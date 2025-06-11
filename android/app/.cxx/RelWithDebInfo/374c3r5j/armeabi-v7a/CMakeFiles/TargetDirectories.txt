@@ -1,0 +1,2 @@
+C:/Users/hs282/StudioProjects/cosmetic_store/android/app/.cxx/RelWithDebInfo/374c3r5j/armeabi-v7a/CMakeFiles/edit_cache.dir
+C:/Users/hs282/StudioProjects/cosmetic_store/android/app/.cxx/RelWithDebInfo/374c3r5j/armeabi-v7a/CMakeFiles/rebuild_cache.dir

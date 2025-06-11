@@ -1,0 +1,2 @@
+PermissionGroupNotification = "This app uses notification to enhance your experience with haptic feedback. Please ensure notification is enabled on your device.";
+UIBackgroundModes = "This app uses vibration to enhance your experience with haptic feedback. Please ensure vibration is enabled on your device.";

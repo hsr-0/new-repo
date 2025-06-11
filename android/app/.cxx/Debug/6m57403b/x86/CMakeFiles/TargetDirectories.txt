@@ -1,0 +1,2 @@
+C:/Users/hs282/StudioProjects/cosmetic_store/android/app/.cxx/Debug/6m57403b/x86/CMakeFiles/edit_cache.dir
+C:/Users/hs282/StudioProjects/cosmetic_store/android/app/.cxx/Debug/6m57403b/x86/CMakeFiles/rebuild_cache.dir

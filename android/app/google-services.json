@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "266994090766",
+    "firebase_url": "https://beytei-me-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "beytei-me",
+    "storage_bucket": "beytei-me.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:266994090766:android:1e27051386bb09f7894d5f",
+        "android_client_info": {
+          "package_name": "co.median.android.wqwnby"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBbc0WkBM46odXzxAHLjZjN4ePIC4vTCI4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

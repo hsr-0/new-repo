@@ -1,0 +1,2 @@
+/Users/cms/meet_project/eyewear_store/android/app/.cxx/RelWithDebInfo/3d2kg584/arm64-v8a/CMakeFiles/edit_cache.dir
+/Users/cms/meet_project/eyewear_store/android/app/.cxx/RelWithDebInfo/3d2kg584/arm64-v8a/CMakeFiles/rebuild_cache.dir

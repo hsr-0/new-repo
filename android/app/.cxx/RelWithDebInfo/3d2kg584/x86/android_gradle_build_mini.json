@@ -1,0 +1,20 @@
+{
+  "buildFiles": [
+    "/Users/cms/flutter/packages/flutter_tools/gradle/src/main/groovy/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/Users/cms/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/Users/cms/meet_project/eyewear_store/android/app/.cxx/RelWithDebInfo/3d2kg584/x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/Users/cms/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/Users/cms/meet_project/eyewear_store/android/app/.cxx/RelWithDebInfo/3d2kg584/x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {}
+}
