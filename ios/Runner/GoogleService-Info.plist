@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CLIENT_ID</key>
+	<string>266994090766-6ic3o5thaqej93dbsvohdbhl49vc40ad.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.266994090766-6ic3o5thaqej93dbsvohdbhl49vc40ad</string>
 	<key>API_KEY</key>
 	<string>AIzaSyD7cRZeGlqv1LqeCNfkeQUiasGmg8aStj4</string>
 	<key>GCM_SENDER_ID</key>
@@ -9,7 +13,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>co.median.android.wqwnby</string>
+	<string>co.median.ios.wqwnby</string>
 	<key>PROJECT_ID</key>
 	<string>beytei-me</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,7 +29,7 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:266994090766:ios:9fc1a0d01a6b4bbd894d5f</string>
+	<string>1:266994090766:ios:1e61d51d5dcdb007894d5f</string>
 	<key>DATABASE_URL</key>
 	<string>https://beytei-me-default-rtdb.asia-southeast1.firebasedatabase.app</string>
 </dict>
