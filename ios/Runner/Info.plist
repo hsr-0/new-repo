@@ -1,9 +1,9 @@
-<?xml version="1.0.1" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0.1">
+<plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <string>en</string>
     <key>CFBundleDisplayName</key>
     <string>Plant Shop</string>
     <key>CFBundleExecutable</key>
@@ -22,7 +22,7 @@
         <string>ar</string>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>$(FLUTTER_BUILD_NAME)</string>
+    <string>1.0.3</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -49,13 +49,22 @@
     <key>FlutterDeepLinkingEnabled</key>
     <true/>
     <key>CFBundleVersion</key>
-    <string>$(FLUTTER_BUILD_NUMBER)</string>
+    <string>3</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
-    <!-- تم إزالة PermissionGroupNotification غير المعتمد -->
+    <!-- أوصاف الصلاحيات المطلوبة -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>يستخدم التطبيق الاشعارات </string>
 
-    <!-- تم إزالة UIBackgroundModes غير الصحيح (ما لم يكن التطبيق يحتاج وظائف خلفية) -->
+    <key>NSCameraUsageDescription</key>
+    <string>يستخدم التطبيق الشعارات </string>
+
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>يستخدم التطبيق </string>
+
+    <key>NSUserNotificationUsageDescription</key>
+    <string>يستخدم التطبيق الإشعارات لإعلامك بتحديات العناية </string>
 
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
@@ -80,11 +89,5 @@
 
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-
-    <!-- إضافة وصف استخدام الإشعارات إذا كان التطبيق يستخدمها -->
-    <key>NSUserNotificationAlertStyle</key>
-    <string>alert</string>
-    <key>NSUserNotificationUsageDescription</key>
-    <string>This app would like to send you notifications</string>
 </dict>
 </plist>
