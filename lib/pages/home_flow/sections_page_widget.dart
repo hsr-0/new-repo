@@ -155,13 +155,13 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
                   _buildGridCard(
                     context: context,
-                    title: 'العيادات لطب الاسنان',
+                    title: 'استشارة طبية ',
                     description: '',
                     imagePath: 'assets/images/clinic.png',
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (context) => const WebViewPage(url: 'https://clinic.beytei.com')),
+                        MaterialPageRoute(builder: (context) => const WebViewPage(url: 'https://tawk.to/chat/6848a65fb0285c1909e28cd2/1itdsjq3f')),
                       );
                     },
                   ),
