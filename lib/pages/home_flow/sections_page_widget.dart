@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
 import '../../doctore/medical_home_screen.dart';
 import '../webview_flow/webview_page.dart';
 import 'package:carousel_slider/carousel_slider.dart';
@@ -20,7 +23,29 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   @override
   void initState() {
     super.initState();
+    initializeFirebase();
     fetchBannerImages();
+  }
+
+  Future<void> initializeFirebase() async {
+    await Firebase.initializeApp();
+    requestNotificationPermissions();
+  }
+
+  Future<void> requestNotificationPermissions() async {
+    NotificationSettings settings = await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      print('User granted permission for notifications');
+    } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
+      print('User granted provisional permission');
+    } else {
+      print('User declined or has not accepted permission');
+    }
   }
 
   Future<void> fetchBannerImages() async {
@@ -91,15 +116,14 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
             const SizedBox(height: 10),
 
-            // استخدام GridView لعرض البطاقات في صفين
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: GridView.count(
-                crossAxisCount: 2, // عدد الأعمدة
-                crossAxisSpacing: 10, // المسافة الأفقية بين البطاقات
-                mainAxisSpacing: 10, // المسافة العمودية بين البطاقات
-                shrinkWrap: true, // لجعل GridView تتقلص حسب محتواها
-                physics: NeverScrollableScrollPhysics(), // لمنع التمرير داخل GridView
+                crossAxisCount: 2,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                shrinkWrap: true,
+                physics: NeverScrollableScrollPhysics(),
                 children: [
                   _buildGridCard(
                     context: context,
@@ -146,13 +170,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       );
                     },
                   ),
-
-
-
-
-
-
-
                   _buildGridCard(
                     context: context,
                     title: 'استشارة طبية ',
