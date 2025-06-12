@@ -4,27 +4,40 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+
     <key>CFBundleDisplayName</key>
-    <string>منصة بيتي </string>
+    <string>منصة بيتي</string>
+
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
+
     <key>CFBundleIdentifier</key>
     <string>co.median.ios.wqwnby</string>
+
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+
     <key>CFBundleName</key>
-    <string>Plant Shop</string>
+    <string>Beytei</string>
+
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+
     <key>CFBundleLocalizations</key>
     <array>
         <string>en</string>
         <string>ar</string>
     </array>
+
     <key>CFBundleShortVersionString</key>
-    <string>1.0.4</string>
+    <string>1.0.5</string>
+
+    <key>CFBundleVersion</key>
+    <string>4</string>
+
     <key>CFBundleSignature</key>
     <string>????</string>
+
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -32,42 +45,48 @@
             <string>Editor</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <!-- FF_REVERSED_CLIENT_ID -->
+                <string>com.googleusercontent.apps.266994090766-6ic3o5thaqej93dbsvohdbhl49vc40ad</string>
             </array>
         </dict>
         <dict>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
             <key>CFBundleURLName</key>
-            <string>plantshop.com</string>
+            <string>beytei.me</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>plantshop</string>
+                <string>beytei</string>
             </array>
         </dict>
     </array>
+
     <key>FlutterDeepLinkingEnabled</key>
     <true/>
-    <key>CFBundleVersion</key>
-    <string>3</string>
+
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
-    <!-- أوصاف الصلاحيات المطلوبة -->
-    <key>NSMicrophoneUsageDescription</key>
-    <string>يستخدم التطبيق الاشعارات </string>
-
+    <!-- صلاحيات الاستخدام -->
     <key>NSCameraUsageDescription</key>
-    <string>يستخدم التطبيق الشعارات </string>
+    <string>نحتاج إلى استخدام الكاميرا لالتقاط الصور أو مسح الباركود</string>
 
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>يستخدم التطبيق </string>
+    <string>نحتاج الوصول إلى مكتبة الصور لاختيار الصور من جهازك</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>نستخدم الميكروفون للتسجيل الصوتي داخل التطبيق</string>
 
     <key>NSUserNotificationUsageDescription</key>
-    <string>يستخدم التطبيق الإشعارات لإعلامك بتحديات العناية </string>
+    <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
+
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>remote-notification</string>
+    </array>
 
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
+
     <key>UIMainStoryboardFile</key>
     <string>Main</string>
 
