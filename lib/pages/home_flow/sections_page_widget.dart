@@ -155,7 +155,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     description: '',
                     imagePath: 'assets/images/cosmetics.png',
                     onTap: () {
-                      context.go('/splash');
+                      context.push('/splash');
                     },
                   ),
                   _buildGridCard(

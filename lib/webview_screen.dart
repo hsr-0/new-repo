@@ -14,32 +14,50 @@ class WebViewScreen extends StatefulWidget {
 
 class _WebViewScreenState extends State<WebViewScreen> {
   late final WebViewController _controller;
+  bool _isLoading = true; // حتى لو لم نستخدمه الآن
 
   @override
   void initState() {
     super.initState();
+
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white)
+      ..enableZoom(true)
       ..setNavigationDelegate(
         NavigationDelegate(
+          onPageStarted: (url) {
+            setState(() => _isLoading = true);
+          },
+          onPageFinished: (url) {
+            setState(() => _isLoading = false);
+          },
           onNavigationRequest: (NavigationRequest request) async {
             if (_shouldOpenExternally(request.url)) {
-              await _launchExternalUrl(request.url); // فتح الرابط خارجيًا
-              return NavigationDecision.prevent; // منع التحميل داخل WebView
+              await _launchExternalUrl(request.url);
+              return NavigationDecision.prevent;
             }
-            return NavigationDecision.navigate; // السماح بالتحميل داخل WebView
+            return NavigationDecision.navigate;
           },
         ),
       )
-      ..loadRequest(Uri.parse(widget.url));
+      ..loadRequest(
+        Uri.parse(widget.url),
+        headers: {'Cache-Control': 'max-age=3600'}, // لتفعيل الكاش إن أمكن
+      );
   }
 
-  // التحقق من الروابط الخارجية
+  // التحقق من الروابط التي يجب فتحها خارج التطبيق
   bool _shouldOpenExternally(String url) {
-    return url.startsWith('tel:') || url.startsWith('mailto:') || url.startsWith('whatsapp:');
+    return url.startsWith('tel:') ||
+        url.startsWith('mailto:') ||
+        url.startsWith('whatsapp:') ||
+        url.contains('wa.me') ||
+        url.startsWith('sms:') ||
+        url.startsWith('intent:');
   }
 
-  // إطلاق الرابط في تطبيق خارجي
+  // فتح الرابط خارجيًا
   Future<void> _launchExternalUrl(String url) async {
     try {
       final Uri uri = Uri.parse(url);
@@ -53,20 +71,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  // إظهار رسالة Snackbar
+  // إظهار Snackbar
   void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
   }
 
-  // التحكم في الرجوع للخلف
+  // التعامل مع زر الرجوع للخلف
   Future<bool> _onWillPop() async {
     if (await _controller.canGoBack()) {
       _controller.goBack();
-      return false; // لا تغلق الشاشة
+      setState(() => _isLoading = true); // إعادة تفعيل التحميل عند الرجوع
+      return false;
     }
-    return true; // أغلق الشاشة
+    return true;
   }
 
   @override

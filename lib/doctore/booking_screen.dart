@@ -348,7 +348,7 @@ class _BookingScreenState extends State<BookingScreen> {
               borderRadius: BorderRadius.circular(8),
             ),
             prefixIcon: Icon(Icons.phone),
-            hintText: 'مثال: 9647712345678',
+            hintText: 'مثال: 07854076931',
           ),
           keyboardType: TextInputType.phone,
           validator: (value) {
@@ -402,25 +402,45 @@ class _BookingScreenState extends State<BookingScreen> {
       children: [
         Text(
           'وقت الموعد',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue),
         ),
         SizedBox(height: 8),
         DropdownButtonFormField<String>(
           value: selectedTime,
           items: defaultTimes.map((time) => DropdownMenuItem(
             value: time,
-            child: Text(time),
+            child: Text(
+              time,
+              style: TextStyle(color: Colors.blue[800]),
+            ),
           )).toList(),
           onChanged: (value) => setState(() => selectedTime = value),
           decoration: InputDecoration(
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: Colors.blue),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: Colors.blue),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: Colors.blue),
             ),
             labelText: 'اختر الوقت',
-            prefixIcon: Icon(Icons.access_time),
+            labelStyle: TextStyle(color: Colors.blue),
+            prefixIcon: Icon(Icons.access_time, color: Colors.blue),
+            filled: true,
+            fillColor: Colors.blue[50],
           ),
           validator: (value) => value == null ? 'الرجاء اختيار الوقت' : null,
-          style: TextStyle(fontSize: 16),
+          style: TextStyle(color: Colors.blue[800]),
+          dropdownColor: Colors.blue[50],
+          icon: Icon(Icons.arrow_drop_down, color: Colors.blue),
+          iconSize: 30,
+          elevation: 2,
+          isExpanded: true,
         ),
       ],
     );
