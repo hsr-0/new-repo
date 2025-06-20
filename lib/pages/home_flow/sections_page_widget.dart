@@ -188,10 +188,8 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     description: '',
                     imagePath: 'assets/images/ms.jpg',
                     onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const WebViewPage(url: 'https://beytei.com/shop/')),
-                      );
+                      GoRouter.of(context).push('/miswak-store');
+
                     },
                   ),
                   _buildGridCard(

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:page_transition/page_transition.dart';
 import 'package:provider/provider.dart';
+import '../../beytei_ms/ms.dart';
 import '../home_flow/splashbeytei.dart';
 import '/home_flow/splash_home_page_widget.dart'; // ✅ استيراد صفحة splash الجديدة
 
@@ -181,6 +182,12 @@ name: HomeMainPageWidget.routeName,
 path: HomeMainPageWidget.routePath,
 builder: (context, params) => HomeMainPageWidget(),
 ),
+    FFRoute(
+      name: 'MiswakStorePage',
+      path: '/miswak-store',
+      builder: (context, params) => const MiswakStoreScreen(),
+    ),
+
 FFRoute(
 name: SettingPageWidget.routeName,
 path: SettingPageWidget.routePath,
