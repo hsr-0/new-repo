@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/rendering.dart';
 
 void main() {
   runApp(const MyApp());
@@ -89,18 +90,19 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
   List<dynamic> testCategories = [];
   int? _currentCategoryId;
   bool _isConnected = true;
+  bool _isCategoriesVisible = true;
+  final ScrollController _scrollController = ScrollController();
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _idController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
   Timer? _searchDebounce;
 
   List<String> bannerImages = [
-    'https://example.com/lab-banner1.jpg',
-    'https://example.com/lab-banner2.jpg',
-    'https://example.com/lab-banner3.jpg',
+    'https://banner.beytei.com/imeges/banner1.jpg',
+    'https://banner.beytei.com/imeges/banner2.jpg',
+    'https://banner.beytei.com/imeges/banner3.jpg',
   ];
   int _currentBannerIndex = 0;
 
@@ -142,10 +144,10 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
     }
 
     try {
-      const consumerKey = 'ck_86b62f6fe8a298a5f9d564d70d689db81b9255ed';
-      const consumerSecret = 'cs_b2de9b284f6245c8297caaf37976d899d6789ab2';
+      const consumerKey = 'ck_cdfdba65d1cff59593a3f5b575ca63749f12f93c';
+      const consumerSecret = 'cs_955d77878c353214db64bbb82205f07c5a1a153e';
 
-      String apiUrl = 'https://beytei.com/wp-json/wc/v3/products?page=$_page&per_page=10';
+      String apiUrl = 'https://tiby.beytei.com/wp-json/wc/v3/products?page=$_page&per_page=10';
       if (searchQuery.isNotEmpty) apiUrl += '&search=$searchQuery';
       if (categoryId != null && categoryId != 0) apiUrl += '&category=$categoryId';
 
@@ -187,11 +189,11 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
 
   Future<void> _fetchTestCategories() async {
     try {
-      const consumerKey = 'your_consumer_key';
-      const consumerSecret = 'your_consumer_secret';
+      const consumerKey = 'ck_cdfdba65d1cff59593a3f5b575ca63749f12f93c';
+      const consumerSecret = 'cs_955d77878c353214db64bbb82205f07c5a1a153e';
 
       final response = await http.get(
-        Uri.parse('https://your-lab-site.com/wp-json/wc/v3/products/categories?parent=0&per_page=10'),
+        Uri.parse('https://tiby.beytei.com/wp-json/wc/v3/products/categories?parent=0&per_page=10'),
         headers: {
           'Authorization': 'Basic ${base64Encode(utf8.encode('$consumerKey:$consumerSecret'))}',
         },
@@ -206,6 +208,18 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
   }
 
   void _scrollListener() {
+    final direction = _scrollController.position.userScrollDirection;
+
+    if (direction == ScrollDirection.forward) {
+      if (!_isCategoriesVisible) {
+        setState(() => _isCategoriesVisible = true);
+      }
+    } else if (direction == ScrollDirection.reverse) {
+      if (_isCategoriesVisible) {
+        setState(() => _isCategoriesVisible = false);
+      }
+    }
+
     if (_scrollController.offset >= _scrollController.position.maxScrollExtent &&
         !_scrollController.position.outOfRange) {
       _fetchLabTests(
@@ -310,12 +324,12 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
   }
 
   Future<void> _sendOrderToWooCommerce() async {
-    const consumerKey = 'your_consumer_key';
-    const consumerSecret = 'your_consumer_secret';
+    const consumerKey = 'ck_cdfdba65d1cff59593a3f5b575ca63749f12f93c';
+    const consumerSecret = 'cs_955d77878c353214db64bbb82205f07c5a1a153e';
 
     try {
       final response = await http.post(
-        Uri.parse('https://your-lab-site.com/wp-json/wc/v3/orders'),
+        Uri.parse('https://tiby.beytei.com/wp-json/wc/v3/orders'),
         headers: {
           'Authorization': 'Basic ${base64Encode(utf8.encode('$consumerKey:$consumerSecret'))}',
           'Content-Type': 'application/json',
@@ -416,14 +430,16 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
   }
 
   Widget _buildTestCategories() {
-    if (testCategories.isEmpty) return const SizedBox.shrink();
+    if (testCategories.isEmpty || !_isCategoriesVisible) return const SizedBox.shrink();
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
       height: 120,
       margin: const EdgeInsets.only(bottom: 10),
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: testCategories.length + 1,
+        physics: const BouncingScrollPhysics(),
         itemBuilder: (context, index) {
           if (index == 0) {
             return Padding(
@@ -508,6 +524,8 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
                             child: CircularProgressIndicator(strokeWidth: 1.5)),
                         errorWidget: (context, url, error) => const Icon(
                             Icons.category, color: Colors.blue),
+                        memCacheHeight: 160,
+                        memCacheWidth: 160,
                       ),
                     )
                         : const Icon(Icons.category, color: Colors.blue),
@@ -535,14 +553,15 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
   Widget _buildTestCard(LabTest test) {
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      margin: const EdgeInsets.all(5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
         onTap: () => _showTestDetails(test),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
               child: CachedNetworkImage(
                 imageUrl: test.imageUrl,
                 height: 120,
@@ -556,6 +575,8 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
                   color: Colors.grey[200],
                   child: const Icon(Icons.medical_services, size: 50, color: Colors.blue),
                 ),
+                memCacheHeight: 240,
+                memCacheWidth: 240,
               ),
             ),
             Padding(
@@ -590,6 +611,9 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blue[800],
                         padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                       child: const Text('حجز الفحص'),
                     ),
@@ -930,17 +954,17 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
             TextField(
               controller: _idController,
               decoration: const InputDecoration(
-                labelText: 'رقم الهوية/الجواز',
+                labelText: 'عنوان المنزل ',
                 border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.credit_card),
+                prefixIcon: Icon(Icons.home),
               ),
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.text,
             ),
             const SizedBox(height: 15),
             const ListTile(
               leading: Icon(Icons.calendar_today),
               title: Text('اختر موعد الحضور'),
-              subtitle: Text('سيتم تأكيد الموعد معك عبر الهاتف'),
+              subtitle: Text('سيتم تأكيد الموعد معك عبر  الهاتف'),
             ),
             const SizedBox(height: 25),
             SizedBox(
@@ -1103,7 +1127,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('مختبرات بيتي1                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ', style: TextStyle(color: Colors.white)),
+        title: const Text('المختبرات', style: TextStyle(color: Colors.white)),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -1181,7 +1205,10 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
           Column(
             children: [
               _buildBannerSlider(),
-              _buildTestCategories(),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: _buildTestCategories(),
+              ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
@@ -1196,13 +1223,14 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
                       ? _buildEmptyState()
                       : GridView.builder(
                     controller: _scrollController,
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(8),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 2,
                       childAspectRatio: 0.75,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
                     ),
+                    physics: const BouncingScrollPhysics(),
                     itemCount: tests.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
                       if (index == tests.length) {

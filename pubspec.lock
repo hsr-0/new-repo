@@ -193,6 +193,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.2"
+  convex_bottom_bar:
+    dependency: "direct main"
+    description:
+      name: convex_bottom_bar
+      sha256: ebf0f3deb1e8e99374d844fee7485d2980ec502dedfaad395c12118477933aef
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.2.0"
   cross_file:
     dependency: transitive
     description:
@@ -692,6 +700,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.1"
+  flutter_screenutil:
+    dependency: "direct main"
+    description:
+      name: flutter_screenutil
+      sha256: "8239210dd68bee6b0577aa4a090890342d04a136ce1c81f98ee513fc0ce891de"
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.9.3"
   flutter_shaders:
     dependency: transitive
     description:
@@ -737,6 +753,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_time_picker_spinner:
+    dependency: "direct main"
+    description:
+      name: flutter_time_picker_spinner
+      sha256: "95600709910ad0cd5fcaec6c371dbe2e81a78989a9ee8c08a356433e2ccff041"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
   flutter_web_plugins:
     dependency: "direct main"
     description: flutter
@@ -856,6 +880,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.15.4"
+  get:
+    dependency: "direct main"
+    description:
+      name: get
+      sha256: c79eeb4339f1f3deffd9ec912f8a923834bec55f7b49c9e882b8fef2c139d425
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.7.2"
   go_router:
     dependency: "direct main"
     description:
@@ -1730,6 +1762,14 @@ packages:
     description:
       name: syncfusion_flutter_datagrid
       sha256: "9f621f6344d2ed7ea3a8d0ff5c145c174f1e227d6d8851290591ceb718e44600"
+      url: "https://pub.dev"
+    source: hosted
+    version: "23.2.7"
+  syncfusion_flutter_datepicker:
+    dependency: "direct main"
+    description:
+      name: syncfusion_flutter_datepicker
+      sha256: b3340a7786f674d18bd22c226358648985e7631734dfc4aae09fdcfb71c09156
       url: "https://pub.dev"
     source: hosted
     version: "23.2.7"

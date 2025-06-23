@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:page_transition/page_transition.dart';
 import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
+import '../../doctoe_beyte/do.dart';
+import '../../lab/lab.dart';
 import '../home_flow/splashbeytei.dart';
 import '/home_flow/splash_home_page_widget.dart'; // ✅ استيراد صفحة splash الجديدة
 
@@ -187,6 +189,22 @@ builder: (context, params) => HomeMainPageWidget(),
       path: '/miswak-store',
       builder: (context, params) => const MiswakStoreScreen(),
     ),
+
+
+    FFRoute(
+      name: 'labstorepage',
+      path: '/lab-store',
+      builder: (context, params) => const LabStoreScreen(),
+    ),
+
+    FFRoute(
+      name: 'dostorepage',
+      path: '/do-store',
+      builder: (context, params) => HomeScreen(),
+    ),
+
+
+
 
 FFRoute(
 name: SettingPageWidget.routeName,

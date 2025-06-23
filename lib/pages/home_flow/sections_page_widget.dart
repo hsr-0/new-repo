@@ -119,7 +119,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: GridView.count(
-                crossAxisCount: 2,
+                crossAxisCount:2,
                 crossAxisSpacing: 10,
                 mainAxisSpacing: 10,
                 shrinkWrap: true,
@@ -151,7 +151,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                   ),
                   _buildGridCard(
                     context: context,
-                    title: 'كوزمتك بيتي',
+                    title: 'بوتيك وكوزمتك بيتي',
                     description: '',
                     imagePath: 'assets/images/cosmetics.png',
                     onTap: () {
@@ -192,16 +192,27 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
                     },
                   ),
+
                   _buildGridCard(
                     context: context,
-                    title: 'محتبرات  بيتي ',
+                    title: 'سجل بيتي الطبي ',
                     description: '',
                     imagePath: 'assets/images/ph.png',
                     onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const WebViewPage(url: 'https://lab.beytei.com/')),
-                      );
+                      GoRouter.of(context).push('/do-store');
+
+                    },
+                  ),
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'المختبرات ',
+                    description: '',
+                    imagePath: 'assets/images/ph.png',
+                    onTap: () {
+                      GoRouter.of(context).push('/lab-store');
+
                     },
                   ),
                 ],
