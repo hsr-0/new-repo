@@ -181,16 +181,15 @@ dev_dependencies:
 
 
 flutter_launcher_icons:
-  android: 'launcher_icon'
-  ios: true
-  web:
-    generate: true
-  image_path: 'assets/images/beytei.png
-  
-  adaptive_icon_background: '#00000000'
-  adaptive_icon_foreground: 'assets/images/adaptive_foreground_icon.png'
+  android: true  # لإنشاء أيقونات أندرويد
+  ios: true      # لإنشاء أيقونات iOS
+  image_path: "assets/icon/icon.jpg"  # المسار إلى صورتك
+  remove_alpha_ios: true  # إزالة الشفافية لأيقونات iOS
+  min_sdk_android: 21     # الحد الأدنى لإصدار أندرويد
 
-
+  # إعدادات إضافية للأيقونات التكيفية لأندرويد (اختياري)
+  adaptive_icon_background: "#FFFFFF"  # لون الخلفية
+  # adaptive_icon_foreground: "assets/icon/icon_foreground.png"  # صورة المقدمة إذا كنت تستخدمها
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
@@ -211,6 +210,8 @@ flutter:
     - assets/rive_animations/
     - assets/pdfs/
     - assets/jsons/
+    - assets/banners/
+    - assets/icon/icon.jpg
 
   fonts:
     - family: 'SF Pro Display'
