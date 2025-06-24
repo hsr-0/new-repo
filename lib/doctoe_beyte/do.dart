@@ -244,7 +244,7 @@ class _RegistrationFormState extends State<RegistrationForm> {
                   ),
                   const SizedBox(height: 15),
                   Text(
-                    'سجل بياناتك الآن واحصل على خصم 20% في الصيدليات المشاركة',
+                    'سجل  الآن واحصل على خصم 20% في الصيدليات المشاركة',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 16,

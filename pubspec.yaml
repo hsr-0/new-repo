@@ -210,7 +210,7 @@ flutter:
     - assets/rive_animations/
     - assets/pdfs/
     - assets/jsons/
-    - assets/banners/
+
     - assets/icon/icon.jpg
 
   fonts:
