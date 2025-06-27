@@ -215,6 +215,21 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
                     },
                   ),
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'تكسي بيتي  ',
+                    description: '',
+                    imagePath: 'assets/images/ph.png',
+                    onTap: () {
+                      GoRouter.of(context).push('/trb-store');
+
+                    },
+                  ),
+
+
+
+
                 ],
               ),
             ),

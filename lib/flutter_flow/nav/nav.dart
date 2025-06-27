@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
+import '../../taxi/tx.dart';
 import '../home_flow/splashbeytei.dart';
 import '/home_flow/splash_home_page_widget.dart'; // ✅ استيراد صفحة splash الجديدة
 
@@ -202,6 +203,17 @@ builder: (context, params) => HomeMainPageWidget(),
       path: '/do-store',
       builder: (context, params) => HomeScreen(),
     ),
+
+
+
+
+    FFRoute(
+      name: 'trbstorepage',
+      path: '/trb-store',
+      builder: (context, params) => const TripScreen(),
+    ),
+
+
 
 
 

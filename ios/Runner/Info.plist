@@ -66,15 +66,19 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
-    <!-- صلاحيات الاستخدام -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+      <string>https</string>
+      <string>http</string>
+    </array>
     <key>NSCameraUsageDescription</key>
-    <string>نحتاج إلى استخدام الكاميرا لالتقاط الصور أو مسح الباركود</string>
+    <string>نحتاج إلى استخدام الكاميرا  لمسح الباركود</string>
 
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>نحتاج الوصول إلى مكتبة الصور لاختيار الصور من جهازك</string>
+    <string>نحتاج الوصول إلى مكتبة الصور</string>
 
     <key>NSMicrophoneUsageDescription</key>
-    <string>نستخدم الميكروفون للتسجيل الصوتي داخل التطبيق</string>
+    <string>نستخدم الميكروفون  داخل التطبيق</string>
 
     <key>NSUserNotificationUsageDescription</key>
     <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
