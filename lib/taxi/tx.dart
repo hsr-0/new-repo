@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -19,7 +21,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,
-        fontFamily: 'Cairo', // تأكد من أن هذا الخط متاح في مشروعك
+        fontFamily: 'Cairo',
         cardTheme: CardThemeData(
           elevation: 2,
           shape: RoundedRectangleBorder(
@@ -40,7 +42,7 @@ class TripScreen extends StatefulWidget {
   State<TripScreen> createState() => _TripScreenState();
 }
 
-class _TripScreenState extends State<TripScreen> {
+class _TripScreenState extends State<TripScreen> with WidgetsBindingObserver {
   List<Map<String, dynamic>> trips = [];
   bool isLoading = true;
   String error = '';
@@ -54,9 +56,23 @@ class _TripScreenState extends State<TripScreen> {
     super.initState();
     _initializeUserId();
     _loadTrips();
+    WidgetsBinding.instance.addObserver(this);
   }
 
-  // تهيئة أو تحميل معرف المستخدم الفريد للجهاز
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _loadTrips();
+    }
+  }
+
   Future<void> _initializeUserId() async {
     final prefs = await SharedPreferences.getInstance();
     String? storedUserId = prefs.getString('user_id');
@@ -67,18 +83,14 @@ class _TripScreenState extends State<TripScreen> {
       setState(() {
         currentUserId = newUserId;
       });
-      print('DEBUG: New User ID generated and saved: $newUserId');
     } else {
       setState(() {
         currentUserId = storedUserId;
       });
-      print('DEBUG: Existing User ID loaded: $storedUserId');
     }
   }
 
-  // تحميل بيانات الرحلات من الـ API
   Future<void> _loadTrips() async {
-    print('DEBUG: Starting _loadTrips to refresh data.');
     setState(() {
       isLoading = true;
       error = '';
@@ -90,71 +102,58 @@ class _TripScreenState extends State<TripScreen> {
         headers: {'Content-Type': 'application/json'},
       );
 
-      print('DEBUG: _loadTrips response status: ${response.statusCode}');
       if (response.statusCode == 200) {
         final dynamic decodedData = json.decode(response.body);
         if (decodedData is List) {
           setState(() {
-            // تحويل كل عنصر في القائمة إلى Map<String, dynamic> بشكل صريح
             trips = decodedData
                 .map((item) => Map<String, dynamic>.from(item as Map))
                 .toList();
-            trips = _processTripData(trips); // معالجة البيانات لحساب المقاعد المتاحة
+            trips = _processTripData(trips);
             isLoading = false;
             isFirstLoad = false;
-            print('DEBUG: Trips loaded successfully. Count: ${trips.length}');
           });
         } else {
-          throw Exception('Expected a list of trips, but got a different type.');
+          throw Exception('تنسيق البيانات غير صحيح.');
         }
       } else {
-        throw Exception('Failed to load trips: ${response.statusCode}');
+        throw Exception('فشل تحميل الرحلات: ${response.statusCode}');
       }
-    } catch (e) {
-      print('DEBUG: Error loading trips: ${e.toString()}');
+    } on SocketException {
       setState(() {
-        error = 'Error loading trips: ${e.toString()}';
+        error = 'فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.';
         isLoading = false;
         isFirstLoad = false;
       });
+    } catch (e) {
+      setState(() {
+        error = 'حدث خطأ غير متوقع أثناء تحميل البيانات.';
+        isLoading = false;
+        isFirstLoad = false;
+      });
+      print("Error loading trips: $e");
     }
   }
 
-  // معالجة بيانات الرحلة (لحساب المقاعد المتاحة إذا لم تكن محسوبة من الخادم)
   List<Map<String, dynamic>> _processTripData(
       List<Map<String, dynamic>> tripsData) {
     return tripsData.map((trip) {
-      final passengers = trip['passengers'] is List
-          ? List<Map<String, dynamic>>.from(trip['passengers'] as List)
-          : <Map<String, dynamic>>[];
-      final totalSeats = trip['total_seats'] is int
-          ? trip['total_seats'] as int
-          : int.tryParse(trip['total_seats'].toString()) ?? 0;
-
-      final actualAvailableSeats = totalSeats - passengers.length;
-
-      return {
-        ...trip,
-        'passengers': passengers,
-        'available_seats': actualAvailableSeats, // ضمان أنها محسوبة بشكل صحيح
-      };
+      return _processSingleTripData(trip);
     }).toList();
   }
 
-  // دالة لحجز الرحلة
   Future<void> _bookTrip({
     required String tripId,
     required String name,
     required String phone,
     required String address,
-    required int quantity, // عدد المقاعد المطلوب حجزها
+    required int quantity,
   }) async {
-    // تحقق من أن معرف المستخدم موجود
     if (currentUserId == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('خطأ: لم يتم تهيئة معرف المستخدم بعد. يرجى إعادة تشغيل التطبيق.'),
+            content: Text('خطأ: لم يتم تهيئة معرف المستخدم. يرجى إعادة تشغيل التطبيق.'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -163,7 +162,6 @@ class _TripScreenState extends State<TripScreen> {
     }
 
     try {
-      print('DEBUG: Sending booking request for trip ID: $tripId, Quantity: $quantity');
       final response = await http.post(
         Uri.parse('https://banner.beytei.com/wp-json/taxi/v1/book'),
         headers: {'Content-Type': 'application/json'},
@@ -172,14 +170,12 @@ class _TripScreenState extends State<TripScreen> {
           'name': name,
           'phone': phone,
           'address': address,
-          'user_id': currentUserId, // معرف المستخدم الذي تم إنشاؤه تلقائيًا
-          'quantity': quantity, // إرسال عدد المقاعد
+          'user_id': currentUserId,
+          'quantity': quantity,
         }),
       );
 
-      print('DEBUG: Booking response status: ${response.statusCode}');
       final dynamic result = json.decode(response.body);
-      print('DEBUG: Booking response body: $result');
 
       if (response.statusCode == 200 &&
           result is Map &&
@@ -196,18 +192,25 @@ class _TripScreenState extends State<TripScreen> {
           );
         }
       } else {
-        // إذا كان هناك رسالة خطأ من الـ API، اعرضها
         final errorMessage = result is Map && result.containsKey('message')
             ? result['message']
             : 'فشل الحجز لسبب غير معروف.';
         throw Exception(errorMessage);
       }
+    } on SocketException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('فشل الاتصال بالشبكة. يرجى التحقق من اتصالك.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } catch (e) {
-      print('DEBUG: Error during booking: ${e.toString()}'); // طباعة الخطأ في الكونسول
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('خطأ في الحجز: ${e.toString()}'),
+            content: Text('خطأ في الحجز: ${e.toString().replaceFirst("Exception: ", "")}'),
             backgroundColor: Colors.red,
           ),
         );
@@ -215,23 +218,19 @@ class _TripScreenState extends State<TripScreen> {
     }
   }
 
-  // دالة لإلغاء الحجز لمقعد واحد
   Future<void> _cancelBooking(String tripId, String passengerId) async {
     try {
-      print('DEBUG: Sending cancellation request for trip ID: $tripId, Passenger ID: $passengerId');
       final response = await http.post(
         Uri.parse('https://banner.beytei.com/wp-json/taxi/v1/cancel'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'trip_id': tripId,
           'passenger_id': passengerId,
-          'user_id': currentUserId, // تأكد من إرسال معرف المستخدم
+          'user_id': currentUserId,
         }),
       );
 
-      print('DEBUG: Cancellation response status: ${response.statusCode}');
       final dynamic result = json.decode(response.body);
-      print('DEBUG: Cancellation response body: $result');
 
       if (response.statusCode == 200 &&
           result is Map &&
@@ -253,39 +252,40 @@ class _TripScreenState extends State<TripScreen> {
             : 'فشل إلغاء الحجز لسبب غير معروف.';
         throw Exception(errorMessage);
       }
-    } catch (e) {
-      print('DEBUG: Error during cancellation: ${e.toString()}'); // طباعة الخطأ في الكونسول
+    } on SocketException {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ في إلغاء الحجز: ${e.toString()}'),
+          const SnackBar(
+            content: Text('فشل الاتصال بالشبكة. يرجى التحقق من اتصالك.'),
             backgroundColor: Colors.red,
           ),
         );
-        _loadTrips(); // إعادة تحميل البيانات لضمان المزامنة
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ في الإلغاء: ${e.toString().replaceFirst("Exception: ", "")}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        _loadTrips();
       }
     }
   }
 
-  // تحديث بيانات الرحلة محليًا بعد الحجز أو الإلغاء
-  // هذا هو المكان الذي كان فيه الخطأ في الصورة: _processSingleTripData لم تكن معرفة
   void _updateTripLocally(Map<String, dynamic> updatedTrip) {
-    print('DEBUG: Attempting to update trip locally for ID: ${updatedTrip['id']}');
     setState(() {
       final index =
       trips.indexWhere((t) => t['id'].toString() == updatedTrip['id'].toString());
       if (index != -1) {
-        trips[index] = _processSingleTripData(updatedTrip); // استخدام الدالة هنا
-        print('DEBUG: Trip ID ${updatedTrip['id']} updated locally.');
+        trips[index] = _processSingleTripData(updatedTrip);
       } else {
-        print('DEBUG: Trip ID ${updatedTrip['id']} not found in local list. Reloading all trips.');
-        // إذا لم يتم العثور على الرحلة، قم بتحميل جميع الرحلات مجددًا لضمان التناسق
         _loadTrips();
       }
     });
   }
 
-  // دالة لمعالجة بيانات رحلة واحدة
   Map<String, dynamic> _processSingleTripData(Map<String, dynamic> trip) {
     final passengers = trip['passengers'] is List
         ? List<Map<String, dynamic>>.from(trip['passengers'] as List)
@@ -301,12 +301,10 @@ class _TripScreenState extends State<TripScreen> {
     };
   }
 
-  // عرض مربع حوار الحجز
   void _showBookingDialog(Map<String, dynamic> trip) {
     final nameController = TextEditingController();
     final phoneController = TextEditingController();
     final addressController = TextEditingController();
-    // تأكد أن القيمة الافتراضية للكمية هي 1 إذا كانت المقاعد المتاحة أكبر من 0، وإلا 0
     int initialQuantity = (trip['available_seats'] as int) > 0 ? 1 : 0;
     int selectedQuantity = initialQuantity;
 
@@ -323,133 +321,133 @@ class _TripScreenState extends State<TripScreen> {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'حجز مقعد',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'حجز مقعد',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      '${trip['from']} → ${trip['to']}',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                    ),
-                    Text(
-                      '${_formatDate(trip['date'].toString())} - ${trip['time']}',
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: nameController,
-                      decoration: InputDecoration(
-                        labelText: 'الاسم الكامل',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        prefixIcon: const Icon(Icons.person),
+                      const SizedBox(height: 16),
+                      Text(
+                        '${trip['from']} → ${trip['to']}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: phoneController,
-                      decoration: InputDecoration(
-                        labelText: 'رقم الهاتف',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        prefixIcon: const Icon(Icons.phone),
+                      Text(
+                        '${_formatDate(trip['date'].toString())} - ${trip['time']}',
+                        style: const TextStyle(color: Colors.grey),
                       ),
-                      keyboardType: TextInputType.phone,
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: addressController,
-                      decoration: InputDecoration(
-                        labelText: 'عنوان الاستلام',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        prefixIcon: const Icon(Icons.location_on),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text('عدد المقاعد:'),
-                        IconButton(
-                          icon: const Icon(Icons.remove),
-                          onPressed: selectedQuantity > 1
-                              ? () {
-                            setStateSB(() {
-                              selectedQuantity--;
-                            });
-                          }
-                              : null,
-                        ),
-                        Text('$selectedQuantity'),
-                        IconButton(
-                          icon: const Icon(Icons.add),
-                          onPressed: selectedQuantity < maxAvailableSeats
-                              ? () {
-                            setStateSB(() {
-                              selectedQuantity++;
-                            });
-                          }
-                              : null,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('إلغاء'),
-                        ),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
+                      const SizedBox(height: 20),
+                      TextField(
+                        controller: nameController,
+                        onChanged: (_) => setStateSB(() {}),
+                        decoration: InputDecoration(
+                          labelText: 'الاسم الكامل',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          onPressed: (selectedQuantity > 0 && // تأكد أن الكمية > 0
-                              nameController.text.isNotEmpty &&
-                              phoneController.text.isNotEmpty &&
-                              addressController.text.isNotEmpty)
-                              ? () async {
-                            // إغلاق مربع الحوار أولاً
-                            Navigator.pop(ctx);
-
-                            // استدعاء دالة الحجز
-                            await _bookTrip(
-                              tripId: trip['id'].toString(),
-                              name: nameController.text,
-                              phone: phoneController.text,
-                              address: addressController.text,
-                              quantity: selectedQuantity,
-                            );
-
-                            // إعادة تحميل الرحلات بعد اكتمال الحجز لتحديث الواجهة
-                            if (mounted) {
-                              _loadTrips();
-                            }
-                          }
-                              : null, // تعطيل الزر إذا لم تكن الشروط مستوفاة
-                          child: const Text('تأكيد الحجز'),
+                          prefixIcon: const Icon(Icons.person),
                         ),
-                      ],
-                    ),
-                  ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: phoneController,
+                        onChanged: (_) => setStateSB(() {}),
+                        decoration: InputDecoration(
+                          labelText: 'رقم الهاتف',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          prefixIcon: const Icon(Icons.phone),
+                        ),
+                        keyboardType: TextInputType.phone,
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: addressController,
+                        onChanged: (_) => setStateSB(() {}),
+                        decoration: InputDecoration(
+                          labelText: 'عنوان الاستلام',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          prefixIcon: const Icon(Icons.location_on),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('عدد المقاعد:'),
+                          IconButton(
+                            icon: const Icon(Icons.remove),
+                            onPressed: selectedQuantity > 1
+                                ? () {
+                              setStateSB(() {
+                                selectedQuantity--;
+                              });
+                            }
+                                : null,
+                          ),
+                          Text('$selectedQuantity'),
+                          IconButton(
+                            icon: const Icon(Icons.add),
+                            onPressed: selectedQuantity < maxAvailableSeats
+                                ? () {
+                              setStateSB(() {
+                                selectedQuantity++;
+                              });
+                            }
+                                : null,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('إلغاء'),
+                          ),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 24, vertical: 12),
+                            ),
+                            onPressed: (selectedQuantity > 0 &&
+                                nameController.text.isNotEmpty &&
+                                phoneController.text.isNotEmpty &&
+                                addressController.text.isNotEmpty)
+                                ? () async {
+                              Navigator.pop(ctx);
+                              await _bookTrip(
+                                tripId: trip['id'].toString(),
+                                name: nameController.text,
+                                phone: phoneController.text,
+                                address: addressController.text,
+                                quantity: selectedQuantity,
+                              );
+                              if (mounted) {
+                                _loadTrips();
+                              }
+                            }
+                                : null,
+                            child: const Text('تأكيد الحجز'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -459,7 +457,6 @@ class _TripScreenState extends State<TripScreen> {
     );
   }
 
-  // عرض شاشة الركاب
   void _showPassengersScreen(Map<String, dynamic> trip) {
     Navigator.push(
       context,
@@ -473,26 +470,21 @@ class _TripScreenState extends State<TripScreen> {
         ),
       ),
     ).then((_) {
-      // عند العودة من شاشة الركاب، قم بتحديث الرحلات للتأكد من أحدث البيانات
       _loadTrips();
     });
   }
 
-  // تنسيق التاريخ
   String _formatDate(String dateString) {
     try {
       final date = DateTime.parse(dateString);
-      return DateFormat('yyyy/MM/dd').format(date);
+      return DateFormat('yyyy/MM/dd', 'en_US').format(date);
     } catch (e) {
       return dateString;
     }
   }
 
-  // حساب عدد المقاعد التي حجزها المستخدم الحالي
   int _getUserBookedSeatsCount(Map<String, dynamic> trip) {
-    if (currentUserId == null) return 0;
-    if (trip['passengers'] is! List) return 0;
-
+    if (currentUserId == null || trip['passengers'] is! List) return 0;
     final passengers =
     List<Map<String, dynamic>>.from(trip['passengers'] as List);
     return passengers
@@ -517,7 +509,16 @@ class _TripScreenState extends State<TripScreen> {
       body: isLoading && isFirstLoad
           ? const Center(child: CircularProgressIndicator())
           : error.isNotEmpty
-          ? Center(child: Text(error))
+          ? Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(
+            error,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.red, fontSize: 16),
+          ),
+        ),
+      )
           : trips.isEmpty
           ? const Center(child: Text('لا توجد رحلات متاحة حالياً'))
           : ListView.builder(
@@ -529,12 +530,15 @@ class _TripScreenState extends State<TripScreen> {
               ? trip['total_seats'] as int
               : int.tryParse(trip['total_seats'].toString()) ?? 0;
           final passengers = trip['passengers'] is List
-              ? List<Map<String, dynamic>>.from(trip['passengers'] as List)
+              ? List<Map<String, dynamic>>.from(
+              trip['passengers'] as List)
               : <Map<String, dynamic>>[];
           final bookedSeatsCount = passengers.length;
-          final availableSeats = trip['available_seats'] is int
-              ? trip['available_seats'] as int
-              : totalSeats - bookedSeatsCount;
+
+          final availableSeats = trip['available_seats'] as int;
+
+
+
           final driver = trip['driver'] is Map
               ? Map<String, dynamic>.from(trip['driver'] as Map)
               : <String, dynamic>{};
@@ -549,7 +553,6 @@ class _TripScreenState extends State<TripScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // معلومات السائق
                   Row(
                     children: [
                       Container(
@@ -557,28 +560,34 @@ class _TripScreenState extends State<TripScreen> {
                         height: 60,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border:
-                          Border.all(color: Colors.blue, width: 2),
+                          border: Border.all(
+                              color: Colors.blue, width: 2),
                         ),
                         child: ClipOval(
                           child: driver['image'] != null &&
-                              driver['image'].toString().isNotEmpty
+                              driver['image']
+                                  .toString()
+                                  .isNotEmpty
                               ? Image.network(
                             driver['image'].toString(),
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) =>
-                            const Icon(Icons.person, size: 30),
+                            const Icon(Icons.person,
+                                size: 30),
                           )
-                              : const Icon(Icons.person, size: 30),
+                              : const Icon(Icons.person,
+                              size: 30),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment:
+                          CrossAxisAlignment.start,
                           children: [
                             Text(
-                              driver['name']?.toString() ?? 'غير معروف',
+                              driver['name']?.toString() ??
+                                  'غير معروف',
                               style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold),
@@ -586,7 +595,8 @@ class _TripScreenState extends State<TripScreen> {
                             const SizedBox(height: 4),
                             Text(
                               '${driver['car_model'] ?? ''} - ${driver['car_color'] ?? ''}',
-                              style: const TextStyle(color: Colors.grey),
+                              style: const TextStyle(
+                                  color: Colors.grey),
                             ),
                           ],
                         ),
@@ -594,8 +604,6 @@ class _TripScreenState extends State<TripScreen> {
                     ],
                   ),
                   const Divider(height: 24, thickness: 1),
-
-                  // معلومات الرحلة
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -609,15 +617,18 @@ class _TripScreenState extends State<TripScreen> {
                         Expanded(
                           child: Text(
                             trip['from'].toString(),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold),
                             textAlign: TextAlign.center,
                           ),
                         ),
-                        const Icon(Icons.arrow_forward, color: Colors.blue),
+                        const Icon(Icons.arrow_forward,
+                            color: Colors.blue),
                         Expanded(
                           child: Text(
                             trip['to'].toString(),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold),
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -625,8 +636,6 @@ class _TripScreenState extends State<TripScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
-                  // التاريخ والمقاعد
                   Row(
                     mainAxisAlignment:
                     MainAxisAlignment.spaceBetween,
@@ -635,30 +644,31 @@ class _TripScreenState extends State<TripScreen> {
                           Icons.calendar_today,
                           _formatDate(trip['date'].toString()),
                           Colors.blue),
-                      _buildInfoItem(
-                          Icons.access_time,
-                          trip['time'].toString(),
-                          Colors.orange),
+                      _buildInfoItem(Icons.access_time,
+                          trip['time'].toString(), Colors.orange),
                       _buildInfoItem(
                         Icons.event_seat,
                         '$bookedSeatsCount/$totalSeats',
-                        availableSeats > 0 ? Colors.green : Colors.red,
+                        availableSeats > 0
+                            ? Colors.green
+                            : Colors.red,
                       ),
                     ],
                   ),
                   const SizedBox(height: 16),
-
-                  // أزرار الإجراءات
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          icon: const Icon(Icons.people, size: 18),
-                          label: const Text('عرض الركاب'),
+                          icon:
+                          const Icon(Icons.people, size: 18),
+                          label: Text(availableSeats > 0 ? 'عرض الركاب' : 'عرض الركاب (مكتمل)'),
                           style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 12),
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius:
+                              BorderRadius.circular(8),
                             ),
                           ),
                           onPressed: passengers.isNotEmpty
@@ -671,7 +681,9 @@ class _TripScreenState extends State<TripScreen> {
                         child: isUserBookedAnySeat
                             ? ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            padding:
+                            const EdgeInsets.symmetric(
+                                vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius:
                               BorderRadius.circular(8),
@@ -681,23 +693,30 @@ class _TripScreenState extends State<TripScreen> {
                           onPressed: () {
                             _showPassengersScreen(trip);
                           },
-                          child: Text('إلغاء حجز ($userBookedSeats)'),
+                          child: Text(
+                              'إلغاء حجز ($userBookedSeats)'),
                         )
                             : ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            padding:
+                            const EdgeInsets.symmetric(
+                                vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius:
                               BorderRadius.circular(8),
                             ),
-                            backgroundColor: availableSeats > 0
+                            backgroundColor:
+                            availableSeats > 0
                                 ? Colors.blue
-                                : Colors.grey,
+                                : Colors.red[700],
                           ),
                           onPressed: availableSeats > 0
-                              ? () => _showBookingDialog(trip)
+                              ? () =>
+                              _showBookingDialog(trip)
                               : null,
-                          child: const Text('حجز مقعد'),
+                          child: Text(availableSeats > 0
+                              ? 'حجز مقعد'
+                              : 'المقاعد محجوزة'),
                         ),
                       ),
                     ],
@@ -729,7 +748,7 @@ class _TripScreenState extends State<TripScreen> {
 class PassengersScreen extends StatelessWidget {
   final Map<String, dynamic> trip;
   final String? currentUserId;
-  final Function(String)? onCancelBooking;
+  final Future<void> Function(String)? onCancelBooking;
 
   const PassengersScreen({
     super.key,
@@ -773,6 +792,7 @@ class PassengersScreen extends StatelessWidget {
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -799,9 +819,12 @@ class PassengersScreen extends StatelessWidget {
             const SizedBox(height: 12),
             if (currentUserBookings.isEmpty)
               const Center(
-                child: Text(
-                  'لم تقم بأي حجز في هذه الرحلة.',
-                  style: TextStyle(color: Colors.grey),
+                child: Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Text(
+                    'لم تقم بأي حجز في هذه الرحلة.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
                 ),
               )
             else
@@ -824,13 +847,15 @@ class PassengersScreen extends StatelessWidget {
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Tel: ${passenger['phone']?.toString() ?? ''}'),
+                        Text('الهاتف: ${passenger['phone']?.toString() ?? ''}'),
                         if (passenger['address'] != null)
-                          Text('Address: ${passenger['address'].toString()}',
+                          Text(
+                              'العنوان: ${passenger['address'].toString()}',
                               style: const TextStyle(fontSize: 12)),
                         Text(
                           'معرف الحجز: ${passenger['id']?.toString() ?? ''}',
-                          style: const TextStyle(fontSize: 10, color: Colors.blueGrey),
+                          style: const TextStyle(
+                              fontSize: 10, color: Colors.blueGrey),
                         ),
                       ],
                     ),
@@ -842,17 +867,22 @@ class PassengersScreen extends StatelessWidget {
                           context: context,
                           builder: (dialogContext) => AlertDialog(
                             title: const Text('تأكيد الإلغاء'),
-                            content: const Text('هل أنت متأكد من إلغاء هذا المقعد؟'),
+                            content: const Text(
+                                'هل أنت متأكد من إلغاء هذا المقعد؟'),
                             actions: [
                               TextButton(
-                                onPressed: () => Navigator.pop(dialogContext),
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext),
                                 child: const Text('لا'),
                               ),
                               TextButton(
                                 onPressed: () async {
                                   Navigator.pop(dialogContext);
                                   if (onCancelBooking != null) {
-                                    await onCancelBooking!(passenger['id'].toString());
+                                    await onCancelBooking!(
+                                        passenger['id'].toString());
+                                    // The list will refresh on pop
+                                    Navigator.pop(context);
                                   }
                                 },
                                 child: const Text('نعم، إلغاء'),
@@ -877,9 +907,12 @@ class PassengersScreen extends StatelessWidget {
             const SizedBox(height: 12),
             if (passengers.isEmpty)
               const Center(
-                child: Text(
-                  'لا يوجد ركاب مسجلين بعد',
-                  style: TextStyle(color: Colors.grey),
+                child: Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Text(
+                    'لا يوجد ركاب مسجلين بعد',
+                    style: TextStyle(color: Colors.grey),
+                  ),
                 ),
               )
             else
@@ -899,9 +932,10 @@ class PassengersScreen extends StatelessWidget {
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Tel: ${passenger['phone']?.toString() ?? ''}'),
+                        Text('الهاتف: ${passenger['phone']?.toString() ?? ''}'),
                         if (passenger['address'] != null)
-                          Text('Address: ${passenger['address'].toString()}',
+                          Text(
+                              'العنوان: ${passenger['address'].toString()}',
                               style: const TextStyle(fontSize: 12)),
                       ],
                     ),
@@ -917,7 +951,7 @@ class PassengersScreen extends StatelessWidget {
   String _formatDate(String dateString) {
     try {
       final date = DateTime.parse(dateString);
-      return DateFormat('yyyy/MM/dd').format(date);
+      return DateFormat('yyyy/MM/dd', 'en_US').format(date);
     } catch (e) {
       return dateString;
     }

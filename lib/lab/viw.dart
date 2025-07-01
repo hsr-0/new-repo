@@ -8,13 +8,13 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:connectivity_plus/connectivity_plus.dart'; // سنحتاجه للتحقق من الاتصال
 
-// enum لتحديد نوع الملف القابل للعرض بوضوح
 enum DisplayableFileType { pdf, image, unsupported }
 
 class ReportViewerScreen extends StatefulWidget {
   final String fileUrl;
-  final String? apiFileType; // أصبح اختياريًا الآن
+  final String? apiFileType;
   final String reportTitle;
 
   const ReportViewerScreen({
@@ -30,9 +30,9 @@ class ReportViewerScreen extends StatefulWidget {
 
 class _ReportViewerScreenState extends State<ReportViewerScreen> {
   late DisplayableFileType _fileType;
-  String? _localPdfPath;
+  String? _localFilePath;
   bool _isLoading = true;
-  String _loadingMessage = 'جاري تحليل وعرض التقرير...';
+  String _statusMessage = 'جاري تحليل وعرض التقرير...';
 
   @override
   void initState() {
@@ -40,80 +40,121 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
     _initialize();
   }
 
+  // --- الخطوة 1: تحديد مسار الملف المحلي ---
+  Future<File> _getLocalFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    // استخدام آخر جزء من الرابط كاسم للملف لضمان تفرده
+    final fileName = Uri.parse(widget.fileUrl).pathSegments.last;
+    return File('${dir.path}/$fileName');
+  }
+
+  // --- الخطوة 2: تحديث منطق التشغيل الأولي ---
   Future<void> _initialize() async {
-    // 1. تحديد نوع الملف بذكاء
+    // تحديد نوع الملف (صور، PDF، الخ)
     _fileType = _determineFileType();
 
-    // 2. إذا كان الملف PDF، قم بتحميله أولاً
-    if (_fileType == DisplayableFileType.pdf && !kIsWeb) {
-      await _downloadPdf();
+    // التعامل مع ملفات الصور (تستخدم التخزين التلقائي من المكتبة)
+    if (_fileType == DisplayableFileType.image) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
     }
 
-    // 3. إيقاف شاشة التحميل
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
+    // التعامل مع ملفات PDF (تتطلب تخزين يدوي)
+    if (_fileType == DisplayableFileType.pdf && !kIsWeb) {
+      final localFile = await _getLocalFile();
+
+      // التحقق إذا كان الملف موجودًا في الذاكرة (مخزن مؤقتًا)
+      if (await localFile.exists()) {
+        if (mounted) {
+          setState(() {
+            _localFilePath = localFile.path;
+            _isLoading = false;
+            _statusMessage = 'تم العرض من الذاكرة المحفوظة.';
+          });
+        }
+      } else {
+        // إذا لم يكن الملف موجودًا، حاول تحميله
+        await _downloadAndCachePdf();
+      }
+    } else {
+      // للأنواع غير المدعومة أو الويب
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // هذه هي الدالة الذكية لتحديد النوع
+  // --- الخطوة 3: تحديث دالة التحميل مع معالجة الأخطاء ---
+  Future<void> _downloadAndCachePdf() async {
+    // أولاً، تحقق من وجود اتصال بالإنترنت
+    var connectivityResult = await (Connectivity().checkConnectivity());
+    if (connectivityResult == ConnectivityResult.none) {
+      if (mounted) {
+        setState(() {
+          _statusMessage = 'الملف غير محفوظ، ولا يوجد اتصال بالإنترنت لتحميله.';
+          _fileType = DisplayableFileType.unsupported; // اعتبره غير مدعوم الآن
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    // إذا كان هناك انترنت، حاول التحميل
+    try {
+      final uri = Uri.parse(widget.fileUrl);
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final file = await _getLocalFile();
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+        if (mounted) {
+          setState(() {
+            _localFilePath = file.path;
+            _isLoading = false;
+          });
+        }
+      } else {
+        throw Exception('فشل تحميل الملف');
+      }
+    } on SocketException { // <-- معالجة خطأ الإنترنت بالتحديد
+      if (mounted) {
+        setState(() {
+          _statusMessage = 'فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.';
+          _fileType = DisplayableFileType.unsupported;
+          _isLoading = false;
+        });
+      }
+    } catch (e) { // <-- معالجة أي أخطاء أخرى
+      if (mounted) {
+        setState(() {
+          _statusMessage = 'فشل تحميل الملف لعرضه.';
+          _fileType = DisplayableFileType.unsupported;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // --- باقي الدوال تبقى كما هي مع تعديلات بسيطة ---
+
   DisplayableFileType _determineFileType() {
     final typeFromServer = (widget.apiFileType ?? '').toLowerCase().trim();
     final url = widget.fileUrl.toLowerCase();
 
-    // المستوى الأول: الثقة بالنوع القادم من الخادم
-    if (typeFromServer == 'pdf' || typeFromServer == 'application/pdf') {
+    if (typeFromServer == 'pdf' || typeFromServer == 'application/pdf' || url.endsWith('.pdf')) {
       return DisplayableFileType.pdf;
     }
-    if (typeFromServer.startsWith('image')) { // 'image/png', 'image/jpeg' etc.
+    if (typeFromServer.startsWith('image') || url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.jpeg')) {
       return DisplayableFileType.image;
     }
-
-    // المستوى الثاني: تحليل رابط الملف
-    if (url.endsWith('.pdf')) {
-      return DisplayableFileType.pdf;
-    }
-    if (url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.jpeg')) {
-      return DisplayableFileType.image;
-    }
-
-    // المستوى الثالث: إذا فشل كل شيء
     return DisplayableFileType.unsupported;
   }
 
-  Future<void> _downloadPdf() async {
-    try {
-      final uri = Uri.parse(widget.fileUrl);
-      final response = await http.get(uri);
-      final bytes = response.bodyBytes;
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/${widget.reportTitle.replaceAll(' ', '_')}.pdf');
-      await file.writeAsBytes(bytes, flush: true);
-      if (mounted) {
-        setState(() {
-          _localPdfPath = file.path;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loadingMessage = 'فشل تحميل الملف لعرضه.';
-          // سنجعل النوع غير مدعوم إذا فشل التحميل
-          _fileType = DisplayableFileType.unsupported;
-        });
-      }
-    }
-  }
-
-  // دالة لفتح الرابط خارجيًا
   Future<void> _openExternally() async {
     final uri = Uri.parse(widget.fileUrl);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لا يمكن فتح الرابط. تأكد من تثبيت متصفح ويب.')),
+        const SnackBar(content: Text('لا يمكن فتح الرابط.')),
       );
     }
   }
@@ -123,7 +164,6 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.reportTitle),
-        // إضافة زر تنزيل دائم في الأعلى
         actions: [
           IconButton(
             icon: const Icon(Icons.download_for_offline_outlined),
@@ -132,38 +172,27 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
           ),
         ],
       ),
-      body: _isLoading ? _buildLoadingView() : _buildContentView(),
-    );
-  }
-
-  Widget _buildLoadingView() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 20),
-          Text(_loadingMessage),
-        ],
-      ),
+      body: _isLoading ? _buildMessageView(_statusMessage, showIndicator: true) : _buildContentView(),
     );
   }
 
   Widget _buildContentView() {
     switch (_fileType) {
       case DisplayableFileType.pdf:
-        if (_localPdfPath != null) {
-          return PDFView(filePath: _localPdfPath!);
-        }
-        // عرض رسالة خطأ إذا فشل التحميل
-        return _buildUnsupportedView();
+        return (_localFilePath != null)
+            ? PDFView(filePath: _localFilePath!)
+            : _buildUnsupportedView(); // عرض خطأ إذا فشل التحميل لسبب ما
 
       case DisplayableFileType.image:
+      // CachedNetworkImage يتولى التخزين المؤقت للصور تلقائيًا
         return Center(
           child: InteractiveViewer(
+            panEnabled: true,
+            minScale: 0.5,
+            maxScale: 4,
             child: CachedNetworkImage(
               imageUrl: widget.fileUrl,
-              placeholder: (context, url) => _buildLoadingView(),
+              placeholder: (context, url) => _buildMessageView('جاري تحميل الصورة...'),
               errorWidget: (context, url, error) => _buildUnsupportedView(),
             ),
           ),
@@ -175,6 +204,20 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
     }
   }
 
+  // واجهة موحدة لعرض رسائل الحالة والتحميل
+  Widget _buildMessageView(String message, {bool showIndicator = true}) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (showIndicator) const CircularProgressIndicator(),
+          const SizedBox(height: 20),
+          Text(message, textAlign: TextAlign.center),
+        ],
+      ),
+    );
+  }
+
   Widget _buildUnsupportedView() {
     return Center(
       child: Padding(
@@ -184,14 +227,14 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
           children: [
             const Icon(Icons.error_outline, size: 60, color: Colors.red),
             const SizedBox(height: 20),
-            const Text(
-              'تعذر عرض هذا الملف داخل التطبيق.',
+            Text(
+              _statusMessage, // عرض رسالة الخطأ المحددة
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             const Text(
-              'يمكنك محاولة فتحه في تطبيق خارجي أو تنزيله.',
+              'يمكنك محاولة فتحه في تطبيق خارجي.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16),
             ),
@@ -200,11 +243,6 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
               icon: const Icon(Icons.open_in_new),
               label: const Text('فتح خارجيًا'),
               onPressed: _openExternally,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue.shade800,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
             ),
           ],
         ),

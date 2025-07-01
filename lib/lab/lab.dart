@@ -1,4 +1,6 @@
-import 'package:cosmetic_store/lab/viw.dart';
+import 'dart:io';
+
+import 'package:cosmetic_store/lab/viw.dart'; // تأكد من أن هذا الملف موجود وصحيح
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:http/http.dart' as http;
@@ -408,13 +410,20 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
           _currentCategoryId = categoryId;
         });
       }
+    } on SocketException {
+      setState(() {
+        isLoading = false;
+        _isLoadingMore = false;
+      });
+      _showErrorSnackBar('فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.');
     } catch (e) {
       setState(() {
         isLoading = false;
         _isLoadingMore = false;
       });
       if (!loadMore) {
-        _showErrorSnackBar('حدث خطأ في جلب البيانات: $e');
+        print('Error fetching lab tests: $e'); // للمطور
+        _showErrorSnackBar('حدث خطأ غير متوقع أثناء تحميل الفحوصات.'); // للمستخدم
       }
     }
   }
@@ -591,8 +600,11 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
       } else {
         _showErrorSnackBar('فشل في إرسال الطلب: ${response.body}');
       }
+    } on SocketException {
+      _showErrorSnackBar('فشل الاتصال. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.');
     } catch (e) {
-      _showErrorSnackBar('حدث خطأ في إرسال الطلب: $e');
+      print('Order submission error: $e'); // للمطور
+      _showErrorSnackBar('حدث خطأ غير متوقع أثناء إرسال الطلب.'); // للمستخدم
     } finally {
       setState(() => _isAuthLoading = false);
     }
@@ -604,7 +616,6 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
     if (_userId == null || _authToken == null) return;
     setState(() => _isResultsLoading = true);
     try {
-      // [تم الإصلاح] - تم تعديل هذا السطر لإضافة معرف المستخدم إلى الرابط
       final response = await http.get(
         Uri.parse('$_baseUrl/tiby-lab/v1/user-test-results/$_userId'),
         headers: { 'Authorization': 'Bearer $_authToken' },
@@ -622,8 +633,11 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
       } else {
         _showErrorSnackBar('فشل في جلب نتائج الفحوصات.');
       }
+    } on SocketException {
+      _showErrorSnackBar('فشل الاتصال. يرجى التحقق من اتصالك بالإنترنت.');
     } catch(e) {
-      _showErrorSnackBar('حدث خطأ في الشبكة: $e');
+      print('Fetch results error: $e'); // للمطور
+      _showErrorSnackBar('حدث خطأ غير متوقع في جلب البيانات.'); // للمستخدم
     } finally {
       setState(() => _isResultsLoading = false);
     }
@@ -670,7 +684,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
 
   AppBar _buildAppBar() {
     String title = 'المختبر';
-    if (_currentView == AppView.results) title = 'نتائجي';
+    if (_currentView == AppView.results) title = 'نتائج الفحص';
     if (_currentView == AppView.profile) title = 'ملفي الشخصي';
 
     return AppBar(
@@ -900,7 +914,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
         title: Text(result.title, style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text('تاريخ الفحص: ${result.testDate}'),
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-        onTap: () => _showReportOptions(context, result), // <-- IMPORTANT CHANGE
+        onTap: () => _showReportOptions(context, result),
       ),
     );
   }
@@ -1249,17 +1263,12 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
     );
   }
 
-
-
-
   void _showReportOptions(BuildContext context, TestResult result) {
-    // Ensure there is a URL to work with
     if (result.resultFileUrl == null || result.resultFileUrl!.isEmpty) {
       _showErrorSnackBar('ملف النتيجة غير متوفر حاليًا.');
       return;
     }
 
-    // Determine file type, default to 'pdf' if not specified
     final fileType = result.fileType ?? 'pdf';
 
     showModalBottomSheet(
@@ -1272,7 +1281,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
                 leading: const Icon(Icons.visibility),
                 title: const Text('عرض النتيجة'),
                 onTap: () {
-                  Navigator.of(ctx).pop(); // Close the bottom sheet
+                  Navigator.of(ctx).pop();
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => ReportViewerScreen(
@@ -1288,7 +1297,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
                 leading: const Icon(Icons.download_for_offline_outlined),
                 title: const Text('تنزيل / فتح خارجيًا'),
                 onTap: () {
-                  Navigator.of(ctx).pop(); // Close the bottom sheet
+                  Navigator.of(ctx).pop();
                   _openResultFile(result.resultFileUrl);
                 },
               ),
@@ -1298,17 +1307,6 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
       },
     );
   }
-
-
-
-
-
-
-
-
-
-
-
 
   Widget _buildEmptyState() {
     return Center(

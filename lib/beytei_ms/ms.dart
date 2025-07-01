@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -35,6 +36,7 @@ class Product {
   final String description;
   final double price;
   final String imageUrl;
+  final String category;
   int quantity;
 
   Product({
@@ -43,6 +45,7 @@ class Product {
     required this.description,
     required this.price,
     required this.imageUrl,
+    required this.category,
     this.quantity = 1,
   });
 
@@ -55,7 +58,15 @@ class Product {
       imageUrl: json['images'] != null && json['images'].isNotEmpty
           ? json['images'][0]['src'].replaceAll('.jpg', '-300x300.jpg')
           : 'https://via.placeholder.com/150',
+      category: json['categories'] != null && json['categories'].isNotEmpty
+          ? json['categories'][0]['name']
+          : 'عام',
     );
+  }
+
+  String get formattedPrice {
+    final formatter = NumberFormat('#,###');
+    return '${formatter.format(price)} الف';
   }
 }
 
@@ -79,12 +90,13 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   List<dynamic> mainCategories = [];
   int? _currentCategoryId;
   bool _isConnected = true;
+  bool _isCategoriesVisible = true;
+  final ScrollController _scrollController = ScrollController();
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
   Timer? _searchDebounce;
 
   List<String> bannerImages = [
@@ -162,14 +174,17 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
           _currentCategoryId = categoryId;
         });
       }
-    } catch (e) {
-      setState(() {
-        isLoading = false;
-        _isLoadingMore = false;
-      });
-      if (!loadMore) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('حدث خطأ: $e')),
+    }  catch (e) {
+  setState(() {
+  isLoading = false;
+  _isLoadingMore = false;
+  // نفترض أن الاتصال قد فُقد إذا فشلت عملية جلب البيانات
+  _isConnected = false;
+  });
+  if (!loadMore) {
+  // عرض رسالة واضحة للمستخدم للتحقق من الاتصال
+  ScaffoldMessenger.of(context).showSnackBar(
+  const SnackBar(content: Text('يمعود شوف الانترنيت ضعيف، يرجى التحقق من اتصالك بالإنترنت')),
         );
       }
     }
@@ -196,6 +211,18 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   }
 
   void _scrollListener() {
+    final direction = _scrollController.position.userScrollDirection;
+
+    if (direction == ScrollDirection.forward) {
+      if (!_isCategoriesVisible) {
+        setState(() => _isCategoriesVisible = true);
+      }
+    } else if (direction == ScrollDirection.reverse) {
+      if (_isCategoriesVisible) {
+        setState(() => _isCategoriesVisible = false);
+      }
+    }
+
     if (_scrollController.offset >= _scrollController.position.maxScrollExtent &&
         !_scrollController.position.outOfRange) {
       _fetchProducts(
@@ -218,6 +245,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
           description: product.description,
           price: product.price,
           imageUrl: product.imageUrl,
+          category: product.category,
           quantity: 1,
         ));
       }
@@ -350,6 +378,84 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
     }
   }
 
+  void _showProductDetails(Product product) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  product.name,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'الفئة: ${product.category}',
+              style: TextStyle(color: Colors.blue[800]),
+            ),
+            const SizedBox(height: 20),
+            Center(
+              child: CachedNetworkImage(
+                imageUrl: product.imageUrl.replaceAll('-300x300', ''),
+                height: 200,
+                fit: BoxFit.contain,
+                placeholder: (context, url) => Center(child: CircularProgressIndicator()),
+                errorWidget: (context, url, error) => Icon(Icons.image_not_supported),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'وصف المنتج:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text(product.description.replaceAll(RegExp(r'<[^>]*>'), '')),
+            const SizedBox(height: 20),
+            const Text(
+              'السعر:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text(
+              product.formattedPrice,
+              style: const TextStyle(
+                fontSize: 18,
+                color: Colors.green,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  addToCart(product);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[800],
+                  padding: const EdgeInsets.symmetric(vertical: 15),
+                ),
+                child: const Text('أضف إلى السلة الآن'),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBannerSlider() {
     return Container(
       height: 140,
@@ -401,14 +507,16 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   }
 
   Widget _buildMainCategories() {
-    if (mainCategories.isEmpty) return const SizedBox.shrink();
+    if (mainCategories.isEmpty || !_isCategoriesVisible) return const SizedBox.shrink();
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
       height: 120,
       margin: const EdgeInsets.only(bottom: 10),
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: mainCategories.length + 1,
+        physics: const BouncingScrollPhysics(),
         itemBuilder: (context, index) {
           if (index == 0) {
             return Padding(
@@ -516,70 +624,75 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
       ),
     );
   }
-
   Widget _buildProductCard(Product product) {
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-            child: CachedNetworkImage(
-              imageUrl: product.imageUrl,
-              height: 120,
-              width: double.infinity,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => Container(
-                color: Colors.grey[100],
-                child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5)),
-              ),
-              errorWidget: (context, url, error) => Container(
-                color: Colors.grey[200],
-                child: const Icon(Icons.image_not_supported, color: Colors.grey),
+      margin: const EdgeInsets.all(5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: () => _showProductDetails(product),
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              child: CachedNetworkImage(
+                imageUrl: product.imageUrl,
+                height: 120,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[100],
+                  child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5)),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: Colors.grey[200],
+                  child: const Icon(Icons.shopping_bag, size: 50, color: Colors.blue),
+                ),
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  product.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  product.description.replaceAll(RegExp(r'<[^>]*>'), ''),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '${product.price.toStringAsFixed(2)} دينار',
-                      style: const TextStyle(
-                        color: Colors.green,
-                        fontWeight: FontWeight.bold,
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    product.name,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    product.category,
+                    style: TextStyle(fontSize: 12, color: Colors.blue[800]),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    product.formattedPrice,
+                    style: const TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      icon: const Icon(Icons.add_shopping_cart, color: Colors.blue),
+                      onPressed: () => addToCart(product),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.blue[50],
+                        padding: const EdgeInsets.all(8),
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => addToCart(product),
-                      icon: const Icon(Icons.add_shopping_cart, color: Colors.blue),
-                    ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -589,25 +702,36 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: Colors.white,
         borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 5,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: CachedNetworkImage(
-              imageUrl: product.imageUrl,
-              width: 50,
-              height: 50,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => Container(
-                color: Colors.grey[200],
-                child: const Center(child: CircularProgressIndicator(strokeWidth: 1.0)),
-              ),
-              errorWidget: (context, url, error) => Container(
-                color: Colors.grey[200],
-                child: const Icon(Icons.image, size: 20, color: Colors.grey),
+          InkWell(
+            onTap: () => _showProductDetails(product),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: CachedNetworkImage(
+                imageUrl: product.imageUrl,
+                width: 60,
+                height: 60,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[100],
+                  child: const Center(child: CircularProgressIndicator(strokeWidth: 1.0)),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: Colors.grey[200],
+                  child: const Icon(Icons.shopping_bag, size: 20, color: Colors.grey),
+                ),
               ),
             ),
           ),
@@ -623,7 +747,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  '${product.price.toStringAsFixed(2)} × ${product.quantity}',
+                  product.formattedPrice,
                   style: const TextStyle(color: Colors.grey),
                 ),
               ],
@@ -636,7 +760,14 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 icon: const Icon(Icons.remove, size: 18),
                 onPressed: () => updateQuantity(product, product.quantity - 1),
               ),
-              Text(product.quantity.toString()),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey[300]!),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(product.quantity.toString()),
+              ),
               IconButton(
                 icon: const Icon(Icons.add, size: 18),
                 onPressed: () => updateQuantity(product, product.quantity + 1),
@@ -654,6 +785,9 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   }
 
   Widget _buildCartSummary() {
+    final formatter = NumberFormat('#,###');
+    final formattedTotal = formatter.format(totalPrice);
+
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
@@ -674,11 +808,11 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'السلة',
+                'سلة التسوق',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               Text(
-                '${totalPrice.toStringAsFixed(2)} دينار',
+                '$formattedTotal الف ',
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -688,9 +822,10 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            height: 150,
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 200),
             child: ListView.builder(
+              shrinkWrap: true,
               itemCount: cartItems.length,
               itemBuilder: (context, index) => _buildCartItem(cartItems[index]),
             ),
@@ -702,7 +837,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 child: ElevatedButton(
                   onPressed: _showCheckoutForm,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[300],
+                    backgroundColor: Colors.blue[800],
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
@@ -724,6 +859,9 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   }
 
   Widget _buildCheckoutForm() {
+    final formatter = NumberFormat('#,###');
+    final formattedTotal = formatter.format(totalPrice);
+
     return Container(
       width: MediaQuery.of(context).size.width * 0.9,
       padding: const EdgeInsets.all(20),
@@ -771,7 +909,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 children: [
                   Expanded(child: Text('${product.name} (${product.quantity})')),
                   Text(
-                    '${(product.price * product.quantity).toStringAsFixed(2)} دينار',
+                    '${formatter.format(product.price * product.quantity)} دينار',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ],
@@ -785,7 +923,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                   const Text('الإجمالي:', style: TextStyle(fontWeight: FontWeight.bold)),
                   const Spacer(),
                   Text(
-                    '${totalPrice.toStringAsFixed(2)} دينار',
+                    '$formattedTotal دينار',
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -1071,7 +1209,10 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
           Column(
             children: [
               _buildBannerSlider(),
-              _buildMainCategories(),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: _buildMainCategories(),
+              ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
@@ -1086,13 +1227,14 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                       ? _buildEmptyState()
                       : GridView.builder(
                     controller: _scrollController,
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(8),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 2,
                       childAspectRatio: 0.75,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
                     ),
+                    physics: const BouncingScrollPhysics(),
                     itemCount: products.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
                       if (index == products.length) {

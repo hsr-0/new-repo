@@ -197,9 +197,14 @@ class _RegistrationFormState extends State<RegistrationForm> {
           throw Exception('فشل في التسجيل');
         }
       } catch (e) {
+        // طباعة الخطأ الفعلي في الكونسول للمطورين
+        print('Registration Error: $e');
+
+        // عرض رسالة خطأ واضحة ومفيدة للمستخدم
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('حدث خطأ: ${e.toString()}'),
+            content: const Text('فشل التسجيل. يرجى التحقق من اتصالك بالإنترنت والمحاولة لاحقاً.'),
+            backgroundColor: Colors.red[700], // لون مميز للخطأ
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
