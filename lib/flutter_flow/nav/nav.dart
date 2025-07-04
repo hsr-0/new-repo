@@ -210,7 +210,7 @@ builder: (context, params) => HomeMainPageWidget(),
     FFRoute(
       name: 'trbstorepage',
       path: '/trb-store',
-      builder: (context, params) => const TripScreen(),
+      builder: (context, params) => const  AuthGate(),
     ),
 
 
