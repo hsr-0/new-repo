@@ -2,125 +2,102 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>منصة بيتي </string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>co.median.ios.wqwnby</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>7.0</string>
+	<key>CFBundleName</key>
+	<string>Beytei</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ar</string>
+	</array>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.7</string>
+	<key>CFBundleVersion</key>
+	<string>5</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.266994090766-6ic3o5thaqej93dbsvohdbhl49vc40ad</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>beytei.me</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>beytei</string>
+			</array>
+		</dict>
+	</array>
+	<key>FlutterDeepLinkingEnabled</key>
+	<true/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>https</string>
+		<string>http</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>نحتاج إلى استخدام الكاميرا لمسح الباركود</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>نحتاج الوصول إلى مكتبة الصور</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>نستخدم الميكروفون داخل التطبيق</string>
+	<key>NSUserNotificationUsageDescription</key>
+	<string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
 
-    <key>CFBundleDisplayName</key>
-    <string>منصة بيتي</string>
+	<!-- START: Location Permissions from Guide -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>نحتاج إلى الوصول لموقعك لعرض السائقين القريبين وتحديد نقطة الانطلاق.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>نحتاج إلى الوصول لموقعك في الخلفية لتحديث موقعك كسائق وتلقي الطلبات القريبة منك.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>نحتاج إلى الوصول لموقعك في الخلفية لتحديث موقعك كسائق وتلقي الطلبات القريبة منك.</string>
+	<!-- END: Location Permissions from Guide -->
 
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
-
-    <key>CFBundleIdentifier</key>
-    <string>co.median.ios.wqwnby</string>
-
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>7.0</string>
-
-    <key>CFBundleName</key>
-    <string>Beytei</string>
-
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-
-    <key>CFBundleLocalizations</key>
-    <array>
-        <string>en</string>
-        <string>ar</string>
-    </array>
-
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.7</string>
-
-    <key>CFBundleVersion</key>
-    <string>5</string>
-
-    <key>CFBundleSignature</key>
-    <string>????</string>
-
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleTypeRole</key>
-            <string>Editor</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>com.googleusercontent.apps.266994090766-6ic3o5thaqej93dbsvohdbhl49vc40ad</string>
-            </array>
-        </dict>
-        <dict>
-            <key>CFBundleTypeRole</key>
-            <string>Editor</string>
-            <key>CFBundleURLName</key>
-            <string>beytei.me</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>beytei</string>
-            </array>
-        </dict>
-    </array>
-
-    <key>FlutterDeepLinkingEnabled</key>
-    <true/>
-
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
-
-    <key>LSApplicationQueriesSchemes</key>
-    <array>
-        <string>https</string>
-        <string>http</string>
-    </array>
-
-    <key>NSCameraUsageDescription</key>
-    <string>نحتاج إلى استخدام الكاميرا لمسح الباركود</string>
-
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>نحتاج الوصول إلى مكتبة الصور</string>
-
-    <key>NSMicrophoneUsageDescription</key>
-    <string>نستخدم الميكروفون داخل التطبيق</string>
-
-    <key>NSUserNotificationUsageDescription</key>
-    <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
-
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك لتحديد الموقع داخل التطبيق</string>
-
-    <key>NSLocationAlwaysUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك حتى عند تشغيل التطبيق في الخلفية</string>
-
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك لتقديم تجربة أفضل عند استخدام التطبيق</string>
-
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>remote-notification</string>
-    </array>
-
-    <key>UILaunchStoryboardName</key>
-    <string>LaunchScreen</string>
-
-    <key>UIMainStoryboardFile</key>
-    <string>Main</string>
-
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-
-    <key>UIViewControllerBasedStatusBarAppearance</key>
-    <false/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
 </dict>
 </plist>
