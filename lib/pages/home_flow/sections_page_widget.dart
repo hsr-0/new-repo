@@ -246,19 +246,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       context.push('/splash');
                     },
                   ),
-                  _buildGridCard(
-                    context: context,
-                    title: 'الحجز الطبي',
-                    description: 'حجز موعد مع الطبيب',
-                    imagePath: 'assets/images/medical.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => MedicalHomeScreen()),
-                      );
-                    },
-                  ),
+
                   _buildGridCard(
                     context: context,
                     title: 'استشارة طبية ',
@@ -274,6 +262,37 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       );
                     },
                   ),
+
+
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'تكسي بيتي  ',
+                    description: '',
+                    imagePath: 'assets/images/taxi.png',
+                    onTap: () {
+                      GoRouter.of(context).push('/trb-store');
+                    },
+                  ),
+
+
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'الحجز الطبي',
+                    description: 'حجز موعد مع الطبيب',
+                    imagePath: 'assets/images/medical.png',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => MedicalHomeScreen()),
+                      );
+                    },
+                  ),
+
                   _buildGridCard(
                     context: context,
                     title: 'مسواك بيتي ',
@@ -283,6 +302,11 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       GoRouter.of(context).push('/miswak-store');
                     },
                   ),
+
+
+
+
+
                   _buildGridCard(
                     context: context,
                     title: 'سجل بيتي الطبي ',
@@ -301,15 +325,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       GoRouter.of(context).push('/lab-store');
                     },
                   ),
-                  _buildGridCard(
-                    context: context,
-                    title: 'تكسي بيتي  ',
-                    description: '',
-                    imagePath: 'assets/images/taxi.png',
-                    onTap: () {
-                      GoRouter.of(context).push('/trb-store');
-                    },
-                  ),
+
                 ],
               ),
             ),

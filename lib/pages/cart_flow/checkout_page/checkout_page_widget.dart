@@ -4451,7 +4451,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                 ),
                                                               );
 
-                                                              context.goNamed(
+                                                              context.pushNamed(
                                                                   HomeMainPageWidget
                                                                       .routeName);
 

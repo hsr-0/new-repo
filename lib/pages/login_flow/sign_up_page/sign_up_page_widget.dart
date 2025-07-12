@@ -161,7 +161,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> with RouteAware {
                                 FFAppState().isLogin = false;
                                 FFAppState().update(() {});
 
-                                context.goNamed(HomeMainPageWidget.routeName);
+                                context.pushReplacementNamed(HomeMainPageWidget.routeName);
                               }
                             },
                             child: Container(
@@ -831,7 +831,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> with RouteAware {
                                           context.safePop();
                                           context.safePop();
                                         } else {
-                                          context.goNamed(
+                                          context.pushReplacementNamed(
                                               HomeMainPageWidget.routeName);
                                         }
                                       }

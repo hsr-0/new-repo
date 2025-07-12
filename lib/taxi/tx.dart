@@ -468,7 +468,7 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'طلب سريع'),
           BottomNavigationBarItem(icon: Icon(Icons.event_note_outlined), label: 'رحلات مجدولة'),
-          BottomNavigationBarItem(icon: Icon(Icons.star_outline), label: 'طلب خاص'),
+          BottomNavigationBarItem(icon: Icon(Icons.star_outline), label: 'طلب خصوصي '),
         ],
       ),
     );
@@ -567,7 +567,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
         onTap: _changeTab,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), label: 'الطلبات'),
-          BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات خاصة'),
+          BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي '),
           BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
           BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
           BottomNavigationBarItem(icon: Icon(Icons.notifications_outlined), label: 'الإشعارات'),

@@ -147,8 +147,8 @@ final kTranslationsMap = <Map<String, Map<String, String>>>[
   // SplashPage
   {
     '4ybbqts6': {
-      'en': 'كوزمتك بيتي ',
-      'ar': 'كوزمتك بيتي ',
+      'en': 'بوتيك بيتي ',
+      'ar': 'بوتيك بيتي ',
     },
     'd6o1wtnw': {
       'en': 'Home',
@@ -545,11 +545,11 @@ final kTranslationsMap = <Map<String, Map<String, String>>>[
     },
     'p93gq2j9': {
       'en': 'Address line 1',
-      'ar': 'العنوان سطر 1',
+      'ar': 'المحافظة',
     },
     'maz889ao': {
       'en': 'Enter address line 1',
-      'ar': 'أدخل سطر العنوان 1',
+      'ar': 'مثل واسط  ',
     },
     'n46yv5wm': {
       'en': 'Address line 2',
@@ -557,7 +557,7 @@ final kTranslationsMap = <Map<String, Map<String, String>>>[
     },
     'l99qyk44': {
       'en': 'Enter address line 2',
-      'ar': 'أدخل سطر العنوان 2',
+      'ar': 'مثل العزيزية ',
     },
     'idf0u7pp': {
       'en': 'Select  country',
@@ -577,11 +577,11 @@ final kTranslationsMap = <Map<String, Map<String, String>>>[
     },
     'fme2q2kk': {
       'en': 'City',
-      'ar': 'مدينة',
+      'ar': 'المنطقة ',
     },
     '7ex062p0': {
       'en': 'Enter city',
-      'ar': 'أدخل المدينة',
+      'ar': 'الشباب ',
     },
     'oq9dwncq': {
       'en': 'رقم حظج ياحلوة',
@@ -1011,7 +1011,7 @@ final kTranslationsMap = <Map<String, Map<String, String>>>[
     },
     'kkjz9j7a': {
       'en': 'Choose your Payment Mode',
-      'ar': 'اختر طريقة الدفع الخاصة بك',
+      'ar': ' انزل للاسف اكثر واختر طريقة الدفع الخاصة بك',
     },
     'tmlmzccj': {
       'en': 'Confirm Payment',

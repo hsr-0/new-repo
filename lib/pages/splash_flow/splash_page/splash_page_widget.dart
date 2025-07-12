@@ -2,8 +2,7 @@ import '/backend/api_requests/api_calls.dart';
 import '/flutter_flow/flutter_flow_animations.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
-import
-'/flutter_flow/flutter_flow_widgets.dart';
+import '/flutter_flow/flutter_flow_widgets.dart';
 import '/pages/components/logo_component/logo_component_widget.dart';
 import 'dart:math';
 import 'dart:ui';
@@ -57,8 +56,8 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
               _model.currency = await PlantShopGroup.currentCurrencyCall.call();
 
               if (PlantShopGroup.currentCurrencyCall.status(
-                    (_model.currency?.jsonBody ?? ''),
-                  ) ==
+                (_model.currency?.jsonBody ?? ''),
+              ) ==
                   null) {
                 _model.currencySymbol = await actions.currencyConverter(
                   PlantShopGroup.currentCurrencyCall.symbol(
@@ -67,7 +66,7 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
                 );
                 FFAppState().currency = _model.currencySymbol!;
                 FFAppState().currencyCode =
-                    PlantShopGroup.currentCurrencyCall.code(
+                PlantShopGroup.currentCurrencyCall.code(
                   (_model.currency?.jsonBody ?? ''),
                 )!;
                 FFAppState().update(() {});
@@ -79,14 +78,14 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
             }),
             Future(() async {
               _model.currencyPosition =
-                  await PlantShopGroup.currencyPositionCall.call();
+              await PlantShopGroup.currencyPositionCall.call();
 
               if (PlantShopGroup.currencyPositionCall.status(
-                    (_model.currencyPosition?.jsonBody ?? ''),
-                  ) ==
+                (_model.currencyPosition?.jsonBody ?? ''),
+              ) ==
                   null) {
                 FFAppState().currencyPosition =
-                    PlantShopGroup.currencyPositionCall.value(
+                PlantShopGroup.currencyPositionCall.value(
                   (_model.currencyPosition?.jsonBody ?? ''),
                 )!;
                 FFAppState().update(() {});
@@ -97,14 +96,14 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
             }),
             Future(() async {
               _model.thousandSeparator =
-                  await PlantShopGroup.thousandSeparatorCall.call();
+              await PlantShopGroup.thousandSeparatorCall.call();
 
               if (PlantShopGroup.thousandSeparatorCall.status(
-                    (_model.thousandSeparator?.jsonBody ?? ''),
-                  ) ==
+                (_model.thousandSeparator?.jsonBody ?? ''),
+              ) ==
                   null) {
                 FFAppState().thousandSeparator =
-                    PlantShopGroup.thousandSeparatorCall.value(
+                PlantShopGroup.thousandSeparatorCall.value(
                   (_model.thousandSeparator?.jsonBody ?? ''),
                 )!;
                 FFAppState().update(() {});
@@ -115,14 +114,14 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
             }),
             Future(() async {
               _model.decimalSeparator =
-                  await PlantShopGroup.decimalSeparatorCall.call();
+              await PlantShopGroup.decimalSeparatorCall.call();
 
               if (PlantShopGroup.decimalSeparatorCall.status(
-                    (_model.decimalSeparator?.jsonBody ?? ''),
-                  ) ==
+                (_model.decimalSeparator?.jsonBody ?? ''),
+              ) ==
                   null) {
                 FFAppState().decimalSeparator =
-                    PlantShopGroup.decimalSeparatorCall.value(
+                PlantShopGroup.decimalSeparatorCall.value(
                   (_model.decimalSeparator?.jsonBody ?? ''),
                 )!;
                 FFAppState().update(() {});
@@ -133,16 +132,16 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
             }),
             Future(() async {
               _model.numberofDecimals =
-                  await PlantShopGroup.numberOfDecimalsCall.call();
+              await PlantShopGroup.numberOfDecimalsCall.call();
 
               if (PlantShopGroup.numberOfDecimalsCall.status(
-                    (_model.numberofDecimals?.jsonBody ?? ''),
-                  ) ==
+                (_model.numberofDecimals?.jsonBody ?? ''),
+              ) ==
                   null) {
                 FFAppState().decimalPlaces =
                     int.parse((PlantShopGroup.numberOfDecimalsCall.value(
-                  (_model.numberofDecimals?.jsonBody ?? ''),
-                )!));
+                      (_model.numberofDecimals?.jsonBody ?? ''),
+                    )!));
                 FFAppState().update(() {});
               } else {
                 FFAppState().decimalPlaces = 2;
@@ -171,9 +170,11 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
           ]);
           if (FFAppState().isIntro) {
             if (FFAppState().isLogin) {
-              context.goNamed(HomeMainPageWidget.routeName);
+              // 🔥 التعديل: استخدام pushReplacementNamed
+              context.pushReplacementNamed(HomeMainPageWidget.routeName);
             } else {
-              context.goNamed(
+              // 🔥 التعديل: استخدام pushReplacementNamed
+              context.pushReplacementNamed(
                 SignInPageWidget.routeName,
                 queryParameters: {
                   'isInner': serializeParam(
@@ -187,18 +188,19 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
             _model.allIntro = await PlantShopGroup.allIntroCall.call();
 
             if ((PlantShopGroup.allIntroCall.status(
-                      (_model.allIntro?.jsonBody ?? ''),
-                    ) ==
-                    'success') &&
+              (_model.allIntro?.jsonBody ?? ''),
+            ) ==
+                'success') &&
                 (PlantShopGroup.allIntroCall.dataList(
-                          (_model.allIntro?.jsonBody ?? ''),
-                        ) !=
-                        null &&
+                  (_model.allIntro?.jsonBody ?? ''),
+                ) !=
+                    null &&
                     (PlantShopGroup.allIntroCall.dataList(
                       (_model.allIntro?.jsonBody ?? ''),
                     ))!
                         .isNotEmpty)) {
-              context.goNamed(
+              // 🔥 التعديل: استخدام pushReplacementNamed
+              context.pushReplacementNamed(
                 OnboardingPageWidget.routeName,
                 queryParameters: {
                   'introList': serializeParam(
@@ -212,9 +214,11 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
               );
             } else {
               if (FFAppState().isLogin) {
-                context.goNamed(HomeMainPageWidget.routeName);
+                // 🔥 التعديل: استخدام pushReplacementNamed
+                context.pushReplacementNamed(HomeMainPageWidget.routeName);
               } else {
-                context.goNamed(
+                // 🔥 التعديل: استخدام pushReplacementNamed
+                context.pushReplacementNamed(
                   SignInPageWidget.routeName,
                   queryParameters: {
                     'isInner': serializeParam(
@@ -352,14 +356,14 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
                   ),
                   textAlign: TextAlign.center,
                   style: FlutterFlowTheme.of(context).bodyMedium.override(
-                        fontFamily: 'SF Pro Display',
-                        color: FlutterFlowTheme.of(context).primary,
-                        fontSize: 28.0,
-                        letterSpacing: 0.0,
-                        fontWeight: FontWeight.bold,
-                        useGoogleFonts: false,
-                        lineHeight: 1.5,
-                      ),
+                    fontFamily: 'SF Pro Display',
+                    color: FlutterFlowTheme.of(context).primary,
+                    fontSize: 28.0,
+                    letterSpacing: 0.0,
+                    fontWeight: FontWeight.bold,
+                    useGoogleFonts: false,
+                    lineHeight: 1.5,
+                  ),
                 ).animateOnPageLoad(animationsMap['textOnPageLoadAnimation']!),
               ].divide(SizedBox(height: 10.0)),
             ),

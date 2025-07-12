@@ -95,7 +95,7 @@ class _SucessfullyPageWidgetState extends State<SucessfullyPageWidget>
         FocusManager.instance.primaryFocus?.unfocus();
       },
       child: WillPopScope(
-        onWillPop: () async => false,
+        onWillPop: () async => true, // يسمح بالرجوع
         child: Scaffold(
           key: scaffoldKey,
           backgroundColor: FlutterFlowTheme.of(context).lightGray,
@@ -116,25 +116,25 @@ class _SucessfullyPageWidgetState extends State<SucessfullyPageWidget>
                   ),
                   Padding(
                     padding:
-                        EdgeInsetsDirectional.fromSTEB(0.0, 32.0, 0.0, 0.0),
+                    EdgeInsetsDirectional.fromSTEB(0.0, 32.0, 0.0, 0.0),
                     child: Text(
                       FFLocalizations.of(context).getText(
                         '5xg0wce1' /* Your order has been received */,
                       ),
                       textAlign: TextAlign.center,
                       style: FlutterFlowTheme.of(context).bodyMedium.override(
-                            fontFamily: 'SF Pro Display',
-                            fontSize: 22.0,
-                            letterSpacing: 0.0,
-                            fontWeight: FontWeight.bold,
-                            useGoogleFonts: false,
-                            lineHeight: 1.5,
-                          ),
+                        fontFamily: 'SF Pro Display',
+                        fontSize: 22.0,
+                        letterSpacing: 0.0,
+                        fontWeight: FontWeight.bold,
+                        useGoogleFonts: false,
+                        lineHeight: 1.5,
+                      ),
                     ),
                   ),
                   Padding(
                     padding:
-                        EdgeInsetsDirectional.fromSTEB(0.0, 12.0, 0.0, 12.0),
+                    EdgeInsetsDirectional.fromSTEB(0.0, 12.0, 0.0, 12.0),
                     child: RichText(
                       textScaler: MediaQuery.of(context).textScaler,
                       text: TextSpan(
@@ -146,12 +146,12 @@ class _SucessfullyPageWidgetState extends State<SucessfullyPageWidget>
                             style: FlutterFlowTheme.of(context)
                                 .bodyMedium
                                 .override(
-                                  fontFamily: 'SF Pro Display',
-                                  fontSize: 18.0,
-                                  letterSpacing: 0.0,
-                                  fontWeight: FontWeight.w600,
-                                  useGoogleFonts: false,
-                                ),
+                              fontFamily: 'SF Pro Display',
+                              fontSize: 18.0,
+                              letterSpacing: 0.0,
+                              fontWeight: FontWeight.w600,
+                              useGoogleFonts: false,
+                            ),
                           ),
                           TextSpan(
                             text: getJsonField(
@@ -161,62 +161,62 @@ class _SucessfullyPageWidgetState extends State<SucessfullyPageWidget>
                             style: FlutterFlowTheme.of(context)
                                 .bodyMedium
                                 .override(
-                                  fontFamily: 'SF Pro Display',
-                                  color: () {
-                                    if ('pending' ==
-                                        getJsonField(
-                                          widget!.orderDetail,
-                                          r'''$.status''',
-                                        ).toString()) {
-                                      return Color(0xFFD99B0C);
-                                    } else if ('cancelled' ==
-                                        getJsonField(
-                                          widget!.orderDetail,
-                                          r'''$.status''',
-                                        ).toString()) {
-                                      return Color(0xFFFC0A15);
-                                    } else if ('processing' ==
-                                        getJsonField(
-                                          widget!.orderDetail,
-                                          r'''$.status''',
-                                        ).toString()) {
-                                      return Color(0xFFB963BE);
-                                    } else if ('refunded' ==
-                                        getJsonField(
-                                          widget!.orderDetail,
-                                          r'''$.status''',
-                                        ).toString()) {
-                                      return Color(0xFF696969);
-                                    } else if ('on-hold' ==
-                                        getJsonField(
-                                          widget!.orderDetail,
-                                          r'''$.status''',
-                                        ).toString()) {
-                                      return Color(0xFF384AA7);
-                                    } else if ('failed' ==
-                                        getJsonField(
-                                          widget!.orderDetail,
-                                          r'''$.status''',
-                                        ).toString()) {
-                                      return Color(0xFFFC0A15);
-                                    } else {
-                                      return Color(0xFF04B155);
-                                    }
-                                  }(),
-                                  fontSize: 18.0,
-                                  letterSpacing: 0.0,
-                                  fontWeight: FontWeight.w600,
-                                  useGoogleFonts: false,
-                                ),
-                          )
-                        ],
-                        style: FlutterFlowTheme.of(context).bodyMedium.override(
                               fontFamily: 'SF Pro Display',
+                              color: () {
+                                if ('pending' ==
+                                    getJsonField(
+                                      widget!.orderDetail,
+                                      r'''$.status''',
+                                    ).toString()) {
+                                  return Color(0xFFD99B0C);
+                                } else if ('cancelled' ==
+                                    getJsonField(
+                                      widget!.orderDetail,
+                                      r'''$.status''',
+                                    ).toString()) {
+                                  return Color(0xFFFC0A15);
+                                } else if ('processing' ==
+                                    getJsonField(
+                                      widget!.orderDetail,
+                                      r'''$.status''',
+                                    ).toString()) {
+                                  return Color(0xFFB963BE);
+                                } else if ('refunded' ==
+                                    getJsonField(
+                                      widget!.orderDetail,
+                                      r'''$.status''',
+                                    ).toString()) {
+                                  return Color(0xFF696969);
+                                } else if ('on-hold' ==
+                                    getJsonField(
+                                      widget!.orderDetail,
+                                      r'''$.status''',
+                                    ).toString()) {
+                                  return Color(0xFF384AA7);
+                                } else if ('failed' ==
+                                    getJsonField(
+                                      widget!.orderDetail,
+                                      r'''$.status''',
+                                    ).toString()) {
+                                  return Color(0xFFFC0A15);
+                                } else {
+                                  return Color(0xFF04B155);
+                                }
+                              }(),
                               fontSize: 18.0,
                               letterSpacing: 0.0,
                               fontWeight: FontWeight.w600,
                               useGoogleFonts: false,
                             ),
+                          )
+                        ],
+                        style: FlutterFlowTheme.of(context).bodyMedium.override(
+                          fontFamily: 'SF Pro Display',
+                          fontSize: 18.0,
+                          letterSpacing: 0.0,
+                          fontWeight: FontWeight.w600,
+                          useGoogleFonts: false,
+                        ),
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -230,14 +230,14 @@ class _SucessfullyPageWidgetState extends State<SucessfullyPageWidget>
                             'xa98cdf1' /* Order ID:  */,
                           ),
                           style:
-                              FlutterFlowTheme.of(context).bodyMedium.override(
-                                    fontFamily: 'SF Pro Display',
-                                    fontSize: 18.0,
-                                    letterSpacing: 0.0,
-                                    fontWeight: FontWeight.w600,
-                                    useGoogleFonts: false,
-                                    lineHeight: 1.5,
-                                  ),
+                          FlutterFlowTheme.of(context).bodyMedium.override(
+                            fontFamily: 'SF Pro Display',
+                            fontSize: 18.0,
+                            letterSpacing: 0.0,
+                            fontWeight: FontWeight.w600,
+                            useGoogleFonts: false,
+                            lineHeight: 1.5,
+                          ),
                         ),
                         TextSpan(
                           text: '#${getJsonField(
@@ -254,61 +254,57 @@ class _SucessfullyPageWidgetState extends State<SucessfullyPageWidget>
                         )
                       ],
                       style: FlutterFlowTheme.of(context).bodyMedium.override(
-                            fontFamily: 'SF Pro Display',
-                            fontSize: 18.0,
-                            letterSpacing: 0.0,
-                            fontWeight: FontWeight.w600,
-                            useGoogleFonts: false,
-                            lineHeight: 1.5,
-                          ),
+                        fontFamily: 'SF Pro Display',
+                        fontSize: 18.0,
+                        letterSpacing: 0.0,
+                        fontWeight: FontWeight.w600,
+                        useGoogleFonts: false,
+                        lineHeight: 1.5,
+                      ),
                     ),
                     textAlign: TextAlign.center,
                   ),
                   Padding(
                     padding:
-                        EdgeInsetsDirectional.fromSTEB(0.0, 24.0, 0.0, 39.0),
+                    EdgeInsetsDirectional.fromSTEB(0.0, 24.0, 0.0, 39.0),
                     child: Text(
                       FFLocalizations.of(context).getText(
                         'fmlou9iw' /* Thank you for shopping with us */,
                       ),
                       textAlign: TextAlign.center,
                       style: FlutterFlowTheme.of(context).bodyMedium.override(
-                            fontFamily: 'SF Pro Display',
-                            fontSize: 17.0,
-                            letterSpacing: 0.0,
-                            fontWeight: FontWeight.w500,
-                            useGoogleFonts: false,
-                            lineHeight: 1.5,
-                          ),
+                        fontFamily: 'SF Pro Display',
+                        fontSize: 17.0,
+                        letterSpacing: 0.0,
+                        fontWeight: FontWeight.w500,
+                        useGoogleFonts: false,
+                        lineHeight: 1.5,
+                      ),
                     ),
                   ),
                   FFButtonWidget(
                     onPressed: () async {
-                      FFAppState().pageIndex = 0;
-                      FFAppState().update(() {});
-                      if (Navigator.of(context).canPop()) {
-                        context.pop();
-                      }
-                      context.pushNamed(MyOrdersPageWidget.routeName);
+                      // 🔥 التعديل: العودة إلى شاشة الأقسام الرئيسية
+                      context.go('/sections');
                     },
                     text: FFLocalizations.of(context).getText(
-                      'kmscxnuh' /* View My Order */,
+                      'g9f1h2j3' /* Back to Main Menu */,
                     ),
                     options: FFButtonOptions(
-                      width: 164.0,
+                      width: 200.0,
                       height: 56.0,
                       padding:
-                          EdgeInsetsDirectional.fromSTEB(20.0, 0.0, 20.0, 0.0),
+                      EdgeInsetsDirectional.fromSTEB(20.0, 0.0, 20.0, 0.0),
                       iconPadding:
-                          EdgeInsetsDirectional.fromSTEB(0.0, 0.0, 0.0, 0.0),
+                      EdgeInsetsDirectional.fromSTEB(0.0, 0.0, 0.0, 0.0),
                       color: FlutterFlowTheme.of(context).primary,
                       textStyle:
-                          FlutterFlowTheme.of(context).titleSmall.override(
-                                fontFamily: 'SF Pro Display',
-                                color: Colors.white,
-                                letterSpacing: 0.0,
-                                useGoogleFonts: false,
-                              ),
+                      FlutterFlowTheme.of(context).titleSmall.override(
+                        fontFamily: 'SF Pro Display',
+                        color: Colors.white,
+                        letterSpacing: 0.0,
+                        useGoogleFonts: false,
+                      ),
                       elevation: 0.0,
                       borderRadius: BorderRadius.circular(12.0),
                     ),

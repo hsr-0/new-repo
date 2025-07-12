@@ -150,7 +150,8 @@ class _SignInPageWidgetState extends State<SignInPageWidget> with RouteAware {
                                 FFAppState().isLogin = false;
                                 FFAppState().update(() {});
 
-                                context.goNamed(HomeMainPageWidget.routeName);
+                                // 🔥 التعديل: استخدام pushReplacementNamed
+                                context.pushReplacementNamed(HomeMainPageWidget.routeName);
                               }
                             },
                             child: Container(
@@ -511,8 +512,9 @@ class _SignInPageWidgetState extends State<SignInPageWidget> with RouteAware {
                                   if (widget!.isInner) {
                                     context.safePop();
                                   } else {
+                                    // 🔥 التعديل: استخدام pushReplacementNamed
                                     context
-                                        .goNamed(HomeMainPageWidget.routeName);
+                                        .pushReplacementNamed(HomeMainPageWidget.routeName);
                                   }
                                 }
                               } else {
@@ -631,3 +633,4 @@ class _SignInPageWidgetState extends State<SignInPageWidget> with RouteAware {
     );
   }
 }
+

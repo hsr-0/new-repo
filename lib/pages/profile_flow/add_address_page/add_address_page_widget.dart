@@ -2568,9 +2568,9 @@ class _AddAddressPageWidgetState extends State<AddAddressPageWidget>
                                                     FFLocalizations.of(context)
                                                         .getVariableText(
                                                       enText:
-                                                          'Please enter phone number',
+                                                          'رقم الهاتف يبدى من 77او78',
                                                       arText:
-                                                          'الرجاء إدخال رقم الهاتف',
+                                                          'رقم الهاتف يبدى من 77 او 78 بدون صفر ',
                                                     ),
                                                   );
                                                 }
