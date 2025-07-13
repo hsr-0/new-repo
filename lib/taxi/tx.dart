@@ -169,6 +169,9 @@ class ApiService {
         if (data['success'] == true && data['drivers'] is List) return data['drivers'];
       }
       return [];
+    } on SocketException {
+      debugPrint("Network error fetching active drivers.");
+      return [];
     } catch (e) { debugPrint("Failed to fetch active drivers: $e"); return []; }
   }
   static Future<LatLng?> getRideDriverLocation(String token, String rideId) async {
@@ -180,6 +183,9 @@ class ApiService {
           return LatLng(double.parse(data['location']['lat']), double.parse(data['location']['lng']));
         }
       }
+      return null;
+    } on SocketException {
+      debugPrint("Network error getting driver location for ride.");
       return null;
     } catch (e) { debugPrint("Failed to get driver location for ride: $e"); return null; }
   }
@@ -370,7 +376,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         await ApiService.storeAuthData(authResult);
         widget.onLoginSuccess(authResult);
       } else { throw Exception(data['message'] ?? 'فشل تسجيل الدخول أو التسجيل'); }
-    } catch (e) { setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
+    } on SocketException {
+      if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
+    } catch (e) {
+      if (mounted) setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
     } finally { if(mounted) setState(() => _isLoading = false); }
   }
   @override
@@ -444,7 +453,10 @@ class _LoginScreenState extends State<LoginScreen> {
           widget.onLoginSuccess(authResult);
         }
       } else { throw Exception(data['message'] ?? 'فشل تسجيل الدخول'); }
-    } catch (e) { setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
+    } on SocketException {
+      if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
+    } catch (e) {
+      if (mounted) setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
     } finally { if(mounted) setState(() => _isLoading = false); }
   }
   @override
@@ -491,7 +503,10 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
       if (response.statusCode == 201 && data['success'] == true) {
         if(mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green)); Navigator.of(context).pop(); }
       } else { throw Exception(data['message'] ?? 'فشل التسجيل'); }
-    } catch (e) { setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
+    } on SocketException {
+      if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
+    } catch (e) {
+      if (mounted) setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
     } finally { if(mounted) setState(() => _isLoading = false); }
   }
   @override
@@ -566,7 +581,7 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
         onTap: (index) => setState(() => _selectedIndex = index),
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'طلب سريع'),
-          BottomNavigationBarItem(icon: Icon(Icons.event_note_outlined), label: 'رحلات مجدولة'),
+          BottomNavigationBarItem(icon: Icon(Icons.event_note_outlined), label: 'الرحلات '),
           BottomNavigationBarItem(icon: Icon(Icons.star_outline), label: 'طلب خصوصي '),
         ],
       ),
@@ -599,6 +614,8 @@ class _DriverPendingScreenState extends State<DriverPendingScreen> {
           throw Exception(data['message'] ?? 'فشل التحقق');
         }
       }
+    } on SocketException {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally { if(mounted) setState(() => _isChecking = false); }
@@ -696,7 +713,13 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     try {
       final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/available-rides'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
       if (response.statusCode == 200 && mounted) { final data = json.decode(response.body); setState(() => _availableRides = data['rides']); }
-    } catch (e) { debugPrint("Failed to fetch available rides: $e"); } finally { if (mounted) setState(() => _isLoading = false); }
+    } on SocketException {
+      debugPrint("Network error fetching available rides.");
+    } catch (e) {
+      debugPrint("Failed to fetch available rides: $e");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
   Future<void> _acceptRide(String rideId) async {
     setState(() => _isLoading = true);
@@ -710,6 +733,8 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
           throw Exception(data['message'] ?? 'فشل قبول الطلب');
         }
       }
+    } on SocketException {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
       _fetchAvailableRides();
@@ -829,6 +854,9 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل رسم المسار: خطأ من الخادم"), backgroundColor: Colors.red));
         }
       }
+    } on SocketException {
+      debugPrint("ORS Network Error");
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل رسم المسار: تحقق من اتصالك بالإنترنت"), backgroundColor: Colors.orange));
     } catch (e) {
       debugPrint("ORS Exception: ${e.toString()}");
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل رسم المسار: ${e.toString()}"), backgroundColor: Colors.red));
@@ -854,6 +882,8 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           throw Exception(data['message'] ?? 'فشل تحديث الحالة');
         }
       }
+    } on SocketException {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
     } finally { if(mounted) setState(() => _isLoading = false); }
@@ -1088,6 +1118,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           debugPrint("ORS Error: ${response.body}");
         }
       }
+    } on SocketException {
+      debugPrint("ORS Network Error");
     } catch (e) {
       debugPrint("ORS Exception: ${e.toString()}");
     }
@@ -1123,6 +1155,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
         }
       }
       setState(() => _driversData = newDriversData);
+    } on SocketException {
+      debugPrint("Network error fetching drivers.");
     } catch (e) {
       debugPrint("Error fetching drivers: $e");
     }
@@ -1151,6 +1185,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             }
           }
         }
+      } on SocketException {
+        debugPrint("Network error getting ride status.");
       } catch (e) {
         debugPrint("Failed to get ride status: $e");
       }
@@ -1195,6 +1231,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           throw Exception(data['message'] ?? 'فشل إرسال الطلب');
         }
       }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally {
@@ -1217,6 +1255,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           throw Exception(data['message'] ?? 'فشل الإلغاء');
         }
       }
+    } on SocketException {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
     } finally {
@@ -1545,6 +1585,8 @@ class _TripListScreenState extends State<TripListScreen> {
           throw Exception('فشل تحميل الرحلات');
         }
       }
+    } on SocketException {
+      if (mounted) setState(() => error = 'يرجى التحقق من اتصالك بالإنترنت');
     } catch (e) {
       if (mounted) setState(() => error = 'فشل تحميل البيانات. تحقق من اتصالك.');
     } finally { if (mounted) setState(() => isLoading = false); }
@@ -1561,6 +1603,8 @@ class _TripListScreenState extends State<TripListScreen> {
           throw Exception(result['message'] ?? 'فشل الحجز');
         }
       }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خطأ في الحجز: يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.red));
     }  catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الحجز: ${e.toString()}'), backgroundColor: Colors.red)); }
   }
   Future<void> _cancelBooking(String tripId, String passengerId) async {
@@ -1575,6 +1619,8 @@ class _TripListScreenState extends State<TripListScreen> {
           throw Exception(result['message'] ?? 'فشل الإلغاء');
         }
       }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خطأ في الإلغاء: يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.red));
     } catch (e) { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الإلغاء: ${e.toString().replaceFirst("Exception: ", "")}'), backgroundColor: Colors.red)); _loadTrips(); } }
   }
   void _updateTripLocally(Map<String, dynamic> updatedTrip) { setState(() { final index = trips.indexWhere((t) => t['id'].toString() == updatedTrip['id'].toString()); if (index != -1) trips[index] = updatedTrip; }); }
@@ -1845,6 +1891,8 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
           throw Exception(data['message'] ?? 'فشل إنشاء الرحلة');
         }
       }
+    } on SocketException {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) { if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally { if(mounted) setState(() => _isLoading = false); }
   }
@@ -1886,7 +1934,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     try {
       final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/my-notifications'), headers: {'Authorization': 'Bearer ${widget.token}'});
       if(response.statusCode == 200 && mounted) { final data = json.decode(response.body); setState(() => _notifications = data['notifications']); }
-    } catch(e) { debugPrint("Failed to fetch notifications: $e"); } finally { if(mounted) setState(() => _isLoading = false); }
+    } on SocketException {
+      debugPrint("Network error fetching notifications.");
+    } catch(e) {
+      debugPrint("Failed to fetch notifications: $e");
+    } finally {
+      if(mounted) setState(() => _isLoading = false);
+    }
   }
   @override
   Widget build(BuildContext context) {
@@ -1937,7 +1991,13 @@ class _DriverMyTripsScreenState extends State<DriverMyTripsScreen> {
     try {
       final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/my-trips'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
       if (response.statusCode == 200 && mounted) { final data = json.decode(response.body); setState(() => _myTrips = data['trips']); }
-    } catch (e) { debugPrint("Failed to fetch my trips: $e"); } finally { if (mounted) setState(() => _isLoading = false); }
+    } on SocketException {
+      debugPrint("Network error fetching my trips.");
+    } catch (e) {
+      debugPrint("Failed to fetch my trips: $e");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
   @override
   Widget build(BuildContext context) {
@@ -2050,6 +2110,8 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
           }
         }
       }
+    } on SocketException {
+      debugPrint("Network error fetching active private request.");
     } catch (e) {
       debugPrint("Failed to fetch active private request: $e");
     }
@@ -2094,6 +2156,8 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
           throw Exception(data['message'] ?? 'فشل إرسال الطلب');
         }
       }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally {
@@ -2118,6 +2182,8 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
           throw Exception(data['message'] ?? 'فشل إلغاء الطلب');
         }
       }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally {
@@ -2142,7 +2208,7 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('إنشاء طلب رحلة خاصة', style: Theme.of(context).textTheme.headlineSmall),
+            Text('إنشاء طلب رحلة خصوصي ', style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 24),
             TextFormField(controller: _fromController, decoration: const InputDecoration(labelText: 'مكان الانطلاق', prefixIcon: Icon(Icons.my_location)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 16),
@@ -2318,6 +2384,10 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
           throw Exception(data['message'] ?? 'فشل قبول الطلب');
         }
       }
+    } on SocketException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
@@ -2356,12 +2426,19 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
                   return ListView.builder(itemCount: 4, itemBuilder: (ctx, i) => const ShimmerListItem());
                 }
                 if (snapshot.hasError) {
-                  return Center(child: Text('خطأ في تحميل البيانات: ${snapshot.error}'));
+                  final error = snapshot.error;
+                  String errorMessage = 'خطأ في تحميل البيانات';
+                  if (error is SocketException) {
+                    errorMessage = 'يرجى التحقق من اتصالك بالإنترنت';
+                  } else if (error is Exception) {
+                    errorMessage = error.toString().replaceAll("Exception: ", "");
+                  }
+                  return Center(child: Text(errorMessage));
                 }
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
                   return const EmptyStateWidget(
                     svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>''',
-                    message: 'لا توجد طلبات خاصة متاحة حالياً.',
+                    message: 'لا توجد طلبات خصوصي  متاحة حالياً.',
                   );
                 }
 
