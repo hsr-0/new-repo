@@ -1011,7 +1011,7 @@ final kTranslationsMap = <Map<String, Map<String, String>>>[
     },
     'kkjz9j7a': {
       'en': 'Choose your Payment Mode',
-      'ar': ' انزل للاسف اكثر واختر طريقة الدفع الخاصة بك',
+      'ar': ' اختر طريقة الدفع الخاصة بك',
     },
     'tmlmzccj': {
       'en': 'Confirm Payment',

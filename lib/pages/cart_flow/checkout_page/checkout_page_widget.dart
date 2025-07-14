@@ -4486,7 +4486,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                 enText:
                                                                     'Please select payment method!',
                                                                 arText:
-                                                                    'الرجاء تحديد طريقة الدفع!',
+                                                                    'انزل الى الاسفل وحدد طريقة الدفع !',
                                                               ),
                                                             );
                                                             _model.process =
