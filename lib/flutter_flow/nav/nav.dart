@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:page_transition/page_transition.dart';
 import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
+import '../../chat/chat.dart';
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
 import '../../taxi/tx.dart';
@@ -190,6 +191,18 @@ builder: (context, params) => HomeMainPageWidget(),
       path: '/miswak-store',
       builder: (context, params) => const MiswakStoreScreen(),
     ),
+
+
+
+    FFRoute(
+      name: 'medicalstorepage',
+      path: '/medical-store',
+      builder: (context, params) => MedicalChatEntryPage(),
+    ),
+
+
+
+
 
 
     FFRoute(

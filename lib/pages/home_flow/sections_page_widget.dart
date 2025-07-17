@@ -247,6 +247,37 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     },
                   ),
 
+
+
+
+
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'استشارة طبية ',
+                    description: '',
+                    imagePath: 'assets/images/cosmetics.png',
+                    onTap: () {
+                      context.push('/medical-store');
+                    },
+                  ),
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                   _buildGridCard(
                     context: context,
                     title: 'استشارة طبية ',

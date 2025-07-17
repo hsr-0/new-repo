@@ -16,11 +16,75 @@ import 'package:shimmer/shimmer.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+
 // =============================================================================
 //  Global Navigator Key & Deep Link Notifier
 // =============================================================================
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 final ValueNotifier<Map<String, String>> deepLinkNotifier = ValueNotifier({});
+
+
+// =============================================================================
+//  NEW: Firebase Cloud Messaging API Handler
+// =============================================================================
+class FirebaseApi {
+  final _firebaseMessaging = FirebaseMessaging.instance;
+
+  // دالة للحصول على توكن الجهاز الفريد
+  Future<String?> getFcmToken() async {
+    try {
+      final fcmToken = await _firebaseMessaging.getToken();
+      debugPrint('Firebase Token: $fcmToken');
+      return fcmToken;
+    } catch (e) {
+      debugPrint("Failed to get FCM token: $e");
+      return null;
+    }
+  }
+
+  // دالة لتهيئة الإشعارات
+  Future<void> initNotifications() async {
+    await _firebaseMessaging.requestPermission();
+    initPushNotifications();
+  }
+
+  // معالجة الرسائل والضغط على الإشعار
+  void handleMessage(RemoteMessage? message) {
+    if (message == null) return;
+
+    final userType = message.data['userType'] ?? '';
+    final targetScreen = message.data['targetScreen'] ?? '';
+
+    deepLinkNotifier.value = {
+      'userType': userType,
+      'targetScreen': targetScreen,
+    };
+  }
+
+  // تهيئة الاستماع للإشعارات في جميع حالات التطبيق
+  Future<void> initPushNotifications() async {
+    FirebaseMessaging.instance.getInitialMessage().then(handleMessage);
+    FirebaseMessaging.onMessageOpenedApp.listen(handleMessage);
+    FirebaseMessaging.onMessage.listen((message) {
+      final notification = message.notification;
+      if (notification == null) return;
+
+      // *** MODIFIED: Determine notification type from payload ***
+      final notificationType = message.data['notification_type'] ?? 'default';
+
+      NotificationService.showNotification(
+        notification.title ?? 'إشعار جديد',
+        notification.body ?? '',
+        payload: json.encode(message.data),
+        type: notificationType,
+      );
+    });
+  }
+}
 
 
 // =============================================================================
@@ -89,6 +153,7 @@ class PermissionService {
 // =============================================================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   await NotificationService.initialize();
   runApp(const MyApp());
 }
@@ -164,6 +229,20 @@ class ApiService {
     }
     return null;
   }
+  static Future<void> updateFcmToken(String authToken, String fcmToken) async {
+    try {
+      await http.post(
+        Uri.parse('$baseUrl/taxi-auth/v1/update-fcm-token'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken'
+        },
+        body: json.encode({'fcm_token': fcmToken}),
+      );
+    } catch (e) {
+      debugPrint("Failed to update FCM token: $e");
+    }
+  }
   static Future<void> setDriverActiveStatus(String token, bool isActive) async {
     try { await http.post(Uri.parse('$baseUrl/taxi/v1/driver/set-active-status'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode({'is_active': isActive})); } catch (e) { debugPrint("Failed to set driver active status: $e"); }
   }
@@ -221,16 +300,45 @@ class ApiService {
 }
 
 // =============================================================================
-//  MODIFIED: NotificationService (with Deep Linking)
+//  MODIFIED: NotificationService (with Channels)
 // =============================================================================
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  // *** NEW: Define two different notification channels for Android ***
+  static const AndroidNotificationChannel _highImportanceChannel = AndroidNotificationChannel(
+    'high_importance_channel', // id
+    'High Importance Notifications', // title
+    description: 'This channel is used for important notifications.', // description
+    importance: Importance.max, // Makes it a heads-up notification
+    playSound: true,
+  );
+
+  static const AndroidNotificationChannel _defaultImportanceChannel = AndroidNotificationChannel(
+    'default_importance_channel', // id
+    'Default Importance Notifications', // title
+    description: 'This channel is used for general notifications.', // description
+    importance: Importance.defaultImportance,
+    playSound: true,
+    enableVibration: true,
+  );
+
 
   static Future<void> initialize() async {
     const InitializationSettings initializationSettings = InitializationSettings(
       android: AndroidInitializationSettings("@mipmap/ic_launcher"),
       iOS: DarwinInitializationSettings(),
     );
+
+    // *** NEW: Create the notification channels on Android ***
+    await _notificationsPlugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_highImportanceChannel);
+
+    await _notificationsPlugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_defaultImportanceChannel);
+
 
     await _notificationsPlugin.initialize(
       initializationSettings,
@@ -266,16 +374,20 @@ class NotificationService {
     }
   }
 
-  static Future<void> showNotification(String title, String body, {String? payload}) async {
+  // *** MODIFIED: showNotification now accepts a type to choose the channel ***
+  static Future<void> showNotification(String title, String body, {String? payload, String type = 'default'}) async {
+
     final NotificationDetails notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
-        "taxi_app_channel",
-        "Taxi App Notifications",
-        importance: Importance.max,
-        priority: Priority.high,
+        type == 'high_priority' ? _highImportanceChannel.id : _defaultImportanceChannel.id,
+        type == 'high_priority' ? _highImportanceChannel.name : _defaultImportanceChannel.name,
+        channelDescription: type == 'high_priority' ? _highImportanceChannel.description : _defaultImportanceChannel.description,
+        importance: type == 'high_priority' ? Importance.max : Importance.defaultImportance,
+        priority: Priority.high, // High priority for both to ensure delivery
         styleInformation: BigTextStyleInformation(body),
       ),
     );
+
     await _notificationsPlugin.show(
       DateTime.now().millisecondsSinceEpoch.toSigned(31),
       title,
@@ -394,10 +506,26 @@ class AuthGate extends StatefulWidget { const AuthGate({super.key}); @override S
 class _AuthGateState extends State<AuthGate> {
   AuthStatus _authStatus = AuthStatus.unknown; AuthResult? _authResult;
   @override
-  void initState() { super.initState(); _checkAuth(); WidgetsBinding.instance.addPostFrameCallback((_) { if(mounted) PermissionService.handleLocationPermission(context); }); }
+  void initState() {
+    super.initState();
+    _checkAuth();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if(mounted) PermissionService.handleLocationPermission(context);
+    });
+  }
   Future<void> _checkAuth() async {
     final authData = await ApiService.getStoredAuthData();
-    if (mounted) _updateAuthStatus(authData);
+    if (mounted) {
+      _updateAuthStatus(authData);
+      if (authData != null) {
+        // *** NEW: Initialize Firebase Notifications and update token ***
+        await FirebaseApi().initNotifications();
+        final fcmToken = await FirebaseApi().getFcmToken();
+        if (fcmToken != null) {
+          await ApiService.updateFcmToken(authData.token, fcmToken);
+        }
+      }
+    }
   }
   void _updateAuthStatus(AuthResult? authResult) {
     setState(() {
@@ -437,6 +565,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       if (response.statusCode == 200 && data['success'] == true) {
         final authResult = AuthResult(token: data['token'], userId: data['user_id'].toString(), displayName: data['display_name'], isDriver: data['is_driver'] ?? false, driverStatus: data['driver_status']);
         await ApiService.storeAuthData(authResult);
+        // *** NEW: Initialize Firebase Notifications and update token ***
+        await FirebaseApi().initNotifications();
+        final fcmToken = await FirebaseApi().getFcmToken();
+        if (fcmToken != null) {
+          await ApiService.updateFcmToken(authResult.token, fcmToken);
+        }
         widget.onLoginSuccess(authResult);
       } else { throw Exception(data['message'] ?? 'فشل تسجيل الدخول أو التسجيل'); }
     } on SocketException {
@@ -512,6 +646,12 @@ class _LoginScreenState extends State<LoginScreen> {
         final authResult = AuthResult(token: data['token'], userId: data['user_id'].toString(), displayName: data['display_name'], isDriver: data['is_driver'] ?? false, driverStatus: data['driver_status']);
         await ApiService.storeAuthData(authResult);
         if (mounted) {
+          // *** NEW: Initialize Firebase Notifications and update token ***
+          await FirebaseApi().initNotifications();
+          final fcmToken = await FirebaseApi().getFcmToken();
+          if (fcmToken != null) {
+            await ApiService.updateFcmToken(authResult.token, fcmToken);
+          }
           Navigator.of(context).popUntil((route) => route.isFirst);
           widget.onLoginSuccess(authResult);
         }
@@ -586,9 +726,9 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
             const SizedBox(height: 15),
             DropdownButtonFormField<String>(value: _vehicleType, decoration: const InputDecoration(labelText: 'نوع المركبة'), items: const [DropdownMenuItem(value: 'Tuktuk', child: Text('توك توك')), DropdownMenuItem(value: 'Car', child: Text('سيارة'))], onChanged: (value) => setState(() => _vehicleType = value!)),
             const SizedBox(height: 15),
-            TextFormField(controller: _modelController, decoration: const InputDecoration(labelText: 'موديل المركبة'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            TextFormField(controller: _modelController, decoration: const InputDecoration(labelText: 'رقم لوحة المركبة '), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 15),
-            TextFormField(controller: _colorController, decoration: const InputDecoration(labelText: 'لون المركبة'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            TextFormField(controller: _colorController, decoration: const InputDecoration(labelText: 'لون وموديل المركبة'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.all(10),
@@ -1224,7 +1364,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   }
 
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    const String orsApiKey = '5b3ce3597851110001cf6248a318f6479b1341c9b33a83151970228b';
+    const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) {
       debugPrint("ORS API Key is missing or invalid.");
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء إضافة مفتاح API صحيح لرسم المسار"), backgroundColor: Colors.red));
@@ -1493,7 +1633,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
 
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    const String orsApiKey = '5b3ce3597851110001cf6248a318f6479b1341c9b33a83151970228b';
+    const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) {
       debugPrint("ORS API Key is missing or invalid.");
       return;
@@ -2291,11 +2431,12 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
 
-          // *** NEW: Simulate notification to customers ***
+          // *** MODIFIED: Use 'default' type for this notification ***
           NotificationService.showNotification(
             'رحلة جديدة متاحة!',
             'تم إضافة رحلة من ${_fromController.text} إلى ${_toController.text}. اضغط للحجز.',
             payload: '{"userType": "customer", "targetScreen": "trips"}',
+            type: 'default',
           );
 
           _formKey.currentState?.reset(); _fromController.clear(); _toController.clear(); _dateController.clear(); _timeController.clear(); _seatsController.clear();
@@ -2557,11 +2698,12 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
 
-          // *** NEW: Simulate notification to drivers ***
+          // *** MODIFIED: Use 'high_priority' type for this notification ***
           NotificationService.showNotification(
-            'طلب خصوصي جديد!',
-            'يوجد طلب من ${_fromController.text} إلى ${_toController.text}. اضغط للقبول.',
-            payload: '{"userType": "driver", "targetScreen": "private_requests"}',
+              'طلب خصوصي جديد!',
+              'يوجد طلب من ${_fromController.text} إلى ${_toController.text}. اضغط للقبول.',
+              payload: '{"userType": "driver", "targetScreen": "private_requests"}',
+              type: 'high_priority'
           );
 
           _formKey.currentState?.reset();
