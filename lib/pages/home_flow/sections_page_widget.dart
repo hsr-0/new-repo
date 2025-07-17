@@ -209,34 +209,8 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
-                  _buildGridCard(
-                    context: context,
-                    title: 'منصة بيتي العقارية',
-                    description: '',
-                    imagePath: 'assets/images/beytei.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) =>
-                            const WebViewPage(url: 'https://beytei.com')),
-                      );
-                    },
-                  ),
-                  _buildGridCard(
-                    context: context,
-                    title: 'الصيدليات',
-                    description: '',
-                    imagePath: 'assets/images/ph.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) =>
-                            const WebViewPage(url: 'https://ph.beytei.com')),
-                      );
-                    },
-                  ),
+
+
                   _buildGridCard(
                     context: context,
                     title: 'بوتيك وكوزمتك بيتي',
@@ -246,6 +220,17 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       context.push('/splash');
                     },
                   ),
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'تكسي بيتي  ',
+                    description: '',
+                    imagePath: 'assets/images/taxi.png',
+                    onTap: () {
+                      GoRouter.of(context).push('/trb-store');
+                    },
+                  ),
+
 
 
 
@@ -257,7 +242,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     context: context,
                     title: 'استشارة طبية ',
                     description: '',
-                    imagePath: 'assets/images/cosmetics.png',
+                    imagePath: 'assets/images/clinic.png',
                     onTap: () {
                       context.push('/medical-store');
                     },
@@ -273,39 +258,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
 
 
-
-
-
-
-
-                  _buildGridCard(
-                    context: context,
-                    title: 'استشارة طبية ',
-                    description: '',
-                    imagePath: 'assets/images/clinic.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const WebViewPage(
-                                url:
-                                'https://tawk.to/chat/6848a65fb0285c1909e28cd2/1itdsjq3f')),
-                      );
-                    },
-                  ),
-
-
-
-
-                  _buildGridCard(
-                    context: context,
-                    title: 'تكسي بيتي  ',
-                    description: '',
-                    imagePath: 'assets/images/taxi.png',
-                    onTap: () {
-                      GoRouter.of(context).push('/trb-store');
-                    },
-                  ),
 
 
 
