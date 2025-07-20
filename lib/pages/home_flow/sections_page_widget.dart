@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io'; // NEW: Import to check the platform (iOS/Android)
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -9,10 +9,61 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 
+// --- الحزم المطلوبة لنظام التحديث والتقييم ---
+import 'package:firebase_remote_config/firebase_remote_config.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:version/version.dart';
+import 'package:in_app_review/in_app_review.dart'; // [جديد] حزمة طلب التقييم
+import 'package:shared_preferences/shared_preferences.dart'; // [جديد] حزمة حفظ البيانات محلياً
+// --- نهاية الحزم ---
+
 import '../../doctore/medical_home_screen.dart';
 import '../webview_flow/webview_page.dart';
 
-// 1. Create a model class for the banner data
+
+// --- [جديد] كلاس مسؤول عن منطق طلب التقييم ---
+class AppReviewManager {
+  final InAppReview _inAppReview = InAppReview.instance;
+
+  // دالة لطلب التقييم اذا كان الوقت مناسباً
+  Future<void> requestReviewIfAppropriate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // جلب عدد مرات فتح التطبيق، القيمة الافتراضية هي 0
+      int appOpenCount = prefs.getInt('appOpenCount') ?? 0;
+
+      // التحقق مما إذا كان قد تم طلب التقييم من قبل
+      bool hasRequestedReview = prefs.getBool('hasRequestedReview') ?? false;
+
+      // إذا تم الطلب مسبقاً، لا تفعل شيئاً
+      if (hasRequestedReview) {
+        return;
+      }
+
+      // زيادة عداد فتح التطبيق بواحد
+      appOpenCount++;
+      await prefs.setInt('appOpenCount', appOpenCount);
+
+      // إذا تم فتح التطبيق 3 مرات أو أكثر
+      if (appOpenCount >= 1) {
+        if (await _inAppReview.isAvailable()) {
+          // اطلب التقييم
+          _inAppReview.requestReview();
+          // سجل أنه تم الطلب بنجاح لمنع تكراره
+          await prefs.setBool('hasRequestedReview', true);
+        }
+      }
+    } catch (e) {
+      // في حال حدوث خطأ، اطبعه في الـ console فقط لتجنب تعطيل التطبيق
+      print('Failed to request App Review: $e');
+    }
+  }
+}
+// --- نهاية الكلاس ---
+
+
 class BannerItem {
   final String imageUrl;
   final String targetType;
@@ -41,67 +92,112 @@ class SectionsPageWidget extends StatefulWidget {
 }
 
 class _SectionsPageWidgetState extends State<SectionsPageWidget> {
-  // 2. Update the state variable to hold a list of BannerItem objects
   List<BannerItem> banners = [];
   bool showBanners = false;
 
   @override
   void initState() {
     super.initState();
-    // It's good practice to not make initState async.
-    // Call async functions from within it.
     _initialize();
   }
 
   Future<void> _initialize() async {
-    // Firebase is initialized once, so we can just ensure it's ready.
-    await Firebase.initializeApp();
+    // افترض أن تهيئة Firebase تمت في شاشة الـ splash
+    // await Firebase.initializeApp();
 
-    // NEW: Request notification permissions ONLY on iOS
     if (Platform.isIOS) {
       await requestNotificationPermissions();
     }
 
-    await fetchBannerImages();
+    fetchBannerImages();
+
+    // التحقق من التحديث في الخلفية
+    _checkForUpdate();
+
+    // --- [جديد] طلب التقييم عند بدء الصفحة ---
+    AppReviewManager().requestReviewIfAppropriate();
   }
 
-  // MODIFIED: This function will now only be called on iOS devices.
-  Future<void> requestNotificationPermissions() async {
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
+  Future<void> _checkForUpdate() async {
+    try {
+      final remoteConfig = FirebaseRemoteConfig.instance;
+      await remoteConfig.setConfigSettings(RemoteConfigSettings(
+        fetchTimeout: const Duration(seconds: 25),
+        minimumFetchInterval: const Duration(minutes: 5),
+      ));
+      await remoteConfig.fetchAndActivate();
 
-    NotificationSettings settings = await messaging.requestPermission(
-      alert: true,
-      announcement: false,
-      badge: true,
-      carPlay: false,
-      criticalAlert: false,
-      provisional: false,
-      sound: true,
-    );
+      final configString = remoteConfig.getString('app_update_config');
+      if (configString.isEmpty) return;
 
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      print('User granted permission for notifications on iOS');
-    } else {
-      print('User declined or has not accepted permission for notifications on iOS');
+      final config = jsonDecode(configString) as Map<String, dynamic>;
+      final platformConfig = (Platform.isIOS ? config['ios'] : config['android']) as Map<String, dynamic>;
+      final minimumVersionStr = platformConfig['minimum_version'] as String?;
+      final storeUrl = platformConfig['store_url'] as String?;
+
+      if (minimumVersionStr == null || storeUrl == null) return;
+
+      final minimumVersion = Version.parse(minimumVersionStr);
+
+      final packageInfo = await PackageInfo.fromPlatform();
+      final currentVersion = Version.parse(packageInfo.version);
+
+      if (currentVersion < minimumVersion) {
+        if (mounted) {
+          _showUpdateDialog(storeUrl);
+        }
+      }
+    } catch (e) {
+      print('Error checking for update: $e');
     }
   }
 
-  // 3. Modify the fetchBannerImages method
+  void _showUpdateDialog(String updateUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: const Text('تحديث إجباري', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text('يتوفر إصدار جديد من التطبيق. يرجى التحديث الآن لمتابعة استخدام أفضل الخدمات.'),
+          actions: <Widget>[
+            TextButton(
+              style: TextButton.styleFrom(backgroundColor: Colors.blue.shade700),
+              child: const Text('تحديث الآن', style: TextStyle(color: Colors.white)),
+              onPressed: () async {
+                final uri = Uri.parse(updateUrl);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> requestNotificationPermissions() async {
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+  }
+
   Future<void> fetchBannerImages() async {
     final url = Uri.parse('https://banner.beytei.com/images/banners.json');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body);
-        final bannerList =
-        List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
-
+        final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
         if (mounted) {
           setState(() {
             showBanners = jsonData['showBanners'] ?? false;
-            // Parse the JSON array into a list of BannerItem objects
-            banners =
-                bannerList.map((item) => BannerItem.fromJson(item)).toList();
+            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
           });
         }
       }
@@ -110,13 +206,10 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
-  // Helper method for navigation
   void _onBannerTapped(BannerItem banner) {
     if (banner.targetType == 'route') {
-      // Use GoRouter for internal app navigation
       GoRouter.of(context).push(banner.targetUrl);
     } else if (banner.targetType == 'webview') {
-      // Use Navigator to push a new page for the webview
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -130,9 +223,8 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title:
-        const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
-        centerTitle: true, // This line centers the title
+        title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
         backgroundColor: Colors.white,
         actions: [
           IconButton(onPressed: () {}, icon: const Icon(Icons.discount)),
@@ -141,10 +233,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            // 4. Update the CarouselSlider to use the new banners list
             if (showBanners && banners.isNotEmpty) ...[
               const Padding(
-                padding: EdgeInsets.all(10.0),
+                padding: EdgeInsets.fromLTRB(10, 20, 10, 10),
                 child: Text(
                   'العروض المميزة',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -156,11 +247,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                   autoPlay: true,
                   enlargeCenterPage: true,
                 ),
-                // Map over the 'banners' list of objects
                 items: banners.map((banner) {
                   return Builder(
                     builder: (BuildContext context) {
-                      // Wrap the image with GestureDetector for tap handling
                       return GestureDetector(
                         onTap: () => _onBannerTapped(banner),
                         child: ClipRRect(
@@ -169,13 +258,10 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                             banner.imageUrl,
                             fit: BoxFit.cover,
                             width: double.infinity,
-                            // Add a loading builder for a better user experience
                             loadingBuilder: (context, child, loadingProgress) {
                               if (loadingProgress == null) return child;
-                              return const Center(
-                                  child: CircularProgressIndicator());
+                              return const Center(child: CircularProgressIndicator());
                             },
-                            // Add an error builder to handle failed image loads
                             errorBuilder: (context, error, stackTrace) {
                               return const Center(child: Icon(Icons.error));
                             },
@@ -246,9 +332,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       context.push('/splash');
                     },
                   ),
-
-
-
                   _buildGridCard(
                     context: context,
                     title: 'تكسي بيتي  ',
@@ -258,46 +341,15 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       GoRouter.of(context).push('/trb-store');
                     },
                   ),
-
-
-
-
-
-
-
-
                   _buildGridCard(
                     context: context,
-                    title: 'استشارة طبية ',
+                    title: 'استشارة بيتي  ',
                     description: '',
                     imagePath: 'assets/images/clinic.png',
                     onTap: () {
                       context.push('/medical-store');
                     },
                   ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                   _buildGridCard(
                     context: context,
                     title: 'الحجز الطبي',
@@ -311,7 +363,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       );
                     },
                   ),
-
                   _buildGridCard(
                     context: context,
                     title: 'مسواك بيتي ',
@@ -321,11 +372,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       GoRouter.of(context).push('/miswak-store');
                     },
                   ),
-
-
-
-
-
                   _buildGridCard(
                     context: context,
                     title: 'سجل بيتي الطبي ',
@@ -344,10 +390,10 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       GoRouter.of(context).push('/lab-store');
                     },
                   ),
-
                 ],
               ),
             ),
+            const SizedBox(height: 20),
           ],
         ),
       ),
@@ -415,3 +461,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 }
+
+
+
+
+
+
