@@ -2,7 +2,8 @@ plugins {
     id "com.android.application"
     id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
-    id "com.google.gms.google-services" // Firebase services لو تحتاج
+    id "com.google.gms.google-services"
+    id 'com.google.firebase.firebase-perf' // Firebase services لو تحتاج
 }
 
 def localProperties = new Properties()
@@ -43,9 +44,9 @@ android {
     defaultConfig {
         applicationId = "co.median.android.wqwnby"
         minSdk = 23
-        targetSdk = 34
-        versionCode = 26
-        versionName = "1.2.7"
+        targetSdk = 35
+        versionCode = 27
+        versionName = "1.2.8"
     }
 
     signingConfigs {

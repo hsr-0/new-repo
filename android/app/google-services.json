@@ -13,7 +13,12 @@
           "package_name": "co.median.android.wqwnby"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "266994090766-6c1kpde2if3ume5i7l6hkubmtc72859l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBbc0WkBM46odXzxAHLjZjN4ePIC4vTCI4"
@@ -21,7 +26,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "266994090766-6c1kpde2if3ume5i7l6hkubmtc72859l.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "266994090766-6ic3o5thaqej93dbsvohdbhl49vc40ad.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "co.median.ios.wqwnby"
+              }
+            }
+          ]
         }
       }
     }

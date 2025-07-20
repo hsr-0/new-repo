@@ -209,8 +209,34 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
-
-
+                  _buildGridCard(
+                    context: context,
+                    title: 'منصة بيتي العقارية',
+                    description: '',
+                    imagePath: 'assets/images/beytei.png',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) =>
+                            const WebViewPage(url: 'https://beytei.com')),
+                      );
+                    },
+                  ),
+                  _buildGridCard(
+                    context: context,
+                    title: 'الصيدليات',
+                    description: '',
+                    imagePath: 'assets/images/ph.png',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) =>
+                            const WebViewPage(url: 'https://ph.beytei.com')),
+                      );
+                    },
+                  ),
                   _buildGridCard(
                     context: context,
                     title: 'بوتيك وكوزمتك بيتي',
@@ -220,6 +246,8 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       context.push('/splash');
                     },
                   ),
+
+
 
                   _buildGridCard(
                     context: context,
@@ -247,6 +275,14 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       context.push('/medical-store');
                     },
                   ),
+
+
+
+
+
+
+
+
 
 
 

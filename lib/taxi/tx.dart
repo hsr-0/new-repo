@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -660,7 +661,8 @@ class CustomerMainScreen extends StatefulWidget {
   State<CustomerMainScreen> createState() => _CustomerMainScreenState();
 }
 class _CustomerMainScreenState extends State<CustomerMainScreen> {
-  int _selectedIndex = 0;
+  // ## MODIFICATION: Default tab changed to 1 (Trips) ##
+  int _selectedIndex = 1;
   late final List<Widget> _pages;
 
   @override
@@ -776,14 +778,22 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   void _handleDeepLink() { final linkData = deepLinkNotifier.value; if (linkData['userType'] == 'driver' && linkData['targetScreen'] == 'private_requests') { _changeTab(1); deepLinkNotifier.value = {}; } }
   void _changeTab(int index) { setState(() { _selectedIndex = index; }); }
   Future<void> _checkLocationPermission() async { if(mounted) await PermissionService.handleLocationPermission(context); }
+
+  // ## MODIFICATION: Improved location accuracy ##
   void _toggleActiveStatus(bool isActive) {
     setState(() => _isDriverActive = isActive);
     ApiService.setDriverActiveStatus(widget.authResult.token, isActive);
     if (isActive) {
-      _positionStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5))
-          .listen((Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
-    } else { _positionStream?.cancel(); }
+      // Use best accuracy for navigation and remove distance filter
+      _positionStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 0 // Update location with every small change
+      )).listen((Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
+    } else {
+      _positionStream?.cancel();
+    }
   }
+
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
@@ -964,28 +974,79 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
 }
 
 // =============================================================================
-//  MODIFIED: DriverCurrentRideScreen (with Chat Icon)
+//  MODIFIED: DriverCurrentRideScreen (with Chat Icon & Immediate Route Drawing)
 // =============================================================================
 class DriverCurrentRideScreen extends StatefulWidget { final Map<String, dynamic> initialRide; final AuthResult authResult; final VoidCallback onRideFinished; const DriverCurrentRideScreen({super.key, required this.initialRide, required this.authResult, required this.onRideFinished}); @override State<DriverCurrentRideScreen> createState() => _DriverCurrentRideScreenState(); }
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide; bool _isLoading = false; final MapController _mapController = MapController(); StreamSubscription<Position>? _positionStream; LatLng? _driverLocation; List<LatLng> _routePoints = []; double _distanceToPickup = 0.0; double _driverBearing = 0.0; double _previousDriverBearing = 0.0;
+
+  // ## MODIFICATION: `initState` now calls the new initialization method ##
   @override
-  void initState() { super.initState(); _currentRide = widget.initialRide; _startDriverLocationTracking(); }
+  void initState() {
+    super.initState();
+    _currentRide = widget.initialRide;
+    _initializeRide();
+  }
+
   @override
-  void dispose() { _positionStream?.cancel(); super.dispose(); }
+  void dispose() {
+    _positionStream?.cancel();
+    super.dispose();
+  }
+
+  // ## MODIFICATION: New method to immediately get location and draw route ##
+  Future<void> _initializeRide() async {
+    // 1. Get customer's location from ride data
+    final pickupPoint = LatLng(double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
+
+    // 2. Get driver's current location immediately
+    try {
+      final hasPermission = await PermissionService.handleLocationPermission(context);
+      if (!hasPermission || !mounted) return;
+
+      Position currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
+
+      if (mounted) {
+        setState(() {
+          _driverLocation = driverNowLocation;
+        });
+        // 3. Draw the route immediately
+        _getRoute(driverNowLocation, pickupPoint);
+        _mapController.move(driverNowLocation, 15);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك لبدء رسم المسار')));
+      }
+    }
+
+    // 4. Start continuous location tracking
+    _startDriverLocationTracking();
+  }
+
+  // ## MODIFICATION: This method now only handles continuous updates ##
   void _startDriverLocationTracking() {
     _positionStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((Position position) {
       if (mounted) {
         final newLocation = LatLng(position.latitude, position.longitude);
-        final pickupPoint = LatLng(double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
         double newBearing = _driverBearing;
-        if (_driverLocation != null && (newLocation.latitude != _driverLocation!.latitude || newLocation.longitude != _driverLocation!.longitude)) { newBearing = calculateBearing(_driverLocation!, newLocation); }
-        if (_driverLocation == null) { _getRoute(newLocation, pickupPoint); _mapController.move(newLocation, 15); }
-        setState(() { _previousDriverBearing = _driverBearing; _driverLocation = newLocation; _driverBearing = newBearing; _distanceToPickup = Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, pickupPoint.latitude, pickupPoint.longitude); });
+        if (_driverLocation != null && (newLocation.latitude != _driverLocation!.latitude || newLocation.longitude != _driverLocation!.longitude)) {
+          newBearing = calculateBearing(_driverLocation!, newLocation);
+        }
+        setState(() {
+          _previousDriverBearing = _driverBearing;
+          _driverLocation = newLocation;
+          _driverBearing = newBearing;
+          _distanceToPickup = Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
+        });
       }
     });
   }
+
   Future<void> _getRoute(LatLng start, LatLng end) async {
+    // SECURITY WARNING: Hardcoding API keys is a security risk.
+    // Use --dart-define for production apps.
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) { if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء إضافة مفتاح API صحيح لرسم المسار"), backgroundColor: Colors.red)); return; }
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
@@ -999,6 +1060,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       }
     } on SocketException { if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل رسم المسار: تحقق من اتصالك بالإنترنت"), backgroundColor: Colors.orange)); } catch (e) { if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل رسم المسار: ${e.toString().replaceAll("Exception: ", "")}"), backgroundColor: Colors.red)); }
   }
+
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
@@ -1137,6 +1199,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
   void _stopLiveTracking() { _liveTrackingTimer?.cancel(); if (mounted) setState(() { _assignedDriverLocation = null; _routeToCustomer.clear(); }); }
   Future<void> _getRoute(LatLng start, LatLng end) async {
+    // SECURITY WARNING: Hardcoding API keys is a security risk.
+    // Use --dart-define for production apps.
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) { return; }
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
@@ -2240,7 +2304,6 @@ class _ChatScreenState extends State<ChatScreen> {
           typingUsers: _isOtherUserTyping ? [types.User(id: 'other')] : [],
         ),
         // [IMPROVEMENT] - Listen to text changes for typing indicator
-         
       ),
     );
   }

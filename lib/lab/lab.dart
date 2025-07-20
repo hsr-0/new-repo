@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui'; // <-- إضافة هذا السطر مهم لتأثيرات الخلفية
 
 import 'package:cosmetic_store/lab/viw.dart'; // تأكد من أن هذا الملف موجود وصحيح
 import 'package:flutter/material.dart';
@@ -142,6 +143,246 @@ class MyApp extends StatelessWidget {
 }
 
 enum AppView { auth, store, results, profile, loading }
+
+// ===========================================================================
+// NEW MODERN LOGIN SCREEN WIDGET
+// ===========================================================================
+
+class ModernLoginScreen extends StatefulWidget {
+  final TextEditingController phoneController;
+  final TextEditingController nameController;
+  final bool isAuthLoading;
+  final VoidCallback onLogin;
+
+  const ModernLoginScreen({
+    Key? key,
+    required this.phoneController,
+    required this.nameController,
+    required this.isAuthLoading,
+    required this.onLogin,
+  }) : super(key: key);
+
+  @override
+  State<ModernLoginScreen> createState() => _ModernLoginScreenState();
+}
+
+class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+
+    _slideAnimation = Tween<Offset>(begin: const Offset(0, 0.5), end: Offset.zero).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+
+    _animationController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF1E88E5), Color(0xFF0D47A1)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
+          Positioned(
+            top: -100,
+            left: -100,
+            child: _buildGlassyBlob(150, Colors.blue[200]!),
+          ),
+          Positioned(
+            bottom: -120,
+            right: -80,
+            child: _buildGlassyBlob(250, Colors.lightBlue[100]!),
+          ),
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SlideTransition(
+                      position: _slideAnimation,
+                      child: FadeTransition(
+                        opacity: _fadeAnimation,
+                        child: Column(
+                          children: [
+                            Icon(Icons.health_and_safety_outlined, size: 80, color: Colors.white.withOpacity(0.9)),
+                            const SizedBox(height: 20),
+                            const Text(
+                              'تسجيل الدخول',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 32,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'Tajawal',
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              'مرحباً بك في مختبرات بيتي ',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.8),
+                                fontSize: 16,
+                                fontFamily: 'Tajawal',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 40),
+                    _buildAnimatedTextField(
+                      controller: widget.phoneController,
+                      hintText: 'رقم الهاتف',
+                      icon: Icons.phone_android,
+                      keyboardType: TextInputType.phone,
+                      delay: 200,
+                    ),
+                    const SizedBox(height: 20),
+                    _buildAnimatedTextField(
+                      controller: widget.nameController,
+                      hintText: 'الاسم الكامل',
+                      icon: Icons.person_outline,
+                      keyboardType: TextInputType.text,
+                      delay: 300,
+                    ),
+                    const SizedBox(height: 40),
+                    FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: SlideTransition(
+                        position: _slideAnimation,
+                        child: ElevatedButton(
+                          onPressed: widget.isAuthLoading ? null : widget.onLogin,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.blue[800],
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 8,
+                            shadowColor: Colors.black.withOpacity(0.3),
+                          ),
+                          child: widget.isAuthLoading
+                              ? SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: CircularProgressIndicator(
+                              color: Colors.blue[800],
+                              strokeWidth: 3,
+                            ),
+                          )
+                              : const Text(
+                            'تسجيل الدخول',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontFamily: 'Tajawal',
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnimatedTextField({
+    required TextEditingController controller,
+    required String hintText,
+    required IconData icon,
+    required TextInputType keyboardType,
+    required int delay,
+  }) {
+    return FutureBuilder(
+      future: Future.delayed(Duration(milliseconds: delay)),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox.shrink();
+        }
+        return FadeTransition(
+          opacity: _fadeAnimation,
+          child: SlideTransition(
+            position: _slideAnimation,
+            child: TextField(
+              controller: controller,
+              keyboardType: keyboardType,
+              style: const TextStyle(color: Colors.black87, fontFamily: 'Tajawal'),
+              decoration: InputDecoration(
+                hintText: hintText,
+                hintStyle: TextStyle(color: Colors.grey[600]),
+                prefixIcon: Icon(icon, color: Colors.blue[700]),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.9),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGlassyBlob(double size, Color color) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.3),
+        shape: BoxShape.circle,
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Colors.transparent,
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 // ===========================================================================
 // MAIN SCREEN WIDGET
@@ -710,7 +951,12 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
       case AppView.loading:
         return const Center(child: CircularProgressIndicator());
       case AppView.auth:
-        return _buildLoginView();
+        return ModernLoginScreen(
+          phoneController: _phoneController,
+          nameController: _nameController,
+          isAuthLoading: _isAuthLoading,
+          onLogin: _login,
+        );
       case AppView.store:
         return _buildStoreView();
       case AppView.results:
@@ -718,48 +964,16 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
       case AppView.profile:
         return _buildProfileView(isSetup: _isNewUser);
       default:
-        return _buildLoginView();
+        return ModernLoginScreen(
+          phoneController: _phoneController,
+          nameController: _nameController,
+          isAuthLoading: _isAuthLoading,
+          onLogin: _login,
+        );
     }
   }
 
-  Widget _buildLoginView() {
-    return Padding(
-      padding: const EdgeInsets.all(20.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          TextField(
-            controller: _phoneController,
-            decoration: const InputDecoration(
-              labelText: 'رقم الهاتف',
-              prefixIcon: Icon(Icons.phone),
-              border: OutlineInputBorder(),
-            ),
-            keyboardType: TextInputType.phone,
-          ),
-          const SizedBox(height: 20),
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(
-              labelText: 'الاسم الكامل',
-              prefixIcon: Icon(Icons.person),
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 30),
-          ElevatedButton(
-            onPressed: _isAuthLoading ? null : _login,
-            child: _isAuthLoading
-                ? const CircularProgressIndicator(color: Colors.white)
-                : const Text('تسجيل الدخول', style: TextStyle(fontSize: 18)),
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 50),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // تم حذف دالة _buildLoginView القديمة
 
   Widget _buildProfileView({bool isSetup = false}) {
     return SingleChildScrollView(
@@ -846,7 +1060,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
             padding: const EdgeInsets.all(8),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              childAspectRatio: 0.70, // Adjusted for better layout
+              childAspectRatio: 0.70,
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
             ),
@@ -1650,6 +1864,7 @@ class _LabStoreScreenState extends State<LabStoreScreen> {
         !(_currentView == AppView.profile && _isNewUser);
 
     return Scaffold(
+      // لا نعرض AppBar في واجهة تسجيل الدخول الجديدة
       appBar: _currentView == AppView.auth ? null : _buildAppBar(),
       body: Stack(
         children: [

@@ -112,7 +112,7 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
           });
         }
       } else {
-        throw Exception('فشل تحميل الملف');
+        throw Exception('لا توجد فحوصات ');
       }
     } on SocketException { // <-- معالجة خطأ الإنترنت بالتحديد
       if (mounted) {
@@ -234,7 +234,7 @@ class _ReportViewerScreenState extends State<ReportViewerScreen> {
             ),
             const SizedBox(height: 10),
             const Text(
-              'يمكنك محاولة فتحه في تطبيق خارجي.',
+              'يمكنك محاولة فتحه في  الخارج.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16),
             ),
