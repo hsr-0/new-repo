@@ -87,61 +87,83 @@ class AuthDispatcher extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
-        if (snapshot.hasData) {
-          final user = snapshot.data!;
+        if (snapshot.connectionState == ConnectionState.active) {
+          final user = snapshot.data;
+          if (user == null) {
+            return const RegistrationScreen();
+          }
           if (!user.isAnonymous) {
             return const AdminChatListScreen();
           }
           return UserChatScreen(userId: user.uid);
         }
-        return const MedicalChatEntryPage();
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
       },
     );
   }
 }
 
-// ⭐ --- [تم الإصلاح] - تعديل هذه الشاشة لمنع الحلقة اللانهائية ---
-class MedicalChatEntryPage extends StatefulWidget {
-  const MedicalChatEntryPage({super.key});
-
+class RegistrationScreen extends StatefulWidget {
+  const RegistrationScreen({super.key});
   @override
-  State<MedicalChatEntryPage> createState() => _MedicalChatEntryPageState();
+  State<RegistrationScreen> createState() => _RegistrationScreenState();
 }
+class _RegistrationScreenState extends State<RegistrationScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  bool _isLoading = false;
 
-class _MedicalChatEntryPageState extends State<MedicalChatEntryPage> {
-  @override
-  void initState() {
-    super.initState();
-    // نقوم بتسجيل الدخول مرة واحدة فقط عند تهيئة الشاشة
-    // AuthDispatcher سيقوم بالاستماع للتغيير ونقل المستخدم
-    _signIn();
-  }
+  Future<void> _registerUser() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() { _isLoading = true; });
 
-  Future<void> _signIn() async {
     try {
-      // فقط حاول تسجيل الدخول إذا لم يكن هناك مستخدم بالفعل
-      if (FirebaseAuth.instance.currentUser == null) {
-        await FirebaseAuth.instance.signInAnonymously();
+      final userCredential = await FirebaseAuth.instance.signInAnonymously();
+      final user = userCredential.user;
+      if (user != null) {
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'name': _nameController.text.trim(),
+          'phone': _phoneController.text.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       }
     } catch (e) {
-      print("Failed to sign in anonymously: $e");
-      // يمكنك عرض رسالة خطأ هنا إذا أردت
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حدث خطأ أثناء التسجيل. يرجى المحاولة مرة أخرى.')));
+    } finally {
+      if (mounted) setState(() { _isLoading = false; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // هذه الشاشة ستعرض فقط مؤشر تحميل بينما يتم تسجيل الدخول في الخلفية
-    // وبمجرد نجاح الدخول، سيقوم AuthDispatcher بنقل المستخدم تلقائياً
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
+    return Scaffold(
+      appBar: AppBar(title: const Text('تسجيل الدخول للاستشارة')),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('أهلاً بك في استشارات بيتي ', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
+                const SizedBox(height: 8),
+                Text('يرجى إدخال بياناتك للمتابعة', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 32),
+                TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder()), validator: (value) => (value == null || value.isEmpty) ? 'الرجاء إدخال الاسم' : null),
+                const SizedBox(height: 16),
+                TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder()), keyboardType: TextInputType.phone, validator: (value) => (value == null || value.isEmpty) ? 'الرجاء إدخال رقم الهاتف' : null),
+                const SizedBox(height: 24),
+                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)), onPressed: _registerUser, child: const Text('دخول')),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
-
 
 class NotificationService {
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
@@ -164,11 +186,18 @@ class UserChatScreen extends StatefulWidget {
 class _UserChatScreenState extends State<UserChatScreen> {
   List<types.Message> _messages = [];
   late final types.User _user;
+  String _userName = 'مستخدم';
 
   @override
   void initState() {
     super.initState();
     _user = types.User(id: widget.userId);
+    _loadUserDataAndMessages();
+  }
+
+  Future<void> _loadUserDataAndMessages() async {
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(widget.userId).get();
+    if(mounted) setState(() { _userName = userDoc.data()?['name'] ?? 'مستخدم'; });
     NotificationService().initNotifications(widget.userId);
     _loadMessages();
   }
@@ -177,7 +206,11 @@ class _UserChatScreenState extends State<UserChatScreen> {
     FirebaseFirestore.instance.collection('chats').doc(widget.userId).collection('messages').orderBy('createdAt', descending: true).snapshots().listen((snapshot) {
       final newMessages = snapshot.docs.map((doc) {
         final data = doc.data();
-        final updatedData = {...data, 'author': {'id': data['authorId'] ?? ''}, 'id': doc.id, 'status': types.Status.sent};
+        if (data['createdAt'] is Timestamp) {
+          data['createdAt'] = (data['createdAt'] as Timestamp).millisecondsSinceEpoch;
+        }
+        // ⭐ [تم الإصلاح] - لا نضيف حالة يدوياً، بل نترك fromJson يقرأها من قاعدة البيانات
+        final updatedData = {...data, 'author': {'id': data['authorId'] ?? ''}, 'id': doc.id};
         switch (data['type']) {
           case 'image': return types.ImageMessage.fromJson(updatedData);
           default: return types.TextMessage.fromJson(updatedData);
@@ -195,14 +228,16 @@ class _UserChatScreenState extends State<UserChatScreen> {
     const String wordpressApiUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/notify-admin-on-reply';
     const String secretKey = 'beytei93@beytei';
     try {
-      await http.post(
-        Uri.parse(wordpressApiUrl),
-        headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey},
-        body: jsonEncode({'userName': userName, 'messageText': messageText}),
-      );
-    } catch (e) {
-      print('Error sending admin notification: $e');
-    }
+      await http.post(Uri.parse(wordpressApiUrl), headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey}, body: jsonEncode({'userName': userName, 'messageText': messageText}));
+    } catch (e) { print('Error sending admin notification: $e'); }
+  }
+
+  Future<void> _updateChatMetadata(String lastMessageText) async {
+    await FirebaseFirestore.instance.collection('chats').doc(widget.userId).set({
+      'userName': _userName,
+      'lastMessage': {'text': lastMessageText, 'timestamp': FieldValue.serverTimestamp(), 'authorId': widget.userId}
+    }, SetOptions(merge: true));
+    await _notifyAdmin(userName: _userName, messageText: lastMessageText);
   }
 
   Future<void> _handleSendPressed(types.PartialText message) async {
@@ -210,13 +245,11 @@ class _UserChatScreenState extends State<UserChatScreen> {
     _addMessage(textMessage);
 
     Map<String, dynamic> messageJson = textMessage.toJson();
-    messageJson.removeWhere((key, value) => key == 'author' || key == 'id' || key == 'status');
+    messageJson.removeWhere((key, value) => key == 'author' || key == 'id');
     messageJson['authorId'] = textMessage.author.id;
     await FirebaseFirestore.instance.collection('chats').doc(widget.userId).collection('messages').doc(textMessage.id).set(messageJson);
-
-    final userName = 'مستخدم ${widget.userId.substring(0, 6)}';
-    await FirebaseFirestore.instance.collection('chats').doc(widget.userId).set({'userName': userName, 'lastMessage': {'text': textMessage.text, 'timestamp': FieldValue.serverTimestamp(), 'authorId': textMessage.author.id}}, SetOptions(merge: true));
-    await _notifyAdmin(userName: userName, messageText: textMessage.text);
+    await FirebaseFirestore.instance.collection('chats').doc(widget.userId).collection('messages').doc(textMessage.id).update({'status': types.Status.sent.name});
+    await _updateChatMetadata(textMessage.text);
   }
 
   Future<void> _handleImageSelection() async {
@@ -236,15 +269,12 @@ class _UserChatScreenState extends State<UserChatScreen> {
         final responseData = await response.stream.bytesToString();
         final jsonResponse = jsonDecode(responseData);
         final fileUrl = jsonResponse['file_url'];
-        final updatedMessage = message.copyWith(uri: fileUrl);
+        final updatedMessage = message.copyWith(uri: fileUrl, status: types.Status.sent);
         Map<String, dynamic> messageJson = updatedMessage.toJson();
-        messageJson.removeWhere((key, value) => key == 'author' || key == 'id' || key == 'status');
+        messageJson.removeWhere((key, value) => key == 'author' || key == 'id');
         messageJson['authorId'] = updatedMessage.author.id;
         await FirebaseFirestore.instance.collection('chats').doc(widget.userId).collection('messages').doc(message.id).set(messageJson);
-
-        final userName = 'مستخدم ${widget.userId.substring(0, 6)}';
-        await FirebaseFirestore.instance.collection('chats').doc(widget.userId).set({'userName': userName, 'lastMessage': {'text': '📷 صورة', 'timestamp': FieldValue.serverTimestamp(), 'authorId': message.author.id}}, SetOptions(merge: true));
-        await _notifyAdmin(userName: userName, messageText: '📷 صورة');
+        await _updateChatMetadata('📷 صورة');
       } else {
         final updatedMessage = message.copyWith(status: types.Status.error);
         setState(() { final index = _messages.indexWhere((m) => m.id == message.id); if (index != -1) _messages[index] = updatedMessage; });
@@ -258,7 +288,7 @@ class _UserChatScreenState extends State<UserChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('استشارة بيتي الطبية'), actions: [IconButton(icon: const Icon(Icons.admin_panel_settings_outlined),onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminLoginScreen())))]),
+      appBar: AppBar(title: Text('استشارة مع: ${_userName}'), actions: [IconButton(icon: const Icon(Icons.admin_panel_settings_outlined),onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminLoginScreen())))]),
       body: Chat(
         messages: _messages, onAttachmentPressed: _handleImageSelection, onSendPressed: _handleSendPressed, user: _user,
         theme: const DefaultChatTheme(primaryColor: Colors.indigo, secondaryColor: Color(0xFFE3F2FD), attachmentButtonIcon: Icon(Icons.attach_file, color: Colors.indigo)),
@@ -268,7 +298,6 @@ class _UserChatScreenState extends State<UserChatScreen> {
   }
 }
 
-// --- شاشات المسؤول ---
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
   @override State<AdminLoginScreen> createState() => _AdminLoginScreenState();
@@ -283,19 +312,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     const String apiUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/update-admin-fcm-token';
     const String secretKey = 'beytei93@beytei';
     try {
-      final response = await http.post(
-        Uri.parse(apiUrl),
-        headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey},
-        body: jsonEncode({'email': email, 'fcmToken': fcmToken}),
-      );
-      if (response.statusCode == 200) {
-        print('Admin FCM token saved to WordPress successfully.');
-      } else {
-        print('Failed to save admin FCM token: ${response.body}');
-      }
-    } catch (e) {
-      print('Error saving admin FCM token: $e');
-    }
+      await http.post(Uri.parse(apiUrl), headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey}, body: jsonEncode({'email': email, 'fcmToken': fcmToken}));
+    } catch (e) { print('Error saving admin FCM token: $e'); }
   }
   Future<void> _login() async {
     setState(() => _isLoading = true);
@@ -369,7 +387,11 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     FirebaseFirestore.instance.collection('chats').doc(widget.chatId).collection('messages').orderBy('createdAt', descending: true).snapshots().listen((snapshot) {
       final newMessages = snapshot.docs.map((doc) {
         final data = doc.data();
-        final updatedData = {...data, 'author': {'id': data['authorId'] ?? ''}, 'id': doc.id, 'status': types.Status.sent};
+        if (data['createdAt'] is Timestamp) {
+          data['createdAt'] = (data['createdAt'] as Timestamp).millisecondsSinceEpoch;
+        }
+        // ⭐ [تم الإصلاح] - لا نضيف حالة يدوياً، بل نترك fromJson يقرأها من قاعدة البيانات
+        final updatedData = {...data, 'author': {'id': data['authorId'] ?? ''}, 'id': doc.id};
         switch (data['type']) {
           case 'image': return types.ImageMessage.fromJson(updatedData);
           default: return types.TextMessage.fromJson(updatedData);
@@ -422,7 +444,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
           final responseData = await response.stream.bytesToString();
           final jsonResponse = jsonDecode(responseData);
           final fileUrl = jsonResponse['file_url'];
-          message = message.copyWith(uri: fileUrl);
+          message = message.copyWith(uri: fileUrl, status: types.Status.sent);
         } else {
           throw Exception('File upload failed');
         }
@@ -431,10 +453,12 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
         setState(() { final index = _messages.indexWhere((m) => m.id == message.id); if (index != -1) _messages[index] = updatedMessage; });
         return;
       }
+    } else if (message is types.TextMessage) {
+      message = message.copyWith(status: types.Status.sent);
     }
 
     Map<String, dynamic> messageJson = message.toJson();
-    messageJson.removeWhere((key, value) => key == 'author' || key == 'id' || key == 'status');
+    messageJson.removeWhere((key, value) => key == 'author' || key == 'id');
     messageJson['authorId'] = message.author.id;
     await FirebaseFirestore.instance.collection('chats').doc(widget.chatId).collection('messages').doc(message.id).set(messageJson);
     await FirebaseFirestore.instance.collection('chats').doc(widget.chatId).update({'lastMessage.text': lastMessageText, 'lastMessage.timestamp': FieldValue.serverTimestamp(), 'lastMessage.authorId': message.author.id});
@@ -448,12 +472,29 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     }
   }
 
+  Future<void> _showUserInfoDialog() async {
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(widget.chatId).get();
+    final data = userDoc.data();
+    final name = data?['name'] ?? 'غير متوفر';
+    final phone = data?['phone'] ?? 'غير متوفر';
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('معلومات المستخدم'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [Text('الاسم: $name'), const SizedBox(height: 8), Text('رقم الهاتف: $phone')]),
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('إغلاق'))],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('محادثة مع ${widget.userName}')),
+      appBar: AppBar(title: Text('محادثة مع ${widget.userName}'), actions: [IconButton(icon: const Icon(Icons.info_outline), tooltip: 'عرض معلومات المستخدم', onPressed: _showUserInfoDialog)]),
       body: Chat(messages: _messages, onAttachmentPressed: _handleImageSelection, onSendPressed: _handleSendPressed, user: _user, theme: const DefaultChatTheme(attachmentButtonIcon: Icon(Icons.attach_file))),
     );
   }
 }
-

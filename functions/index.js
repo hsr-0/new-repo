@@ -38,7 +38,7 @@ exports.sendChatNotification = functions.firestore
 
         const payload = {
             notification: {
-                title: "رد من الطبيب 👨‍⚕️",
+                title: "رد من  👨‍⚕️",
                 body: messageData.text || "لديك رسالة جديدة.",
                 sound: "default",
             },

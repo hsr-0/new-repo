@@ -197,7 +197,7 @@ builder: (context, params) => HomeMainPageWidget(),
     FFRoute(
       name: 'medicalstorepage',
       path: '/medical-store',
-      builder: (context, params) => MedicalChatEntryPage(),
+      builder: (context, params) => AuthDispatcher(),
     ),
 
 
