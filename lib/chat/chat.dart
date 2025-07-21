@@ -103,18 +103,45 @@ class AuthDispatcher extends StatelessWidget {
   }
 }
 
-class MedicalChatEntryPage extends StatelessWidget {
+// ⭐ --- [تم الإصلاح] - تعديل هذه الشاشة لمنع الحلقة اللانهائية ---
+class MedicalChatEntryPage extends StatefulWidget {
   const MedicalChatEntryPage({super.key});
+
+  @override
+  State<MedicalChatEntryPage> createState() => _MedicalChatEntryPageState();
+}
+
+class _MedicalChatEntryPageState extends State<MedicalChatEntryPage> {
+  @override
+  void initState() {
+    super.initState();
+    // نقوم بتسجيل الدخول مرة واحدة فقط عند تهيئة الشاشة
+    // AuthDispatcher سيقوم بالاستماع للتغيير ونقل المستخدم
+    _signIn();
+  }
+
+  Future<void> _signIn() async {
+    try {
+      // فقط حاول تسجيل الدخول إذا لم يكن هناك مستخدم بالفعل
+      if (FirebaseAuth.instance.currentUser == null) {
+        await FirebaseAuth.instance.signInAnonymously();
+      }
+    } catch (e) {
+      print("Failed to sign in anonymously: $e");
+      // يمكنك عرض رسالة خطأ هنا إذا أردت
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder(
-      future: FirebaseAuth.instance.signInAnonymously(),
-      builder: (context, snapshot) {
-        return const Scaffold(body: Center(child: CircularProgressIndicator()));
-      },
+    // هذه الشاشة ستعرض فقط مؤشر تحميل بينما يتم تسجيل الدخول في الخلفية
+    // وبمجرد نجاح الدخول، سيقوم AuthDispatcher بنقل المستخدم تلقائياً
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator()),
     );
   }
 }
+
 
 class NotificationService {
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
@@ -241,25 +268,20 @@ class _UserChatScreenState extends State<UserChatScreen> {
   }
 }
 
-// ⭐ --- شاشات المسؤول (مع التعديل النهائي) ---
+// --- شاشات المسؤول ---
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
   @override State<AdminLoginScreen> createState() => _AdminLoginScreenState();
 }
-
 class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
-
-  // ⭐ [جديد] - دالة لتسجيل توكن الطبيب في ووردبريس
   Future<void> _saveAdminFCMTokenToWordPress(String email) async {
     final fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken == null) return;
-
     const String apiUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/update-admin-fcm-token';
     const String secretKey = 'beytei93@beytei';
-
     try {
       final response = await http.post(
         Uri.parse(apiUrl),
@@ -275,12 +297,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       print('Error saving admin FCM token: $e');
     }
   }
-
   Future<void> _login() async {
     setState(() => _isLoading = true);
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
-
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
       await _saveAdminFCMTokenToWordPress(email);
@@ -291,7 +311,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(appBar: AppBar(title: const Text('بوابة الأطباء')), body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24.0), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [TextField(controller: _emailController, decoration: const InputDecoration(labelText: 'البريد الإلكتروني'), keyboardType: TextInputType.emailAddress), const SizedBox(height: 16), TextField(controller: _passwordController, decoration: const InputDecoration(labelText: 'كلمة المرور'), obscureText: true), const SizedBox(height: 24), _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _login, child: const Text('تسجيل الدخول'))]))));
@@ -437,3 +456,4 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     );
   }
 }
+
