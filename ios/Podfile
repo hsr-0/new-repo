@@ -31,11 +31,14 @@ target 'Runner' do
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
-  # ✅ إضافة Firebase الأساسي
-  pod 'FirebaseCore'
+  # ⭐ [إضافة مهمة] - مكتبة المصادقة (Authentication)
+  pod 'Firebase/Auth'
 
-  # ✅ Firestore (نسخة مستقرة من Firebase)
-  pod 'FirebaseFirestore'
+  # ⭐ [إضافة مهمة] - مكتبة الإشعارات (Messaging)
+  pod 'Firebase/Messaging'
+
+  # ✅ Firestore (كانت موجودة بشكل غير كامل، هذه هي الطريقة الصحيحة)
+  pod 'Firebase/Firestore'
 
 end
 

@@ -1,6 +1,6 @@
 import UIKit
 import Flutter
-import FirebaseCore // ← ضروري جداً
+import Firebase // ⭐ تأكد من استيراد Firebase
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
@@ -8,8 +8,20 @@ import FirebaseCore // ← ضروري جداً
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    FirebaseApp.configure() // ← هذا هو السطر الأهم لتشغيل Firebase
+
+    // ⭐ الخطوة 1: تهيئة Firebase (لقد أضفتها بشكل صحيح)
+    FirebaseApp.configure()
+
     GeneratedPluginRegistrant.register(with: self)
+
+    // ⭐ الخطوة 2: تسجيل التطبيق لاستقبال الإشعارات (الجزء المفقود)
+    if #available(iOS 10.0, *) {
+      UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
+    }
+
+    application.registerForRemoteNotifications()
+    // --- نهاية الجزء المفقود ---
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 }
