@@ -17,16 +17,14 @@ import 'package:version/version.dart';
 import 'package:in_app_review/in_app_review.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:share_plus/share_plus.dart'; // [جديد] حزمة المشاركة
+import 'package:share_plus/share_plus.dart';
 
 import '../../doctore/medical_home_screen.dart';
 import '../webview_flow/webview_page.dart';
 
 // ... (كلاس AppReviewManager وكلاس BannerItem يبقيان كما هما)
-
 class AppReviewManager {
   final InAppReview _inAppReview = InAppReview.instance;
-
   Future<void> requestReviewIfAppropriate() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -35,7 +33,7 @@ class AppReviewManager {
       if (hasRequestedReview) return;
       appOpenCount++;
       await prefs.setInt('appOpenCount', appOpenCount);
-      if (appOpenCount >= 3) {
+      if (appOpenCount >= 5) {
         if (await _inAppReview.isAvailable()) {
           _inAppReview.requestReview();
           await prefs.setBool('hasRequestedReview', true);
@@ -51,9 +49,7 @@ class BannerItem {
   final String imageUrl;
   final String targetType;
   final String targetUrl;
-
   BannerItem({required this.imageUrl, required this.targetType, required this.targetUrl});
-
   factory BannerItem.fromJson(Map<String, dynamic> json) {
     return BannerItem(
       imageUrl: json['imageUrl'],
@@ -63,10 +59,8 @@ class BannerItem {
   }
 }
 
-
 class SectionsPageWidget extends StatefulWidget {
   const SectionsPageWidget({Key? key}) : super(key: key);
-
   @override
   State<SectionsPageWidget> createState() => _SectionsPageWidgetState();
 }
@@ -82,68 +76,54 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   Future<void> _initialize() async {
-    await _requestAllPermissions();
+    // لا نطلب الأذونات تلقائياً الآن، سنطلبها يدوياً
     fetchBannerImages();
     _checkForUpdate();
     AppReviewManager().requestReviewIfAppropriate();
   }
 
-  // --- [جديد] دالة لجلب التوكن ومشاركته ---
-  Future<void> _getAndShareFcmToken() async {
-    // جلب توكن FCM
-    final fcmToken = await FirebaseMessaging.instance.getToken();
+  // --- [جديد] دالة طلب إذن الإشعارات يدوياً مع إظهار رسالة ---
+  Future<void> _requestNotificationPermissionManually() async {
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
 
-    if (fcmToken == null) {
-      print("Failed to get FCM token.");
-      // يمكنك إظهار رسالة خطأ للمستخدم هنا إذا أردت
+    String message;
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      message = "تم منح إذن الإشعارات بنجاح!";
+      print(message);
+    } else {
+      message = "تم رفض إذن الإشعارات أو لم يتم التفاعل.";
+      print(message);
+    }
+
+    // إظهار رسالة على الشاشة بنتيجة الطلب
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("فشل الحصول على التوكن. تأكد من اتصالك بالإنترنت.")),
+        SnackBar(content: Text(message, textDirection: TextDirection.rtl)),
+      );
+    }
+  }
+
+  Future<void> _getAndShareFcmToken() async {
+    final fcmToken = await FirebaseMessaging.instance.getToken();
+    if (fcmToken == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("فشل الحصول على التوكن.")),
       );
       return;
     }
-
-    print("FCM Token: $fcmToken");
-
-    // استخدام حزمة المشاركة لفتح نافذة المشاركة
-    await Share.share(
-      'My FCM Token is: $fcmToken',
-      subject: 'FCM Token for Beytei App',
-    );
+    await Share.share('My FCM Token is: $fcmToken');
   }
 
-
-  // ... (باقي الدوال تبقى كما هي: _requestAllPermissions, _checkForUpdate, etc.)
-  Future<void> _requestAllPermissions() async {
-    if (Platform.isIOS) {
-      await _requestNotificationPermission();
-    }
-    await _requestLocationPermission();
-  }
-
-  Future<void> _requestNotificationPermission() async {
-    await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
-  }
-
-  Future<void> _requestLocationPermission() async {
-    await Permission.location.request();
-  }
-
-  Future<void> _checkForUpdate() async {
-    // ...
-  }
-
-  void _showUpdateDialog(String url) {
-    // ...
-  }
-
-  Future<void> fetchBannerImages() async {
-    // ...
-  }
-
-  void _onBannerTapped(BannerItem banner) {
-    // ...
-  }
-
+  // ... (باقي الدوال تبقى كما هي)
+  Future<void> _checkForUpdate() async {/* ... */}
+  void _showUpdateDialog(String url) {/* ... */}
+  Future<void> fetchBannerImages() async {/* ... */}
+  void _onBannerTapped(BannerItem banner) {/* ... */}
 
   @override
   Widget build(BuildContext context) {
@@ -151,23 +131,31 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       appBar: AppBar(
         title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
-        backgroundColor: Colors.white,
-        actions: [
-          IconButton(onPressed: () {}, icon: const Icon(Icons.discount)),
+      ),
+      // --- [تعديل] إضافة مجموعة أزرار للتشخيص ---
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            onPressed: _requestNotificationPermissionManually,
+            backgroundColor: Colors.red,
+            tooltip: 'Request Notification Permission',
+            heroTag: 'btn1', // ضروري عند وجود أكثر من زر عائم
+            child: const Icon(Icons.notifications_active, color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          FloatingActionButton(
+            onPressed: _getAndShareFcmToken,
+            backgroundColor: Colors.blue.shade800,
+            tooltip: 'Share FCM Token',
+            heroTag: 'btn2', // ضروري عند وجود أكثر من زر عائم
+            child: const Icon(Icons.share, color: Colors.white),
+          ),
         ],
       ),
-
-      // --- [جديد] إضافة الزر العائم ---
-      floatingActionButton: FloatingActionButton(
-        onPressed: _getAndShareFcmToken,
-        backgroundColor: Colors.blue.shade800,
-        tooltip: 'Share FCM Token',
-        child: const Icon(Icons.share, color: Colors.white),
-      ),
-
       body: SingleChildScrollView(
+        // ... (باقي واجهة المستخدم كما هي)
         child: Column(
-          // ... (محتوى الصفحة يبقى كما هو)
           children: [
             if (showBanners && banners.isNotEmpty) ...[
               const Padding(
@@ -223,7 +211,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
-                  // ... محتوى الـ GridView كما هو
                   _buildGridCard(
                     context: context,
                     title: 'منصة بيتي العقارية',
