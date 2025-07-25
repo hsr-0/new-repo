@@ -9,47 +9,72 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 
-// --- الحزم المطلوبة ---
+// --- الحزم المطلوبة لنظام التحديث والتقييم ---
 import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:version/version.dart';
-import 'package:in_app_review/in_app_review.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:in_app_review/in_app_review.dart'; // [جديد] حزمة طلب التقييم
+import 'package:shared_preferences/shared_preferences.dart'; // [جديد] حزمة حفظ البيانات محلياً
+// --- نهاية الحزم ---
 
 import '../../doctore/medical_home_screen.dart';
 import '../webview_flow/webview_page.dart';
 
-// ... (كلاس AppReviewManager وكلاس BannerItem يبقيان كما هما)
+
+// --- [جديد] كلاس مسؤول عن منطق طلب التقييم ---
 class AppReviewManager {
   final InAppReview _inAppReview = InAppReview.instance;
+
+  // دالة لطلب التقييم اذا كان الوقت مناسباً
   Future<void> requestReviewIfAppropriate() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+
+      // جلب عدد مرات فتح التطبيق، القيمة الافتراضية هي 0
       int appOpenCount = prefs.getInt('appOpenCount') ?? 0;
+
+      // التحقق مما إذا كان قد تم طلب التقييم من قبل
       bool hasRequestedReview = prefs.getBool('hasRequestedReview') ?? false;
-      if (hasRequestedReview) return;
+
+      // إذا تم الطلب مسبقاً، لا تفعل شيئاً
+      if (hasRequestedReview) {
+        return;
+      }
+
+      // زيادة عداد فتح التطبيق بواحد
       appOpenCount++;
       await prefs.setInt('appOpenCount', appOpenCount);
-      if (appOpenCount >= 5) {
+
+      // إذا تم فتح التطبيق 3 مرات أو أكثر
+      if (appOpenCount >= 1) {
         if (await _inAppReview.isAvailable()) {
+          // اطلب التقييم
           _inAppReview.requestReview();
+          // سجل أنه تم الطلب بنجاح لمنع تكراره
           await prefs.setBool('hasRequestedReview', true);
         }
       }
     } catch (e) {
-      print('[AppReview] Failed to request App Review: $e');
+      // في حال حدوث خطأ، اطبعه في الـ console فقط لتجنب تعطيل التطبيق
+      print('Failed to request App Review: $e');
     }
   }
 }
+// --- نهاية الكلاس ---
+
 
 class BannerItem {
   final String imageUrl;
   final String targetType;
   final String targetUrl;
-  BannerItem({required this.imageUrl, required this.targetType, required this.targetUrl});
+
+  BannerItem({
+    required this.imageUrl,
+    required this.targetType,
+    required this.targetUrl,
+  });
+
   factory BannerItem.fromJson(Map<String, dynamic> json) {
     return BannerItem(
       imageUrl: json['imageUrl'],
@@ -61,6 +86,7 @@ class BannerItem {
 
 class SectionsPageWidget extends StatefulWidget {
   const SectionsPageWidget({Key? key}) : super(key: key);
+
   @override
   State<SectionsPageWidget> createState() => _SectionsPageWidgetState();
 }
@@ -76,54 +102,122 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   Future<void> _initialize() async {
-    // لا نطلب الأذونات تلقائياً الآن، سنطلبها يدوياً
+    // افترض أن تهيئة Firebase تمت في شاشة الـ splash
+    // await Firebase.initializeApp();
+
+    if (Platform.isIOS) {
+      await requestNotificationPermissions();
+    }
+
     fetchBannerImages();
+
+    // التحقق من التحديث في الخلفية
     _checkForUpdate();
+
+    // --- [جديد] طلب التقييم عند بدء الصفحة ---
     AppReviewManager().requestReviewIfAppropriate();
   }
 
-  // --- [جديد] دالة طلب إذن الإشعارات يدوياً مع إظهار رسالة ---
-  Future<void> _requestNotificationPermissionManually() async {
+  Future<void> _checkForUpdate() async {
+    try {
+      final remoteConfig = FirebaseRemoteConfig.instance;
+      await remoteConfig.setConfigSettings(RemoteConfigSettings(
+        fetchTimeout: const Duration(seconds: 25),
+        minimumFetchInterval: const Duration(minutes: 5),
+      ));
+      await remoteConfig.fetchAndActivate();
+
+      final configString = remoteConfig.getString('app_update_config');
+      if (configString.isEmpty) return;
+
+      final config = jsonDecode(configString) as Map<String, dynamic>;
+      final platformConfig = (Platform.isIOS ? config['ios'] : config['android']) as Map<String, dynamic>;
+      final minimumVersionStr = platformConfig['minimum_version'] as String?;
+      final storeUrl = platformConfig['store_url'] as String?;
+
+      if (minimumVersionStr == null || storeUrl == null) return;
+
+      final minimumVersion = Version.parse(minimumVersionStr);
+
+      final packageInfo = await PackageInfo.fromPlatform();
+      final currentVersion = Version.parse(packageInfo.version);
+
+      if (currentVersion < minimumVersion) {
+        if (mounted) {
+          _showUpdateDialog(storeUrl);
+        }
+      }
+    } catch (e) {
+      print('Error checking for update: $e');
+    }
+  }
+
+  void _showUpdateDialog(String updateUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: const Text('تحديث إجباري', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text('يتوفر إصدار جديد من التطبيق. يرجى التحديث الآن لمتابعة استخدام أفضل الخدمات.'),
+          actions: <Widget>[
+            TextButton(
+              style: TextButton.styleFrom(backgroundColor: Colors.blue.shade700),
+              child: const Text('تحديث الآن', style: TextStyle(color: Colors.white)),
+              onPressed: () async {
+                final uri = Uri.parse(updateUrl);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> requestNotificationPermissions() async {
     FirebaseMessaging messaging = FirebaseMessaging.instance;
-    NotificationSettings settings = await messaging.requestPermission(
+    await messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
     );
+  }
 
-    String message;
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      message = "تم منح إذن الإشعارات بنجاح!";
-      print(message);
-    } else {
-      message = "تم رفض إذن الإشعارات أو لم يتم التفاعل.";
-      print(message);
-    }
-
-    // إظهار رسالة على الشاشة بنتيجة الطلب
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message, textDirection: TextDirection.rtl)),
-      );
+  Future<void> fetchBannerImages() async {
+    final url = Uri.parse('https://banner.beytei.com/images/banners.json');
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final jsonData = json.decode(response.body);
+        final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
+        if (mounted) {
+          setState(() {
+            showBanners = jsonData['showBanners'] ?? false;
+            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+          });
+        }
+      }
+    } catch (e) {
+      print('Error fetching banners: $e');
     }
   }
 
-  Future<void> _getAndShareFcmToken() async {
-    final fcmToken = await FirebaseMessaging.instance.getToken();
-    if (fcmToken == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("فشل الحصول على التوكن.")),
+  void _onBannerTapped(BannerItem banner) {
+    if (banner.targetType == 'route') {
+      GoRouter.of(context).push(banner.targetUrl);
+    } else if (banner.targetType == 'webview') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => WebViewPage(url: banner.targetUrl),
+        ),
       );
-      return;
     }
-    await Share.share('My FCM Token is: $fcmToken');
   }
-
-  // ... (باقي الدوال تبقى كما هي)
-  Future<void> _checkForUpdate() async {/* ... */}
-  void _showUpdateDialog(String url) {/* ... */}
-  Future<void> fetchBannerImages() async {/* ... */}
-  void _onBannerTapped(BannerItem banner) {/* ... */}
 
   @override
   Widget build(BuildContext context) {
@@ -131,30 +225,12 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       appBar: AppBar(
         title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
-      ),
-      // --- [تعديل] إضافة مجموعة أزرار للتشخيص ---
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            onPressed: _requestNotificationPermissionManually,
-            backgroundColor: Colors.red,
-            tooltip: 'Request Notification Permission',
-            heroTag: 'btn1', // ضروري عند وجود أكثر من زر عائم
-            child: const Icon(Icons.notifications_active, color: Colors.white),
-          ),
-          const SizedBox(height: 10),
-          FloatingActionButton(
-            onPressed: _getAndShareFcmToken,
-            backgroundColor: Colors.blue.shade800,
-            tooltip: 'Share FCM Token',
-            heroTag: 'btn2', // ضروري عند وجود أكثر من زر عائم
-            child: const Icon(Icons.share, color: Colors.white),
-          ),
+        backgroundColor: Colors.white,
+        actions: [
+          IconButton(onPressed: () {}, icon: const Icon(Icons.discount)),
         ],
       ),
       body: SingleChildScrollView(
-        // ... (باقي واجهة المستخدم كما هي)
         child: Column(
           children: [
             if (showBanners && banners.isNotEmpty) ...[
@@ -166,7 +242,11 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 ),
               ),
               CarouselSlider(
-                options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true),
+                options: CarouselOptions(
+                  height: 180.0,
+                  autoPlay: true,
+                  enlargeCenterPage: true,
+                ),
                 items: banners.map((banner) {
                   return Builder(
                     builder: (BuildContext context) {
@@ -193,7 +273,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 }).toList(),
               ),
             ],
+
             const SizedBox(height: 20),
+
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 10),
               child: Text(
@@ -201,7 +283,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
             ),
+
             const SizedBox(height: 10),
+
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: GridView.count(
@@ -330,32 +414,56 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     required String imagePath,
     required VoidCallback onTap,
   }) {
-    // ...
-    return Container();
-  }
-}
-
-class MedicalHomeScreen extends StatelessWidget{
-  @override
-  Widget build(BuildContext context){
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Medical Home Screen"),
+    return GestureDetector(
+      onTap: onTap,
+      child: Card(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(15)),
+                child: Image.asset(
+                  imagePath,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            Padding(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 8.0, vertical: 5.0),
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue,
+                ),
+              ),
+            ),
+            if (description.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Text(
+                  description,
+                  style: const TextStyle(fontSize: 14, color: Colors.black),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
 }
 
-class WebViewPage extends StatelessWidget{
-  final String url;
-  const WebViewPage({Key? key, required this.url}) : super(key: key);
 
-  @override
-  Widget build(BuildContext context){
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(url),
-      ),
-    );
-  }
-}
+
+
+
+
