@@ -370,6 +370,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.1"
+  dots_indicator:
+    dependency: transitive
+    description:
+      name: dots_indicator
+      sha256: c070af5058a084ba7b354df4b4c26c719595d70a3531eea6edd8af8716684ba3
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.0.1"
   dotted_decoration:
     dependency: transitive
     description:
@@ -1344,6 +1352,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.2.0"
+  introduction_screen:
+    dependency: "direct main"
+    description:
+      name: introduction_screen
+      sha256: "02c123e074ee85b0ad0a8d3cd990f1eae78d5cfb2ac4588ad3703ac2a07fb5b0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.1.17"
   io:
     dependency: transitive
     description:

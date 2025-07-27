@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:async';
 import 'dart:convert';
+
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -10,7 +13,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
+// [FIXED] - Aliased the geolocator import to resolve name conflicts.
+import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shimmer/shimmer.dart';
@@ -25,6 +29,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import 'package:uuid/uuid.dart';
+
+// [NEW] - Importing packages for Onboarding feature
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:introduction_screen/introduction_screen.dart';
 
 
 // =============================================================================
@@ -106,6 +114,7 @@ double calculateBearing(LatLng startPoint, LatLng endPoint) {
   return (bearing * 180 / pi + 360) % 360;
 }
 
+// [FIXED] - Removed the 'return' keyword to resolve the lint error.
 Future<void> makePhoneCall(String? phoneNumber, BuildContext context) {
   if (phoneNumber == null || phoneNumber.isEmpty) {
     if (context.mounted) {
@@ -114,11 +123,12 @@ Future<void> makePhoneCall(String? phoneNumber, BuildContext context) {
     return Future.value();
   }
   final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-  return launchUrl(launchUri).catchError((_) {
+  launchUrl(launchUri).catchError((_) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('لا يمكن إجراء الاتصال بالرقم $phoneNumber')));
     }
   });
+  return Future.value();
 }
 
 // =============================================================================
@@ -126,20 +136,20 @@ Future<void> makePhoneCall(String? phoneNumber, BuildContext context) {
 // =============================================================================
 class PermissionService {
   static Future<bool> handleLocationPermission(BuildContext context) async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خدمات الموقع معطلة. الرجاء تفعيل خدمات الموقع.')));
       return false;
     }
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
+    geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+    if (permission == geolocator.LocationPermission.denied) {
+      permission = await geolocator.Geolocator.requestPermission();
+      if (permission == geolocator.LocationPermission.denied) {
         if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم رفض إذن الوصول للموقع.')));
         return false;
       }
     }
-    if (permission == LocationPermission.deniedForever) {
+    if (permission == geolocator.LocationPermission.deniedForever) {
       if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم رفض إذن الموقع بشكل دائم. يرجى تفعيله من إعدادات التطبيق.')));
       return false;
     }
@@ -151,15 +161,25 @@ class PermissionService {
 //  Entry Point & App Theme
 // =============================================================================
 void main() async {
+  // Ensure widgets are initialized
   WidgetsFlutterBinding.ensureInitialized();
+
   // [CHAT INTEGRATION] - Initialize Firebase for the whole app
   await Firebase.initializeApp();
   await NotificationService.initialize();
-  runApp(const MyApp());
+
+  // [NEW ONBOARDING] - Check if onboarding should be shown
+  final prefs = await SharedPreferences.getInstance();
+  final showOnboarding = prefs.getBool('showOnboarding') ?? true;
+
+  runApp(MyApp(showOnboarding: showOnboarding));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  // [NEW ONBOARDING] - Pass the flag to the app widget
+  final bool showOnboarding;
+  const MyApp({super.key, required this.showOnboarding});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -196,10 +216,78 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const AuthGate(),
+      // [NEW ONBOARDING] - Conditionally show OnboardingScreen or AuthGate
+      home: showOnboarding ? const OnboardingScreen() : const AuthGate(),
     );
   }
 }
+
+// =============================================================================
+// [NEW] - Onboarding Screen
+// =============================================================================
+class OnboardingScreen extends StatelessWidget {
+  const OnboardingScreen({super.key});
+
+  void _onDone(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('showOnboarding', false);
+    if (context.mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const AuthGate()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // [FIXED] - Added 'const' to resolve the error.
+    const pageDecoration = PageDecoration(
+      titleTextStyle: TextStyle(fontSize: 28.0, fontWeight: FontWeight.w700, fontFamily: 'Cairo'),
+      bodyTextStyle: TextStyle(fontSize: 19.0, fontFamily: 'Cairo'),
+      bodyPadding: EdgeInsets.fromLTRB(16.0, 0.0, 16.0, 16.0),
+      pageColor: Colors.white,
+      imagePadding: EdgeInsets.zero,
+    );
+
+    return IntroductionScreen(
+      key: GlobalKey<IntroductionScreenState>(),
+      pages: [
+        PageViewModel(
+          title: "الطلبات السريعة",
+          body: "للتنقل داخل المدينة. حدد مكانك على الخريطة، ثم حدد الوجهة والسعر، وانتظر قبول أقرب سائق لطلبك.",
+          image: const Center(child: Icon(Icons.map_outlined, size: 170.0, color: Colors.amber)),
+          decoration: pageDecoration,
+        ),
+        PageViewModel(
+          title: "الرحلات المجدولة",
+          body: "الانتقال بين  المحافظات؟اذهب  الى  الرحلات المتاحة واحجز مقعدك بسهولة مع سائقين موثوقين.",
+          image: const Center(child: Icon(Icons.event_note_outlined, size: 170.0, color: Colors.blue)),
+          decoration: pageDecoration,
+        ),
+        PageViewModel(
+          title: "الطلبات الخصوصية",
+          body: "طلب سيارة خصوصي ؟ أنشئ طلباً خاصاً بتفاصيل رحلتك والسعر المقترح، وسيقوم السائقون بالتواصل معك.",
+          image: const Center(child: Icon(Icons.star_outline, size: 170.0, color: Colors.green)),
+          decoration: pageDecoration,
+        ),
+      ],
+      onDone: () => _onDone(context),
+      showSkipButton: true,
+      skip: const Text('تخطي', style: TextStyle(fontWeight: FontWeight.w600, fontFamily: 'Cairo')),
+      next: const Icon(Icons.arrow_forward),
+      done: const Text('ابدأ الآن', style: TextStyle(fontWeight: FontWeight.w600, fontFamily: 'Cairo')),
+      dotsDecorator: DotsDecorator(
+        size: const Size(10.0, 10.0),
+        color: const Color(0xFFBDBDBD),
+        activeSize: const Size(22.0, 10.0),
+        activeShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(25.0),
+        ),
+      ),
+    );
+  }
+}
+
 
 // =============================================================================
 //  Models & Services
@@ -294,6 +382,8 @@ class ApiService {
   static Future<http.Response> getMyActivePrivateRequest(String token) {
     return http.get(Uri.parse('$baseUrl/taxi/v1/private-requests/my-active'), headers: {'Authorization': 'Bearer $token'});
   }
+
+  // [MODIFIED] - This function is now used by the customer to cancel their private request.
   static Future<http.Response> cancelMyPrivateRequest(String token, String requestId) {
     return http.post(Uri.parse('$baseUrl/taxi/v1/private-requests/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode({'request_id': requestId}));
   }
@@ -768,7 +858,7 @@ class _DriverPendingScreenState extends State<DriverPendingScreen> {
 
 class DriverMainScreen extends StatefulWidget { final AuthResult authResult; final VoidCallback onLogout; const DriverMainScreen({super.key, required this.authResult, required this.onLogout}); @override State<DriverMainScreen> createState() => _DriverMainScreenState(); }
 class _DriverMainScreenState extends State<DriverMainScreen> {
-  int _selectedIndex = 0; bool _isDriverActive = false; StreamSubscription<Position>? _positionStream; Map<String, dynamic>? _currentQuickRide;
+  int _selectedIndex = 0; bool _isDriverActive = false; StreamSubscription<geolocator.Position>? _positionStream; Map<String, dynamic>? _currentQuickRide;
   void _onRideAccepted(Map<String, dynamic> ride) { setState(() { _currentQuickRide = ride; }); }
   void _onRideFinished() { setState(() { _currentQuickRide = null; }); }
   @override
@@ -785,10 +875,10 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     ApiService.setDriverActiveStatus(widget.authResult.token, isActive);
     if (isActive) {
       // Use best accuracy for navigation and remove distance filter
-      _positionStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
+      _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(
+          accuracy: geolocator.LocationAccuracy.bestForNavigation,
           distanceFilter: 0 // Update location with every small change
-      )).listen((Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
+      )).listen((geolocator.Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
     } else {
       _positionStream?.cancel();
     }
@@ -859,7 +949,7 @@ class ModernInfoDialog extends StatelessWidget {
 class DriverAvailableRidesScreen extends StatefulWidget { final AuthResult authResult; final Function(Map<String, dynamic>) onRideAccepted; const DriverAvailableRidesScreen({super.key, required this.authResult, required this.onRideAccepted}); @override State<DriverAvailableRidesScreen> createState() => _DriverAvailableRidesScreenState(); }
 class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen> {
   List<dynamic>? _availableRides; bool _isLoading = true; Timer? _ridesTimer;
-  final MapController _mapController = MapController(); LatLng? _driverLocation; StreamSubscription<Position>? _locationStream;
+  final MapController _mapController = MapController(); LatLng? _driverLocation; StreamSubscription<geolocator.Position>? _locationStream;
   @override
   void initState() { super.initState(); _fetchAvailableRides(); _ridesTimer = Timer.periodic(const Duration(seconds: 15), (timer) => _fetchAvailableRides()); _setupInitialLocation(); WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) { showDialog(context: context, builder: (context) => const ModernInfoDialog()); } }); }
   @override
@@ -868,14 +958,14 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     final hasPermission = await PermissionService.handleLocationPermission(context);
     if (!hasPermission || !mounted) return;
     try {
-      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high);
       if (mounted) {
         final initialLocation = LatLng(position.latitude, position.longitude);
         setState(() => _driverLocation = initialLocation);
         _mapController.move(initialLocation, 15.0);
       }
     } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك الحالي.'))); }
-    _locationStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10)).listen((Position position) { if (mounted) { setState(() { _driverLocation = LatLng(position.latitude, position.longitude); }); } });
+    _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.high, distanceFilter: 10)).listen((geolocator.Position position) { if (mounted) { setState(() { _driverLocation = LatLng(position.latitude, position.longitude); }); } });
   }
   Future<void> _fetchAvailableRides() async {
     try {
@@ -978,7 +1068,7 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
 // =============================================================================
 class DriverCurrentRideScreen extends StatefulWidget { final Map<String, dynamic> initialRide; final AuthResult authResult; final VoidCallback onRideFinished; const DriverCurrentRideScreen({super.key, required this.initialRide, required this.authResult, required this.onRideFinished}); @override State<DriverCurrentRideScreen> createState() => _DriverCurrentRideScreenState(); }
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
-  late Map<String, dynamic> _currentRide; bool _isLoading = false; final MapController _mapController = MapController(); StreamSubscription<Position>? _positionStream; LatLng? _driverLocation; List<LatLng> _routePoints = []; double _distanceToPickup = 0.0; double _driverBearing = 0.0; double _previousDriverBearing = 0.0;
+  late Map<String, dynamic> _currentRide; bool _isLoading = false; final MapController _mapController = MapController(); StreamSubscription<geolocator.Position>? _positionStream; LatLng? _driverLocation; List<LatLng> _routePoints = []; double _distanceToPickup = 0.0; double _driverBearing = 0.0; double _previousDriverBearing = 0.0;
 
   // ## MODIFICATION: `initState` now calls the new initialization method ##
   @override
@@ -1004,7 +1094,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!hasPermission || !mounted) return;
 
-      Position currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high);
       final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
 
       if (mounted) {
@@ -1027,7 +1117,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
 
   // ## MODIFICATION: This method now only handles continuous updates ##
   void _startDriverLocationTracking() {
-    _positionStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((Position position) {
+    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((geolocator.Position position) {
       if (mounted) {
         final newLocation = LatLng(position.latitude, position.longitude);
         double newBearing = _driverBearing;
@@ -1038,7 +1128,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           _previousDriverBearing = _driverBearing;
           _driverLocation = newLocation;
           _driverBearing = newBearing;
-          _distanceToPickup = Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
+          _distanceToPickup = geolocator.Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
         });
       }
     });
@@ -1094,11 +1184,15 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('الرحلة الحالية'),
-        // [CHAT INTEGRATION] - Add chat icon to AppBar
         actions: [
-          ChatIconWithBadge(
-            chatId: 'ride_${_currentRide['id']}',
-            currentUserId: widget.authResult.userId,
+          // [MODIFIED] - Clearer Chat Button
+          TextButton.icon(
+            icon: ChatIconWithBadge(
+              chatId: 'ride_${_currentRide['id']}',
+              currentUserId: widget.authResult.userId,
+              onPressed: () {}, // Action is handled by the parent button
+            ),
+            label: const Text("التحدث مع الزبون"),
             onPressed: () {
               Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => ChatScreen(
@@ -1163,7 +1257,7 @@ enum BookingStage { selectingPickup, selectingDestination, confirmingRequest }
 class QuickRideMapScreen extends StatefulWidget { final String token; final AuthResult authResult; const QuickRideMapScreen({super.key, required this.token, required this.authResult}); @override State<QuickRideMapScreen> createState() => _QuickRideMapScreenState(); }
 class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController(); Map<String, dynamic>? _activeRide; bool _isLoading = true; Timer? _statusTimer; final _priceController = TextEditingController(); Map<String, dynamic> _driversData = {}; Map<String, AnimationController> _animationControllers = {}; Map<String, Animation<LatLng>> _animations = {}; Map<String, ({LatLng begin, LatLng end})> _driverAnimationSegments = {}; Timer? _driversTimer; final Map<String, double> _lastBearings = {};
-  BookingStage _bookingStage = BookingStage.selectingPickup; LatLng? _pickupLocation; LatLng? _destinationLocation; LatLng? _currentUserLocation; StreamSubscription<Position>? _locationStream;
+  BookingStage _bookingStage = BookingStage.selectingPickup; LatLng? _pickupLocation; LatLng? _destinationLocation; LatLng? _currentUserLocation; StreamSubscription<geolocator.Position>? _locationStream;
   LatLng? _assignedDriverLocation; Timer? _liveTrackingTimer; List<LatLng> _routeToCustomer = []; double _assignedDriverBearing = 0.0; double _previousAssignedDriverBearing = 0.0;
   @override
   void initState() { super.initState(); _setupInitialLocation(); _checkForActiveRide(); _driversTimer = Timer.periodic(const Duration(seconds: 5), (timer) { if (_activeRide == null) _fetchActiveDrivers(); }); }
@@ -1173,14 +1267,14 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     final hasPermission = await PermissionService.handleLocationPermission(context);
     if (!hasPermission || !mounted) return;
     try {
-      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.bestForNavigation);
       if (mounted) {
         final initialLocation = LatLng(position.latitude, position.longitude);
         setState(() { _currentUserLocation = initialLocation; _pickupLocation = initialLocation; });
         _mapController.move(initialLocation, 16.0);
       }
     } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع الأولي.'))); }
-    _locationStream = Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10)).listen((Position position) { if (mounted) { setState(() { _currentUserLocation = LatLng(position.latitude, position.longitude); }); } });
+    _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.high, distanceFilter: 10)).listen((geolocator.Position position) { if (mounted) { setState(() { _currentUserLocation = LatLng(position.latitude, position.longitude); }); } });
   }
   Future<void> _checkForActiveRide() async { setState(() => _isLoading = false); }
   void _startLiveTracking(String rideId) {
@@ -1395,23 +1489,29 @@ class ActiveRideInfoCard extends StatelessWidget {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // [CHAT INTEGRATION] - Add chat icon to info card
-                    ChatIconWithBadge(
-                      chatId: 'ride_${ride['id']}',
-                      currentUserId: authResult.userId,
-                      onPressed: () {
-                        Navigator.of(context).push(MaterialPageRoute(
-                          builder: (_) => ChatScreen(
-                            chatId: 'ride_${ride['id']}',
-                            chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
-                            authResult: authResult,
-                            participants: {
-                              'customer': authResult.userId,
-                              'driver': driver['id']?.toString(),
-                            },
-                          ),
-                        ));
-                      },
+                    // [MODIFIED] - Clearer Chat Button
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ChatIconWithBadge(
+                          chatId: 'ride_${ride['id']}',
+                          currentUserId: authResult.userId,
+                          onPressed: () {
+                            Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                chatId: 'ride_${ride['id']}',
+                                chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
+                                authResult: authResult,
+                                participants: {
+                                  'customer': authResult.userId,
+                                  'driver': driver['id']?.toString(),
+                                },
+                              ),
+                            ));
+                          },
+                        ),
+                        const Text("تحدث مع السائق", style: TextStyle(fontSize: 8)),
+                      ],
                     ),
                     IconButton(icon: const Icon(Icons.call, color: Colors.green), onPressed: () => makePhoneCall(driver['phone'], context)),
                   ],
@@ -1540,20 +1640,22 @@ class PassengersScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('قائمة الركاب'), centerTitle: true,
-        // [CHAT INTEGRATION] - Add group chat button
         actions: [
-          ChatIconWithBadge(
-            chatId: 'trip_${trip['id']}',
-            currentUserId: authResult.userId,
+          // [MODIFIED] - Clearer Group Chat Button
+          TextButton.icon(
+            icon: ChatIconWithBadge(
+              chatId: 'trip_${trip['id']}',
+              currentUserId: authResult.userId,
+              onPressed: () {}, // The action is handled by the parent button
+            ),
+            label: const Text("محادثة الرحلة"),
             onPressed: () {
               Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => ChatScreen(
                   chatId: 'trip_${trip['id']}',
                   chatName: 'مجموعة رحلة ${trip['from']} - ${trip['to']}',
                   authResult: authResult,
-                  // For group chat, we don't need specific participants,
-                  // as anyone with the trip ID can join.
-                  participants: {},
+                  participants: {}, // For group chat, anyone with the trip ID can join.
                 ),
               ));
             },
@@ -1617,6 +1719,8 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
+          // This notification should ideally be sent from the backend to all customers.
+          // Here, we simulate it for demonstration purposes.
           NotificationService.showNotification('رحلة جديدة متاحة!', 'تم إضافة رحلة من ${_fromController.text} إلى ${_toController.text}. اضغط للحجز.', payload: '{"userType": "customer", "targetScreen": "trips"}', type: 'default');
           _formKey.currentState?.reset(); _fromController.clear(); _toController.clear(); _dateController.clear(); _timeController.clear(); _seatsController.clear();
         } else { throw Exception(data['message'] ?? 'فشل إنشاء الرحلة'); }
@@ -1735,45 +1839,150 @@ class _DriverMyTripsScreenState extends State<DriverMyTripsScreen> {
   }
 }
 
-class PrivateRequestFormScreen extends StatefulWidget { final AuthResult authResult; const PrivateRequestFormScreen({super.key, required this.authResult}); @override State<PrivateRequestFormScreen> createState() => _PrivateRequestFormScreenState(); }
+// =============================================================================
+//  [MODIFIED] - Private Request Screens
+// =============================================================================
+
+class PrivateRequestFormScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const PrivateRequestFormScreen({super.key, required this.authResult});
+  @override
+  State<PrivateRequestFormScreen> createState() => _PrivateRequestFormScreenState();
+}
+
 class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
-  final _formKey = GlobalKey<FormState>(); final _fromController = TextEditingController(); final _toController = TextEditingController(); final _priceController = TextEditingController(); final _timeController = TextEditingController(); final _phoneController = TextEditingController(); bool _withReturn = false; bool _isLoading = false;
-  Map<String, dynamic>? _activeRequest; Timer? _statusTimer;
+  final _formKey = GlobalKey<FormState>();
+  final _fromController = TextEditingController();
+  final _toController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _timeController = TextEditingController();
+  final _phoneController = TextEditingController();
+  bool _withReturn = false;
+  bool _isLoading = false;
+
+  Map<String, dynamic>? _activeRequest;
+  Timer? _statusTimer;
+
   @override
-  void initState() { super.initState(); _fetchMyActiveRequest(); }
+  void initState() {
+    super.initState();
+    _fetchMyActiveRequest();
+  }
+
   @override
-  void dispose() { _statusTimer?.cancel(); _fromController.dispose(); _toController.dispose(); _priceController.dispose(); _timeController.dispose(); _phoneController.dispose(); super.dispose(); }
-  void _startStatusTimer() { _statusTimer?.cancel(); _statusTimer = Timer.periodic(const Duration(seconds: 10), (timer) { if (_activeRequest != null && _activeRequest!['status'] == 'pending') { _fetchMyActiveRequest(); } else { timer.cancel(); } }); }
+  void dispose() {
+    _statusTimer?.cancel();
+    _fromController.dispose();
+    _toController.dispose();
+    _priceController.dispose();
+    _timeController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  void _startStatusTimer() {
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (_activeRequest != null && _activeRequest!['status'] == 'pending') {
+        _fetchMyActiveRequest();
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
   Future<void> _fetchMyActiveRequest() async {
     if (!mounted) return;
     try {
       final response = await ApiService.getMyActivePrivateRequest(widget.authResult.token);
       if (mounted && response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['success'] == true && data['request'] != null) { setState(() { _activeRequest = data['request']; }); _startStatusTimer(); } else { setState(() { _activeRequest = null; }); }
+        if (data['success'] == true && data['request'] != null) {
+          setState(() {
+            _activeRequest = data['request'];
+          });
+          _startStatusTimer();
+        } else {
+          setState(() {
+            _activeRequest = null;
+          });
+        }
       }
-    } catch (e) { debugPrint("Failed to fetch active private request: $e"); }
+    } catch (e) {
+      debugPrint("Failed to fetch active private request: $e");
+    }
   }
-  Future<void> _selectTime() async { final TimeOfDay? picked = await showTimePicker(context: context, initialTime: TimeOfDay.now()); if (picked != null && mounted) { setState(() { _timeController.text = picked.format(context); }); } }
+
+  Future<void> _selectTime() async {
+    final TimeOfDay? picked = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+    if (picked != null && mounted) {
+      setState(() {
+        _timeController.text = picked.format(context);
+      });
+    }
+  }
+
   Future<void> _submitRequest() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _isLoading = true);
     try {
-      final body = {'from': _fromController.text, 'to': _toController.text, 'price': _priceController.text, 'time': _timeController.text, 'phone': _phoneController.text, 'with_return': _withReturn};
+      final body = {
+        'from': _fromController.text,
+        'to': _toController.text,
+        'price': _priceController.text,
+        'time': _timeController.text,
+        'phone': _phoneController.text,
+        'with_return': _withReturn
+      };
       final response = await ApiService.createPrivateRequest(widget.authResult.token, body);
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          NotificationService.showNotification('طلب خصوصي جديد!', 'يوجد طلب من ${_fromController.text} إلى ${_toController.text}. اضغط للقبول.', payload: '{"userType": "driver", "targetScreen": "private_requests"}', type: 'high_priority');
-          _formKey.currentState?.reset(); _fromController.clear(); _toController.clear(); _priceController.clear(); _timeController.clear(); _phoneController.clear();
-          setState(() => _withReturn = false); _fetchMyActiveRequest();
-        } else { throw Exception(data['message'] ?? 'فشل إرسال الطلب'); }
+          // This notification should be sent from the backend to all drivers.
+          NotificationService.showNotification('طلب خصوصي جديد!',
+              'يوجد طلب من ${_fromController.text} إلى ${_toController.text}. اضغط للقبول.',
+              payload: '{"userType": "driver", "targetScreen": "private_requests"}',
+              type: 'high_priority');
+          _formKey.currentState?.reset();
+          _fromController.clear();
+          _toController.clear();
+          _priceController.clear();
+          _timeController.clear();
+          _phoneController.clear();
+          setState(() => _withReturn = false);
+          _fetchMyActiveRequest();
+        } else {
+          throw Exception(data['message'] ?? 'فشل إرسال الطلب');
+        }
       }
-    } on SocketException { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange)); } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red)); } finally { if (mounted) setState(() => _isLoading = false); }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
+
+  // [MODIFIED] - Customer can now cancel their request.
   Future<void> _cancelRequest() async {
     if (_activeRequest == null) return;
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تأكيد الإلغاء'),
+        content: const Text('هل أنت متأكد من إلغاء هذا الطلب؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('تراجع')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('نعم، إلغاء'), style: TextButton.styleFrom(foregroundColor: Colors.red)),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
     setState(() => _isLoading = true);
     try {
       final response = await ApiService.cancelMyPrivateRequest(widget.authResult.token, _activeRequest!['id'].toString());
@@ -1781,13 +1990,53 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          setState(() { _activeRequest = null; _statusTimer?.cancel(); });
-        } else { throw Exception(data['message'] ?? 'فشل إلغاء الطلب'); }
+
+          // This notification should be sent from the backend to the accepted driver.
+          // Simulating it here for demonstration.
+          if (_activeRequest!['status'] == 'accepted') {
+            NotificationService.showNotification(
+              'إلغاء رحلة خاصة',
+              'قام الزبون بإلغاء الرحلة الخاصة من ${_activeRequest!['from']} إلى ${_activeRequest!['to']}.',
+              // The payload should contain the driver's FCM token, which the backend would have.
+              // payload: '{"driver_fcm_token": "..."}'
+              type: 'high_priority',
+            );
+          }
+
+          setState(() {
+            _activeRequest = null;
+            _statusTimer?.cancel();
+          });
+        } else {
+          throw Exception(data['message'] ?? 'فشل إلغاء الطلب');
+        }
       }
-    } on SocketException { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange)); } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red)); } finally { if (mounted) setState(() => _isLoading = false); }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
+
   @override
-  Widget build(BuildContext context) { return Scaffold(body: _activeRequest != null ? ActivePrivateRequestCard(request: _activeRequest!, onCancel: _cancelRequest, authResult: widget.authResult) : _buildRequestForm()); }
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          _activeRequest != null
+              ? ActivePrivateRequestCard(request: _activeRequest!, onCancel: _cancelRequest, authResult: widget.authResult)
+              : _buildRequestForm(),
+          if (_isLoading) Container(
+            color: Colors.black.withOpacity(0.3),
+            child: const Center(child: CircularProgressIndicator()),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildRequestForm() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
@@ -1796,13 +2045,20 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('إنشاء طلب رحلة خصوصي ', style: Theme.of(context).textTheme.headlineSmall), const SizedBox(height: 24),
-            TextFormField(controller: _fromController, decoration: const InputDecoration(labelText: 'مكان الانطلاق', prefixIcon: Icon(Icons.my_location)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null), const SizedBox(height: 16),
-            TextFormField(controller: _toController, decoration: const InputDecoration(labelText: 'الوجهة', prefixIcon: Icon(Icons.flag)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null), const SizedBox(height: 16),
-            TextFormField(controller: _priceController, decoration: const InputDecoration(labelText: 'السعر المقترح (دينار عراقي)', prefixIcon: Icon(Icons.price_change)), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null), const SizedBox(height: 16),
-            TextFormField(controller: _timeController, decoration: const InputDecoration(labelText: 'وقت الانطلاق', prefixIcon: Icon(Icons.access_time)), readOnly: true, onTap: _selectTime, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null), const SizedBox(height: 16),
-            TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف للتواصل', prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null), const SizedBox(height: 16),
-            SwitchListTile(title: const Text('هل الرحلة مع عودة؟'), value: _withReturn, onChanged: (val) => setState(() => _withReturn = val), secondary: Icon(_withReturn ? Icons.sync : Icons.sync_disabled)), const SizedBox(height: 32),
+            Text('إنشاء طلب رحلة خصوصي', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 24),
+            TextFormField(controller: _fromController, decoration: const InputDecoration(labelText: 'مكان الانطلاق', prefixIcon: Icon(Icons.my_location)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            const SizedBox(height: 16),
+            TextFormField(controller: _toController, decoration: const InputDecoration(labelText: 'الوجهة', prefixIcon: Icon(Icons.flag)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            const SizedBox(height: 16),
+            TextFormField(controller: _priceController, decoration: const InputDecoration(labelText: 'السعر المقترح (دينار عراقي)', prefixIcon: Icon(Icons.price_change)), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            const SizedBox(height: 16),
+            TextFormField(controller: _timeController, decoration: const InputDecoration(labelText: 'وقت الانطلاق', prefixIcon: Icon(Icons.access_time)), readOnly: true, onTap: _selectTime, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            const SizedBox(height: 16),
+            TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف للتواصل', prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            const SizedBox(height: 16),
+            SwitchListTile(title: const Text('هل الرحلة مع عودة؟'), value: _withReturn, onChanged: (val) => setState(() => _withReturn = val), secondary: Icon(_withReturn ? Icons.sync : Icons.sync_disabled)),
+            const SizedBox(height: 32),
             SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _isLoading ? null : _submitRequest, child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('إرسال الطلب للسائقين'))),
           ],
         ),
@@ -1812,11 +2068,15 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
 }
 
 class ActivePrivateRequestCard extends StatelessWidget {
-  final Map<String, dynamic> request; final VoidCallback onCancel; final AuthResult authResult;
+  final Map<String, dynamic> request;
+  final VoidCallback onCancel;
+  final AuthResult authResult;
   const ActivePrivateRequestCard({super.key, required this.request, required this.onCancel, required this.authResult});
+
   @override
   Widget build(BuildContext context) {
-    final driver = request['accepted_driver']; final bool isAccepted = request['status'] == 'accepted' && driver != null;
+    final driver = request['accepted_driver'];
+    final bool isAccepted = request['status'] == 'accepted' && driver != null;
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Center(
@@ -1825,48 +2085,68 @@ class ActivePrivateRequestCard extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
-              mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('طلبك الحالي', style: Theme.of(context).textTheme.headlineSmall), const Divider(height: 24),
-                _buildInfoRow(Icons.my_location, "من:", request['from']), const SizedBox(height: 8),
-                _buildInfoRow(Icons.flag, "إلى:", request['to']), const SizedBox(height: 8),
-                _buildInfoRow(Icons.payments, "السعر:", "${request['price']} د.ع"), const SizedBox(height: 8),
-                _buildInfoRow(Icons.access_time, "الوقت:", request['time']), const Divider(height: 24),
+                Text('طلبك الحالي', style: Theme.of(context).textTheme.headlineSmall),
+                const Divider(height: 24),
+                _buildInfoRow(Icons.my_location, "من:", request['from']),
+                const SizedBox(height: 8),
+                _buildInfoRow(Icons.flag, "إلى:", request['to']),
+                const SizedBox(height: 8),
+                _buildInfoRow(Icons.payments, "السعر:", "${request['price']} د.ع"),
+                const SizedBox(height: 8),
+                _buildInfoRow(Icons.access_time, "الوقت:", request['time']),
+                const Divider(height: 24),
                 if (isAccepted) ...[
-                  Text('تم قبول طلبك!', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green[700])), const SizedBox(height: 12),
+                  Text('تم قبول طلبك!', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green[700])),
+                  const SizedBox(height: 12),
                   ListTile(
                     leading: CircleAvatar(backgroundImage: driver['image'] != null && driver['image'].isNotEmpty ? NetworkImage(driver['image']) : null, child: driver['image'] == null || driver['image'].isEmpty ? const Icon(Icons.person) : null),
                     title: Text(driver['name'] ?? 'اسم السائق'),
                     subtitle: Text(driver['car_model'] ?? 'بيانات السيارة'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // [CHAT INTEGRATION] - Add chat icon
-                        ChatIconWithBadge(
-                          chatId: 'private_${request['id']}',
-                          currentUserId: authResult.userId,
-                          onPressed: () {
-                            Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                chatId: 'private_${request['id']}',
-                                chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
-                                authResult: authResult,
-                                participants: {
-                                  'customer': authResult.userId,
-                                  'driver': driver['id']?.toString(),
-                                },
-                              ),
-                            ));
-                          },
-                        ),
-                        IconButton(icon: const Icon(Icons.call, color: Colors.green, size: 30), onPressed: () => makePhoneCall(driver['phone'], context)),
-                      ],
+                    trailing: IconButton(icon: const Icon(Icons.call, color: Colors.green, size: 30), onPressed: () => makePhoneCall(driver['phone'], context)),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: ChatIconWithBadge(chatId: 'private_${request['id']}', currentUserId: authResult.userId, onPressed: (){}),
+                      label: const Text("التحدث مع السائق"),
+                      onPressed: () {
+                        Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => ChatScreen(
+                            chatId: 'private_${request['id']}',
+                            chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
+                            authResult: authResult,
+                            participants: {
+                              'customer': authResult.userId,
+                              'driver': driver['id']?.toString(),
+                            },
+                          ),
+                        ));
+                      },
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
                     ),
                   ),
                 ] else ...[
-                  Row(children: [const CircularProgressIndicator(strokeWidth: 2), const SizedBox(width: 16), Text('جاري البحث عن سائق...', style: TextStyle(fontSize: 16, color: Colors.grey[700]))]), const SizedBox(height: 20),
-                  SizedBox(width: double.infinity, child: ElevatedButton.icon(onPressed: onCancel, icon: const Icon(Icons.cancel_outlined), label: const Text('إلغاء الطلب'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white)))
+                  Row(children: [
+                    const CircularProgressIndicator(strokeWidth: 2),
+                    const SizedBox(width: 16),
+                    Text('جاري البحث عن سائق...', style: TextStyle(fontSize: 16, color: Colors.grey[700]))
+                  ]),
                 ],
+                const SizedBox(height: 20),
+                // [MODIFIED] - The cancel button is now always visible for the customer.
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: onCancel,
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text('إلغاء الطلب'),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1874,7 +2154,16 @@ class ActivePrivateRequestCard extends StatelessWidget {
       ),
     );
   }
-  Widget _buildInfoRow(IconData icon, String label, String value) { return Row(children: [Icon(icon, color: Colors.grey[600], size: 20), const SizedBox(width: 12), Text(label, style: TextStyle(color: Colors.grey[800], fontSize: 16)), const SizedBox(width: 8), Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)))]); }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(children: [
+      Icon(icon, color: Colors.grey[600], size: 20),
+      const SizedBox(width: 12),
+      Text(label, style: TextStyle(color: Colors.grey[800], fontSize: 16)),
+      const SizedBox(width: 8),
+      Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)))
+    ]);
+  }
 }
 
 // =============================================================================
@@ -1964,14 +2253,20 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () => makePhoneCall(request['phone'], context),
-                    icon: const Icon(Icons.call), label: const Text("الاتصال بالزبون"), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                    icon: const Icon(Icons.call), label: const Text("الاتصال بالزبون"), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
                   ),
                 ),
                 const SizedBox(height: 12),
-                // [CHAT INTEGRATION] - Add chat button
+                // [MODIFIED] - Clearer Chat Button for Driver
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
+                    icon: ChatIconWithBadge(
+                      chatId: 'private_${request['id']}',
+                      currentUserId: widget.authResult.userId,
+                      onPressed: (){},
+                    ),
+                    label: const Text("التحدث مع الزبون"),
                     onPressed: () {
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => ChatScreen(
@@ -1985,16 +2280,14 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
                         ),
                       ));
                     },
-                    icon: const Icon(Icons.chat_bubble_outline),
-                    label: const Text("مراسلة الزبون"),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
                   ),
                 ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(child: OutlinedButton(onPressed: () => _endPrivateTrip('cancelled'), style: OutlinedButton.styleFrom(foregroundColor: Colors.red), child: const Text("إلغاء"))), const SizedBox(width: 12),
-                    Expanded(child: ElevatedButton(onPressed: () => _endPrivateTrip('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green), child: const Text("إنهاء"))),
+                    Expanded(child: ElevatedButton(onPressed: () => _endPrivateTrip('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white), child: const Text("إنهاء"))),
                   ],
                 )
               ],
@@ -2069,33 +2362,32 @@ class ChatIconWithBadge extends StatelessWidget {
           unreadCount = data['unreadCount']?[currentUserId] ?? 0;
         }
 
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.chat_bubble_outline),
-              color: Colors.blue,
-              onPressed: onPressed,
-            ),
-            if (unreadCount > 0)
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                  child: Text(
-                    unreadCount.toString(),
-                    style: const TextStyle(color: Colors.white, fontSize: 10),
-                    textAlign: TextAlign.center,
+        return InkWell(
+          onTap: onPressed,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.chat_bubble_outline, color: Colors.blue, size: 30),
+              if (unreadCount > 0)
+                Positioned(
+                  top: -4,
+                  right: -4,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    child: Text(
+                      unreadCount.toString(),
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         );
       },
     );
@@ -2292,18 +2584,24 @@ class _ChatScreenState extends State<ChatScreen> {
         messages: _messages,
         onSendPressed: _handleSendPressed,
         user: _user,
-        theme: const DefaultChatTheme(
-          primaryColor: Colors.amber,
-          secondaryColor: Color(0xfff5f5f5),
+        // [MODIFIED] - Updated chat theme and enabled user names.
+        showUserNames: true,
+        theme: DefaultChatTheme(
+          primaryColor: Colors.amber[700]!,
+          secondaryColor: Colors.grey[200]!,
+          inputBackgroundColor: Colors.white,
+          inputTextColor: Colors.black,
+          messageInsetsHorizontal: 12,
+          messageInsetsVertical: 12,
         ),
         l10n: const ChatL10nEn(
           inputPlaceholder: 'اكتب رسالتك...',
         ),
-        // [IMPROVEMENT] - Add typing indicator
         typingIndicatorOptions: TypingIndicatorOptions(
           typingUsers: _isOtherUserTyping ? [types.User(id: 'other')] : [],
         ),
-        // [IMPROVEMENT] - Listen to text changes for typing indicator
+        // [NOTE] If you still see an error here, please ensure your `flutter_chat_ui`
+        // package is updated to the latest version in your `pubspec.yaml`.
       ),
     );
   }
