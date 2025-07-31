@@ -99,6 +99,10 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
 
+  // --- NEW ---
+  // Flag to prevent multiple order submissions
+  bool _isSubmitting = false;
+
   List<String> bannerImages = [
     'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
     'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
@@ -117,6 +121,10 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   void dispose() {
     _scrollController.dispose();
     _searchDebounce?.cancel();
+    _nameController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -133,6 +141,8 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   }
 
   Future<void> _fetchProducts({String searchQuery = '', int? categoryId, bool loadMore = false}) async {
+    if (_isLoadingMore) return; // Prevent multiple simultaneous fetches
+
     if (!loadMore) {
       _page = 1;
       _hasMore = true;
@@ -162,30 +172,32 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
         List<dynamic> data = json.decode(response.body);
         final fetchedProducts = data.map((json) => Product.fromJson(json)).toList();
 
-        setState(() {
-          if (loadMore) {
-            products.addAll(fetchedProducts);
-          } else {
-            products = fetchedProducts;
-          }
-          _hasMore = fetchedProducts.length == 10;
-          isLoading = false;
-          _isLoadingMore = false;
-          _currentCategoryId = categoryId;
-        });
+        if (mounted) {
+          setState(() {
+            if (loadMore) {
+              products.addAll(fetchedProducts);
+            } else {
+              products = fetchedProducts;
+            }
+            _hasMore = fetchedProducts.length == 10;
+            isLoading = false;
+            _isLoadingMore = false;
+            _currentCategoryId = categoryId;
+          });
+        }
       }
     }  catch (e) {
-  setState(() {
-  isLoading = false;
-  _isLoadingMore = false;
-  // نفترض أن الاتصال قد فُقد إذا فشلت عملية جلب البيانات
-  _isConnected = false;
-  });
-  if (!loadMore) {
-  // عرض رسالة واضحة للمستخدم للتحقق من الاتصال
-  ScaffoldMessenger.of(context).showSnackBar(
-  const SnackBar(content: Text('يمعود شوف الانترنيت ضعيف، يرجى التحقق من اتصالك بالإنترنت')),
-        );
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+          _isLoadingMore = false;
+          _isConnected = false;
+        });
+        if (!loadMore) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('الاتصال بالإنترنت ضعيف، يرجى التحقق من اتصالك')),
+          );
+        }
       }
     }
   }
@@ -202,7 +214,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
         },
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && mounted) {
         setState(() => mainCategories = json.decode(response.body));
       }
     } catch (e) {
@@ -223,8 +235,8 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
       }
     }
 
-    if (_scrollController.offset >= _scrollController.position.maxScrollExtent &&
-        !_scrollController.position.outOfRange) {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent * 0.9 &&
+        !_isLoadingMore) {
       _fetchProducts(
         searchQuery: _searchController.text,
         categoryId: _currentCategoryId,
@@ -313,7 +325,11 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   void _showCheckoutForm() => setState(() => showCheckout = true);
   void _hideCheckoutForm() => setState(() => showCheckout = false);
 
+  // --- MODIFIED ---
   void _submitOrder() {
+    // Prevent function from running if an order is already being submitted
+    if (_isSubmitting) return;
+
     if (_nameController.text.isEmpty ||
         _phoneController.text.isEmpty ||
         _addressController.text.isEmpty) {
@@ -322,9 +338,16 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
       );
       return;
     }
+
+    // Set the flag to true and update the UI to show a loading indicator
+    setState(() {
+      _isSubmitting = true;
+    });
+
     _sendOrderToWooCommerce();
   }
 
+  // --- MODIFIED ---
   Future<void> _sendOrderToWooCommerce() async {
     const consumerKey = 'ck_86b62f6fe8a298a5f9d564d70d689db81b9255ed';
     const consumerSecret = 'cs_b2de9b284f6245c8297caaf37976d899d6789ab2';
@@ -359,22 +382,34 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
           const SnackBar(content: Text('تم تأكيد طلبك بنجاح انتظر اتصال المندوب !')),
         );
 
-        setState(() {
-          cartItems.clear();
-          totalPrice = 0.0;
-          showCart = false;
-          showCheckout = false;
-          _nameController.clear();
-          _phoneController.clear();
-          _addressController.clear();
-        });
+        if (mounted) {
+          setState(() {
+            cartItems.clear();
+            totalPrice = 0.0;
+            showCart = false;
+            showCheckout = false;
+            _nameController.clear();
+            _phoneController.clear();
+            _addressController.clear();
+          });
+        }
       } else {
-        throw Exception('فشل إرسال الطلب: ${response.statusCode}');
+        throw Exception('فشل إرسال الطلب: ${response.body}');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('حدث خطأ في إرسال الطلب: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('حدث خطأ في إرسال الطلب: $e')),
+        );
+      }
+    } finally {
+      // --- NEW ---
+      // Reset the flag regardless of success or failure
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
   }
 
@@ -858,6 +893,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
     );
   }
 
+  // --- MODIFIED ---
   Widget _buildCheckoutForm() {
     final formatter = NumberFormat('#,###');
     final formattedTotal = formatter.format(totalPrice);
@@ -888,7 +924,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 IconButton(
-                  onPressed: _hideCheckoutForm,
+                  onPressed: _isSubmitting ? null : _hideCheckoutForm,
                   icon: const Icon(Icons.close),
                 ),
               ],
@@ -949,6 +985,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.person),
               ),
+              enabled: !_isSubmitting,
             ),
             const SizedBox(height: 15),
             TextField(
@@ -959,6 +996,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 prefixIcon: Icon(Icons.phone),
               ),
               keyboardType: TextInputType.phone,
+              enabled: !_isSubmitting,
             ),
             const SizedBox(height: 15),
             TextField(
@@ -969,20 +1007,25 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 prefixIcon: Icon(Icons.location_on),
               ),
               maxLines: 2,
+              enabled: !_isSubmitting,
             ),
             const SizedBox(height: 25),
             SizedBox(
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
-                onPressed: _submitOrder,
+                // Disable the button when submitting
+                onPressed: _isSubmitting ? null : _submitOrder,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blue[800],
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text('تأكيد الطلب', style: TextStyle(fontSize: 18)),
+                // Show a loading indicator or the text
+                child: _isSubmitting
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text('تأكيد الطلب', style: TextStyle(fontSize: 18)),
               ),
             ),
             const SizedBox(height: 10),

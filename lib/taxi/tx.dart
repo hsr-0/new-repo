@@ -1,8 +1,4 @@
 import 'dart:async';
-import 'dart:async';
-import 'dart:convert';
-
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -13,37 +9,29 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
-// [FIXED] - Aliased the geolocator import to resolve name conflicts.
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:url_launcher/url_launcher.dart';
-
-// [CHAT INTEGRATION] - Importing Firebase and Chat UI packages
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart' as fb_auth; // Using alias to avoid conflicts
+import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import 'package:uuid/uuid.dart';
-
-// [NEW] - Importing packages for Onboarding feature
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:introduction_screen/introduction_screen.dart';
-
 
 // =============================================================================
-//  Global Navigator Key & Deep Link Notifier
+//  Global Navigator Key & Deep Link Notifier
 // =============================================================================
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 final ValueNotifier<Map<String, String>> deepLinkNotifier = ValueNotifier({});
 
-
 // =============================================================================
-//  NEW: Firebase Cloud Messaging API Handler
+//  Firebase Cloud Messaging API Handler
 // =============================================================================
 class FirebaseApi {
   final _firebaseMessaging = FirebaseMessaging.instance;
@@ -66,14 +54,9 @@ class FirebaseApi {
 
   void handleMessage(RemoteMessage? message) {
     if (message == null) return;
-
     final userType = message.data['userType'] ?? '';
     final targetScreen = message.data['targetScreen'] ?? '';
-
-    deepLinkNotifier.value = {
-      'userType': userType,
-      'targetScreen': targetScreen,
-    };
+    deepLinkNotifier.value = {'userType': userType, 'targetScreen': targetScreen};
   }
 
   Future<void> initPushNotifications() async {
@@ -93,9 +76,8 @@ class FirebaseApi {
   }
 }
 
-
 // =============================================================================
-//  Helper Classes & Functions
+//  Helper Classes & Functions
 // =============================================================================
 class LatLngTween extends Tween<LatLng> {
   LatLngTween({required LatLng begin, required LatLng end}) : super(begin: begin, end: end);
@@ -105,8 +87,10 @@ class LatLngTween extends Tween<LatLng> {
 
 double calculateBearing(LatLng startPoint, LatLng endPoint) {
   if (startPoint.latitude == endPoint.latitude && startPoint.longitude == endPoint.longitude) return 0.0;
-  final lat1 = startPoint.latitudeInRad; final lon1 = startPoint.longitudeInRad;
-  final lat2 = endPoint.latitudeInRad; final lon2 = endPoint.longitudeInRad;
+  final lat1 = startPoint.latitudeInRad;
+  final lon1 = startPoint.longitudeInRad;
+  final lat2 = endPoint.latitudeInRad;
+  final lon2 = endPoint.longitudeInRad;
   final dLon = lon2 - lon1;
   final y = sin(dLon) * cos(lat2);
   final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
@@ -114,7 +98,6 @@ double calculateBearing(LatLng startPoint, LatLng endPoint) {
   return (bearing * 180 / pi + 360) % 360;
 }
 
-// [FIXED] - Removed the 'return' keyword to resolve the lint error.
 Future<void> makePhoneCall(String? phoneNumber, BuildContext context) {
   if (phoneNumber == null || phoneNumber.isEmpty) {
     if (context.mounted) {
@@ -132,7 +115,7 @@ Future<void> makePhoneCall(String? phoneNumber, BuildContext context) {
 }
 
 // =============================================================================
-//  Permission Service
+//  Permission Service
 // =============================================================================
 class PermissionService {
   static Future<bool> handleLocationPermission(BuildContext context) async {
@@ -158,25 +141,18 @@ class PermissionService {
 }
 
 // =============================================================================
-//  Entry Point & App Theme
+//  Entry Point & App Theme
 // =============================================================================
 void main() async {
-  // Ensure widgets are initialized
   WidgetsFlutterBinding.ensureInitialized();
-
-  // [CHAT INTEGRATION] - Initialize Firebase for the whole app
   await Firebase.initializeApp();
   await NotificationService.initialize();
-
-  // [NEW ONBOARDING] - Check if onboarding should be shown
   final prefs = await SharedPreferences.getInstance();
   final showOnboarding = prefs.getBool('showOnboarding') ?? true;
-
   runApp(MyApp(showOnboarding: showOnboarding));
 }
 
 class MyApp extends StatelessWidget {
-  // [NEW ONBOARDING] - Pass the flag to the app widget
   final bool showOnboarding;
   const MyApp({super.key, required this.showOnboarding});
 
@@ -216,84 +192,22 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      // [NEW ONBOARDING] - Conditionally show OnboardingScreen or AuthGate
-      home: showOnboarding ? const OnboardingScreen() : const AuthGate(),
-    );
-  }
-}
-
-// =============================================================================
-// [NEW] - Onboarding Screen
-// =============================================================================
-class OnboardingScreen extends StatelessWidget {
-  const OnboardingScreen({super.key});
-
-  void _onDone(BuildContext context) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('showOnboarding', false);
-    if (context.mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const AuthGate()),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // [FIXED] - Added 'const' to resolve the error.
-    const pageDecoration = PageDecoration(
-      titleTextStyle: TextStyle(fontSize: 28.0, fontWeight: FontWeight.w700, fontFamily: 'Cairo'),
-      bodyTextStyle: TextStyle(fontSize: 19.0, fontFamily: 'Cairo'),
-      bodyPadding: EdgeInsets.fromLTRB(16.0, 0.0, 16.0, 16.0),
-      pageColor: Colors.white,
-      imagePadding: EdgeInsets.zero,
-    );
-
-    return IntroductionScreen(
-      key: GlobalKey<IntroductionScreenState>(),
-      pages: [
-        PageViewModel(
-          title: "الطلبات السريعة",
-          body: "للتنقل داخل المدينة. حدد مكانك على الخريطة، ثم حدد الوجهة والسعر، وانتظر قبول أقرب سائق لطلبك.",
-          image: const Center(child: Icon(Icons.map_outlined, size: 170.0, color: Colors.amber)),
-          decoration: pageDecoration,
-        ),
-        PageViewModel(
-          title: "الرحلات المجدولة",
-          body: "الانتقال بين  المحافظات؟اذهب  الى  الرحلات المتاحة واحجز مقعدك بسهولة مع سائقين موثوقين.",
-          image: const Center(child: Icon(Icons.event_note_outlined, size: 170.0, color: Colors.blue)),
-          decoration: pageDecoration,
-        ),
-        PageViewModel(
-          title: "الطلبات الخصوصية",
-          body: "طلب سيارة خصوصي ؟ أنشئ طلباً خاصاً بتفاصيل رحلتك والسعر المقترح، وسيقوم السائقون بالتواصل معك.",
-          image: const Center(child: Icon(Icons.star_outline, size: 170.0, color: Colors.green)),
-          decoration: pageDecoration,
-        ),
-      ],
-      onDone: () => _onDone(context),
-      showSkipButton: true,
-      skip: const Text('تخطي', style: TextStyle(fontWeight: FontWeight.w600, fontFamily: 'Cairo')),
-      next: const Icon(Icons.arrow_forward),
-      done: const Text('ابدأ الآن', style: TextStyle(fontWeight: FontWeight.w600, fontFamily: 'Cairo')),
-      dotsDecorator: DotsDecorator(
-        size: const Size(10.0, 10.0),
-        color: const Color(0xFFBDBDBD),
-        activeSize: const Size(22.0, 10.0),
-        activeShape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(25.0),
-        ),
-      ),
+      home: const AuthGate(),
     );
   }
 }
 
 
+
 // =============================================================================
-//  Models & Services
+//  Models & Services
 // =============================================================================
 class AuthResult {
-  final String token; final String userId; final String displayName; final bool isDriver; final String? driverStatus;
+  final String token;
+  final String userId;
+  final String displayName;
+  final bool isDriver;
+  final String? driverStatus;
   AuthResult({required this.token, required this.userId, required this.displayName, required this.isDriver, this.driverStatus});
 }
 
@@ -307,52 +221,73 @@ class ApiService {
     await _storage.write(key: 'is_driver', value: authResult.isDriver.toString());
     if (authResult.driverStatus != null) await _storage.write(key: 'driver_status', value: authResult.driverStatus);
   }
+
   static Future<void> clearAuthData() async => await _storage.deleteAll();
   static Future<AuthResult?> getStoredAuthData() async {
-    final token = await _storage.read(key: 'auth_token'); final userId = await _storage.read(key: 'user_id');
-    final displayName = await _storage.read(key: 'display_name'); final isDriverStr = await _storage.read(key: 'is_driver');
+    final token = await _storage.read(key: 'auth_token');
+    final userId = await _storage.read(key: 'user_id');
+    final displayName = await _storage.read(key: 'display_name');
+    final isDriverStr = await _storage.read(key: 'is_driver');
     final driverStatus = await _storage.read(key: 'driver_status');
     if (token != null && userId != null && displayName != null && isDriverStr != null) {
       return AuthResult(token: token, userId: userId, displayName: displayName, isDriver: isDriverStr.toLowerCase() == 'true', driverStatus: driverStatus);
     }
     return null;
   }
+
+  static Future<http.Response> _post(String endpoint, String token, Map<String, dynamic> body) {
+    return http.post(Uri.parse('$baseUrl$endpoint'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode(body));
+  }
+
+  static Future<http.Response> _get(String endpoint, String token) {
+    return http.get(Uri.parse('$baseUrl$endpoint'), headers: {'Authorization': 'Bearer $token'});
+  }
+
   static Future<void> updateFcmToken(String authToken, String fcmToken) async {
     try {
       await http.post(
         Uri.parse('$baseUrl/taxi-auth/v1/update-fcm-token'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $authToken'
-        },
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $authToken'},
         body: json.encode({'fcm_token': fcmToken}),
       );
     } catch (e) {
       debugPrint("Failed to update FCM token: $e");
     }
   }
+
   static Future<void> setDriverActiveStatus(String token, bool isActive) async {
-    try { await http.post(Uri.parse('$baseUrl/taxi/v1/driver/set-active-status'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode({'is_active': isActive})); } catch (e) { debugPrint("Failed to set driver active status: $e"); }
+    try {
+      await _post('/taxi/v1/driver/set-active-status', token, {'is_active': isActive});
+    } catch (e) {
+      debugPrint("Failed to set driver active status: $e");
+    }
   }
+
   static Future<void> updateDriverLocation(String token, LatLng location) async {
-    try { await http.post(Uri.parse('$baseUrl/taxi/v1/driver/update-location'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode({'lat': location.latitude, 'lng': location.longitude})); } catch (e) { debugPrint("Failed to update driver location: $e"); }
+    try {
+      await _post('/taxi/v1/driver/update-location', token, {'lat': location.latitude, 'lng': location.longitude});
+    } catch (e) {
+      debugPrint("Failed to update driver location: $e");
+    }
   }
+
   static Future<List<dynamic>> fetchActiveDrivers(String token) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/taxi/v1/customer/active-drivers'), headers: {'Authorization': 'Bearer $token'});
+      final response = await _get('/taxi/v1/customer/active-drivers', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['drivers'] is List) return data['drivers'];
       }
       return [];
-    } on SocketException {
-      debugPrint("Network error fetching active drivers.");
+    } catch (e) {
+      debugPrint("Failed to fetch active drivers: $e");
       return [];
-    } catch (e) { debugPrint("Failed to fetch active drivers: $e"); return []; }
+    }
   }
+
   static Future<LatLng?> getRideDriverLocation(String token, String rideId) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/taxi/v1/rides/driver-location?ride_id=$rideId'), headers: {'Authorization': 'Bearer $token'});
+      final response = await _get('/taxi/v1/rides/driver-location?ride_id=$rideId', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['location'] != null) {
@@ -360,85 +295,101 @@ class ApiService {
         }
       }
       return null;
-    } on SocketException {
-      debugPrint("Network error getting driver location for ride.");
+    } catch (e) {
+      debugPrint("Failed to get driver location for ride: $e");
       return null;
-    } catch (e) { debugPrint("Failed to get driver location for ride: $e"); return null; }
+    }
   }
+
   static Future<http.Response> createPrivateRequest(String token, Map<String, dynamic> body) {
-    return http.post(Uri.parse('$baseUrl/taxi/v1/private-requests/create'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode(body));
+    return _post('/taxi/v1/private-requests/create', token, body);
   }
+
   static Future<List<dynamic>> getAvailablePrivateRequests(String token) async {
-    final response = await http.get(Uri.parse('$baseUrl/taxi/v1/private-requests/available'), headers: {'Authorization': 'Bearer $token'});
+    final response = await _get('/taxi/v1/private-requests/available', token);
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
       throw Exception('Failed to load private requests');
     }
   }
+
   static Future<http.Response> acceptPrivateRequest(String token, String requestId) {
-    return http.post(Uri.parse('$baseUrl/taxi/v1/private-requests/accept'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode({'request_id': requestId}));
-  }
-  static Future<http.Response> getMyActivePrivateRequest(String token) {
-    return http.get(Uri.parse('$baseUrl/taxi/v1/private-requests/my-active'), headers: {'Authorization': 'Bearer $token'});
+    return _post('/taxi/v1/private-requests/accept', token, {'request_id': requestId});
   }
 
-  // [MODIFIED] - This function is now used by the customer to cancel their private request.
+  static Future<http.Response> driverCompletePrivateRequest(String token, String requestId) {
+    return _post('/taxi/v1/driver/private-requests/complete', token, {'request_id': requestId});
+  }
+
+
+  static Future<http.Response> getMyActivePrivateRequest(String token) {
+    return _get('/taxi/v1/private-requests/my-active', token);
+  }
+
   static Future<http.Response> cancelMyPrivateRequest(String token, String requestId) {
-    return http.post(Uri.parse('$baseUrl/taxi/v1/private-requests/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode({'request_id': requestId}));
+    return _post('/taxi/v1/private-requests/cancel', token, {'request_id': requestId});
+  }
+
+  // [NEW] API calls for new features
+  static Future<Map<String, dynamic>> getDriverDashboard(String token) async {
+    final response = await _get('/taxi/v1/driver/dashboard', token);
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to load driver dashboard');
+    }
+  }
+
+  static Future<List<dynamic>> getOffers(String token) async {
+    // Offers are public, so no token is needed for the request itself, but we pass it for consistency.
+    final response = await http.get(Uri.parse('$baseUrl/taxi/v1/offers'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to load offers');
+    }
+  }
+
+  static Future<http.Response> rateRide(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v1/rides/rate', token, body);
   }
 }
 
 // =============================================================================
-//  MODIFIED: NotificationService (with Channels)
+//  NotificationService (with Channels)
 // =============================================================================
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
-
-  static const AndroidNotificationChannel _highImportanceChannel = AndroidNotificationChannel(
-    'high_importance_channel', 'High Importance Notifications',
-    description: 'This channel is used for important notifications.',
-    importance: Importance.max, playSound: true,
-  );
-
-  static const AndroidNotificationChannel _defaultImportanceChannel = AndroidNotificationChannel(
-    'default_importance_channel', 'Default Importance Notifications',
-    description: 'This channel is used for general notifications.',
-    importance: Importance.defaultImportance, playSound: true, enableVibration: true,
-  );
-
+  static const AndroidNotificationChannel _highImportanceChannel = AndroidNotificationChannel('high_importance_channel', 'High Importance Notifications', description: 'This channel is used for important notifications.', importance: Importance.max, playSound: true);
+  static const AndroidNotificationChannel _defaultImportanceChannel = AndroidNotificationChannel('default_importance_channel', 'Default Importance Notifications', description: 'This channel is used for general notifications.', importance: Importance.defaultImportance, playSound: true, enableVibration: true);
 
   static Future<void> initialize() async {
-    const InitializationSettings initializationSettings = InitializationSettings(
-      android: AndroidInitializationSettings("@mipmap/ic_launcher"),
-      iOS: DarwinInitializationSettings(),
-    );
-
+    const InitializationSettings initializationSettings = InitializationSettings(android: AndroidInitializationSettings("@mipmap/ic_launcher"), iOS: DarwinInitializationSettings());
     await _notificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(_highImportanceChannel);
     await _notificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(_defaultImportanceChannel);
-
     await _notificationsPlugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse notificationResponse) async {
         if (notificationResponse.payload != null) {
           try {
             final Map<String, dynamic> payloadData = json.decode(notificationResponse.payload!);
-            deepLinkNotifier.value = {
-              'userType': payloadData['userType'] ?? '',
-              'targetScreen': payloadData['targetScreen'] ?? '',
-            };
-          } catch (e) { debugPrint('Error parsing notification payload: $e'); }
+            deepLinkNotifier.value = {'userType': payloadData['userType'] ?? '', 'targetScreen': payloadData['targetScreen'] ?? ''};
+          } catch (e) {
+            debugPrint('Error parsing notification payload: $e');
+          }
         }
       },
     );
-
     final NotificationAppLaunchDetails? notificationAppLaunchDetails = await _notificationsPlugin.getNotificationAppLaunchDetails();
     if (notificationAppLaunchDetails?.didNotificationLaunchApp ?? false) {
       if (notificationAppLaunchDetails!.notificationResponse?.payload != null) {
         try {
           final Map<String, dynamic> payloadData = json.decode(notificationAppLaunchDetails.notificationResponse!.payload!);
-          deepLinkNotifier.value = { 'userType': payloadData['userType'] ?? '', 'targetScreen': payloadData['targetScreen'] ?? '' };
-        } catch (e) { debugPrint('Error parsing launch notification payload: $e'); }
+          deepLinkNotifier.value = {'userType': payloadData['userType'] ?? '', 'targetScreen': payloadData['targetScreen'] ?? ''};
+        } catch (e) {
+          debugPrint('Error parsing launch notification payload: $e');
+        }
       }
     }
   }
@@ -459,35 +410,96 @@ class NotificationService {
 }
 
 // =============================================================================
-//  UI Enhancement Widgets
+//  UI Enhancement Widgets
 // =============================================================================
-class EmptyStateWidget extends StatelessWidget { final String svgAsset; final String message; final String? buttonText; final VoidCallback? onButtonPressed; const EmptyStateWidget({ super.key, required this.svgAsset, required this.message, this.buttonText, this.onButtonPressed }); @override Widget build(BuildContext context) { return Center(child: Padding(padding: const EdgeInsets.all(32.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [SvgPicture.string(svgAsset, height: 150, colorFilter: ColorFilter.mode(Colors.grey[400]!, BlendMode.srcIn)), const SizedBox(height: 24), Text(message, style: TextStyle(fontSize: 18, color: Colors.grey[700]), textAlign: TextAlign.center), const SizedBox(height: 24), if (buttonText != null && onButtonPressed != null) ElevatedButton(onPressed: onButtonPressed, child: Text(buttonText!))]))); } }
-class ShimmerListItem extends StatelessWidget { const ShimmerListItem({super.key}); @override Widget build(BuildContext context) { return Shimmer.fromColors(baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!, child: Padding(padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(width: 60.0, height: 60.0, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle)), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[const SizedBox(height: 8), Container(width: double.infinity, height: 10.0, color: Colors.white), const SizedBox(height: 8), Container(width: 150, height: 10.0, color: Colors.white)]))]))); } }
-class RotatingVehicleIcon extends StatelessWidget { final String vehicleType; final double bearing; const RotatingVehicleIcon({super.key, required this.vehicleType, required this.bearing}); @override Widget build(BuildContext context) { const String carSvg = '''<svg viewBox="0 0 80 160" xmlns="http://www.w3.org/2000/svg"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dx="2" dy="5" result="offsetblur"/><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g transform="translate(0, 0)" filter="url(#shadow)"><path d="M25,10 C15,10 10,20 10,30 L10,130 C10,140 15,150 25,150 L55,150 C65,150 70,140 70,130 L70,30 C70,20 65,10 55,10 L25,10 Z" fill="#BDBDBD"/><path d="M20,25 C15,25 15,30 15,35 L15,70 L65,70 L65,35 C65,30 65,25 60,25 L20,25 Z" fill="#212121" opacity="0.8"/><path d="M15,80 L15,120 C15,125 20,125 20,125 L60,125 C65,125 65,120 65,120 L65,80 L15,80 Z" fill="#424242" opacity="0.7"/></g></svg>'''; const String tuktukSvg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 17.17V10c0-2.21-1.79-4-4-4h-2.1c-.83-2.32-3.07-4-5.9-4-3.31 0-6 2.69-6 6s2.69 6 6 6c.34 0 .67-.04 1-.09V17H2v2h18v-2h-2zm-8-2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM5 8c0-2.21 1.79-4 4-4s4 1.79 4 4-1.79 4-4 4-4-1.79-4-4z"/></svg>'''; return Transform.rotate(angle: bearing * (pi / 180), child: SvgPicture.string(vehicleType.toLowerCase() == 'tuktuk' ? tuktukSvg : carSvg)); } }
-class PulsingUserLocationMarker extends StatefulWidget { const PulsingUserLocationMarker({super.key}); @override State<PulsingUserLocationMarker> createState() => _PulsingUserLocationMarkerState(); }
-class _PulsingUserLocationMarkerState extends State<PulsingUserLocationMarker> with SingleTickerProviderStateMixin { late final AnimationController _controller; @override void initState() { super.initState(); _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true); } @override void dispose() { _controller.dispose(); super.dispose(); } @override Widget build(BuildContext context) { return AnimatedBuilder(animation: _controller, builder: (context, child) { return Stack(alignment: Alignment.center, children: [Container(width: 15 + (15 * _controller.value), height: 15 + (15 * _controller.value), decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue.withOpacity(0.8 - (0.8 * _controller.value)))), Container(width: 15, height: 15, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue, border: Border.all(color: Colors.white, width: 2)))]); }); } }
+class EmptyStateWidget extends StatelessWidget {
+  final String svgAsset;
+  final String message;
+  final String? buttonText;
+  final VoidCallback? onButtonPressed;
+  const EmptyStateWidget({super.key, required this.svgAsset, required this.message, this.buttonText, this.onButtonPressed});
+  @override
+  Widget build(BuildContext context) {
+    return Center(child: Padding(padding: const EdgeInsets.all(32.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [SvgPicture.string(svgAsset, height: 150, colorFilter: ColorFilter.mode(Colors.grey[400]!, BlendMode.srcIn)), const SizedBox(height: 24), Text(message, style: TextStyle(fontSize: 18, color: Colors.grey[700]), textAlign: TextAlign.center), const SizedBox(height: 24), if (buttonText != null && onButtonPressed != null) ElevatedButton(onPressed: onButtonPressed, child: Text(buttonText!))])));
+  }
+}
+
+class ShimmerListItem extends StatelessWidget {
+  const ShimmerListItem({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer.fromColors(baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!, child: Padding(padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(width: 60.0, height: 60.0, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle)), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[const SizedBox(height: 8), Container(width: double.infinity, height: 10.0, color: Colors.white), const SizedBox(height: 8), Container(width: 150, height: 10.0, color: Colors.white)]))])));
+  }
+}
+
+class RotatingVehicleIcon extends StatelessWidget {
+  final String vehicleType;
+  final double bearing;
+  const RotatingVehicleIcon({super.key, required this.vehicleType, required this.bearing});
+  @override
+  Widget build(BuildContext context) {
+    const String carSvg = '''<svg viewBox="0 0 80 160" xmlns="http://www.w3.org/2000/svg"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dx="2" dy="5" result="offsetblur"/><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g transform="translate(0, 0)" filter="url(#shadow)"><path d="M25,10 C15,10 10,20 10,30 L10,130 C10,140 15,150 25,150 L55,150 C65,150 70,140 70,130 L70,30 C70,20 65,10 55,10 L25,10 Z" fill="#BDBDBD"/><path d="M20,25 C15,25 15,30 15,35 L15,70 L65,70 L65,35 C65,30 65,25 60,25 L20,25 Z" fill="#212121" opacity="0.8"/><path d="M15,80 L15,120 C15,125 20,125 20,125 L60,125 C65,125 65,120 65,120 L65,80 L15,80 Z" fill="#424242" opacity="0.7"/></g></svg>''';
+    const String tuktukSvg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 17.17V10c0-2.21-1.79-4-4-4h-2.1c-.83-2.32-3.07-4-5.9-4-3.31 0-6 2.69-6 6s2.69 6 6 6c.34 0 .67-.04 1-.09V17H2v2h18v-2h-2zm-8-2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM5 8c0-2.21 1.79-4 4-4s4 1.79 4 4-1.79 4-4 4-4-1.79-4-4z"/></svg>''';
+    return Transform.rotate(angle: bearing * (pi / 180), child: SvgPicture.string(vehicleType.toLowerCase() == 'tuktuk' ? tuktukSvg : carSvg));
+  }
+}
+
+class PulsingUserLocationMarker extends StatefulWidget {
+  const PulsingUserLocationMarker({super.key});
+  @override
+  State<PulsingUserLocationMarker> createState() => _PulsingUserLocationMarkerState();
+}
+
+class _PulsingUserLocationMarkerState extends State<PulsingUserLocationMarker> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(animation: _controller, builder: (context, child) {
+      return Stack(alignment: Alignment.center, children: [Container(width: 15 + (15 * _controller.value), height: 15 + (15 * _controller.value), decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue.withOpacity(0.8 - (0.8 * _controller.value)))), Container(width: 15, height: 15, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue, border: Border.all(color: Colors.white, width: 2)))]);
+    });
+  }
+}
 
 // =============================================================================
-//  Authentication Gate & Welcome Screen
+//  Authentication Gate & Welcome Screen
 // =============================================================================
 enum AuthStatus { unknown, authenticated, unauthenticated }
-class AuthGate extends StatefulWidget { const AuthGate({super.key}); @override State<AuthGate> createState() => _AuthGateState(); }
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
 class _AuthGateState extends State<AuthGate> {
-  AuthStatus _authStatus = AuthStatus.unknown; AuthResult? _authResult;
+  AuthStatus _authStatus = AuthStatus.unknown;
+  AuthResult? _authResult;
   @override
   void initState() {
     super.initState();
     _checkAuth();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if(mounted) PermissionService.handleLocationPermission(context);
+      if (mounted) PermissionService.handleLocationPermission(context);
     });
   }
+
   Future<void> _checkAuth() async {
     final authData = await ApiService.getStoredAuthData();
     if (mounted) {
       _updateAuthStatus(authData);
       if (authData != null) {
-        // [CHAT INTEGRATION] - Ensure Firebase anonymous sign-in and update FCM token
         await _ensureFirebaseSignIn();
         await FirebaseApi().initNotifications();
         final fcmToken = await FirebaseApi().getFcmToken();
@@ -498,7 +510,6 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
-  // [CHAT INTEGRATION] - New function to handle Firebase sign-in
   Future<void> _ensureFirebaseSignIn() async {
     if (fb_auth.FirebaseAuth.instance.currentUser == null) {
       try {
@@ -516,41 +527,63 @@ class _AuthGateState extends State<AuthGate> {
       _authStatus = authResult != null ? AuthStatus.authenticated : AuthStatus.unauthenticated;
     });
   }
+
   Future<void> _logout() async {
     final authData = await ApiService.getStoredAuthData();
-    if (authData != null && authData.isDriver) { await ApiService.setDriverActiveStatus(authData.token, false); }
+    if (authData != null && authData.isDriver) {
+      await ApiService.setDriverActiveStatus(authData.token, false);
+    }
     await ApiService.clearAuthData();
-    // [CHAT INTEGRATION] - Also sign out from Firebase to ensure clean state
     await fb_auth.FirebaseAuth.instance.signOut();
     _updateAuthStatus(null);
   }
+
   @override
   Widget build(BuildContext context) {
     switch (_authStatus) {
-      case AuthStatus.unknown: return const Scaffold(body: Center(child: CircularProgressIndicator()));
-      case AuthStatus.unauthenticated: return WelcomeScreen(onLoginSuccess: _updateAuthStatus);
+      case AuthStatus.unknown:
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      case AuthStatus.unauthenticated:
+        return WelcomeScreen(onLoginSuccess: _updateAuthStatus);
       case AuthStatus.authenticated:
         if (_authResult!.isDriver) {
-          if (_authResult!.driverStatus == 'approved') { return DriverMainScreen(authResult: _authResult!, onLogout: _logout); }
-          else { return DriverPendingScreen(onLogout: _logout, onCheckStatus: _updateAuthStatus, phone: _authResult!.displayName); }
-        } else { return CustomerMainScreen(authResult: _authResult!, onLogout: _logout); }
+          if (_authResult!.driverStatus == 'approved') {
+            return DriverMainScreen(authResult: _authResult!, onLogout: _logout);
+          } else {
+            return DriverPendingScreen(onLogout: _logout, onCheckStatus: _updateAuthStatus, phone: _authResult!.displayName);
+          }
+        } else {
+          return CustomerMainScreen(authResult: _authResult!, onLogout: _logout);
+        }
     }
   }
 }
 
-class WelcomeScreen extends StatefulWidget { final Function(AuthResult) onLoginSuccess; const WelcomeScreen({super.key, required this.onLoginSuccess}); @override State<WelcomeScreen> createState() => _WelcomeScreenState(); }
+class WelcomeScreen extends StatefulWidget {
+  final Function(AuthResult) onLoginSuccess;
+  const WelcomeScreen({super.key, required this.onLoginSuccess});
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
 class _WelcomeScreenState extends State<WelcomeScreen> {
-  final _nameController = TextEditingController(); final _phoneController = TextEditingController(); final _formKey = GlobalKey<FormState>(); bool _isLoading = false; String? _errorMessage;
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _isLoading = false;
+  String? _errorMessage;
   Future<void> _submitCustomerLogin() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    setState(() { _isLoading = true; _errorMessage = null; });
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
     try {
       final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi-auth/v1/register/customer'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': _nameController.text, 'phone_number': _phoneController.text}));
       final data = json.decode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
         final authResult = AuthResult(token: data['token'], userId: data['user_id'].toString(), displayName: data['display_name'], isDriver: data['is_driver'] ?? false, driverStatus: data['driver_status']);
         await ApiService.storeAuthData(authResult);
-        // [CHAT INTEGRATION] - Ensure Firebase sign-in after WordPress login
         if (fb_auth.FirebaseAuth.instance.currentUser == null) {
           await fb_auth.FirebaseAuth.instance.signInAnonymously();
         }
@@ -560,19 +593,25 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           await ApiService.updateFcmToken(authResult.token, fcmToken);
         }
         widget.onLoginSuccess(authResult);
-      } else { throw Exception(data['message'] ?? 'فشل تسجيل الدخول أو التسجيل'); }
+      } else {
+        throw Exception(data['message'] ?? 'فشل تسجيل الدخول أو التسجيل');
+      }
     } on SocketException {
       if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
     } catch (e) {
       if (mounted) setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
-    } finally { if(mounted) setState(() => _isLoading = false); }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
+
   @override
   Widget build(BuildContext context) {
     final String logoSvg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><defs><linearGradient id="a" x1="50%" x2="50%" y1="0%" y2="100%"><stop offset="0%" stop-color="#FFD54F"/><stop offset="100%" stop-color="#FF8F00"/></linearGradient></defs><path fill="url(#a)" d="M100 10a90 90 0 1 0 0 180 90 90 0 0 0 0-180zm0 170a80 80 0 1 1 0-160 80 80 0 0 1 0 160z"/><path fill="#FFF" d="M149.5 115.8c-1.2-5.7-6.2-10-12.1-10H62.6c-5.9 0-10.9 4.3-12.1 10L40 140h120l-10.5-24.2zM67.3 85.2h65.4c2.8 0 5 2.2 5 5v10.6H62.3V90.2c0-2.8 2.2-5 5-5z"/><circle cx="70" cy="135" r="10" fill="#212121"/><circle cx="130" cy="135" r="10" fill="#212121"/></svg>''';
     return Scaffold(
       body: Container(
-        width: double.infinity, height: double.infinity,
+        width: double.infinity,
+        height: double.infinity,
         decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.amber.shade100, Colors.amber.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight)),
         child: SingleChildScrollView(
           child: Padding(
@@ -587,7 +626,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 Text('الأسرع في مدينتك', style: TextStyle(fontSize: 18, color: Colors.grey[700])),
                 const SizedBox(height: 40),
                 Card(
-                  elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  elevation: 4,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                   child: Padding(
                     padding: const EdgeInsets.all(20.0),
                     child: Form(
@@ -608,7 +648,9 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 30),
-                TextButton.icon(icon: const Icon(Icons.local_taxi), label: const Text('هل أنت سائق؟ اضغط هنا'), onPressed: () { if(mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => DriverAuthScreen(onLoginSuccess: widget.onLoginSuccess)));}, style: TextButton.styleFrom(foregroundColor: Colors.grey[800])),
+                TextButton.icon(icon: const Icon(Icons.local_taxi), label: const Text('هل أنت سائق؟ اضغط هنا'), onPressed: () {
+                  if (mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => DriverAuthScreen(onLoginSuccess: widget.onLoginSuccess)));
+                }, style: TextButton.styleFrom(foregroundColor: Colors.grey[800])),
               ],
             ),
           ),
@@ -619,14 +661,26 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 }
 
 // =============================================================================
-//  Generic Login & Driver Registration Screens
+//  Generic Login & Driver Registration Screens
 // =============================================================================
-class LoginScreen extends StatefulWidget { final Function(AuthResult) onLoginSuccess; const LoginScreen({super.key, required this.onLoginSuccess}); @override State<LoginScreen> createState() => _LoginScreenState(); }
+class LoginScreen extends StatefulWidget {
+  final Function(AuthResult) onLoginSuccess;
+  const LoginScreen({super.key, required this.onLoginSuccess});
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
 class _LoginScreenState extends State<LoginScreen> {
-  final _phoneController = TextEditingController(); final _formKey = GlobalKey<FormState>(); bool _isLoading = false; String? _errorMessage;
+  final _phoneController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _isLoading = false;
+  String? _errorMessage;
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    setState(() { _isLoading = true; _errorMessage = null; });
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
     try {
       final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi-auth/v1/login'), headers: {'Content-Type': 'application/json'}, body: json.encode({'phone_number': _phoneController.text}));
       final data = json.decode(response.body);
@@ -634,7 +688,6 @@ class _LoginScreenState extends State<LoginScreen> {
         final authResult = AuthResult(token: data['token'], userId: data['user_id'].toString(), displayName: data['display_name'], isDriver: data['is_driver'] ?? false, driverStatus: data['driver_status']);
         await ApiService.storeAuthData(authResult);
         if (mounted) {
-          // [CHAT INTEGRATION] - Ensure Firebase sign-in after WordPress login
           if (fb_auth.FirebaseAuth.instance.currentUser == null) {
             await fb_auth.FirebaseAuth.instance.signInAnonymously();
           }
@@ -646,13 +699,18 @@ class _LoginScreenState extends State<LoginScreen> {
           Navigator.of(context).popUntil((route) => route.isFirst);
           widget.onLoginSuccess(authResult);
         }
-      } else { throw Exception(data['message'] ?? 'فشل تسجيل الدخول'); }
+      } else {
+        throw Exception(data['message'] ?? 'فشل تسجيل الدخول');
+      }
     } on SocketException {
       if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
     } catch (e) {
       if (mounted) setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
-    } finally { if(mounted) setState(() => _isLoading = false); }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -675,18 +733,48 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-class DriverAuthScreen extends StatelessWidget { final Function(AuthResult) onLoginSuccess; const DriverAuthScreen({super.key, required this.onLoginSuccess}); @override Widget build(BuildContext context) { return DefaultTabController(length: 2, initialIndex: 1, child: Scaffold(appBar: AppBar(title: const Text('بوابة السائقين'), bottom: const TabBar(tabs: [Tab(text: 'تسجيل دخول'), Tab(text: 'تسجيل جديد')])), body: TabBarView(children: [LoginScreen(onLoginSuccess: onLoginSuccess), DriverRegistrationScreen(onLoginSuccess: onLoginSuccess)]))); } }
-class DriverRegistrationScreen extends StatefulWidget { final Function(AuthResult) onLoginSuccess; const DriverRegistrationScreen({super.key, required this.onLoginSuccess}); @override State<DriverRegistrationScreen> createState() => _DriverRegistrationScreenState(); }
+class DriverAuthScreen extends StatelessWidget {
+  final Function(AuthResult) onLoginSuccess;
+  const DriverAuthScreen({super.key, required this.onLoginSuccess});
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(length: 2, initialIndex: 1, child: Scaffold(appBar: AppBar(title: const Text('بوابة السائقين'), bottom: const TabBar(tabs: [Tab(text: 'تسجيل دخول'), Tab(text: 'تسجيل جديد')])), body: TabBarView(children: [LoginScreen(onLoginSuccess: onLoginSuccess), DriverRegistrationScreen(onLoginSuccess: onLoginSuccess)])));
+  }
+}
+
+class DriverRegistrationScreen extends StatefulWidget {
+  final Function(AuthResult) onLoginSuccess;
+  const DriverRegistrationScreen({super.key, required this.onLoginSuccess});
+  @override
+  State<DriverRegistrationScreen> createState() => _DriverRegistrationScreenState();
+}
+
 class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
-  final _formKey = GlobalKey<FormState>(); final _nameController = TextEditingController(); final _phoneController = TextEditingController(); final _modelController = TextEditingController(); final _colorController = TextEditingController(); String _vehicleType = 'Tuktuk'; bool _isLoading = false; String? _errorMessage; final ImagePicker _picker = ImagePicker(); XFile? _registrationImageFile;
-  Future<void> _pickImage() async { final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery); if (pickedFile != null) setState(() => _registrationImageFile = pickedFile); }
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _modelController = TextEditingController();
+  final _colorController = TextEditingController();
+  String _vehicleType = 'Tuktuk';
+  bool _isLoading = false;
+  String? _errorMessage;
+  final ImagePicker _picker = ImagePicker();
+  XFile? _registrationImageFile;
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) setState(() => _registrationImageFile = pickedFile);
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_registrationImageFile == null) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء رفع صورة سنوية السيارة'), backgroundColor: Colors.red));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء رفع صورة سنوية السيارة'), backgroundColor: Colors.red));
       return;
     }
-    setState(() { _isLoading = true; _errorMessage = null; });
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
     try {
       var request = http.MultipartRequest('POST', Uri.parse('${ApiService.baseUrl}/taxi-auth/v1/register/driver'));
       request.fields.addAll({'name': _nameController.text, 'phone': _phoneController.text, 'vehicle_type': _vehicleType, 'car_model': _modelController.text, 'car_color': _colorController.text});
@@ -695,14 +783,22 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
       final response = await http.Response.fromStream(streamedResponse);
       final data = json.decode(response.body);
       if (response.statusCode == 201 && data['success'] == true) {
-        if(mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green)); Navigator.of(context).pop(); }
-      } else { throw Exception(data['message'] ?? 'فشل التسجيل'); }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
+          Navigator.of(context).pop();
+        }
+      } else {
+        throw Exception(data['message'] ?? 'فشل التسجيل');
+      }
     } on SocketException {
       if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
     } catch (e) {
       if (mounted) setState(() => _errorMessage = e.toString().replaceAll("Exception: ", ""));
-    } finally { if(mounted) setState(() => _isLoading = false); }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -742,17 +838,18 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 }
 
 // =============================================================================
-//  Customer Main Screen
+//  Customer Main Screen (Updated with Offers)
 // =============================================================================
 class CustomerMainScreen extends StatefulWidget {
-  final AuthResult authResult; final VoidCallback onLogout;
+  final AuthResult authResult;
+  final VoidCallback onLogout;
   const CustomerMainScreen({super.key, required this.authResult, required this.onLogout});
   @override
   State<CustomerMainScreen> createState() => _CustomerMainScreenState();
 }
+
 class _CustomerMainScreenState extends State<CustomerMainScreen> {
-  // ## MODIFICATION: Default tab changed to 1 (Trips) ##
-  int _selectedIndex = 1;
+  int _selectedIndex = 1; // Default to Trips
   late final List<Widget> _pages;
 
   @override
@@ -762,6 +859,7 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
       QuickRideMapScreen(token: widget.authResult.token, authResult: widget.authResult),
       TripListScreen(authResult: widget.authResult),
       PrivateRequestFormScreen(authResult: widget.authResult),
+      OffersScreen(authResult: widget.authResult), // [NEW] Offers screen
     ];
     deepLinkNotifier.addListener(_handleDeepLink);
   }
@@ -775,7 +873,9 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
   void _handleDeepLink() {
     final linkData = deepLinkNotifier.value;
     if (linkData['userType'] == 'customer' && linkData['targetScreen'] == 'trips') {
-      setState(() { _selectedIndex = 1; });
+      setState(() {
+        _selectedIndex = 1;
+      });
       deepLinkNotifier.value = {};
     }
   }
@@ -791,10 +891,12 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: (index) => setState(() => _selectedIndex = index),
+        type: BottomNavigationBarType.fixed, // To allow more than 3 items
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'طلب سريع'),
-          BottomNavigationBarItem(icon: Icon(Icons.event_note_outlined), label: 'الرحلات '),
-          BottomNavigationBarItem(icon: Icon(Icons.star_outline), label: 'طلب خصوصي '),
+          BottomNavigationBarItem(icon: Icon(Icons.event_note_outlined), label: 'الرحلات'),
+          BottomNavigationBarItem(icon: Icon(Icons.star_outline), label: 'طلب خصوصي'),
+          BottomNavigationBarItem(icon: Icon(Icons.local_offer_outlined), label: 'العروض'), // [NEW] Offers tab
         ],
       ),
     );
@@ -802,9 +904,212 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
 }
 
 // =============================================================================
-//  Driver Screens
+//  [NEW] Offers Screen for Customers
 // =============================================================================
-class DriverPendingScreen extends StatefulWidget { final VoidCallback onLogout; final Function(AuthResult?) onCheckStatus; final String phone; const DriverPendingScreen({super.key, required this.onLogout, required this.phone, required this.onCheckStatus}); @override State<DriverPendingScreen> createState() => _DriverPendingScreenState(); }
+class OffersScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const OffersScreen({super.key, required this.authResult});
+
+  @override
+  State<OffersScreen> createState() => _OffersScreenState();
+}
+
+class _OffersScreenState extends State<OffersScreen> {
+  late Future<List<dynamic>> _offersFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOffers();
+  }
+
+  void _loadOffers() {
+    setState(() {
+      _offersFuture = ApiService.getOffers(widget.authResult.token);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: () async => _loadOffers(),
+        child: FutureBuilder<List<dynamic>>(
+          future: _offersFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return ListView.builder(
+                  itemCount: 5, itemBuilder: (ctx, i) => const ShimmerListItem());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('خطأ في تحميل العروض: ${snapshot.error}'));
+            }
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return const EmptyStateWidget(
+                  svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>''',
+                  message: 'لا توجد عروض متاحة حالياً.');
+            }
+
+            final offers = snapshot.data!;
+            return ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: offers.length,
+              itemBuilder: (context, index) {
+                final offer = offers[index];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (offer['image_url'] != null && offer['image_url'].isNotEmpty)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(offer['image_url'],
+                                width: double.infinity,
+                                height: 150,
+                                fit: BoxFit.cover),
+                          ),
+                        const SizedBox(height: 12),
+                        Text(offer['title'] ?? 'عرض جديد',
+                            style: Theme.of(context).textTheme.titleLarge),
+                        const SizedBox(height: 8),
+                        Text(offer['description'] ?? 'تفاصيل العرض غير متوفرة.',
+                            style: Theme.of(context).textTheme.bodyMedium),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+//  [NEW] Driver Dashboard Screen
+// =============================================================================
+class DriverDashboardScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const DriverDashboardScreen({super.key, required this.authResult});
+
+  @override
+  State<DriverDashboardScreen> createState() => _DriverDashboardScreenState();
+}
+
+class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
+  Future<Map<String, dynamic>>? _dashboardFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboard();
+  }
+
+  void _loadDashboard() {
+    setState(() {
+      _dashboardFuture = ApiService.getDriverDashboard(widget.authResult.token);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: () async => _loadDashboard(),
+        child: FutureBuilder<Map<String, dynamic>>(
+          future: _dashboardFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('خطأ في تحميل البيانات: ${snapshot.error}'));
+            }
+            if (!snapshot.hasData || snapshot.data!['success'] != true) {
+              return const Center(child: Text('لا توجد بيانات لعرضها.'));
+            }
+
+            // ================== FIX STARTS HERE ==================
+            // Safely handle the case where 'data' might be null from the API
+            final data = snapshot.data!['data'] ?? {};
+            // =================== FIX ENDS HERE ===================
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  _buildStatCard(
+                    context,
+                    icon: Icons.attach_money,
+                    title: 'الأرباح الكلية',
+                    value: '${data['total_earnings'] ?? 0} د.ع', // This is now safe
+                    color: Colors.green,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildStatCard(
+                    context,
+                    icon: Icons.star,
+                    title: 'متوسط التقييم',
+                    value: (data['average_rating'] ?? 0.0).toStringAsFixed(1),
+                    color: Colors.amber,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildStatCard(
+                    context,
+                    icon: Icons.directions_car,
+                    title: 'الرحلات المكتملة',
+                    value: (data['completed_rides'] ?? 0).toString(),
+                    color: Colors.blue,
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCard(BuildContext context, {required IconData icon, required String title, required String value, required Color color}) {
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Row(
+          children: [
+            Icon(icon, size: 40, color: color),
+            const SizedBox(width: 20),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleMedium),
+                Text(value, style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: color, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+//  Driver Screens (Updated with Dashboard)
+// =============================================================================
+class DriverPendingScreen extends StatefulWidget {
+  final VoidCallback onLogout;
+  final Function(AuthResult?) onCheckStatus;
+  final String phone;
+  const DriverPendingScreen({super.key, required this.onLogout, required this.phone, required this.onCheckStatus});
+  @override
+  State<DriverPendingScreen> createState() => _DriverPendingScreenState();
+}
+
 class _DriverPendingScreenState extends State<DriverPendingScreen> {
   bool _isChecking = false;
   Future<void> _checkStatus() async {
@@ -822,14 +1127,19 @@ class _DriverPendingScreenState extends State<DriverPendingScreen> {
           } else {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الحساب لا يزال قيد المراجعة.'), backgroundColor: Colors.orange));
           }
-        } else { throw Exception(data['message'] ?? 'فشل التحقق'); }
+        } else {
+          throw Exception(data['message'] ?? 'فشل التحقق');
+        }
       }
     } on SocketException {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
-    } finally { if(mounted) setState(() => _isChecking = false); }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isChecking = false);
+    }
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -856,29 +1166,69 @@ class _DriverPendingScreenState extends State<DriverPendingScreen> {
   }
 }
 
-class DriverMainScreen extends StatefulWidget { final AuthResult authResult; final VoidCallback onLogout; const DriverMainScreen({super.key, required this.authResult, required this.onLogout}); @override State<DriverMainScreen> createState() => _DriverMainScreenState(); }
-class _DriverMainScreenState extends State<DriverMainScreen> {
-  int _selectedIndex = 0; bool _isDriverActive = false; StreamSubscription<geolocator.Position>? _positionStream; Map<String, dynamic>? _currentQuickRide;
-  void _onRideAccepted(Map<String, dynamic> ride) { setState(() { _currentQuickRide = ride; }); }
-  void _onRideFinished() { setState(() { _currentQuickRide = null; }); }
+class DriverMainScreen extends StatefulWidget {
+  final AuthResult authResult;
+  final VoidCallback onLogout;
+  const DriverMainScreen({super.key, required this.authResult, required this.onLogout});
   @override
-  void initState() { super.initState(); _checkLocationPermission(); deepLinkNotifier.addListener(_handleDeepLink); }
-  @override
-  void dispose() { deepLinkNotifier.removeListener(_handleDeepLink); _positionStream?.cancel(); if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false); super.dispose(); }
-  void _handleDeepLink() { final linkData = deepLinkNotifier.value; if (linkData['userType'] == 'driver' && linkData['targetScreen'] == 'private_requests') { _changeTab(1); deepLinkNotifier.value = {}; } }
-  void _changeTab(int index) { setState(() { _selectedIndex = index; }); }
-  Future<void> _checkLocationPermission() async { if(mounted) await PermissionService.handleLocationPermission(context); }
+  State<DriverMainScreen> createState() => _DriverMainScreenState();
+}
 
-  // ## MODIFICATION: Improved location accuracy ##
+class _DriverMainScreenState extends State<DriverMainScreen> {
+  int _selectedIndex = 0;
+  bool _isDriverActive = false;
+  StreamSubscription<geolocator.Position>? _positionStream;
+  Map<String, dynamic>? _currentQuickRide;
+  void _onRideAccepted(Map<String, dynamic> ride) {
+    setState(() {
+      _currentQuickRide = ride;
+    });
+  }
+
+  void _onRideFinished() {
+    setState(() {
+      _currentQuickRide = null;
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLocationPermission();
+    deepLinkNotifier.addListener(_handleDeepLink);
+  }
+
+  @override
+  void dispose() {
+    deepLinkNotifier.removeListener(_handleDeepLink);
+    _positionStream?.cancel();
+    if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false);
+    super.dispose();
+  }
+
+  void _handleDeepLink() {
+    final linkData = deepLinkNotifier.value;
+    if (linkData['userType'] == 'driver' && linkData['targetScreen'] == 'private_requests') {
+      _changeTab(1);
+      deepLinkNotifier.value = {};
+    }
+  }
+
+  void _changeTab(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  Future<void> _checkLocationPermission() async {
+    if (mounted) await PermissionService.handleLocationPermission(context);
+  }
+
   void _toggleActiveStatus(bool isActive) {
     setState(() => _isDriverActive = isActive);
     ApiService.setDriverActiveStatus(widget.authResult.token, isActive);
     if (isActive) {
-      // Use best accuracy for navigation and remove distance filter
-      _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(
-          accuracy: geolocator.LocationAccuracy.bestForNavigation,
-          distanceFilter: 0 // Update location with every small change
-      )).listen((geolocator.Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
+      _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 0)).listen((geolocator.Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
     } else {
       _positionStream?.cancel();
     }
@@ -891,7 +1241,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       DriverPrivateRequestsScreen(authResult: widget.authResult),
       DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => _changeTab(3)),
       DriverCreateTripScreen(authResult: widget.authResult),
-      NotificationsScreen(token: widget.authResult.token),
+      DriverDashboardScreen(authResult: widget.authResult), // [NEW] Dashboard Screen
     ];
     return Scaffold(
       appBar: AppBar(
@@ -903,9 +1253,15 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       ),
       body: IndexedStack(index: _selectedIndex, children: pages),
       bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed, currentIndex: _selectedIndex, onTap: _changeTab,
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _selectedIndex,
+        onTap: _changeTab,
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), label: 'الطلبات'), BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي '), BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'), BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'), BottomNavigationBarItem(icon: Icon(Icons.notifications_outlined), label: 'الإشعارات'),
+          BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), label: 'الطلبات'),
+          BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات خاصة'),
+          BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
+          BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'لوحة المعلومات'), // [NEW] Dashboard Tab
         ],
       ),
     );
@@ -913,7 +1269,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
 }
 
 // =============================================================================
-//  NEW: Modern Info Dialog
+//  NEW: Modern Info Dialog
 // =============================================================================
 class ModernInfoDialog extends StatelessWidget {
   const ModernInfoDialog({super.key});
@@ -932,7 +1288,7 @@ class ModernInfoDialog extends StatelessWidget {
             const Divider(height: 30),
             _buildInfoRow(context, Icons.location_city, "هذا القسم مخصص للطلبات داخل المدينة."), const SizedBox(height: 15),
             _buildInfoRow(context, Icons.toggle_on, "يجب تفعيل 'استقبال الطلبات' من الأعلى لتظهر لك الرحلات."), const SizedBox(height: 15),
-            _buildInfoRow(context, Icons.info_outline, "القسم مصمم بشكل أساسي لمركبات التكتك."), const SizedBox(height: 24),
+            _buildInfoRow(context, Icons.info_outline, "القسم مصمم بشكل أساسيلطلبات السريعة داخل المدينة."), const SizedBox(height: 24),
             ElevatedButton(onPressed: () => Navigator.of(context).pop(), child: const Text("حسناً، فهمت")),
           ],
         ),
@@ -944,7 +1300,7 @@ class ModernInfoDialog extends StatelessWidget {
 
 
 // =============================================================================
-//  MODIFIED: DriverAvailableRidesScreen (with Sliding Panel)
+//  MODIFIED: DriverAvailableRidesScreen (with Sliding Panel)
 // =============================================================================
 class DriverAvailableRidesScreen extends StatefulWidget { final AuthResult authResult; final Function(Map<String, dynamic>) onRideAccepted; const DriverAvailableRidesScreen({super.key, required this.authResult, required this.onRideAccepted}); @override State<DriverAvailableRidesScreen> createState() => _DriverAvailableRidesScreenState(); }
 class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen> {
@@ -1062,19 +1418,18 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     );
   }
 }
-
 // =============================================================================
-//  MODIFIED: DriverCurrentRideScreen (with Chat Icon & Immediate Route Drawing)
+//  MODIFIED: DriverCurrentRideScreen (with Chat Icon & Immediate Route Drawing)
 // =============================================================================
 class DriverCurrentRideScreen extends StatefulWidget { final Map<String, dynamic> initialRide; final AuthResult authResult; final VoidCallback onRideFinished; const DriverCurrentRideScreen({super.key, required this.initialRide, required this.authResult, required this.onRideFinished}); @override State<DriverCurrentRideScreen> createState() => _DriverCurrentRideScreenState(); }
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide; bool _isLoading = false; final MapController _mapController = MapController(); StreamSubscription<geolocator.Position>? _positionStream; LatLng? _driverLocation; List<LatLng> _routePoints = []; double _distanceToPickup = 0.0; double _driverBearing = 0.0; double _previousDriverBearing = 0.0;
 
-  // ## MODIFICATION: `initState` now calls the new initialization method ##
   @override
   void initState() {
     super.initState();
     _currentRide = widget.initialRide;
+    // [MODIFIED] - Initialize the ride immediately to draw the route
     _initializeRide();
   }
 
@@ -1084,16 +1439,14 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     super.dispose();
   }
 
-  // ## MODIFICATION: New method to immediately get location and draw route ##
+  // [NEW] - This function runs on init to get the driver's location and draw the initial route.
   Future<void> _initializeRide() async {
-    // 1. Get customer's location from ride data
     final pickupPoint = LatLng(double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
-
-    // 2. Get driver's current location immediately
     try {
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!hasPermission || !mounted) return;
 
+      // Get current position to start drawing the route
       geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high);
       final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
 
@@ -1101,7 +1454,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         setState(() {
           _driverLocation = driverNowLocation;
         });
-        // 3. Draw the route immediately
+        // Immediately get the route from driver's location to pickup point
         _getRoute(driverNowLocation, pickupPoint);
         _mapController.move(driverNowLocation, 15);
       }
@@ -1110,12 +1463,10 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك لبدء رسم المسار')));
       }
     }
-
-    // 4. Start continuous location tracking
+    // Start live location tracking
     _startDriverLocationTracking();
   }
 
-  // ## MODIFICATION: This method now only handles continuous updates ##
   void _startDriverLocationTracking() {
     _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((geolocator.Position position) {
       if (mounted) {
@@ -1158,17 +1509,28 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
-          if (newStatus == 'completed' || newStatus == 'cancelled') { widget.onRideFinished(); } else {
+          if (newStatus == 'completed' || newStatus == 'cancelled') {
+            widget.onRideFinished();
+          } else {
             setState(() => _currentRide = data['ride']);
             if (newStatus == 'ongoing' && _driverLocation != null && _currentRide['destination']?['lat'] != null) {
               final destination = LatLng(double.parse(_currentRide['destination']['lat']), double.parse(_currentRide['destination']['lng']));
               _getRoute(_driverLocation!, destination);
             }
           }
-        } else { throw Exception(data['message'] ?? 'فشل تحديث الحالة'); }
+        } else {
+          throw Exception(data['message'] ?? 'فشل تحديث الحالة');
+        }
       }
-    } on SocketException { if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange)); } catch (e) { if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red)); } finally { if(mounted) setState(() => _isLoading = false); }
+    } on SocketException {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
+
   Widget _buildActionButton() {
     String status = _currentRide['status'];
     if (status == 'accepted') return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.hail), label: const Text('وصلت إلى موقع العميل'), onPressed: _isLoading ? null : () => _updateStatus('arrived_pickup'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white)));
@@ -1176,23 +1538,32 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     if (status == 'ongoing') return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_circle), label: const Text('إنهاء الرحلة'), onPressed: _isLoading ? null : () => _updateStatus('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white)));
     return const SizedBox.shrink();
   }
+
   @override
   Widget build(BuildContext context) {
     LatLng pickupPoint = LatLng(double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
     LatLng? destinationPoint = _currentRide['destination']?['lat'] != null ? LatLng(double.parse(_currentRide['destination']['lat']), double.parse(_currentRide['destination']['lng'])) : null;
     String status = _currentRide['status'];
+    // [MODIFIED] - Get customer phone from ride data (ensure backend provides it)
+    final customerPhone = _currentRide['customer_phone'] as String?;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('الرحلة الحالية'),
+        // [MODIFIED] - Added call button
         actions: [
-          // [MODIFIED] - Clearer Chat Button
+          IconButton(
+            icon: const Icon(Icons.call, color: Colors.green),
+            onPressed: () => makePhoneCall(customerPhone, context),
+            tooltip: 'الاتصال بالزبون',
+          ),
           TextButton.icon(
             icon: ChatIconWithBadge(
               chatId: 'ride_${_currentRide['id']}',
               currentUserId: widget.authResult.userId,
               onPressed: () {}, // Action is handled by the parent button
             ),
-            label: const Text("التحدث مع الزبون"),
+            label: const Text("محادثة"),
             onPressed: () {
               Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => ChatScreen(
@@ -1200,7 +1571,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
                   chatName: 'محادثة مع زبون',
                   authResult: widget.authResult,
                   participants: {
-                    'customer': _currentRide['customer']?['id']?.toString(),
+                    'customer': _currentRide['author']?.toString(),
                     'driver': widget.authResult.userId,
                   },
                 ),
@@ -1232,6 +1603,12 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
+                    // [NEW] Show the region name if available
+                    if (_currentRide['pickup_region'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Text("المنطقة: ${_currentRide['pickup_region']}", style: TextStyle(fontSize: 16, color: Colors.blueGrey)),
+                      ),
                     Text('حالة الرحلة: $status', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     if(status == 'accepted') Text("المسافة إلى العميل: ${(_distanceToPickup / 1000).toStringAsFixed(2)} كم"),
                     const Divider(),
@@ -1251,7 +1628,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
 }
 
 // =============================================================================
-//  Customer Quick Ride Screen (Refactored)
+//  Customer Quick Ride Screen (Refactored & with Rating)
 // =============================================================================
 enum BookingStage { selectingPickup, selectingDestination, confirmingRequest }
 class QuickRideMapScreen extends StatefulWidget { final String token; final AuthResult authResult; const QuickRideMapScreen({super.key, required this.token, required this.authResult}); @override State<QuickRideMapScreen> createState() => _QuickRideMapScreenState(); }
@@ -1293,10 +1670,12 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
   void _stopLiveTracking() { _liveTrackingTimer?.cancel(); if (mounted) setState(() { _assignedDriverLocation = null; _routeToCustomer.clear(); }); }
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // SECURITY WARNING: Hardcoding API keys is a security risk.
-    // Use --dart-define for production apps.
-    const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
-    if (orsApiKey.length < 50) { return; }
+    // ================== FIX STARTS HERE ==================
+    // استبدل هذا المفتاح بمفتاحك الخاص من موقع OpenRouteService
+    const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0';
+    // =================== FIX ENDS HERE ===================
+
+    if (orsApiKey == 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0') { return; }
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
     try {
       final response = await http.get(Uri.parse(url));
@@ -1311,7 +1690,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     try {
       final driversList = await ApiService.fetchActiveDrivers(widget.token);
       if (!mounted) return;
-      final newDriversData = {for (var d in driversList) d['driver_id'].toString(): d};
+      final newDriversData = {for (var d in driversList) d['id'].toString(): d};
       for (var driverId in newDriversData.keys) {
         final oldDriver = _driversData[driverId]; final newDriver = newDriversData[driverId];
         final newPosition = LatLng(double.parse(newDriver['lat']), double.parse(newDriver['lng']));
@@ -1343,7 +1722,13 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           final bool statusChanged = _activeRide?['status'] != updatedRide['status'];
           final bool driverAssigned = _activeRide?['driver'] == null && updatedRide['driver'] != null;
           if (statusChanged || driverAssigned) { setState(() { _activeRide = updatedRide; }); }
-          if (updatedRide['status'] == 'accepted' && _assignedDriverLocation == null) { _stopLiveTracking(); _startLiveTracking(updatedRide['id'].toString()); } else if (['completed', 'cancelled'].contains(updatedRide['status'])) { _resetBookingState(); }
+          if (updatedRide['status'] == 'accepted' && _assignedDriverLocation == null) { _stopLiveTracking(); _startLiveTracking(updatedRide['id'].toString()); }
+          else if (['completed', 'cancelled'].contains(updatedRide['status'])) {
+            if (updatedRide['status'] == 'completed' && updatedRide['is_rated'] == false) {
+              _showRatingDialog(updatedRide['id'].toString(), 'quick_ride');
+            }
+            _resetBookingState();
+          }
         }
       }
     } catch (e) { debugPrint("Failed to get ride status: $e"); }
@@ -1405,6 +1790,19 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     }
     return markers;
   }
+
+  void _showRatingDialog(String rideId, String rideType) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => RatingDialog(
+        token: widget.authResult.token,
+        rideId: rideId,
+        rideType: rideType,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1460,6 +1858,10 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 }
 
 
+
+
+
+
 class ActiveRideInfoCard extends StatelessWidget {
   final Map<String, dynamic> ride; final VoidCallback onCancel; final AuthResult authResult;
   const ActiveRideInfoCard({super.key, required this.ride, required this.onCancel, required this.authResult});
@@ -1489,31 +1891,40 @@ class ActiveRideInfoCard extends StatelessWidget {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // [MODIFIED] - Clearer Chat Button
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ChatIconWithBadge(
-                          chatId: 'ride_${ride['id']}',
-                          currentUserId: authResult.userId,
-                          onPressed: () {
-                            Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                chatId: 'ride_${ride['id']}',
-                                chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
-                                authResult: authResult,
-                                participants: {
-                                  'customer': authResult.userId,
-                                  'driver': driver['id']?.toString(),
-                                },
-                              ),
-                            ));
-                          },
-                        ),
-                        const Text("تحدث مع السائق", style: TextStyle(fontSize: 8)),
-                      ],
+                    // [MODIFIED] - Added call button
+                    IconButton(
+                        icon: const Icon(Icons.call, color: Colors.green),
+                        tooltip: 'الاتصال بالسائق',
+                        onPressed: () => makePhoneCall(driver['phone'], context)
                     ),
-                    IconButton(icon: const Icon(Icons.call, color: Colors.green), onPressed: () => makePhoneCall(driver['phone'], context)),
+                    const SizedBox(width: 8),
+                    // [MODIFIED] - Using the new ChatIconWithBadge
+                    InkWell(
+                      onTap: () {
+                        Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => ChatScreen(
+                            chatId: 'ride_${ride['id']}',
+                            chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
+                            authResult: authResult,
+                            participants: {
+                              'customer': authResult.userId,
+                              'driver': driver['user_id']?.toString(), // Ensure backend provides user_id for driver
+                            },
+                          ),
+                        ));
+                      },
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ChatIconWithBadge(
+                            chatId: 'ride_${ride['id']}',
+                            currentUserId: authResult.userId,
+                            onPressed: (){}, // Handled by parent InkWell
+                          ),
+                          const Text("محادثة", style: TextStyle(fontSize: 8)),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               )
@@ -1631,17 +2042,31 @@ class _TripListScreenState extends State<TripListScreen> {
 class PassengersScreen extends StatelessWidget {
   final Map<String, dynamic> trip; final String currentUserId; final Future<void> Function(String) onCancelBooking; final AuthResult authResult;
   const PassengersScreen({ super.key, required this.trip, required this.currentUserId, required this.onCancelBooking, required this.authResult });
+
+  void _showRatingDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => RatingDialog(
+        token: authResult.token,
+        rideId: trip['id'].toString(),
+        rideType: 'trip', // Assuming 'trip' is the type for scheduled trips
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final passengers = (trip['passengers'] as List?)?.map((p) => Map<String, dynamic>.from(p)).toList() ?? [];
     final totalSeats = int.tryParse(trip['total_seats'].toString()) ?? 0;
     final currentUserBookings = passengers.where((p) => p['user_id']?.toString() == currentUserId).toList();
     final isDriver = trip['driver']?['user_id']?.toString() == currentUserId;
+    final isTripOver = DateTime.parse(trip['date']).isBefore(DateTime.now());
+    final bool canRate = isTripOver && !isDriver && currentUserBookings.isNotEmpty; // Add check for is_rated if available from backend
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('قائمة الركاب'), centerTitle: true,
         actions: [
-          // [MODIFIED] - Clearer Group Chat Button
           TextButton.icon(
             icon: ChatIconWithBadge(
               chatId: 'trip_${trip['id']}',
@@ -1668,6 +2093,18 @@ class PassengersScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [Text('${trip['from']} → ${trip['to']}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center), const SizedBox(height: 8), Text('${_formatDate(trip['date'].toString())} - ${trip['time']}', style: const TextStyle(color: Colors.grey)), const SizedBox(height: 8), Text('المقاعد: ${passengers.length}/$totalSeats (المتبقي: ${totalSeats - passengers.length})', style: const TextStyle(fontWeight: FontWeight.bold))]))),
+            if(canRate) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _showRatingDialog(context),
+                  icon: const Icon(Icons.star),
+                  label: const Text('تقييم السائق'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             if (!isDriver) ...[
               const Text('حجوزاتي لهذه الرحلة:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)), const SizedBox(height: 12),
@@ -1719,8 +2156,6 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          // This notification should ideally be sent from the backend to all customers.
-          // Here, we simulate it for demonstration purposes.
           NotificationService.showNotification('رحلة جديدة متاحة!', 'تم إضافة رحلة من ${_fromController.text} إلى ${_toController.text}. اضغط للحجز.', payload: '{"userType": "customer", "targetScreen": "trips"}', type: 'default');
           _formKey.currentState?.reset(); _fromController.clear(); _toController.clear(); _dateController.clear(); _timeController.clear(); _seatsController.clear();
         } else { throw Exception(data['message'] ?? 'فشل إنشاء الرحلة'); }
@@ -1743,48 +2178,6 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
               TextFormField(controller: _seatsController, decoration: const InputDecoration(labelText: 'عدد المقاعد'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null), const SizedBox(height: 30),
               SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _isLoading ? null : _submit, child: _isLoading ? const CircularProgressIndicator() : const Text('إنشاء الرحلة'))),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class NotificationsScreen extends StatefulWidget { final String token; const NotificationsScreen({super.key, required this.token}); @override State<NotificationsScreen> createState() => _NotificationsScreenState(); }
-class _NotificationsScreenState extends State<NotificationsScreen> {
-  List<dynamic>? _notifications; bool _isLoading = true;
-  @override
-  void initState() { super.initState(); _fetchNotifications(); }
-  Future<void> _fetchNotifications() async {
-    setState(() => _isLoading = true);
-    try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/my-notifications'), headers: {'Authorization': 'Bearer ${widget.token}'});
-      if(response.statusCode == 200 && mounted) { final data = json.decode(response.body); setState(() => _notifications = data['notifications']); }
-    } on SocketException { debugPrint("Network error fetching notifications."); } catch(e) { debugPrint("Failed to fetch notifications: $e"); } finally { if(mounted) setState(() => _isLoading = false); }
-  }
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _fetchNotifications,
-        child: _isLoading ? ListView.builder(itemCount: 5, itemBuilder: (context, index) => const ShimmerListItem()) : _notifications == null || _notifications!.isEmpty ? const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>''', message: 'لا توجد إشعارات جديدة.') : AnimationLimiter(
-          child: ListView.builder(
-            itemCount: _notifications!.length,
-            itemBuilder: (context, index) {
-              final notif = _notifications![index];
-              return AnimationConfiguration.staggeredList(
-                position: index, duration: const Duration(milliseconds: 375),
-                child: SlideAnimation(
-                  verticalOffset: 50.0,
-                  child: FadeInAnimation(
-                    child: Card(
-                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      child: ListTile(leading: const Icon(Icons.notifications_active, color: Colors.amber), title: Text(notif['title']), subtitle: Text(notif['content']), trailing: Text(DateFormat('yyyy-MM-dd').format(DateTime.parse(notif['date'])))),
-                    ),
-                  ),
-                ),
-              );
-            },
           ),
         ),
       ),
@@ -1840,7 +2233,7 @@ class _DriverMyTripsScreenState extends State<DriverMyTripsScreen> {
 }
 
 // =============================================================================
-//  [MODIFIED] - Private Request Screens
+//  [MODIFIED] - Private Request Screens
 // =============================================================================
 
 class PrivateRequestFormScreen extends StatefulWidget {
@@ -1883,7 +2276,7 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
   void _startStatusTimer() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      if (_activeRequest != null && _activeRequest!['status'] == 'pending') {
+      if (_activeRequest != null && (_activeRequest!['status'] == 'pending' || _activeRequest!['status'] == 'accepted')) {
         _fetchMyActiveRequest();
       } else {
         timer.cancel();
@@ -1898,19 +2291,49 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
       if (mounted && response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['request'] != null) {
+          final currentStatus = _activeRequest?['status'];
+          final newStatus = data['request']['status'];
+          final isRated = data['request']['is_rated'] ?? false;
+
           setState(() {
             _activeRequest = data['request'];
           });
-          _startStatusTimer();
+
+          if ((currentStatus == 'accepted' || currentStatus == 'pending') && newStatus == 'completed' && !isRated) {
+            _showRatingDialog(_activeRequest!['id'].toString(), 'private_request');
+            _resetForm(); // Reset after rating
+          } else if (newStatus == 'completed' || newStatus == 'cancelled') {
+            _resetForm();
+          } else if (newStatus == 'pending' || newStatus == 'accepted') {
+            _startStatusTimer();
+          }
+
         } else {
-          setState(() {
-            _activeRequest = null;
-          });
+          _resetForm();
         }
       }
     } catch (e) {
       debugPrint("Failed to fetch active private request: $e");
+      _resetForm();
     }
+  }
+
+  void _resetForm() {
+    setState(() {
+      _activeRequest = null;
+    });
+  }
+
+  void _showRatingDialog(String rideId, String rideType) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => RatingDialog(
+        token: widget.authResult.token,
+        rideId: rideId,
+        rideType: rideType,
+      ),
+    );
   }
 
   Future<void> _selectTime() async {
@@ -1939,7 +2362,6 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          // This notification should be sent from the backend to all drivers.
           NotificationService.showNotification('طلب خصوصي جديد!',
               'يوجد طلب من ${_fromController.text} إلى ${_toController.text}. اضغط للقبول.',
               payload: '{"userType": "driver", "targetScreen": "private_requests"}',
@@ -1965,7 +2387,6 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
     }
   }
 
-  // [MODIFIED] - Customer can now cancel their request.
   Future<void> _cancelRequest() async {
     if (_activeRequest == null) return;
 
@@ -1990,23 +2411,15 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-
-          // This notification should be sent from the backend to the accepted driver.
-          // Simulating it here for demonstration.
           if (_activeRequest!['status'] == 'accepted') {
             NotificationService.showNotification(
               'إلغاء رحلة خاصة',
               'قام الزبون بإلغاء الرحلة الخاصة من ${_activeRequest!['from']} إلى ${_activeRequest!['to']}.',
-              // The payload should contain the driver's FCM token, which the backend would have.
-              // payload: '{"driver_fcm_token": "..."}'
               type: 'high_priority',
             );
           }
-
-          setState(() {
-            _activeRequest = null;
-            _statusTimer?.cancel();
-          });
+          _resetForm();
+          _statusTimer?.cancel();
         } else {
           throw Exception(data['message'] ?? 'فشل إلغاء الطلب');
         }
@@ -2137,7 +2550,6 @@ class ActivePrivateRequestCard extends StatelessWidget {
                   ]),
                 ],
                 const SizedBox(height: 20),
-                // [MODIFIED] - The cancel button is now always visible for the customer.
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
@@ -2166,12 +2578,10 @@ class ActivePrivateRequestCard extends StatelessWidget {
   }
 }
 
-// =============================================================================
-//  Driver Private Request Screens (Updated)
-// =============================================================================
 class DriverPrivateRequestsScreen extends StatefulWidget { final AuthResult authResult; const DriverPrivateRequestsScreen({super.key, required this.authResult}); @override State<DriverPrivateRequestsScreen> createState() => _DriverPrivateRequestsScreenState(); }
 class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScreen> {
   Future<List<dynamic>>? _privateRequestsFuture; Map<String, dynamic>? _acceptedRequest; bool _isLoading = false; Timer? _requestsTimer;
+
   @override
   void initState() { super.initState(); _loadRequests(); _requestsTimer = Timer.periodic(const Duration(seconds: 20), (timer) { if(_acceptedRequest == null) { _loadRequests(); } }); }
   @override
@@ -2185,17 +2595,36 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          setState(() { _acceptedRequest = request; });
+          final activeRequestResponse = await ApiService.getAvailablePrivateRequests(widget.authResult.token);
+          if(activeRequestResponse.isNotEmpty){
+            final updatedRequest = (activeRequestResponse).firstWhere((r) => r['id'] == request['id'], orElse: () => null);
+            if(updatedRequest != null){
+              setState(() { _acceptedRequest = updatedRequest; });
+            } else {
+              _loadRequests();
+            }
+          }
         } else { throw Exception(data['message'] ?? 'فشل قبول الطلب'); }
       }
     } on SocketException { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange)); } } catch (e) { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red)); _loadRequests(); } } finally { if (mounted) setState(() => _isLoading = false); }
   }
-  void _endPrivateTrip(String status) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(status == 'completed' ? 'تم إنهاء الرحلة بنجاح' : 'تم إلغاء الرحلة'), backgroundColor: Colors.green));
-      _loadRequests();
-    }
+
+  Future<void> _endPrivateTrip(String requestId) async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await ApiService.driverCompletePrivateRequest(widget.authResult.token, requestId);
+      final data = json.decode(response.body);
+      if (mounted) {
+        if (response.statusCode == 200 && data['success'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
+          _loadRequests();
+        } else {
+          throw Exception(data['message'] ?? 'فشل إنهاء الرحلة');
+        }
+      }
+    } on SocketException { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange)); } } catch (e) { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red)); } } finally { if (mounted) setState(() => _isLoading = false); }
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2212,7 +2641,7 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
                   if (error is SocketException) { errorMessage = 'يرجى التحقق من اتصالك بالإنترنت'; } else if (error is Exception) { errorMessage = error.toString().replaceAll("Exception: ", ""); }
                   return Center(child: Text(errorMessage));
                 }
-                if (!snapshot.hasData || snapshot.data!.isEmpty) { return const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>''', message: 'لا توجد طلبات خصوصي  متاحة حالياً.'); }
+                if (!snapshot.hasData || snapshot.data!.isEmpty) { return const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>''', message: 'لا توجد طلبات خصوصي متاحة حالياً.'); }
                 final requests = snapshot.data!;
                 return AnimationLimiter(
                   child: ListView.builder(
@@ -2257,7 +2686,6 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
                   ),
                 ),
                 const SizedBox(height: 12),
-                // [MODIFIED] - Clearer Chat Button for Driver
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
@@ -2286,8 +2714,7 @@ class _DriverPrivateRequestsScreenState extends State<DriverPrivateRequestsScree
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    Expanded(child: OutlinedButton(onPressed: () => _endPrivateTrip('cancelled'), style: OutlinedButton.styleFrom(foregroundColor: Colors.red), child: const Text("إلغاء"))), const SizedBox(width: 12),
-                    Expanded(child: ElevatedButton(onPressed: () => _endPrivateTrip('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white), child: const Text("إنهاء"))),
+                    Expanded(child: ElevatedButton(onPressed: () => _endPrivateTrip(request['id'].toString()), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white), child: const Text("إنهاء"))),
                   ],
                 )
               ],
@@ -2337,7 +2764,6 @@ String _formatDate(String dateString) { try { return DateFormat('yyyy/MM/dd', 'e
 // [CHAT INTEGRATION] - NEW & IMPROVED WIDGETS
 // =============================================================================
 
-// [IMPROVEMENT] - A new widget to display a chat icon with an unread badge
 class ChatIconWithBadge extends StatelessWidget {
   final String chatId;
   final String currentUserId;
@@ -2358,7 +2784,6 @@ class ChatIconWithBadge extends StatelessWidget {
         int unreadCount = 0;
         if (snapshot.hasData && snapshot.data!.exists) {
           final data = snapshot.data!.data() as Map<String, dynamic>;
-          // The unread count is stored for the current user's ID
           unreadCount = data['unreadCount']?[currentUserId] ?? 0;
         }
 
@@ -2399,7 +2824,6 @@ class ChatScreen extends StatefulWidget {
   final String chatId;
   final String chatName;
   final AuthResult authResult;
-  // [IMPROVEMENT] - Pass all participants to manage unread/typing status
   final Map<String, String?> participants;
 
   const ChatScreen({
@@ -2432,7 +2856,6 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _typingTimer?.cancel();
-    // When leaving the screen, mark self as not typing
     _updateTypingStatus(false);
     super.dispose();
   }
@@ -2446,7 +2869,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (snapshot.exists) {
         final data = snapshot.data() as Map<String, dynamic>;
         final typingStatuses = data['typingStatus'] as Map<String, dynamic>? ?? {};
-        // Find the other user's ID
         final otherUserId = widget.participants.values.firstWhere(
               (id) => id != null && id != _user.id,
           orElse: () => null,
@@ -2535,14 +2957,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     final chatDocRef = FirebaseFirestore.instance.collection('chats').doc(widget.chatId);
-
-    // Get the other user's ID to increment their unread count
     final recipientId = widget.participants.values.firstWhere(
           (id) => id != null && id != _user.id,
       orElse: () => null,
     );
-
-    // Prepare the data for Firestore
     final messageData = {
       'author': message.author.toJson(),
       'createdAt': FieldValue.serverTimestamp(),
@@ -2550,12 +2968,8 @@ class _ChatScreenState extends State<ChatScreen> {
       'type': types.MessageType.text.name,
     };
 
-    // Use a transaction to ensure atomicity
     FirebaseFirestore.instance.runTransaction((transaction) async {
-      // 1. Add the new message
       transaction.set(chatDocRef.collection('messages').doc(), messageData);
-
-      // 2. Update the chat metadata
       final updateData = {
         'lastMessage': {
           'text': message.text,
@@ -2564,12 +2978,9 @@ class _ChatScreenState extends State<ChatScreen> {
         },
         'participants': widget.participants.values.where((id) => id != null).toList(),
       };
-
       if (recipientId != null) {
-        // Atomically increment the recipient's unread count
-        updateData['unreadCount.${recipientId}'] = FieldValue.increment(1);
+        updateData['unreadCount.$recipientId'] = FieldValue.increment(1);
       }
-
       transaction.set(chatDocRef, updateData, SetOptions(merge: true));
     });
   }
@@ -2584,7 +2995,6 @@ class _ChatScreenState extends State<ChatScreen> {
         messages: _messages,
         onSendPressed: _handleSendPressed,
         user: _user,
-        // [MODIFIED] - Updated chat theme and enabled user names.
         showUserNames: true,
         theme: DefaultChatTheme(
           primaryColor: Colors.amber[700]!,
@@ -2600,9 +3010,119 @@ class _ChatScreenState extends State<ChatScreen> {
         typingIndicatorOptions: TypingIndicatorOptions(
           typingUsers: _isOtherUserTyping ? [types.User(id: 'other')] : [],
         ),
-        // [NOTE] If you still see an error here, please ensure your `flutter_chat_ui`
-        // package is updated to the latest version in your `pubspec.yaml`.
       ),
+    );
+  }
+}
+
+// =============================================================================
+//  [NEW] Rating Dialog Widget
+// =============================================================================
+class RatingDialog extends StatefulWidget {
+  final String token;
+  final String rideId;
+  final String rideType;
+
+  const RatingDialog({
+    super.key,
+    required this.token,
+    required this.rideId,
+    required this.rideType,
+  });
+
+  @override
+  State<RatingDialog> createState() => _RatingDialogState();
+}
+
+class _RatingDialogState extends State<RatingDialog> {
+  int _rating = 0;
+  final _commentController = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _submitRating() async {
+    if (_rating == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تحديد تقييم (نجمة واحدة على الأقل)')));
+      return;
+    }
+    setState(() => _isLoading = true);
+
+    try {
+      final response = await ApiService.rateRide(widget.token, {
+        'ride_id': widget.rideId,
+        'ride_type': widget.rideType,
+        'rating': _rating,
+        'comment': _commentController.text,
+      });
+
+      if (mounted) {
+        if (response.statusCode == 201) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('شكراً لتقييمك!'), backgroundColor: Colors.green));
+          Navigator.of(context).pop();
+        } else {
+          final data = json.decode(response.body);
+          throw Exception(data['message'] ?? 'فشل إرسال التقييم');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('تقييم الرحلة'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('كيف كانت تجربتك مع السائق؟'),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(5, (index) {
+                return IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _rating = index + 1;
+                    });
+                  },
+                  icon: Icon(
+                    index < _rating ? Icons.star : Icons.star_border,
+                    color: Colors.amber,
+                    size: 36,
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _commentController,
+              decoration: const InputDecoration(
+                labelText: 'أضف تعليقاً (اختياري)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
+          child: const Text('لاحقاً'),
+        ),
+        ElevatedButton(
+          onPressed: _isLoading ? null : _submitRating,
+          child: _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('إرسال التقييم'),
+        ),
+      ],
     );
   }
 }
