@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:page_transition/page_transition.dart';
 import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
+import '../../beytei_re/re.dart'as re;
 import '../../chat/chat.dart';
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
@@ -205,6 +206,7 @@ builder: (context, params) => HomeMainPageWidget(),
 
 
 
+
     FFRoute(
       name: 'labstorepage',
       path: '/lab-store',
@@ -225,6 +227,16 @@ builder: (context, params) => HomeMainPageWidget(),
       path: '/trb-store',
       builder: (context, params) => const  AuthGate(),
     ),
+
+
+    FFRoute(
+      name: 'restaurantstorepage', // اسم مميز للمسار
+      path: '/restaurants-store',  // الرابط الذي سيتم استخدامه للانتقال
+      // تأكد من استبدال RestaurantHomeScreen باسم شاشة المطاعم الفعلية لديك
+      builder: (context, params) => const re.RestaurantModule(),
+    ),
+
+
 
 
 

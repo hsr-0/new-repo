@@ -396,6 +396,27 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       GoRouter.of(context).push('/do-store');
                     },
                   ),
+
+
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'المطاعم  ',
+                    description: '',
+                    imagePath: 'assets/images/ph.png',
+                    onTap: () {
+                      GoRouter.of(context).push('/restaurants-store');
+                    },
+                  ),
+
+
+
+
+
+
+
+
                   _buildGridCard(
                     context: context,
                     title: 'المختبرات ',
