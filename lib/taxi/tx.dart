@@ -594,7 +594,7 @@ class PrivacyPolicyScreen extends StatefulWidget {
 class _PrivacyPolicyScreenState extends State<PrivacyPolicyScreen> {
   late final WebViewController _controller;
   bool _isLoading = true;
-  final String privacyPolicyUrl = 'https://re.beytei.com/privacy-policy/';
+  final String privacyPolicyUrl = 'https://beytei.com/privacy-policy/';
 
   @override
   void initState() {
@@ -1526,7 +1526,7 @@ class DriverStatsBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.8),
-        borderRadius: const BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
+        borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(20), bottomRight: Radius.circular(20)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,

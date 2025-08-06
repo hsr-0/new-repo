@@ -8,7 +8,7 @@ class SplashHomePageWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // ⭐ نستخدم Future.delayed للانتقال بعد 5 ثواني
-    Future.delayed(const Duration(seconds: 6), () {
+    Future.delayed(const Duration(seconds: 2), () {
       GoRouter.of(context).go('/sections');
     });
 
