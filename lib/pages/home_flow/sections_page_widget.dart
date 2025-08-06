@@ -365,6 +365,28 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       context.push('/medical-store');
                     },
                   ),
+
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'المطاعم  ',
+                    description: '',
+                    imagePath: 'assets/images/re.jpg',
+                    onTap: () {
+                      GoRouter.of(context).push('/restaurants-store');
+                    },
+                  ),
+
+
+
+
+
+
+
+
+
+
                   _buildGridCard(
                     context: context,
                     title: 'الحجز الطبي',
@@ -399,16 +421,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
 
 
-
-                  _buildGridCard(
-                    context: context,
-                    title: 'المطاعم  ',
-                    description: '',
-                    imagePath: 'assets/images/ph.png',
-                    onTap: () {
-                      GoRouter.of(context).push('/restaurants-store');
-                    },
-                  ),
 
 
 
