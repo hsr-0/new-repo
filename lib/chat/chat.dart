@@ -72,7 +72,7 @@ class MedicalChatApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'استشارات بيتي الطبية',
+      title: 'استشارات بيتي ',
       theme: ThemeData(primarySwatch: Colors.indigo, fontFamily: 'Tajawal'),
       debugShowCheckedModeBanner: false,
       home: const AuthDispatcher(),
@@ -225,7 +225,7 @@ class _UserChatScreenState extends State<UserChatScreen> {
   }
 
   Future<void> _notifyAdmin({required String userName, required String messageText}) async {
-    const String wordpressApiUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/notify-admin-on-reply';
+    const String wordpressApiUrl = 'https://iraqed.beytei.com/wp-json/beytei-chat/v1/notify-admin-on-reply';
     const String secretKey = 'beytei93@beytei';
     try {
       await http.post(Uri.parse(wordpressApiUrl), headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey}, body: jsonEncode({'userName': userName, 'messageText': messageText}));
@@ -260,7 +260,7 @@ class _UserChatScreenState extends State<UserChatScreen> {
     final message = types.ImageMessage(author: _user, id: const Uuid().v4(), createdAt: DateTime.now().millisecondsSinceEpoch, name: result.name, size: bytes.length, uri: result.path, width: image.width.toDouble(), height: image.height.toDouble(), status: types.Status.sending);
     _addMessage(message);
 
-    const String uploadUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/upload-file';
+    const String uploadUrl = 'https://iraqed.beytei.com/wp-json/beytei-chat/v1/upload-file';
     const String secretKey = 'beytei93@beytei';
     try {
       final request = http.MultipartRequest('POST', Uri.parse(uploadUrl))..headers['X-Auth-Token'] = secretKey..files.add(http.MultipartFile.fromBytes('file', bytes, filename: result.name));
@@ -309,7 +309,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   Future<void> _saveAdminFCMTokenToWordPress(String email) async {
     final fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken == null) return;
-    const String apiUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/update-admin-fcm-token';
+    const String apiUrl = 'https://iraqed.beytei.com/wp-json/beytei-chat/v1/update-admin-fcm-token';
     const String secretKey = 'beytei93@beytei';
     try {
       await http.post(Uri.parse(apiUrl), headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey}, body: jsonEncode({'email': email, 'fcmToken': fcmToken}));
@@ -422,7 +422,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
   }
 
   Future<void> _sendNotificationViaWordpress({required String fcmToken, required String messageText}) async {
-    const String wordpressApiUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/notify-on-reply';
+    const String wordpressApiUrl = 'https://iraqed.beytei.com/wp-json/beytei-chat/v1/notify-on-reply';
     const String secretKey = 'beytei93@beytei';
     try {
       await http.post(Uri.parse(wordpressApiUrl), headers: {'Content-Type': 'application/json; charset=UTF-8', 'X-Auth-Token': secretKey}, body: jsonEncode({'authorId': 'admin', 'fcmToken': fcmToken, 'messageText': messageText}));
@@ -435,7 +435,7 @@ class _AdminChatScreenState extends State<AdminChatScreen> {
     String lastMessageText = (message is types.TextMessage) ? message.text : '📷 صورة';
 
     if (message is types.ImageMessage && imageBytes != null) {
-      const String uploadUrl = 'https://banner.beytei.com/wp-json/beytei-chat/v1/upload-file';
+      const String uploadUrl = 'https://iraqed.beytei.com/wp-json/beytei-chat/v1/upload-file';
       const String secretKey = 'beytei93@beytei';
       try {
         final request = http.MultipartRequest('POST', Uri.parse(uploadUrl))..headers['X-Auth-Token'] = secretKey..files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: message.name));
