@@ -338,6 +338,26 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       );
                     },
                   ),
+
+
+
+                  _buildGridCard(
+                    context: context,
+                    title: 'الصيدليات ',
+                    description: '',
+                    imagePath: 'assets/images/ph.png',
+                    onTap: () {
+                      context.push('/pharmacy-store');
+                    },
+                  ),
+
+
+
+
+
+
+
+
                   _buildGridCard(
                     context: context,
                     title: 'بوتيك وكوزمتك بيتي',

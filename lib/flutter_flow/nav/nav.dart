@@ -9,6 +9,7 @@ import '../../beytei_re/re.dart'as re;
 import '../../chat/chat.dart';
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
+import '../../ph/ph.dart';
 import '../../taxi/tx.dart';
 import '../home_flow/splashbeytei.dart';
 import '/home_flow/splash_home_page_widget.dart'; // ✅ استيراد صفحة splash الجديدة
@@ -227,6 +228,20 @@ builder: (context, params) => HomeMainPageWidget(),
       path: '/trb-store',
       builder: (context, params) => const  AuthGate(),
     ),
+
+
+    FFRoute(
+      name: 'pharmacystorepage',
+      path: '/pharmacy-store',
+      builder: (context, params) => const  PharmacyModule(),
+    ),
+
+
+
+
+
+
+
 
 
     FFRoute(

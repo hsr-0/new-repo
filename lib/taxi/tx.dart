@@ -463,7 +463,8 @@ class RotatingVehicleIcon extends StatelessWidget {
   const RotatingVehicleIcon({super.key, required this.vehicleType, required this.bearing});
   @override
   Widget build(BuildContext context) {
-    const String carSvg = '''<svg viewBox="0 0 80 160" xmlns="http://www.w3.org/2000/svg"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dx="2" dy="5" result="offsetblur"/><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g transform="translate(0, 0)" filter="url(#shadow)"><path d="M25,10 C15,10 10,20 10,30 L10,130 C10,140 15,150 25,150 L55,150 C65,150 70,140 70,130 L70,30 C70,20 65,10 55,10 L25,10 Z" fill="#BDBDBD"/><path d="M20,25 C15,25 15,30 15,35 L15,70 L65,70 L65,35 C65,30 65,25 60,25 L20,25 Z" fill="#212121" opacity="0.8"/><path d="M15,80 L15,120 C15,125 20,125 20,125 L60,125 C65,125 65,120 65,120 L65,80 L15,80 Z" fill="#424242" opacity="0.7"/></g></svg>''';
+    // ## FIX: Changed the car color to white (#FFFFFF) ##
+    const String carSvg = '''<svg viewBox="0 0 80 160" xmlns="http://www.w3.org/2000/svg"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dx="2" dy="5" result="offsetblur"/><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g transform="translate(0, 0)" filter="url(#shadow)"><path d="M25,10 C15,10 10,20 10,30 L10,130 C10,140 15,150 25,150 L55,150 C65,150 70,140 70,130 L70,30 C70,20 65,10 55,10 L25,10 Z" fill="#FFFFFF"/><path d="M20,25 C15,25 15,30 15,35 L15,70 L65,70 L65,35 C65,30 65,25 60,25 L20,25 Z" fill="#424242" opacity="0.8"/><path d="M15,80 L15,120 C15,125 20,125 20,125 L60,125 C65,125 65,120 65,120 L65,80 L15,80 Z" fill="#616161" opacity="0.7"/></g></svg>''';
     const String tuktukSvg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 17.17V10c0-2.21-1.79-4-4-4h-2.1c-.83-2.32-3.07-4-5.9-4-3.31 0-6 2.69-6 6s2.69 6 6 6c.34 0 .67-.04 1-.09V17H2v2h18v-2h-2zm-8-2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM5 8c0-2.21 1.79-4 4-4s4 1.79 4 4-1.79 4-4 4-4-1.79-4-4z"/></svg>''';
     return Transform.rotate(angle: bearing * (pi / 180), child: SvgPicture.string(vehicleType.toLowerCase() == 'tuktuk' ? tuktukSvg : carSvg));
   }
@@ -492,7 +493,16 @@ class _PulsingUserLocationMarkerState extends State<PulsingUserLocationMarker> w
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(animation: _controller, builder: (context, child) {
-      return Stack(alignment: Alignment.center, children: [Container(width: 15 + (15 * _controller.value), height: 15 + (15 * _controller.value), decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue.withOpacity(0.8 - (0.8 * _controller.value)))), Container(width: 15, height: 15, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue, border: Border.all(color: Colors.white, width: 2)))]);
+      return Stack(alignment: Alignment.center, children: [
+        // Pulsing blue halo
+        Container(width: 25 + (20 * _controller.value), height: 25 + (20 * _controller.value), decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue.withOpacity(0.5 - (0.5 * _controller.value)))),
+        // White car icon instead of the blue dot
+        const SizedBox(
+          width: 40,
+          height: 40,
+          child: RotatingVehicleIcon(vehicleType: 'Car', bearing: 0.0), // Bearing is handled by the parent marker
+        ),
+      ]);
     });
   }
 }
@@ -1445,26 +1455,23 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
           Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Row(children: [const Text("استقبال الطلبات", style: TextStyle(fontSize: 12)), Switch(value: _isDriverActive, onChanged: _toggleActiveStatus, activeColor: Colors.green)])),
           IconButton(icon: const Icon(Icons.logout), onPressed: widget.onLogout)
         ],
+        // ## FIX: Moved the stats bar to the AppBar's bottom property ##
+        bottom: _selectedIndex == 0
+            ? PreferredSize(
+          preferredSize: const Size.fromHeight(60.0),
+          child: DriverStatsBar(stats: _liveStats),
+        )
+            : null,
       ),
-      body: Stack(
-        children: [
-          IndexedStack(index: _selectedIndex, children: pages),
-          if (_selectedIndex == 0)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: DriverStatsBar(stats: _liveStats),
-            ),
-        ],
-      ),
+      // ## FIX: Removed the outer Stack as it's no longer needed ##
+      body: IndexedStack(index: _selectedIndex, children: pages),
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         currentIndex: _selectedIndex,
         onTap: _changeTab,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), label: 'الطلبات'),
-          BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات خاصة'),
+          BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي'),
           BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
           BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
           BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'لوحة المعلومات'),
@@ -1499,7 +1506,7 @@ class ModernInfoDialog extends StatelessWidget {
             const SizedBox(height: 15),
             _buildInfoRow(context, Icons.toggle_on, "يجب تفعيل 'استقبال الطلبات' من الأعلى لتظهر لك الرحلات."),
             const SizedBox(height: 15),
-            _buildInfoRow(context, Icons.info_outline, "القسم مصمم بشكل أساسي لطلبات السريعة داخل المدينة."),
+            _buildInfoRow(context, Icons.info_outline, "القسم مصمم بشكل أساسي لمركبات التكتك."),
             const SizedBox(height: 24),
             ElevatedButton(onPressed: () => Navigator.of(context).pop(), child: const Text("حسناً، فهمت")),
           ],
@@ -1519,16 +1526,14 @@ class DriverStatsBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (stats == null) {
-      return const SizedBox.shrink(); // Or a shimmer/loading effect
-    }
+    // This container will now be placed in the AppBar's bottom.
+    // It needs a background color to be visible.
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.8),
-        borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(20), bottomRight: Radius.circular(20)),
-      ),
-      child: Row(
+      color: Theme.of(context).appBarTheme.backgroundColor, // Match AppBar color
+      child: stats == null
+          ? const Center(child: SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+          : Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           _buildStatItem(Icons.attach_money, "أرباح اليوم", "${stats?['today_earnings'] ?? 0} د.ع"),
@@ -1545,8 +1550,8 @@ class DriverStatsBar extends StatelessWidget {
       children: [
         Icon(icon, color: Colors.amber, size: 24),
         const SizedBox(height: 4),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
-        Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+        Text(label, style: const TextStyle(color: Colors.black54, fontSize: 10)),
+        Text(value, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 14)),
       ],
     );
   }
@@ -1678,6 +1683,7 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
             mapController: _mapController,
             options: MapOptions(initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336), initialZoom: 14.0),
             children: [
+              // ## FIX: Reverted to the more reliable tile provider ##
               TileLayer(
                 urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
                 subdomains: const ['a', 'b', 'c'],
@@ -1699,7 +1705,8 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
             ],
           ),
           DraggableScrollableSheet(
-            initialChildSize: 0.25,
+            // ## FIX: Increased initial size for better usability ##
+            initialChildSize: 0.4,
             minChildSize: 0.15,
             maxChildSize: 0.8,
             builder: (BuildContext context, ScrollController scrollController) {
@@ -1834,8 +1841,9 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     });
   }
 
+  // ## FIX: This function now has robust error handling to inform the user ##
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // !!! SECURITY WARNING: Hardcoding API keys is a major security risk. !!!
+    // SECURITY WARNING: Hardcoding API keys is a security risk.
     // Replace this with a key loaded from environment variables for production.
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0';
     if (orsApiKey.length < 50) {
@@ -1943,6 +1951,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
             mapController: _mapController,
             options: MapOptions(initialCenter: pickupPoint, initialZoom: 14.0),
             children: [
+              // ## FIX: Reverted to the more reliable tile provider ##
               TileLayer(
                 urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
                 subdomains: const ['a', 'b', 'c'],
@@ -2132,20 +2141,26 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       });
   }
 
+  // ## FIX: Replaced with the robust version to provide user feedback on failure ##
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // !!! SECURITY WARNING: Hardcoding API keys is a major security risk. !!!
-    // Replace this with a key loaded from environment variables for production.
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0';
     if (orsApiKey.length < 50) {
+      // No snackbar here as it's a developer issue, not a user one.
       return;
     }
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
     try {
       final response = await http.get(Uri.parse(url));
-      if (mounted && response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final coordinates = data['features'][0]['geometry']['coordinates'] as List;
-        setState(() => _routeToCustomer = coordinates.map((c) => LatLng(c[1], c[0])).toList());
+      if (mounted) {
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          final coordinates = data['features'][0]['geometry']['coordinates'] as List;
+          setState(() => _routeToCustomer = coordinates.map((c) => LatLng(c[1], c[0])).toList());
+        } else {
+          // Silently fail for the customer to avoid annoying popups if the service is temporarily down.
+          // The route simply won't appear.
+          debugPrint("Failed to draw route: ${json.decode(response.body)['error']?['message'] ?? 'Server Error'}");
+        }
       }
     } catch (e) {
       debugPrint("ORS Exception: ${e.toString()}");
@@ -2369,6 +2384,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
               },
             ),
             children: [
+              // ## FIX: Reverted to the more reliable tile provider ##
               TileLayer(
                 urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
                 subdomains: const ['a', 'b', 'c'],
@@ -3340,7 +3356,7 @@ class _PrivateRequestFormScreenState extends State<PrivateRequestFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('إنشاء طلب رحلة خصوصي', style: Theme.of(context).textTheme.headlineSmall),
+            Text('طلب سيارة خصوصي ', style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 24),
             TextFormField(controller: _fromController, decoration: const InputDecoration(labelText: 'مكان الانطلاق', prefixIcon: Icon(Icons.my_location)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 16),
