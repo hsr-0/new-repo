@@ -75,37 +75,6 @@ class AuthProvider with ChangeNotifier {
   }
 }
 
-// --- تعريف المسارات داخل الوحدة ---
-Route<dynamic> _onGenerateRoute(RouteSettings settings) {
-  switch (settings.name) {
-    case '/main':
-      return MaterialPageRoute(builder: (_) => const MainScreen());
-    case '/details':
-      final foodItem = settings.arguments as FoodItem;
-      return MaterialPageRoute(builder: (_) => DetailScreen(foodItem: foodItem));
-    case '/menu':
-      final restaurant = settings.arguments as Restaurant;
-      return MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant));
-    case '/search':
-      final args = settings.arguments as Map<String, dynamic>;
-      return MaterialPageRoute(
-        builder: (_) => SearchScreen(
-          searchQuery: args['query'],
-          selectedAreaId: args['areaId'],
-        ),
-      );
-    case '/login':
-      return MaterialPageRoute(builder: (_) => const RestaurantLoginScreen());
-    case '/dashboard':
-      return MaterialPageRoute(builder: (_) => const RestaurantDashboardScreen());
-    case '/privacy':
-      return MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen());
-    case '/':
-    default:
-      return MaterialPageRoute(builder: (_) => const AuthWrapper());
-  }
-}
-
 /// الودجت الرئيسي الذي يتم استدعاؤه
 class RestaurantModule extends StatelessWidget {
   const RestaurantModule({super.key});
@@ -127,12 +96,17 @@ class RestaurantModule extends StatelessWidget {
               backgroundColor: Colors.white,
               elevation: 0.5,
               iconTheme: IconThemeData(color: Colors.black),
-              titleTextStyle: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold),
+              titleTextStyle: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'Tajawal'),
+            ),
+            textTheme: const TextTheme(
+              bodyLarge: TextStyle(fontFamily: 'Tajawal'),
+              bodyMedium: TextStyle(fontFamily: 'Tajawal'),
+              displayLarge: TextStyle(fontFamily: 'Tajawal'),
+              titleLarge: TextStyle(fontFamily: 'Tajawal'),
             )
         ),
         debugShowCheckedModeBanner: false,
         home: const AuthWrapper(),
-        onGenerateRoute: _onGenerateRoute,
       ),
     );
   }
@@ -260,14 +234,17 @@ class Order {
     var itemsFromJson = json['line_items'] as List;
     List<LineItem> lineItemsList = itemsFromJson.map((i) => LineItem.fromJson(i)).toList();
 
+    final billing = json['billing'] as Map<String, dynamic>? ?? {};
+    final shipping = json['shipping'] as Map<String, dynamic>? ?? {};
+
     return Order(
       id: json['id'],
       status: json['status'],
       dateCreated: DateTime.parse(json['date_created']),
       total: json['total'].toString(),
-      customerName: json['customer_name'] ?? '',
-      address: json['address'] ?? '',
-      phone: json['phone'] ?? '',
+      customerName: '${billing['first_name'] ?? ''} ${billing['last_name'] ?? ''}'.trim(),
+      address: shipping['address_1'] ?? billing['address_1'] ?? 'N/A',
+      phone: billing['phone'] ?? 'N/A',
       lineItems: lineItemsList,
     );
   }
@@ -371,7 +348,7 @@ class ApiService {
   }
 
   Future<List<Restaurant>> getAllRestaurants() async {
-    final fields = 'id,name,image,count';
+    const fields = 'id,name,image,count';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields';
     final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
     if (response.statusCode == 200) {
@@ -394,7 +371,7 @@ class ApiService {
   }
 
   Future<List<FoodItem>> _getProducts(String params) async {
-    final fields = 'id,name,regular_price,sale_price,images,categories,short_description';
+    const fields = 'id,name,regular_price,sale_price,images,categories,short_description';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields';
     final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
     if (response.statusCode == 200) {
@@ -612,6 +589,7 @@ class SplashScreen extends StatelessWidget {
   }
 }
 
+// [MODIFIED] MainScreen now handles the back button logic intelligently.
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
   @override
@@ -619,32 +597,74 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  late List<Widget> _widgetOptions;
-
-  @override
-  void initState() {
-    super.initState();
-    _setupScreens();
-  }
-
-  void _setupScreens() {
-    _widgetOptions = <Widget>[
-      const HomeScreen(),
-      const RestaurantsScreen(),
-      const CartScreen()
-    ];
-  }
+  // A key for each tab's Navigator to control its stack
+  final List<GlobalKey<NavigatorState>> _navigatorKeys = [
+    GlobalKey<NavigatorState>(),
+    GlobalKey<NavigatorState>(),
+    GlobalKey<NavigatorState>(),
+  ];
 
   @override
   Widget build(BuildContext context) {
     final navProvider = Provider.of<NavigationProvider>(context);
 
-    return Scaffold(
-      body: IndexedStack(
-        index: navProvider.currentIndex,
-        children: _widgetOptions,
+    return WillPopScope(
+      onWillPop: () async {
+        final NavigatorState? currentNavigator = _navigatorKeys[navProvider.currentIndex].currentState;
+
+        if (currentNavigator != null && currentNavigator.canPop()) {
+          currentNavigator.pop();
+          return false;
+        }
+
+        if (navProvider.currentIndex != 0) {
+          navProvider.changeTab(0);
+          return false;
+        }
+
+        return true;
+      },
+      child: Scaffold(
+        body: IndexedStack(
+          index: navProvider.currentIndex,
+          children: <Widget>[
+            _buildOffstageNavigator(0),
+            _buildOffstageNavigator(1),
+            _buildOffstageNavigator(2),
+          ],
+        ),
+        bottomNavigationBar: _buildCustomBottomNav(navProvider),
       ),
-      bottomNavigationBar: _buildCustomBottomNav(navProvider),
+    );
+  }
+
+  // Helper method to build a navigator for each tab
+  Widget _buildOffstageNavigator(int index) {
+    return Offstage(
+      offstage: Provider.of<NavigationProvider>(context).currentIndex != index,
+      child: Navigator(
+        key: _navigatorKeys[index],
+        onGenerateRoute: (settings) {
+          Widget pageBuilder;
+          switch (index) {
+            case 0:
+              pageBuilder = const HomeScreen();
+              break;
+            case 1:
+              pageBuilder = const RestaurantsScreen();
+              break;
+            case 2:
+              pageBuilder = const CartScreen();
+              break;
+            default:
+              pageBuilder = const HomeScreen();
+          }
+          return MaterialPageRoute(
+            builder: (context) => pageBuilder,
+            settings: settings,
+          );
+        },
+      ),
     );
   }
 
@@ -678,6 +698,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
+// --- MODIFIED HOME SCREEN FOR BETTER PERFORMANCE ---
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -686,27 +707,26 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final ApiService _apiService = ApiService();
-  Future<Map<String, List<dynamic>>>? _pageData;
   final TextEditingController _searchController = TextEditingController();
-  final List<String> bannerImages = ['https://beytei.com/wp-content/uploads/2023/05/banner1.jpg', 'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg', 'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg'];
+  final List<String> bannerImages = [
+    'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
+    'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
+    'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg'
+  ];
+
   int? _selectedAreaId;
   String? _selectedAreaName;
+
+  // Futures for each section to load independently
+  Future<List<Restaurant>>? _restaurantsFuture;
+  Future<List<FoodItem>>? _onSaleFuture;
+  Future<List<FoodItem>>? _breakfastFuture;
+  Future<List<FoodItem>>? _familyMealsFuture;
 
   @override
   void initState() {
     super.initState();
     _loadAllData();
-  }
-
-  Future<void> _loadAllData() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _selectedAreaId = prefs.getInt('selectedAreaId');
-      _selectedAreaName = prefs.getString('selectedAreaName');
-      if (_selectedAreaId != null) {
-        _pageData = _fetchPageData(_selectedAreaId!);
-      }
-    });
   }
 
   @override
@@ -715,124 +735,295 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  Future<Map<String, List<dynamic>>> _fetchPageData(int areaId) async {
-    try {
-      final deliverableRestaurantIds = await _apiService.getDeliverableRestaurantIds(areaId);
-      final results = await Future.wait([_apiService.getAllRestaurants(), _apiService.getProductsByTag("فطور"), _apiService.getProductsByTag("عائلي"), _apiService.getOnSaleItems()]);
-      final List<Restaurant> allRestaurants = (results[0] as List<Restaurant>)..forEach((r) => r.isDeliverable = deliverableRestaurantIds.contains(r.id));
-      final List<FoodItem> breakfast = (results[1] as List<FoodItem>)..forEach((i) => i.isDeliverable = deliverableRestaurantIds.contains(i.categoryId));
-      final List<FoodItem> familyMeals = (results[2] as List<FoodItem>)..forEach((i) => i.isDeliverable = deliverableRestaurantIds.contains(i.categoryId));
-      final List<FoodItem> onSale = (results[3] as List<FoodItem>)..forEach((i) => i.isDeliverable = deliverableRestaurantIds.contains(i.categoryId));
-      return {"restaurants": allRestaurants, "breakfast": breakfast, "family_meals": familyMeals, "on_sale": onSale};
-    } catch (e) {
-      throw Exception('فشل في تحميل البيانات: $e');
+  Future<void> _loadAllData() async {
+    final prefs = await SharedPreferences.getInstance();
+    _selectedAreaId = prefs.getInt('selectedAreaId');
+    _selectedAreaName = prefs.getString('selectedAreaName');
+
+    if (_selectedAreaId != null) {
+      setState(() {
+        final deliverableIdsFuture = _apiService.getDeliverableRestaurantIds(_selectedAreaId!);
+
+        _restaurantsFuture = _filterAndBuildFuture<Restaurant>(
+          deliverableIdsFuture,
+          _apiService.getAllRestaurants(),
+        );
+        _onSaleFuture = _filterAndBuildFuture<FoodItem>(
+          deliverableIdsFuture,
+          _apiService.getOnSaleItems(),
+        );
+        _breakfastFuture = _filterAndBuildFuture<FoodItem>(
+          deliverableIdsFuture,
+          _apiService.getProductsByTag("فطور"),
+        );
+        _familyMealsFuture = _filterAndBuildFuture<FoodItem>(
+          deliverableIdsFuture,
+          _apiService.getProductsByTag("عائلي"),
+        );
+      });
     }
+  }
+
+  Future<List<T>> _filterAndBuildFuture<T>(
+      Future<Set<int>> deliverableIdsFuture,
+      Future<List<T>> itemsFuture,
+      ) async {
+    final deliverableIds = await deliverableIdsFuture;
+    final items = await itemsFuture;
+
+    return items.where((item) {
+      if (item is Restaurant) {
+        item.isDeliverable = deliverableIds.contains(item.id);
+        return item.isDeliverable;
+      }
+      if (item is FoodItem) {
+        item.isDeliverable = deliverableIds.contains(item.categoryId);
+        return item.isDeliverable;
+      }
+      return false;
+    }).toList();
   }
 
   void _onSearchSubmitted(String query) {
     if (query.isNotEmpty) {
-      Navigator.of(context).pushNamed(
-        '/search',
-        arguments: {'query': query, 'areaId': _selectedAreaId},
-      );
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SearchScreen(
+          searchQuery: query,
+          selectedAreaId: _selectedAreaId!,
+        ),
+      ));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        appBar: AppBar(
-          title: InkWell(
-            onTap: () async {
-              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SelectLocationScreen(isCancellable: true,)));
-              _loadAllData();
+      appBar: AppBar(
+        title: InkWell(
+          onTap: () async {
+            await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const SelectLocationScreen(isCancellable: true),
+            ));
+            _loadAllData();
+          },
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(_selectedAreaName ?? "اختر منطقة", style: const TextStyle(fontSize: 16)),
+            const Icon(Icons.keyboard_arrow_down, size: 20)
+          ]),
+        ),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.login),
+            tooltip: "دخول مدير المطعم",
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen()));
             },
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(_selectedAreaName ?? "اختر منطقة", style: const TextStyle(fontSize: 16)),
-              const Icon(Icons.keyboard_arrow_down, size: 20)
-            ]),
-          ),
-          centerTitle: true,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.login),
-              tooltip: "دخول مدير المطعم",
-              onPressed: () {
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen()));
-              },
-            )
+          )
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _loadAllData,
+        child: _selectedAreaId == null
+            ? const Center(child: Text("الرجاء تحديد منطقة أولاً"))
+            : ListView(
+          padding: const EdgeInsets.symmetric(vertical: 10.0),
+          children: [
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSearchBar()),
+            const SizedBox(height: 20),
+            _buildBannerSlider(),
+            const SizedBox(height: 20),
+
+            _buildSection<Restaurant>(
+              future: _restaurantsFuture,
+              title: 'المطاعم',
+              onViewAll: () => Provider.of<NavigationProvider>(context, listen: false).changeTab(1),
+              listBuilder: (items) => _buildRestaurantsList(items),
+              shimmerList: _buildShimmerRestaurantsList(),
+            ),
+
+            _buildSection<FoodItem>(
+              future: _onSaleFuture,
+              title: 'عروض وخصومات',
+              onViewAll: () {},
+              listBuilder: (items) => _buildFoodsList(items),
+              shimmerList: _buildShimmerFoodsList(),
+            ),
+
+            _buildSection<FoodItem>(
+              future: _breakfastFuture,
+              title: 'الفطور',
+              onViewAll: () {},
+              listBuilder: (items) => _buildFoodsList(items),
+              shimmerList: _buildShimmerFoodsList(),
+            ),
+
+            _buildSection<FoodItem>(
+              future: _familyMealsFuture,
+              title: 'وجبات عائلية',
+              onViewAll: () {},
+              listBuilder: (items) => _buildFoodsList(items),
+              shimmerList: _buildShimmerFoodsList(),
+            ),
           ],
         ),
-        body: RefreshIndicator(
-            onRefresh: _loadAllData,
-            child: _selectedAreaId == null
-                ? const Center(child: Text("الرجاء تحديد منطقة أولاً"))
-                : FutureBuilder<Map<String, List<dynamic>>>(
-                future: _pageData,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const ShimmerHomeScreen();
-                  }
-                  if (snapshot.hasError) {
-                    return Center(child: Text('${snapshot.error}'));
-                  }
-                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                    return const Center(child: Text('لا توجد بيانات'));
-                  }
-                  final restaurants = (snapshot.data!['restaurants'] as List<Restaurant>).where((r) => r.isDeliverable).toList();
-                  final onSaleFoods = (snapshot.data!['on_sale'] as List<FoodItem>).where((i) => i.isDeliverable).toList();
-                  final breakfastFoods = (snapshot.data!['breakfast'] as List<FoodItem>).where((i) => i.isDeliverable).toList();
-                  final familyFoods = (snapshot.data!['family_meals'] as List<FoodItem>).where((i) => i.isDeliverable).toList();
-
-                  return ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 10.0),
-                      children: [
-                        Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSearchBar()),
-                        const SizedBox(height: 20),
-                        _buildBannerSlider(),
-                        const SizedBox(height: 20),
-                        if (restaurants.isNotEmpty) ...[Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSectionTitle('المطاعم', () => Provider.of<NavigationProvider>(context, listen: false).changeTab(1))), const SizedBox(height: 10), _buildRestaurantsList(restaurants), const SizedBox(height: 20)],
-                        if (onSaleFoods.isNotEmpty) ...[Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSectionTitle('عروض وخصومات', () {})), const SizedBox(height: 10), _buildFoodsList(onSaleFoods), const SizedBox(height: 20)],
-                        if (breakfastFoods.isNotEmpty) ...[Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSectionTitle('الفطور', () {})), const SizedBox(height: 10), _buildFoodsList(breakfastFoods), const SizedBox(height: 20)],
-                        if (familyFoods.isNotEmpty) ...[Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSectionTitle('وجبات عائلية', () {})), const SizedBox(height: 10), _buildFoodsList(familyFoods), const SizedBox(height: 20)]
-                      ]
-                  );
-                }
-            )
-        )
+      ),
     );
   }
+
+  Widget _buildSection<T>({
+    required Future<List<T>>? future,
+    required String title,
+    required VoidCallback onViewAll,
+    required Widget Function(List<T>) listBuilder,
+    required Widget shimmerList,
+  }) {
+    return FutureBuilder<List<T>>(
+      future: future,
+      builder: (context, snapshot) {
+        if (future == null) {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: _buildSectionTitle(title, onViewAll),
+              ),
+              const SizedBox(height: 10),
+              shimmerList,
+              const SizedBox(height: 20),
+            ],
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: _buildSectionTitle(title, onViewAll),
+              ),
+              const SizedBox(height: 10),
+              shimmerList,
+              const SizedBox(height: 20),
+            ],
+          );
+        }
+
+        if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final items = snapshot.data!;
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: _buildSectionTitle(title, onViewAll),
+            ),
+            const SizedBox(height: 10),
+            listBuilder(items),
+            const SizedBox(height: 20),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildBannerSlider() {
-    return CarouselSlider(options: CarouselOptions(height: 150.0, autoPlay: true, enlargeCenterPage: true, aspectRatio: 16 / 9, viewportFraction: 0.9), items: bannerImages.map((i) {
-      return Builder(builder: (BuildContext context) {
-        return Container(width: MediaQuery.of(context).size.width, margin: const EdgeInsets.symmetric(horizontal: 5.0), decoration: BoxDecoration(borderRadius: BorderRadius.circular(15), image: DecorationImage(image: CachedNetworkImageProvider(i), fit: BoxFit.cover)));
-      });
-    }).toList());
+    return CarouselSlider(
+        options: CarouselOptions(
+            height: 150.0,
+            autoPlay: true,
+            enlargeCenterPage: true,
+            aspectRatio: 16 / 9,
+            viewportFraction: 0.9),
+        items: bannerImages.map((i) {
+          return Builder(builder: (BuildContext context) {
+            return Container(
+                width: MediaQuery.of(context).size.width,
+                margin: const EdgeInsets.symmetric(horizontal: 5.0),
+                decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(15),
+                    image: DecorationImage(
+                        image: CachedNetworkImageProvider(i),
+                        fit: BoxFit.cover)));
+          });
+        }).toList());
   }
+
   Widget _buildSearchBar() {
-    return TextField(controller: _searchController, textInputAction: TextInputAction.search, onSubmitted: _onSearchSubmitted, decoration: InputDecoration(hintText: 'ابحث عن وجبة أو مطعم...', prefixIcon: const Icon(Icons.search, color: Colors.grey), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade100, contentPadding: EdgeInsets.zero));
+    return TextField(
+        controller: _searchController,
+        textInputAction: TextInputAction.search,
+        onSubmitted: _onSearchSubmitted,
+        decoration: InputDecoration(
+            hintText: 'ابحث عن وجبة أو مطعم...',
+            prefixIcon: const Icon(Icons.search, color: Colors.grey),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide: BorderSide.none),
+            filled: true,
+            fillColor: Colors.grey.shade100,
+            contentPadding: EdgeInsets.zero));
   }
+
   Widget _buildSectionTitle(String title, VoidCallback onViewAll) {
-    return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), TextButton(onPressed: onViewAll, child: Text('عرض الكل', style: TextStyle(color: Theme.of(context).colorScheme.primary)))]);
+    return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title,
+              style:
+              const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          TextButton(
+              onPressed: onViewAll,
+              child: Text('عرض الكل',
+                  style:
+                  TextStyle(color: Theme.of(context).colorScheme.primary)))
+        ]);
   }
+
   Widget _buildFoodsList(List<FoodItem> foods) {
-    return SizedBox(height: 270, child: ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 5), itemCount: foods.length, itemBuilder: (context, index) => FoodCard(food: foods[index])));
+    return SizedBox(
+        height: 270,
+        child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            itemCount: foods.length,
+            itemBuilder: (context, index) => FoodCard(food: foods[index])));
   }
+
+  Widget _buildShimmerFoodsList() {
+    return SizedBox(
+        height: 270,
+        child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            itemCount: 3,
+            itemBuilder: (context, index) => const ShimmerFoodCard()));
+  }
+
   Widget _buildRestaurantsList(List<Restaurant> restaurants) {
-    return SizedBox(height: 130, child: ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 5), itemCount: restaurants.length > 5 ? 5 : restaurants.length, itemBuilder: (context, index) => RestaurantCard(restaurant: restaurants[index])));
+    return SizedBox(
+        height: 130,
+        child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            itemCount: restaurants.length > 5 ? 5 : restaurants.length,
+            itemBuilder: (context, index) =>
+                HorizontalRestaurantCard(restaurant: restaurants[index])));
+  }
+
+  Widget _buildShimmerRestaurantsList() {
+    return SizedBox(
+        height: 130,
+        child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            itemCount: 5,
+            itemBuilder: (context, index) =>
+            const ShimmerHorizontalRestaurantCard()));
   }
 }
-
-// ... The rest of the screens (Restaurant, Menu, Cart, etc.) and widgets (FoodCard, OrderCard, etc.)
-// would follow here, just as provided in the previous comprehensive answer. I am omitting them here
-// to avoid extreme length, but the code structure from the previous answer is the one to use.
-// The key changes are in the initial setup (main.dart or module entry), providers, and the dashboard screen.
-
-// ===================
-// NOTE: For brevity, only the most critical updated screens are included.
-// The full set of screens (Search, Menu, Detail, etc.) and Widgets (FoodCard, etc.)
-// from the previous complete answer should be used. The code below is the rest of the essential parts.
-// ===================
 
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
@@ -967,6 +1158,10 @@ class _RestaurantsScreenState extends State<RestaurantsScreen> {
       setState(() {
         _restaurantsFuture = _fetchRestaurants(_selectedAreaId!);
       });
+    } else {
+      setState(() {
+        _restaurantsFuture = Future.value([]);
+      });
     }
   }
 
@@ -994,14 +1189,30 @@ class _RestaurantsScreenState extends State<RestaurantsScreen> {
           future: _restaurantsFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.8), itemCount: 9, itemBuilder: (context, index) => const ShimmerRestaurantCard());
+              return GridView.builder(
+                  padding: const EdgeInsets.all(15),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 15,
+                      mainAxisSpacing: 15,
+                      childAspectRatio: 0.7),
+                  itemCount: 6,
+                  itemBuilder: (context, index) => const ShimmerRestaurantCard());
             }
             if (snapshot.hasError) return Center(child: Text("خطأ: ${snapshot.error}"));
             if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Center(child: Text("لا توجد مطاعم متاحة حالياً"));
+              return const Center(child: Text("لا توجد مطاعم متاحة حالياً في منطقتك"));
             }
             final restaurants = snapshot.data!;
-            return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.8), itemCount: restaurants.length, itemBuilder: (context, index) => RestaurantCard(restaurant: restaurants[index]));
+            return GridView.builder(
+                padding: const EdgeInsets.all(15),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 15,
+                    mainAxisSpacing: 15,
+                    childAspectRatio: 0.7),
+                itemCount: restaurants.length,
+                itemBuilder: (context, index) => RestaurantCard(restaurant: restaurants[index]));
           },
         ),
       ),
@@ -1278,7 +1489,7 @@ class _CartScreenState extends State<CartScreen> {
     return Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), blurRadius: 10, spreadRadius: 5)]), child: Column(children: [
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('الإجمالي', style: TextStyle(fontSize: 18, color: Colors.grey)), Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))]),
       const SizedBox(height: 20),
-      SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => _showCheckoutDialog(context, cart), style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))), child: const Text('إتمام الطلب', style: TextStyle(fontSize: 18, color: Colors.white))))
+      SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => _showCheckoutDialog(context, cart), style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white), child: const Text('إتمام الطلب', style: TextStyle(fontSize: 18))))
     ]));
   }
 }
@@ -1519,7 +1730,7 @@ class FoodCard extends StatelessWidget {
     final cart = Provider.of<CartProvider>(context, listen: false);
     return GestureDetector(
         onTap: food.isDeliverable
-            ? () => Navigator.of(context).pushNamed('/details', arguments: food)
+            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailScreen(foodItem: food)))
             : null,
         child: Opacity(
             opacity: food.isDeliverable ? 1.0 : 0.5,
@@ -1559,15 +1770,16 @@ class FoodCard extends StatelessWidget {
   }
 }
 
-class RestaurantCard extends StatelessWidget {
+// --- NEW WIDGET FOR HORIZONTAL LISTS IN HOME SCREEN ---
+class HorizontalRestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
-  const RestaurantCard({super.key, required this.restaurant});
+  const HorizontalRestaurantCard({super.key, required this.restaurant});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
         onTap: restaurant.isDeliverable
-            ? () => Navigator.of(context).pushNamed('/menu', arguments: restaurant)
+            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
             : null,
         child: Opacity(
             opacity: restaurant.isDeliverable ? 1.0 : 0.5,
@@ -1582,6 +1794,104 @@ class RestaurantCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(restaurant.name, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12))
                 ]))));
+  }
+}
+
+// --- NEW, IMPROVED RESTAURANT CARD WIDGET ---
+class RestaurantCard extends StatelessWidget {
+  final Restaurant restaurant;
+  const RestaurantCard({super.key, required this.restaurant});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      elevation: 4,
+      shadowColor: Colors.black.withOpacity(0.1),
+      child: InkWell(
+        onTap: restaurant.isDeliverable
+            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
+            : null,
+        child: Opacity(
+          opacity: restaurant.isDeliverable ? 1.0 : 0.6,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Image part
+              Expanded(
+                flex: 3,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    CachedNetworkImage(
+                      imageUrl: restaurant.imageUrl,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Shimmer.fromColors(
+                        baseColor: Colors.grey[300]!,
+                        highlightColor: Colors.grey[100]!,
+                        child: Container(color: Colors.white),
+                      ),
+                      errorWidget: (context, url, error) => const Icon(Icons.storefront, color: Colors.grey, size: 40),
+                    ),
+                    if (!restaurant.isDeliverable)
+                      Container(
+                        color: Colors.black.withOpacity(0.6),
+                        child: const Center(
+                          child: Text(
+                            'خارج\nمنطقتك',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              // Details and Button part
+              Expanded(
+                flex: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        restaurant.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      // The new prominent button
+                      SizedBox(
+                        height: 30,
+                        child: ElevatedButton.icon(
+                          onPressed: restaurant.isDeliverable
+                              ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
+                              : null,
+                          icon: const Icon(Icons.menu_book, size: 14),
+                          label: const Text(' عرض المنيو', style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).primaryColor,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1652,7 +1962,7 @@ class _OrderCardState extends State<OrderCard> {
   Widget build(BuildContext context) {
     final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
     final formattedDate = formatter.format(widget.order.dateCreated.toLocal());
-    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(double.parse(widget.order.total));
+    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(double.tryParse(widget.order.total) ?? 0);
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -1842,7 +2152,7 @@ class ShimmerHomeScreen extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 5),
               itemCount: 5,
-              itemBuilder: (context, index) => const ShimmerRestaurantCard(),
+              itemBuilder: (context, index) => const ShimmerHorizontalRestaurantCard(),
             ),
           ),
           Padding(
@@ -1864,8 +2174,8 @@ class ShimmerHomeScreen extends StatelessWidget {
   }
 }
 
-class ShimmerRestaurantCard extends StatelessWidget {
-  const ShimmerRestaurantCard({super.key});
+class ShimmerHorizontalRestaurantCard extends StatelessWidget {
+  const ShimmerHorizontalRestaurantCard({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1889,6 +2199,60 @@ class ShimmerRestaurantCard extends StatelessWidget {
     );
   }
 }
+
+// --- NEW, IMPROVED SHIMMER WIDGET ---
+class ShimmerRestaurantCard extends StatelessWidget {
+  const ShimmerRestaurantCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              flex: 3,
+              child: Container(color: Colors.white),
+            ),
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Column(
+                      children: [
+                        Container(height: 12, width: 100, color: Colors.white),
+                        const SizedBox(height: 4),
+                        Container(height: 12, width: 70, color: Colors.white),
+                      ],
+                    ),
+                    Container(
+                      height: 30,
+                      width: 100,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 
 class ShimmerFoodCard extends StatelessWidget {
   const ShimmerFoodCard({super.key});

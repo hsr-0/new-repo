@@ -1,3 +1,10 @@
+// --- START: FCM HANDLER IMPORTS ---
+// الخطوة 1: أضف هذه الاستيرادات في بداية الملف
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+// --- END: FCM HANDLER IMPORTS ---
+
 import '/custom_code/actions/index.dart' as actions;
 import 'package:provider/provider.dart';
 import 'package:flutter/gestures.dart';
@@ -14,6 +21,59 @@ import 'index.dart';
 import 'dart:async';
 import 'package:easy_debounce/easy_debounce.dart';
 
+
+// --- START: FCM BACKGROUND HANDLER ---
+// الخطوة 2: أضف هذه الدوال والمتغيرات هنا، خارج أي كلاس
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // لا تقم بتهيئة Firebase هنا مرة أخرى إذا كان يتم تهيئته بالفعل في main
+  // هذا السطر ضروري فقط إذا كان المعالج يعمل بشكل مستقل تماماً
+  await Firebase.initializeApp();
+  print("Handling a background message: ${message.messageId}");
+  _showLocalNotification(message);
+}
+
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+FlutterLocalNotificationsPlugin();
+
+void _showLocalNotification(RemoteMessage message) {
+  final String title = message.data['title'] ?? 'إشعار جديد';
+  final String body = message.data['body'] ?? 'لديك رسالة جديدة.';
+
+  const AndroidNotificationDetails androidPlatformChannelSpecifics =
+  AndroidNotificationDetails(
+    'high_importance_channel', // معرف القناة
+    'High Importance Notifications', // اسم القناة
+    channelDescription: 'This channel is used for important notifications.',
+    importance: Importance.max,
+    priority: Priority.high,
+    playSound: true,
+    showWhen: true,
+  );
+
+  const DarwinNotificationDetails iOSPlatformChannelSpecifics =
+  DarwinNotificationDetails(
+    presentAlert: true,
+    presentBadge: true,
+    presentSound: true,
+  );
+
+  const NotificationDetails platformChannelSpecifics = NotificationDetails(
+    android: androidPlatformChannelSpecifics,
+    iOS: iOSPlatformChannelSpecifics,
+  );
+
+  flutterLocalNotificationsPlugin.show(
+    DateTime.now().millisecondsSinceEpoch.toSigned(31), // ID فريد للإشعار
+    title,
+    body,
+    platformChannelSpecifics,
+    payload: message.data.toString(), // تمرير البيانات لصفحة معينة
+  );
+}
+// --- END: FCM BACKGROUND HANDLER ---
+
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   GoRouter.optionURLReflectsImperativeAPIs = true;
@@ -22,11 +82,46 @@ void main() async {
 
   await initFirebase(); // تهيئة فايربيز
 
+  // --- START: FCM INITIALIZATION ---
+  // الخطوة 3: أضف كود تهيئة الإشعارات هنا بعد تهيئة Firebase
+  // ربط معالج الخلفية
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // إعداد قناة الإشعارات لأندرويد
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'high_importance_channel',
+    'High Importance Notifications',
+    description: 'This channel is used for important notifications.',
+    importance: Importance.high,
+    playSound: true,
+  );
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+      AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
+  // طلب صلاحيات الإشعارات لـ iOS
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+  // التعامل مع الإشعارات عندما يكون التطبيق في المقدمة
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    print('Got a message whilst in the foreground!');
+    print('Message data: ${message.data}');
+    _showLocalNotification(message);
+  });
+  // --- END: FCM INITIALIZATION ---
+
+
   // تنفيذ الأكشنات المخصصة
   await actions.connected();
-  await actions.firebaseInit();
+  // await actions.firebaseInit(); // هذا مكرر، initFirebase() قامت بالمهمة
   await actions.notificationPermission();
-  await actions.notificationInit();
+   await actions.notificationInit(); // ربما لم نعد بحاجة لهذا الأكشن إذا كان يقوم بنفس عمل الكود الجديد
   await actions.lockOrientation();
 
   await FFLocalizations.initialize(); // تهيئة اللغات

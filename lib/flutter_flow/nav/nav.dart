@@ -230,11 +230,18 @@ builder: (context, params) => HomeMainPageWidget(),
     ),
 
 
+
+
+
+
     FFRoute(
-      name: 'pharmacystorepage',
+      name: 'phstorepage',
       path: '/pharmacy-store',
-      builder: (context, params) => const  PharmacyModule(),
+      builder: (context, params) => const PharmacyApp(),
     ),
+
+
+
 
 
 

@@ -324,20 +324,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       );
                     },
                   ),
-                  _buildGridCard(
-                    context: context,
-                    title: 'الصيدليات',
-                    description: '',
-                    imagePath: 'assets/images/ph.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) =>
-                            const WebViewPage(url: 'https://ph.beytei.com')),
-                      );
-                    },
-                  ),
+
 
 
 
