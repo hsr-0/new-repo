@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
-import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 
@@ -16,13 +15,14 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:version/version.dart';
 import 'package:in_app_review/in_app_review.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart'; // [جديد] حزمة الأذونات
+import 'package:permission_handler/permission_handler.dart';
 
-import '../../doctore/medical_home_screen.dart';
-import '../webview_flow/webview_page.dart';
+// --- استيراد الصفحات الأخرى (تأكد من صحة المسارات) ---
+import '../../doctore/medical_home_screen.dart'; // تأكد من صحة هذا المسار
+import '../webview_flow/webview_page.dart'; // تأكد من صحة هذا المسار
 
 
-// --- كلاس طلب التقييم مع تعديلات لتصحيح الأخطاء ---
+// --- كلاس طلب التقييم ---
 class AppReviewManager {
   final InAppReview _inAppReview = InAppReview.instance;
 
@@ -32,7 +32,6 @@ class AppReviewManager {
       int appOpenCount = prefs.getInt('appOpenCount') ?? 0;
       bool hasRequestedReview = prefs.getBool('hasRequestedReview') ?? false;
 
-      // [للتشخيص] طباعة الحالة الحالية
       print('[AppReview] Open count: $appOpenCount, Has review been requested before? $hasRequestedReview');
 
       if (hasRequestedReview) {
@@ -43,7 +42,6 @@ class AppReviewManager {
       appOpenCount++;
       await prefs.setInt('appOpenCount', appOpenCount);
 
-      // غيرنا الشرط ليكون أكثر واقعية (مثلاً بعد 5 مرات)
       if (appOpenCount >= 5) {
         print('[AppReview] Threshold reached. Requesting review...');
         if (await _inAppReview.isAvailable()) {
@@ -62,7 +60,7 @@ class AppReviewManager {
   }
 }
 
-
+// --- كلاس عناصر البانر ---
 class BannerItem {
   final String imageUrl;
   final String targetType;
@@ -72,13 +70,14 @@ class BannerItem {
 
   factory BannerItem.fromJson(Map<String, dynamic> json) {
     return BannerItem(
-      imageUrl: json['imageUrl'],
-      targetType: json['targetType'],
-      targetUrl: json['targetUrl'],
+      imageUrl: json['imageUrl'] ?? '',
+      targetType: json['targetType'] ?? '',
+      targetUrl: json['targetUrl'] ?? '',
     );
   }
 }
 
+// --- الواجهة الرئيسية ---
 class SectionsPageWidget extends StatefulWidget {
   const SectionsPageWidget({Key? key}) : super(key: key);
 
@@ -97,18 +96,16 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   Future<void> _initialize() async {
-    // افترض أن تهيئة Firebase تمت في شاشة الـ splash
-
-    // [جديد] طلب الأذونات أولاً
+    // ملاحظة: تأكد من تهيئة Firebase في ملف main.dart قبل تشغيل التطبيق
     await _requestAllPermissions();
-
     fetchBannerImages();
     _checkForUpdate();
     AppReviewManager().requestReviewIfAppropriate();
   }
 
-  // --- [جديد] دالة مجمعة لطلب كل الأذونات ---
+  // دالة مجمعة لطلب كل الأذونات
   Future<void> _requestAllPermissions() async {
+    // طلب إذن الإشعارات ضروري جداً لـ iOS
     if (Platform.isIOS) {
       await _requestNotificationPermission();
     }
@@ -122,6 +119,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       alert: true,
       badge: true,
       sound: true,
+      provisional: false, // اجعلها false لطلب الإذن بشكل صريح
     );
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
       print('[Permissions] Notification permission granted.');
@@ -130,11 +128,10 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
-  // --- [جديد] دالة طلب إذن الموقع ---
+  // دالة طلب إذن الموقع
   Future<void> _requestLocationPermission() async {
     var status = await Permission.location.status;
     if (status.isDenied) {
-      // إذا لم يتم طلب الإذن من قبل، اطلبه الآن
       final result = await Permission.location.request();
       if (result.isGranted) {
         print('[Permissions] Location permission granted.');
@@ -142,15 +139,14 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         print('[Permissions] Location permission denied.');
       }
     } else if (status.isPermanentlyDenied) {
-      // إذا رفض المستخدم الإذن بشكل دائم
       print('[Permissions] Location permission permanently denied. Opening app settings.');
-      await openAppSettings(); // فتح إعدادات التطبيق ليقوم المستخدم بتفعيله يدوياً
+      await openAppSettings();
     } else if (status.isGranted) {
       print('[Permissions] Location permission already granted.');
     }
   }
 
-
+  // دالة التحقق من التحديثات
   Future<void> _checkForUpdate() async {
     try {
       final remoteConfig = FirebaseRemoteConfig.instance;
@@ -184,6 +180,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
+  // دالة عرض نافذة التحديث
   void _showUpdateDialog(String updateUrl) {
     showDialog(
       context: context,
@@ -210,6 +207,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 
+  // دالة جلب البانرات
   Future<void> fetchBannerImages() async {
     final url = Uri.parse('https://banner.beytei.com/images/banners.json');
     try {
@@ -230,6 +228,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   void _onBannerTapped(BannerItem banner) {
+    if (banner.targetUrl.isEmpty) return;
     if (banner.targetType == 'route') {
       GoRouter.of(context).push(banner.targetUrl);
     } else if (banner.targetType == 'webview') {
@@ -247,59 +246,23 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         backgroundColor: Colors.white,
-        actions: [
-          IconButton(onPressed: () {}, icon: const Icon(Icons.discount)),
-        ],
+        elevation: 1,
       ),
       body: SingleChildScrollView(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // ... باقي واجهة المستخدم كما هي
-            if (showBanners && banners.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(10, 20, 10, 10),
-                child: Text(
-                  'العروض المميزة',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-              CarouselSlider(
-                options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true),
-                items: banners.map((banner) {
-                  return Builder(
-                    builder: (BuildContext context) {
-                      return GestureDetector(
-                        onTap: () => _onBannerTapped(banner),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(15),
-                          child: Image.network(
-                            banner.imageUrl,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return const Center(child: CircularProgressIndicator());
-                            },
-                            errorBuilder: (context, error, stackTrace) {
-                              return const Center(child: Icon(Icons.error));
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                }).toList(),
-              ),
-            ],
+            if (showBanners && banners.isNotEmpty)
+              _buildCarouselSlider(),
             const SizedBox(height: 20),
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 10),
+              padding: EdgeInsets.symmetric(horizontal: 15),
               child: Text(
                 'خدماتنا',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 15),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: GridView.count(
@@ -309,141 +272,65 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
-                  // ... محتوى الـ GridView كما هو
                   _buildGridCard(
                     context: context,
                     title: 'منصة بيتي العقارية',
-                    description: '',
                     imagePath: 'assets/images/beytei.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) =>
-                            const WebViewPage(url: 'https://beytei.com')),
-                      );
-                    },
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const WebViewPage(url: 'https://beytei.com'))),
                   ),
-
-
-
-
                   _buildGridCard(
                     context: context,
-                    title: 'الصيدليات ',
-                    description: '',
+                    title: 'الصيدليات',
                     imagePath: 'assets/images/ph.png',
-                    onTap: () {
-                      context.push('/pharmacy-store');
-                    },
+                    onTap: () => context.push('/pharmacy-store'),
                   ),
-
-
-
-
-
-
-
-
                   _buildGridCard(
                     context: context,
                     title: 'بوتيك وكوزمتك بيتي',
-                    description: '',
                     imagePath: 'assets/images/cosmetics.png',
-                    onTap: () {
-                      context.push('/splash');
-                    },
+                    onTap: () => context.push('/splash'), // تأكد من المسار
                   ),
                   _buildGridCard(
                     context: context,
-                    title: 'تكسي بيتي  ',
-                    description: '',
+                    title: 'تكسي بيتي',
                     imagePath: 'assets/images/taxi.png',
-                    onTap: () {
-                      GoRouter.of(context).push('/trb-store');
-                    },
+                    onTap: () => context.push('/trb-store'),
                   ),
                   _buildGridCard(
                     context: context,
-                    title: 'استشارة بيتي  ',
-                    description: '',
+                    title: 'استشارة بيتي',
                     imagePath: 'assets/images/clinic.png',
-                    onTap: () {
-                      context.push('/medical-store');
-                    },
+                    onTap: () => context.push('/medical-store'),
                   ),
-
-
-
                   _buildGridCard(
                     context: context,
-                    title: 'المطاعم  ',
-                    description: '',
+                    title: 'المطاعم',
                     imagePath: 'assets/images/re.jpg',
-                    onTap: () {
-                      GoRouter.of(context).push('/restaurants-store');
-                    },
+                    onTap: () => context.push('/restaurants-store'),
                   ),
-
-
-
-
-
-
-
-
-
-
                   _buildGridCard(
                     context: context,
                     title: 'الحجز الطبي',
-                    description: 'حجز موعد مع الطبيب',
                     imagePath: 'assets/images/medical.png',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => MedicalHomeScreen()),
-                      );
-                    },
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MedicalHomeScreen())),
                   ),
                   _buildGridCard(
                     context: context,
-                    title: 'مسواك بيتي ',
-                    description: '',
+                    title: 'مسواك بيتي',
                     imagePath: 'assets/images/ms.jpg',
-                    onTap: () {
-                      GoRouter.of(context).push('/miswak-store');
-                    },
+                    onTap: () => context.push('/miswak-store'),
                   ),
                   _buildGridCard(
                     context: context,
-                    title: 'سجل بيتي الطبي ',
-                    description: '',
+                    title: 'سجل بيتي الطبي',
                     imagePath: 'assets/images/ph.png',
-                    onTap: () {
-                      GoRouter.of(context).push('/do-store');
-                    },
+                    onTap: () => context.push('/do-store'),
                   ),
-
-
-
-
-
-
-
-
-
-
-
                   _buildGridCard(
                     context: context,
-                    title: 'المختبرات ',
-                    description: '',
+                    title: 'المختبرات',
                     imagePath: 'assets/images/lab.jpg',
-                    onTap: () {
-                      GoRouter.of(context).push('/lab-store');
-                    },
+                    onTap: () => context.push('/lab-store'),
                   ),
                 ],
               ),
@@ -452,53 +339,90 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           ],
         ),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'الرئيسية'),
-          BottomNavigationBarItem(icon: Icon(Icons.discount), label: 'الخصومات'),
-        ],
-      ),
+      // يمكنك إضافة BottomNavigationBar هنا إذا أردت
+    );
+  }
+
+  Widget _buildCarouselSlider() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(15, 20, 15, 10),
+          child: Text(
+            'العروض المميزة',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+        ),
+        CarouselSlider(
+          options: CarouselOptions(
+            height: 180.0,
+            autoPlay: true,
+            enlargeCenterPage: true,
+            aspectRatio: 16 / 9,
+            viewportFraction: 0.85,
+          ),
+          items: banners.map((banner) {
+            return GestureDetector(
+              onTap: () => _onBannerTapped(banner),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(15),
+                child: Image.network(
+                  banner.imageUrl,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const Center(child: CircularProgressIndicator());
+                  },
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Center(child: Icon(Icons.error_outline, color: Colors.red));
+                  },
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 
   Widget _buildGridCard({
     required BuildContext context,
     required String title,
-    required String description,
     required String imagePath,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Card(
+        elevation: 2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Expanded(
+              flex: 3,
               child: ClipRRect(
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
                 child: Image.asset(imagePath, width: double.infinity, fit: BoxFit.cover),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 5.0),
-              child: Text(
-                title,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue),
-              ),
-            ),
-            if (description.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: Text(
-                  description,
-                  style: const TextStyle(fontSize: 14, color: Colors.black),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+            Expanded(
+              flex: 1,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
-            const SizedBox(height: 8),
+            ),
           ],
         ),
       ),
