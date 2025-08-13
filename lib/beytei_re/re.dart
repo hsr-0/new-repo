@@ -11,7 +11,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -20,10 +19,14 @@ const String BEYTEI_URL = 'https://re.beytei.com'; // استبدل بالراب�
 const String CONSUMER_KEY = 'ck_d22c789681c4610838f1d39a05dbedcb73a2c810';
 const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 
+// --- [MODIFIED] معالج رسائل الخلفية ---
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  print("==== BACKGROUND NOTIFICATION RECEIVED ====");
+  print("==== BACKGROUND NOTIFICATION RECEIVED (Restaurant) ====");
+  print("Message data: ${message.data}");
+  // استدعاء خدمة الإشعارات لعرض التنبيه
+  await NotificationService.display(message);
 }
 
 // --- Providers for State Management ---
@@ -76,8 +79,27 @@ class AuthProvider with ChangeNotifier {
 }
 
 /// الودجت الرئيسي الذي يتم استدعاؤه
-class RestaurantModule extends StatelessWidget {
+class RestaurantModule extends StatefulWidget {
   const RestaurantModule({super.key});
+
+  @override
+  State<RestaurantModule> createState() => _RestaurantModuleState();
+}
+
+class _RestaurantModuleState extends State<RestaurantModule> {
+
+  @override
+  void initState() {
+    super.initState();
+    // تهيئة خدمة الإشعارات عند بدء تشغيل الوحدة
+    NotificationService.initialize();
+
+    // التعامل مع الإشعارات عندما يكون التطبيق في المقدمة
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      print('Got a message whilst in the foreground! (Restaurant)');
+      NotificationService.display(message);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -112,6 +134,77 @@ class RestaurantModule extends StatelessWidget {
   }
 }
 
+// --- [MODIFIED] خدمة الإشعارات المحسّنة ---
+class NotificationService {
+  static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+
+  static Future<void> initialize() async {
+    // 1. تهيئة المكتبة مع تحديد أيقونة الإشعار لأندرويد
+    const AndroidInitializationSettings initializationSettingsAndroid =
+    AndroidInitializationSettings('ic_notification'); // استخدم أيقونتك الخاصة
+    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+    const InitializationSettings initializationSettings = InitializationSettings(
+        android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
+    await _localNotifications.initialize(initializationSettings);
+
+    // 2. إنشاء قناة الإشعارات لأندرويد (هنا نحدد الصوت والأهمية)
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'new_orders_channel', // معرف فريد للقناة
+      'طلبات جديدة', // اسم القناة للمستخدم
+      description: 'إشعارات للطلبات الجديدة في المطعم.',
+      importance: Importance.max, // لضمان ظهور التنبيه المنبثق
+      playSound: true,
+      enableVibration: true,
+      // تأكد من وجود ملف woo_sound.mp3 في android/app/src/main/res/raw
+      sound: RawResourceAndroidNotificationSound('woo_sound'),
+    );
+
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(channel);
+
+    // 3. طلب الصلاحيات لـ iOS
+    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+        alert: true, badge: true, sound: true);
+  }
+
+  static Future<void> display(RemoteMessage message) async {
+    // استخراج البيانات من حمولة 'data' وليس 'notification'
+    final String title = message.data['title'] ?? 'طلب جديد!';
+    final String body = message.data['body'] ?? 'لقد تلقيت طلباً جديداً.';
+
+    final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    final NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'new_orders_channel', // يجب أن يطابق معرف القناة
+        'طلبات جديدة', // يجب أن يطابق اسم القناة
+        importance: Importance.max,
+        priority: Priority.high,
+        // الأيقونة والصوت يتم التحكم بهما عبر القناة الآن
+      ),
+      iOS: DarwinNotificationDetails(
+        // تأكد من وجود ملف woo_sound.caf في مجلد Runner
+        sound: 'woo.wav',
+        presentSound: true,
+        presentAlert: true,
+        presentBadge: true,
+      ),
+    );
+
+    await _localNotifications.show(
+      id,
+      title,
+      body,
+      platformChannelSpecifics,
+      payload: message.data['order_id'],
+    );
+  }
+}
+
+
+// ... باقي الكود الخاص بك يبقى كما هو بدون تغيير ...
+// (AuthWrapper, LocationCheckWrapper, Models, Services, Screens, Widgets)
 
 /// الودجت الجذر الذي يقرر أي واجهة يعرضها
 class AuthWrapper extends StatelessWidget {
@@ -533,28 +626,6 @@ class AuthService {
 
     await FirebaseMessaging.instance.deleteToken();
     await prefs.remove('jwt_token');
-  }
-}
-
-class NotificationService {
-  static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
-  static final AudioPlayer _audioPlayer = AudioPlayer();
-
-  static Future<void> initialize() async {
-    const AndroidNotificationChannel channel = AndroidNotificationChannel('new_orders_channel', 'طلبات جديدة', description: 'إشعارات للطلبات الجديدة في المطعم.', importance: Importance.max, playSound: true, enableVibration: true, sound: RawResourceAndroidNotificationSound('woo_sound'));
-    await _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(channel);
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
-  }
-
-  static Future<void> display(RemoteMessage message) async {
-    try {
-      await _audioPlayer.play(AssetSource('sounds/woo_sound.mp3'));
-    } catch (e) {
-      print("[NOTIFICATION_SERVICE] Error playing sound: $e");
-    }
-
-    final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    await _localNotifications.show(id, message.notification?.title ?? 'No Title', message.notification?.body ?? 'No Body', const NotificationDetails(android: AndroidNotificationDetails('new_orders_channel', 'طلبات جديدة', importance: Importance.max, priority: Priority.high), iOS: DarwinNotificationDetails(sound: 'woo_sound.caf', presentSound: true)), payload: message.data['order_id']);
   }
 }
 
@@ -1572,11 +1643,10 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _loadOrders();
+    // This listener is for when the app is already open
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      if (message.notification != null) {
-        NotificationService.display(message);
-        _refreshOrders();
-      }
+      NotificationService.display(message);
+      _refreshOrders();
     });
   }
 
