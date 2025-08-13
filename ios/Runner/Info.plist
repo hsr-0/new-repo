@@ -22,9 +22,9 @@
        <string>ar</string>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.7</string>
+    <string>1.2.8</string>
     <key>CFBundleVersion</key>
-    <string>23</string>
+    <string>24</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -57,6 +57,11 @@
        <string>https</string>
        <string>http</string>
     </array>
+
+    <!-- ⭐ [مهم جدًا] هذا هو السطر الذي تم إضافته لإصلاح الإشعارات -->
+    <key>FirebaseAppDelegateProxyEnabled</key>
+    <false/>
+
     <key>NSCameraUsageDescription</key>
     <string>نحتاج إلى استخدام الكاميرا لمسح الباركود</string>
     <key>NSPhotoLibraryUsageDescription</key>

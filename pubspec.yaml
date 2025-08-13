@@ -30,6 +30,27 @@ dependencies:
   cached_network_image: 3.4.1
   cached_network_image_platform_interface: 4.1.1
 
+
+
+
+
+
+
+
+
+
+  firebase_core: ^3.1.0
+  firebase_auth: ^5.1.0
+  cloud_firestore: ^5.0.1
+
+
+
+
+
+
+
+
+
   in_app_review: ^2.0.9
 
   firebase_remote_config: ^5.0.1
@@ -51,7 +72,6 @@ dependencies:
   dropdown_button2: 2.3.9
   easy_debounce: 2.0.1
   equatable: 2.0.5
-  firebase_core: 3.8.0
   dio_cookie_manager: ^3.1.1
   cookie_jar: ^4.0.8
   introduction_screen: ^3.1.12
@@ -73,9 +93,7 @@ dependencies:
 
 
 
-  firebase_auth: ^5.3.3
   flutter_chat_types: ^3.6.0
-  cloud_firestore: ^5.5.0
   syncfusion_flutter_datagrid: ^23.1.40
   mailer: ^6.4.1
 
