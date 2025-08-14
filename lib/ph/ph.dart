@@ -1037,7 +1037,7 @@ class _PharmacyLoginScreenState extends State<PharmacyLoginScreen> {
               children: [
                 Icon(Icons.storefront_outlined, size: 80, color: Theme.of(context).primaryColor),
                 const SizedBox(height: 20),
-                Text('   يمكنك اصافة صيدليتك بتواصل على رقم: 07854076931', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                Text('   يمكنك اضافة صيدليتك بتواصل على رقم: 07854076931', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 32),
                 TextFormField(controller: _usernameController, decoration: const InputDecoration(labelText: 'اسم المستخدم', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
                 const SizedBox(height: 16),
