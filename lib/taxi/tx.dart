@@ -26,6 +26,10 @@ import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'de.dart';
+
+final ValueNotifier<Map<String, dynamic>?> acceptedRideNotifier = ValueNotifier(null);
+
 // =============================================================================
 // Global Navigator Key & Deep Link Notifier
 // =============================================================================
@@ -65,15 +69,26 @@ class FirebaseApi {
     FirebaseMessaging.instance.getInitialMessage().then(handleMessage);
     FirebaseMessaging.onMessageOpenedApp.listen(handleMessage);
     FirebaseMessaging.onMessage.listen((message) {
+      debugPrint("--- إشعار جديد وصل --- البيانات: ${message.data}");
       final notification = message.notification;
       if (notification == null) return;
-      final notificationType = message.data['notification_type'] ?? 'default';
-      NotificationService.showNotification(
-        notification.title ?? 'إشعار جديد',
-        notification.body ?? '',
-        payload: json.encode(message.data),
-        type: notificationType,
-      );
+
+      // --- المنطق الجديد والمبسط ---
+      final status = message.data['status'] as String?;
+      if (status == 'accepted' && message.data['ride_data'] != null) {
+        // تم قبول الرحلة، مرر البيانات مباشرة
+        final rideData = json.decode(message.data['ride_data']);
+        acceptedRideNotifier.value = rideData;
+      } else {
+        // إشعار عادي
+        final notificationType = message.data['notification_type'] ?? 'default';
+        NotificationService.showNotification(
+          notification.title ?? 'إشعار جديد',
+          notification.body ?? '',
+          payload: json.encode(message.data),
+          type: notificationType,
+        );
+      }
     });
   }
 }
@@ -232,6 +247,37 @@ class ApiService {
     if (authResult.driverStatus != null) await _storage.write(key: 'driver_status', value: authResult.driverStatus);
   }
 
+
+
+
+
+
+  static Future<Map<String, dynamic>?> getRideDetails(String token, String rideId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/taxi/v2/rides/status?ride_id=$rideId'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['ride'] != null) {
+          return data['ride'];
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint("Failed to get ride details: $e");
+      return null;
+    }
+  }
+
+
+
+
+
+
+
+
   static Future<void> clearAuthData() async => await _storage.deleteAll();
   static Future<AuthResult?> getStoredAuthData() async {
     final token = await _storage.read(key: 'auth_token');
@@ -249,6 +295,10 @@ class ApiService {
     return http.post(Uri.parse('$baseUrl$endpoint'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode(body));
   }
 
+
+
+
+
   static Future<http.Response> _get(String endpoint, String token) {
     return http.get(Uri.parse('$baseUrl$endpoint'), headers: {'Authorization': 'Bearer $token'});
   }
@@ -265,17 +315,31 @@ class ApiService {
     }
   }
 
+
+
+
+  static Future<http.Response> v2AcceptRide(String token, String rideId) {
+    return _post('/taxi/v2/driver/accept-ride', token, {'ride_id': rideId});
+  }
+
   static Future<void> setDriverActiveStatus(String token, bool isActive) async {
     try {
-      await _post('/taxi/v1/driver/set-active-status', token, {'is_active': isActive});
+      await _post('/taxi/v2/driver/set-active-status', token, {'is_active': isActive});
     } catch (e) {
       debugPrint("Failed to set driver active status: $e");
     }
   }
 
+  static Future<http.Response> driverCounterOffer(String token, String rideId, double price) {
+    return _post('/taxi/v2/driver/rides/counter-offer', token, {
+      'ride_id': rideId,
+      'price': price,
+    });
+  }
+
   static Future<void> updateDriverLocation(String token, LatLng location) async {
     try {
-      await _post('/taxi/v1/driver/update-location', token, {'lat': location.latitude, 'lng': location.longitude});
+      await _post('/taxi/v2/driver/update-location', token, {'lat': location.latitude, 'lng': location.longitude});
     } catch (e) {
       debugPrint("Failed to update driver location: $e");
     }
@@ -283,7 +347,7 @@ class ApiService {
 
   static Future<List<dynamic>> fetchActiveDrivers(String token) async {
     try {
-      final response = await _get('/taxi/v1/customer/active-drivers', token);
+      final response = await _get('/taxi/v2/customer/active-drivers', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['drivers'] is List) return data['drivers'];
@@ -297,7 +361,7 @@ class ApiService {
 
   static Future<LatLng?> getRideDriverLocation(String token, String rideId) async {
     try {
-      final response = await _get('/taxi/v1/rides/driver-location?ride_id=$rideId', token);
+      final response = await _get('/taxi/v2/rides/driver-location?ride_id=$rideId', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['location'] != null) {
@@ -311,12 +375,17 @@ class ApiService {
     }
   }
 
+
+
+
+
+
   static Future<http.Response> createPrivateRequest(String token, Map<String, dynamic> body) {
-    return _post('/taxi/v1/private-requests/create', token, body);
+    return _post('/taxi/v2/private-requests/create', token, body);
   }
 
   static Future<List<dynamic>> getAvailablePrivateRequests(String token) async {
-    final response = await _get('/taxi/v1/private-requests/available', token);
+    final response = await _get('/taxi/v2/private-requests/available', token);
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -324,25 +393,35 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> getDriverHubData(String token) async {
+    final response = await _get('/taxi/v2/driver/hub', token);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['success'] == true) {
+        return data['data'];
+      }
+    }
+    throw Exception('Failed to load driver hub data');
+  }
+
   static Future<http.Response> acceptPrivateRequest(String token, String requestId) {
-    return _post('/taxi/v1/private-requests/accept', token, {'request_id': requestId});
+    return _post('/taxi/v2/private-requests/accept', token, {'request_id': requestId});
   }
 
   static Future<http.Response> driverCompletePrivateRequest(String token, String requestId) {
-    return _post('/taxi/v1/driver/private-requests/complete', token, {'request_id': requestId});
+    return _post('/taxi/v2/driver/private-requests/complete', token, {'request_id': requestId});
   }
 
-
   static Future<http.Response> getMyActivePrivateRequest(String token) {
-    return _get('/taxi/v1/private-requests/my-active', token);
+    return _get('/taxi/v2/private-requests/my-active', token);
   }
 
   static Future<http.Response> cancelMyPrivateRequest(String token, String requestId) {
-    return _post('/taxi/v1/private-requests/cancel', token, {'request_id': requestId});
+    return _post('/taxi/v2/private-requests/cancel', token, {'request_id': requestId});
   }
 
   static Future<Map<String, dynamic>> getDriverDashboard(String token) async {
-    final response = await _get('/taxi/v1/driver/dashboard', token);
+    final response = await _get('/taxi/v2/driver/dashboard', token);
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -351,7 +430,7 @@ class ApiService {
   }
 
   static Future<List<dynamic>> getOffers(String token) async {
-    final response = await http.get(Uri.parse('$baseUrl/taxi/v1/offers'));
+    final response = await http.get(Uri.parse('$baseUrl/taxi/v2/offers'));
     if (response.statusCode == 200) {
       return json.decode(response.body);
     } else {
@@ -360,12 +439,44 @@ class ApiService {
   }
 
   static Future<http.Response> rateRide(String token, Map<String, dynamic> body) {
-    return _post('/taxi/v1/rides/rate', token, body);
+    return _post('/taxi/v2/rides/rate', token, body);
   }
+
+  static Future<http.Response> customerRespondToOffer(String token, String rideId, String driverId, String action) {
+    return _post('/taxi/v2/customer/rides/respond-offer', token, {
+      'ride_id': rideId,
+      'driver_id': driverId,
+      'action': action,
+    });
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   static Future<Map<String, dynamic>> getDriverLiveStats(String token) async {
     try {
-      final response = await _get('/taxi/v1/driver/live-stats', token);
+      final response = await _get('/taxi/v2/driver/live-stats', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['stats'] != null) {
@@ -379,6 +490,7 @@ class ApiService {
     }
   }
 }
+final ValueNotifier<String?> acceptedRideIdNotifier = ValueNotifier(null);
 
 // =============================================================================
 // NotificationService (with Channels)
@@ -475,13 +587,11 @@ class PulsingUserLocationMarker extends StatefulWidget {
 }
 
 class _PulsingUserLocationMarkerState extends State<PulsingUserLocationMarker> with SingleTickerProviderStateMixin {
-  // Animation controller to manage the pulsing animation.
   late final AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    // Initialize the controller to run for 2 seconds and repeat in reverse.
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -490,44 +600,38 @@ class _PulsingUserLocationMarkerState extends State<PulsingUserLocationMarker> w
 
   @override
   void dispose() {
-    // Dispose of the controller when the widget is removed to prevent memory leaks.
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Use AnimatedBuilder to rebuild the widget on every animation tick.
     return AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          // The Stack allows layering the pulsing effect behind the central dot.
-          return Stack(
-              alignment: Alignment.center,
-              children: [
-          // The outer circle that expands and fades, creating the "pulse".
-          // Its size and opacity are driven by the animation controller's value.
-          Container(
-          width: 15 + (15 * _controller.value),
-          height: 15 + (15 * _controller.value),
-          decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.blue.withOpacity(0.8 - (0.8 * _controller.value)),
-          ),
-          ),
-          // The central, static blue dot with a white border.
-          Container(
-          width: 15,
-          height: 15,
-          decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.blue,
-          border: Border.all(color: Colors.white, width: 2),
-          ),
-          ),
-              ],
-          );
-        },
+      animation: _controller,
+      builder: (context, child) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 15 + (15 * _controller.value),
+              height: 15 + (15 * _controller.value),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue.withOpacity(0.8 - (0.8 * _controller.value)),
+              ),
+            ),
+            Container(
+              width: 15,
+              height: 15,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -607,11 +711,16 @@ class _AuthGateState extends State<AuthGate> {
         return WelcomeScreen(onLoginSuccess: _updateAuthStatus);
       case AuthStatus.authenticated:
         if (_authResult!.isDriver) {
-          if (_authResult!.driverStatus == 'approved') {
-            return DriverMainScreen(authResult: _authResult!, onLogout: _logout);
-          } else {
-            return DriverPendingScreen(onLogout: _logout, onCheckStatus: _updateAuthStatus, phone: _authResult!.displayName);
+          // ▼▼▼ هذا هو الجزء الذي تم تعديله ▼▼▼
+          switch (_authResult!.driverStatus) {
+            case 'approved':
+              return DriverMainScreen(authResult: _authResult!, onLogout: _logout);
+            case 'suspended': // <-- الحالة الجديدة
+              return DriverSuspendedScreen(onLogout: _logout);
+            default: // 'pending', 'rejected', or any other status
+              return DriverPendingScreen(onLogout: _logout, onCheckStatus: _updateAuthStatus, phone: _authResult!.displayName);
           }
+          // ▲▲▲ نهاية الجزء المعدل ▲▲▲
         } else {
           return CustomerMainScreen(authResult: _authResult!, onLogout: _logout);
         }
@@ -823,6 +932,73 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   }
 }
 
+
+// =============================================================================
+// Driver Suspended Screen
+// =============================================================================
+class DriverSuspendedScreen extends StatelessWidget {
+  final VoidCallback onLogout;
+  const DriverSuspendedScreen({super.key, required this.onLogout});
+
+  Future<void> _contactForRecharge(BuildContext context) async {
+    const adminPhoneNumber = "+9647854076931"; // !! استبدل هذا برقم الواتساب الخاص بالمسؤول
+    final message = "أرغب في شحن محفظتي لمتابعة العمل.";
+    final uri = Uri.parse("https://wa.me/$adminPhoneNumber?text=${Uri.encodeComponent(message)}");
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if(context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب. تأكد من تثبيته على جهازك.")));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.red[50],
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.account_balance_wallet_outlined, size: 80, color: Colors.red[700]),
+              const SizedBox(height: 20),
+              Text(
+                'تم إيقاف حسابك مؤقتًا',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.red[900]),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'لقد وصل رصيد محفظتك إلى الحد السالب المسموح به. يرجى شحن المحفظة لمتابعة استقبال الطلبات والرحلات.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.black54),
+              ),
+              const SizedBox(height: 30),
+              ElevatedButton.icon(
+                onPressed: () => _contactForRecharge(context),
+                icon: const Icon(Icons.support_agent),
+                label: const Text(' تواصل معنا عبر الرقم 07854076931'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                ),
+              ),
+              const SizedBox(height: 20),
+              TextButton(onPressed: onLogout, child: const Text('تسجيل الخروج')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
 // =============================================================================
 // Generic Login & Driver Registration Screens
 // =============================================================================
@@ -923,45 +1099,62 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
   String? _errorMessage;
   final ImagePicker _picker = ImagePicker();
   XFile? _registrationImageFile;
-  bool _privacyPolicyAccepted = false;
+  XFile? _personalIdImageFile; // <--- 1. المتغير الجديد لصورة الهوية
 
-  Future<void> _pickImage() async {
+  bool _privacyPolicyAccepted = false;
+  Future<void> _pickPersonalIdImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() => _personalIdImageFile = pickedFile);
+    }
+  }
+  Future<void> _pickVehicleImage() async {
     final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) setState(() => _registrationImageFile = pickedFile);
   }
 
   Future<void> _submit() async {
     if (!_privacyPolicyAccepted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('يجب الموافقة على سياسة الخصوصية لتسجيل حساب سائق'),
-        backgroundColor: Colors.red,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يجب الموافقة على سياسة الخصوصية')));
       return;
     }
 
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_registrationImageFile == null) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء رفع صورة سنوية السيارة'), backgroundColor: Colors.red));
+
+    // التحقق من وجود الصورتين
+    if (_registrationImageFile == null || _personalIdImageFile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء رفع صورة السنوية والهوية الشخصية معًا'), backgroundColor: Colors.red));
       return;
     }
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+
+    setState(() { _isLoading = true; _errorMessage = null; });
+
     try {
       var request = http.MultipartRequest('POST', Uri.parse('${ApiService.baseUrl}/taxi-auth/v1/register/driver'));
-      request.fields.addAll({'name': _nameController.text, 'phone': _phoneController.text, 'vehicle_type': _vehicleType, 'car_model': _modelController.text, 'car_color': _colorController.text});
+
+      request.fields.addAll({
+        'name': _nameController.text,
+        'phone': _phoneController.text,
+        'vehicle_type': _vehicleType,
+        'car_model': _modelController.text,
+        'car_color': _colorController.text
+      });
+
+      // --- 3. إضافة الملفين معًا ---
       request.files.add(await http.MultipartFile.fromPath('vehicle_registration', _registrationImageFile!.path));
+      request.files.add(await http.MultipartFile.fromPath('personal_id', _personalIdImageFile!.path)); // <--- الملف الجديد
+
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
       final data = json.decode(response.body);
-      if (response.statusCode == 201 && data['success'] == true) {
-        if (mounted) {
+
+      if (mounted) {
+        if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
           Navigator.of(context).pop();
+        } else {
+          throw Exception(data['message'] ?? 'فشل التسجيل');
         }
-      } else {
-        throw Exception(data['message'] ?? 'فشل التسجيل');
       }
     } on SocketException {
       if (mounted) setState(() => _errorMessage = 'يرجى التحقق من اتصالك بالإنترنت');
@@ -996,7 +1189,24 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
               child: Column(
                 children: [
                   if (_registrationImageFile != null) ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(_registrationImageFile!.path), height: 150, width: double.infinity, fit: BoxFit.cover)),
-                  TextButton.icon(icon: const Icon(Icons.upload_file), label: Text(_registrationImageFile == null ? 'رفع صورة سنوية السيارة' : 'تغيير الصورة'), onPressed: _pickImage),
+                  TextButton.icon(icon: const Icon(Icons.upload_file), label: Text(_registrationImageFile == null ? 'رفع صورة سنوية السيارة' : 'تغيير الصورة'), onPressed:  _pickVehicleImage),
+                ],
+              ),
+            ),const SizedBox(height: 15), // مسافة فاصلة
+
+// --- 2. الواجهة الجديدة لصورة الهوية ---
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(12)),
+              child: Column(
+                children: [
+                  if (_personalIdImageFile != null)
+                    ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(_personalIdImageFile!.path), height: 150, width: double.infinity, fit: BoxFit.cover)),
+                  TextButton.icon(
+                    icon: const Icon(Icons.badge_outlined),
+                    label: Text(_personalIdImageFile == null ? 'رفع صورة الهوية الشخصية' : 'تغيير الصورة'),
+                    onPressed: _pickPersonalIdImage, // استدعاء الدالة الجديدة
+                  ),
                 ],
               ),
             ),
@@ -1041,6 +1251,198 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
     );
   }
 }
+
+
+
+class DriverHubScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const DriverHubScreen({super.key, required this.authResult});
+
+  @override
+  State<DriverHubScreen> createState() => _DriverHubScreenState();
+}
+
+class _DriverHubScreenState extends State<DriverHubScreen> {
+  Future<Map<String, dynamic>>? _hubDataFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHubData();
+  }
+
+  void _loadHubData() {
+    setState(() {
+      _hubDataFuture = ApiService.getDriverHubData(widget.authResult.token);
+    });
+  }
+
+  // دالة لفتح واتساب لشحن الرصيد
+  Future<void> _launchWhatsApp() async {
+    const adminPhoneNumber = "+9647854076931"; // !! هام: استبدل هذا الرقم برقم الواتساب الخاص بك
+    final message = "أرغب في شحن محفظتي. اسمي: ${widget.authResult.displayName}";
+    final uri = Uri.parse("https://wa.me/$adminPhoneNumber?text=${Uri.encodeComponent(message)}");
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب. تأكد من تثبيته على جهازك.")));
+    }
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: () async => _loadHubData(),
+        child: FutureBuilder<Map<String, dynamic>>(
+          future: _hubDataFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text("خطأ في تحميل البيانات: ${snapshot.error}"));
+            }
+            if (!snapshot.hasData) {
+              return const Center(child: Text("لا توجد بيانات"));
+            }
+
+            final hubData = snapshot.data!;
+            final stats = hubData['stats'] as Map<String, dynamic>? ?? {};
+            final walletBalance = hubData['wallet_balance'] ?? 0;
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // قسم المحفظة
+                  _WalletCard(balance: walletBalance, onRecharge: _launchWhatsApp),
+                  const SizedBox(height: 24),
+
+                  // قسم الإحصائيات
+                  Text("أداء اليوم", style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  _StatsGrid(stats: stats),
+                  const SizedBox(height: 24),
+
+                  // يمكنك إضافة أقسام الحوافز والمتصدرين والجوائز هنا بنفس الطريقة
+                  // ...
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ويدجت لعرض بطاقة المحفظة
+class _WalletCard extends StatelessWidget {
+  final num balance;
+  final VoidCallback onRecharge;
+
+  const _WalletCard({required this.balance, required this.onRecharge});
+
+  @override
+  Widget build(BuildContext context) {
+    final isNegative = balance < 0;
+    return Card(
+      elevation: 4,
+      color: isNegative ? Colors.red[50] : Colors.green[50],
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: isNegative ? Colors.red.shade200 : Colors.green.shade200)
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            Text("رصيد المحفظة", style: TextStyle(color: Colors.grey[700], fontSize: 16)),
+            const SizedBox(height: 8),
+            Text(
+              "${NumberFormat.decimalPattern('ar').format(balance)} د.ع",
+              style: TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                color: isNegative ? Colors.red[800] : Colors.green[800],
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: onRecharge,
+              icon: const Icon(Icons.insert_comment_sharp),
+              label: const Text("شحن الرصيد"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+// ويدجت لعرض شبكة الإحصائيات
+class _StatsGrid extends StatelessWidget {
+  final Map<String, dynamic> stats;
+  const _StatsGrid({required this.stats});
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 3,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      children: [
+        _StatItem(icon: Icons.attach_money, label: "أرباح اليوم", value: "${stats['today_earnings'] ?? 0} د.ع", color: Colors.green),
+        _StatItem(icon: Icons.directions_car, label: "رحلات اليوم", value: (stats['today_rides'] ?? 0).toString(), color: Colors.blue),
+        _StatItem(icon: Icons.star, label: "التقييم", value: (stats['average_rating'] ?? 0.0).toStringAsFixed(1), color: Colors.amber),
+      ],
+    );
+  }
+}
+
+class _StatItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  const _StatItem({required this.icon, required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(label, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center),
+            const SizedBox(height: 4),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
 
 // =============================================================================
 // Customer Main Screen
@@ -1219,6 +1621,15 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     _loadDashboard();
   }
 
+
+
+
+
+
+
+
+
+
   void _loadDashboard() {
     setState(() {
       _dashboardFuture = ApiService.getDriverDashboard(widget.authResult.token);
@@ -1379,6 +1790,7 @@ class DriverMainScreen extends StatefulWidget {
   @override
   State<DriverMainScreen> createState() => _DriverMainScreenState();
 }
+// ============== ✂️✂️✂️  ابدأ النسخ من هنا ✂️✂️✂️ ==============
 
 class _DriverMainScreenState extends State<DriverMainScreen> {
   int _selectedIndex = 0;
@@ -1400,11 +1812,26 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     });
   }
 
+  // --- الدالة التي تستجيب للإشعار وتستلم بيانات الرحلة مباشرة ---
+  void _handleAcceptedRide() {
+    final rideData = acceptedRideNotifier.value;
+    if (rideData != null) {
+      if (mounted) {
+        // لا حاجة لطلب API جديد، البيانات موجودة بالفعل
+        _onRideAccepted(rideData);
+      }
+      // إعادة تعيين المتغير لمنع التنفيذ مرة أخرى
+      acceptedRideNotifier.value = null;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _checkLocationPermission();
     deepLinkNotifier.addListener(_handleDeepLink);
+    // *** ربط المستمع الجديد ***
+    acceptedRideNotifier.addListener(_handleAcceptedRide);
     _fetchLiveStats();
     _statsTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
       if (mounted) {
@@ -1412,6 +1839,17 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       }
     });
     _toggleActiveStatus(_isDriverActive);
+  }
+
+  @override
+  void dispose() {
+    deepLinkNotifier.removeListener(_handleDeepLink);
+    // *** إزالة المستمع الجديد ***
+    acceptedRideNotifier.removeListener(_handleAcceptedRide);
+    _positionStream?.cancel();
+    _statsTimer?.cancel();
+    if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false);
+    super.dispose();
   }
 
   Future<void> _fetchLiveStats() async {
@@ -1427,19 +1865,17 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    deepLinkNotifier.removeListener(_handleDeepLink);
-    _positionStream?.cancel();
-    _statsTimer?.cancel();
-    if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false);
-    super.dispose();
-  }
-
   void _handleDeepLink() {
     final linkData = deepLinkNotifier.value;
-    if (linkData['userType'] == 'driver' && linkData['targetScreen'] == 'private_requests') {
-      _changeTab(1);
+    // التحقق من أن الإشعار موجه للسائق
+    if (linkData['userType'] == 'driver') {
+      // التحقق من الشاشة المستهدفة
+      if (linkData['targetScreen'] == 'private_requests') {
+        _changeTab(1); // انتقل إلى تبويب الطلبات الخاصة
+      } else if (linkData['targetScreen'] == 'quick_rides') {
+        _changeTab(0); // انتقل إلى تبويب الطلبات السريعة
+      }
+      // إعادة تعيين بيانات الإشعار بعد التعامل معها
       deepLinkNotifier.value = {};
     }
   }
@@ -1459,20 +1895,27 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     ApiService.setDriverActiveStatus(widget.authResult.token, isActive);
 
     if (isActive) {
-      _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 10)).listen((geolocator.Position position) => ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude)));
-    } else {
-      _positionStream?.cancel();
+      // --- (التعديل هنا): طلب أعلى دقة ممكنة ---
+      const locationSettings = geolocator.LocationSettings(
+        accuracy: geolocator.LocationAccuracy.bestForNavigation,
+        distanceFilter: 5, // تحديث كل 10 أمتار
+      );
+      _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
+        ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude));
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      _currentQuickRide == null ? DriverAvailableRidesScreen(authResult: widget.authResult, onRideAccepted: _onRideAccepted) : DriverCurrentRideScreen(initialRide: _currentQuickRide!, authResult: widget.authResult, onRideFinished: _onRideFinished),
+      _currentQuickRide == null
+          ? DriverAvailableRidesScreen(authResult: widget.authResult, onRideAccepted: _onRideAccepted)
+          : DriverCurrentRideScreen(initialRide: _currentQuickRide!, authResult: widget.authResult, onRideFinished: _onRideFinished),
       DriverPrivateRequestsScreen(authResult: widget.authResult),
       DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => _changeTab(3)),
       DriverCreateTripScreen(authResult: widget.authResult),
-      DriverDashboardScreen(authResult: widget.authResult),
+      DriverHubScreen(authResult: widget.authResult),
     ];
     return Scaffold(
       appBar: AppBar(
@@ -1579,9 +2022,6 @@ class DriverStatsBar extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// DriverAvailableRidesScreen (with new Map Style & Distance Filter)
-// =============================================================================
 class DriverAvailableRidesScreen extends StatefulWidget {
   final AuthResult authResult;
   final Function(Map<String, dynamic>) onRideAccepted;
@@ -1597,15 +2037,21 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
   final MapController _mapController = MapController();
   LatLng? _driverLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
+  PageController? _pageController;
+  int _currentPageIndex = 0;
+  String _distanceToPickup = "...";
+
+  // --- (جديد): لتتبع الطلب الذي تم إرسال عرض له ---
+  String? _sentOfferRideId;
+
   @override
   void initState() {
     super.initState();
+    _pageController = PageController(viewportFraction: 0.85);
     _setupInitialLocationAndFetchRides();
-    _ridesTimer = Timer.periodic(const Duration(seconds: 15), (timer) => _fetchAvailableRides());
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        showDialog(context: context, builder: (context) => const ModernInfoDialog());
-      }
+    _ridesTimer = Timer.periodic(const Duration(seconds: 20), (timer) {
+      if (!mounted) return;
+      _fetchAvailableRides();
     });
   }
 
@@ -1613,6 +2059,7 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
   void dispose() {
     _ridesTimer?.cancel();
     _locationStream?.cancel();
+    _pageController?.dispose();
     super.dispose();
   }
 
@@ -1624,95 +2071,171 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
       if (mounted) {
         final initialLocation = LatLng(position.latitude, position.longitude);
         setState(() => _driverLocation = initialLocation);
-        _mapController.move(initialLocation, 15.0);
-        _fetchAvailableRides(); // Fetch rides after getting location
+        _mapController.move(initialLocation, 14.0);
+        await _fetchAvailableRides();
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك الحالي.')));
     }
-    _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.high, distanceFilter: 10)).listen((geolocator.Position position) {
+    _locationStream = geolocator.Geolocator.getPositionStream().listen((geolocator.Position position) {
       if (mounted) {
-        setState(() {
-          _driverLocation = LatLng(position.latitude, position.longitude);
-        });
+        setState(() => _driverLocation = LatLng(position.latitude, position.longitude));
+        _updateDistanceInfo(_currentPageIndex);
       }
     });
   }
 
-  Future<void> _fetchAvailableRides() async {
-    if (_driverLocation == null) return; // Don't fetch if driver location is unknown
+  void _updateDistanceInfo(int pageIndex) {
+    if (_driverLocation == null || _availableRides == null || _availableRides!.isEmpty || pageIndex >= _availableRides!.length) {
+      setState(() => _distanceToPickup = "...");
+      return;
+    }
+    final ride = _availableRides![pageIndex];
+    final rideLat = double.parse(ride['pickup']['lat']);
+    final rideLng = double.parse(ride['pickup']['lng']);
+    final distanceInMeters = geolocator.Geolocator.distanceBetween(_driverLocation!.latitude, _driverLocation!.longitude, rideLat, rideLng);
+    setState(() {
+      _distanceToPickup = distanceInMeters < 1000 ? "${distanceInMeters.round()} متر" : "${(distanceInMeters / 1000).toStringAsFixed(1)} كم";
+      _currentPageIndex = pageIndex;
+    });
+  }
 
+  Future<void> _fetchAvailableRides() async {
+    if (!mounted) return;
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/available-rides'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
+      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/available-rides'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
-        List<dynamic> allRides = data['rides'];
-
-        // ** NEW: Filter rides by distance (1km) **
-        List<dynamic> nearbyRides = allRides.where((ride) {
-          try {
-            final rideLat = double.parse(ride['pickup']['lat']);
-            final rideLng = double.parse(ride['pickup']['lng']);
-            final distance = geolocator.Geolocator.distanceBetween(
-              _driverLocation!.latitude,
-              _driverLocation!.longitude,
-              rideLat,
-              rideLng,
-            );
-            return distance <= 1000; // 1000 meters = 1 km
-          } catch (e) {
-            return false;
+        setState(() {
+          _availableRides = data['rides'];
+          _isLoading = false;
+          // إذا تم قبول العرض الذي أرسلته، قم بإلغاء حالة الانتظار
+          if (_sentOfferRideId != null && (_availableRides?.every((ride) => ride['id'].toString() != _sentOfferRideId) ?? true)) {
+            _sentOfferRideId = null;
           }
-        }).toList();
-
-        setState(() => _availableRides = nearbyRides);
+        });
+        if (_availableRides != null && _availableRides!.isNotEmpty) {
+          _updateDistanceInfo(_currentPageIndex);
+        }
       }
-    } on SocketException {
-      debugPrint("Network error fetching available rides.");
     } catch (e) {
-      debugPrint("Failed to fetch available rides: $e");
-    } finally {
       if (mounted) setState(() => _isLoading = false);
+      debugPrint("Failed to fetch available rides: $e");
     }
   }
 
   Future<void> _acceptRide(String rideId) async {
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/accept-ride'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'ride_id': rideId}));
+      final response = await ApiService.v2AcceptRide(widget.authResult.token, rideId);
       final data = json.decode(response.body);
-      if (mounted) {
-        if (response.statusCode == 200 && data['success'] == true) {
-          widget.onRideAccepted(data['ride']);
-        } else {
-          throw Exception(data['message'] ?? 'فشل قبول الطلب');
-        }
+      if (mounted && response.statusCode == 200 && data['success'] == true) {
+        widget.onRideAccepted(data['ride']);
+      } else if (mounted) {
+        throw Exception(data['message'] ?? 'فشل قبول الطلب');
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
-      _fetchAvailableRides();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+        _fetchAvailableRides();
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
+  Future<void> _showOfferSentDialog() {
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          icon: const Icon(Icons.check_circle_outline, color: Colors.green, size: 60),
+          title: const Text('تم إرسال عرضك', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text('سيتم إعلامك فور موافقة الزبون.', textAlign: TextAlign.center),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: <Widget>[
+            ElevatedButton(
+              child: const Text('حسناً'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showNegotiationDialog(Map<String, dynamic> ride) async {
+    final priceController = TextEditingController();
+    final initialPrice = double.tryParse(ride['customer_offer_price'].toString()) ?? 0.0;
+    priceController.text = initialPrice.toStringAsFixed(0);
+
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(builder: (context, setDialogState) {
+          void updatePrice(double amount) {
+            double currentPrice = double.tryParse(priceController.text) ?? initialPrice;
+            setDialogState(() => priceController.text = (currentPrice + amount).toStringAsFixed(0));
+          }
+          return AlertDialog(
+            title: const Text('تفاوض على السعر'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text("عرض العميل: $initialPrice د.ع"),
+                const SizedBox(height: 16),
+                TextField(controller: priceController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'سعرك الجديد (د.ع)')),
+                const SizedBox(height: 16),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [ElevatedButton(onPressed: () => updatePrice(500), child: const Text('+500')), ElevatedButton(onPressed: () => updatePrice(1000), child: const Text('+1000'))])
+              ],
+            ),
+            actions: <Widget>[
+              TextButton(child: const Text('إلغاء'), onPressed: () => Navigator.of(context).pop()),
+              ElevatedButton(
+                child: const Text('إرسال العرض'),
+                onPressed: () async {
+                  if (priceController.text.isEmpty) return;
+                  final rideId = ride['id'].toString();
+                  final price = double.parse(priceController.text);
+                  Navigator.of(context).pop();
+                  setState(() => _isLoading = true);
+                  try {
+                    final response = await ApiService.driverCounterOffer(widget.authResult.token, rideId, price);
+                    final data = json.decode(response.body);
+                    if (mounted && response.statusCode == 200 && data['success'] == true) {
+                      _showOfferSentDialog();
+                      setState(() {
+                        // --- (جديد): تحديث حالة الانتظار ---
+                        _sentOfferRideId = rideId;
+                      });
+                    } else if (mounted) {
+                      throw Exception(data['message'] ?? 'فشل إرسال العرض');
+                    }
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+                  } finally {
+                    if (mounted) setState(() => _isLoading = false);
+                  }
+                },
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
   List<Marker> _buildMarkers() {
     List<Marker> markers = [];
     if (_driverLocation != null) {
-      markers.add(Marker(point: _driverLocation!, width: 80, height: 80, child: const PulsingUserLocationMarker()));
+      markers.add(Marker(point: _driverLocation!, width: 40, height: 40, child: const RotatingVehicleIcon(vehicleType: 'Car', bearing: 0)));
     }
-    if (_availableRides != null) {
-      for (var ride in _availableRides!) {
-        try {
-          final lat = double.parse(ride['pickup']['lat']);
-          final lng = double.parse(ride['pickup']['lng']);
-          markers.add(Marker(point: LatLng(lat, lng), width: 40, height: 40, child: const Icon(Icons.pin_drop, color: Colors.red, size: 40)));
-        } catch (e) {
-          debugPrint("Could not parse ride location: $e");
-        }
-      }
+    if (_availableRides != null && _availableRides!.isNotEmpty && _currentPageIndex < _availableRides!.length) {
+      final ride = _availableRides![_currentPageIndex];
+      final lat = double.parse(ride['pickup']['lat']);
+      final lng = double.parse(ride['pickup']['lng']);
+      markers.add(Marker(point: LatLng(lat, lng), width: 40, height: 40, child: const Icon(Icons.pin_drop, color: Colors.red, size: 40)));
     }
     return markers;
   }
@@ -1725,84 +2248,129 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336), initialZoom: 14.0),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-                subdomains: const ['a', 'b', 'c'],
-                userAgentPackageName: 'com.beytei.taxi',
-              ),
-              MarkerLayer(markers: _buildMarkers()),
-              RichAttributionWidget(
-                attributions: [
-                  TextSourceAttribution(
-                    '© OpenStreetMap France',
-                    onTap: () => launchUrl(Uri.parse('https://www.openstreetmap.fr/')),
-                  ),
-                  TextSourceAttribution(
-                    '© OpenStreetMap contributors',
-                    onTap: () => launchUrl(Uri.parse('https://openstreetmap.org/copyright')),
-                  ),
-                ],
-              ),
-            ],
+            children: [TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: const ['a', 'b', 'c']), MarkerLayer(markers: _buildMarkers())],
           ),
-          DraggableScrollableSheet(
-            initialChildSize: 0.4,
-            minChildSize: 0.15,
-            maxChildSize: 0.8,
-            builder: (BuildContext context, ScrollController scrollController) {
-              return Container(
-                decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor, borderRadius: const BorderRadius.only(topLeft: Radius.circular(24.0), topRight: Radius.circular(24.0)), boxShadow: [BoxShadow(blurRadius: 10.0, color: Colors.black.withOpacity(0.2))]),
-                child: Column(
-                  children: [
-                    Container(width: 40, height: 5, margin: const EdgeInsets.symmetric(vertical: 10), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(12))),
-                    Expanded(
-                      child: _isLoading
-                          ? ListView.builder(itemCount: 3, itemBuilder: (context, index) => const ShimmerListItem())
-                          : _availableRides == null || _availableRides!.isEmpty
-                          ? const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-coffee"><path d="M18 8h1a4 4 0 0 1 0 8h-1"></path><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path><line x1="6" y1="1" x2="6" y2="4"></line><line x1="10" y1="1" x2="10" y2="4"></line><line x1="14" y1="1" x2="14" y2="4"></line></svg>''', message: 'لا توجد طلبات متاحة حالياً.')
-                          : RefreshIndicator(
-                        onRefresh: _fetchAvailableRides,
-                        child: AnimationLimiter(
-                          child: ListView.builder(
-                            controller: scrollController,
-                            padding: const EdgeInsets.only(bottom: 70),
-                            itemCount: _availableRides!.length,
-                            itemBuilder: (context, index) {
-                              final ride = _availableRides![index];
-                              return AnimationConfiguration.staggeredList(
-                                position: index,
-                                duration: const Duration(milliseconds: 375),
-                                child: SlideAnimation(
-                                  verticalOffset: 50.0,
-                                  child: FadeInAnimation(
-                                    child: Card(
-                                      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                                      child: ListTile(
-                                        leading: const Icon(Icons.pin_drop_outlined, color: Colors.green),
-                                        title: Text('طلب جديد بسعر: ${ride['price'] ?? 'N/A'} IQD'),
-                                        subtitle: Text('تاريخ الطلب: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.parse(ride['request_time']))}'),
-                                        trailing: ElevatedButton(child: const Text('قبول'), onPressed: () => _acceptRide(ride['id'].toString())),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+          if (_availableRides != null && _availableRides!.isNotEmpty) Positioned(top: 40, left: 0, right: 0, child: Center(child: TopRideInfoBar(distance: _distanceToPickup))),
+          if (_isLoading)
+            const Center(child: CircularProgressIndicator())
+          else if (_availableRides == null || _availableRides!.isEmpty)
+            const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-coffee"><path d="M18 8h1a4 4 0 0 1 0 8h-1"></path><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path><line x1="6" y1="1" x2="6" y2="4"></line><line x1="10" y1="1" x2="10" y2="4"></line><line x1="14" y1="1" x2="14" y2="4"></line></svg>''', message: 'لا توجد طلبات متاحة حالياً.')
+          else
+            Positioned(
+              bottom: 20,
+              left: 0,
+              right: 0,
+              height: 220,
+              child: PageView.builder(
+                controller: _pageController,
+                itemCount: _availableRides!.length,
+                onPageChanged: (index) {
+                  final ride = _availableRides![index];
+                  final rideLocation = LatLng(double.parse(ride['pickup']['lat']), double.parse(ride['pickup']['lng']));
+                  _mapController.move(rideLocation, 15.0);
+                  _updateDistanceInfo(index);
+                },
+                itemBuilder: (context, index) {
+                  final ride = _availableRides![index];
+                  return RideInfoCard(
+                    ride: ride,
+                    // --- (جديد): تمرير حالة الانتظار للبطاقة ---
+                    isWaitingForApproval: _sentOfferRideId == ride['id'].toString(),
+                    onAccept: () => _acceptRide(ride['id'].toString()),
+                    onNegotiate: () => _showNegotiationDialog(ride),
+                  );
+                },
+              ),
+            ),
         ],
       ),
     );
   }
 }
+
+// --- ويدجت جديد: شريط المعلومات العلوي ---
+class TopRideInfoBar extends StatelessWidget {
+  final String distance;
+  const TopRideInfoBar({super.key, required this.distance});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Text(
+        "المسافة حتى نقطة الأنطلاق: $distance",
+        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+}
+
+class RideInfoCard extends StatelessWidget {
+  final Map<String, dynamic> ride;
+  final bool isWaitingForApproval;
+  final VoidCallback onAccept;
+  final VoidCallback onNegotiate;
+
+  const RideInfoCard({super.key, required this.ride, required this.onAccept, required this.onNegotiate, required this.isWaitingForApproval});
+
+  @override
+  Widget build(BuildContext context) {
+    final destinationName = ride['destination']?['name'] ?? 'وجهة غير محددة';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+      child: Card(
+        elevation: 8,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(child: Chip(label: Text("${ride['customer_offer_price'] ?? 0} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)), backgroundColor: Theme.of(context).primaryColor)),
+              const Divider(height: 20),
+              _buildInfoRow(Icons.my_location, "نقطة الانطلاق:", "محدد على الخريطة"),
+              const SizedBox(height: 8),
+              _buildInfoRow(Icons.flag, "نقطة الوصول:", destinationName),
+              const Spacer(),
+              // --- (التعديل هنا): عرض حالة الانتظار أو الأزرار ---
+              if (isWaitingForApproval)
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox(width: 12),
+                      Text("في انتظار موافقة الزبون...", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                    ],
+                  ),
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(child: ElevatedButton(onPressed: onNegotiate, style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey), child: const Text('تفاوض', style: TextStyle(color: Colors.white)))),
+                    const SizedBox(width: 12),
+                    Expanded(child: ElevatedButton(onPressed: onAccept, child: const Text('قبول الرحلة'))),
+                  ],
+                )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(children: [Icon(icon, color: Colors.grey, size: 20), const SizedBox(width: 8), Text(label, style: const TextStyle(color: Colors.grey)), const SizedBox(width: 4), Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis))]);
+  }
+}
+
+
 
 // =============================================================================
 // DriverCurrentRideScreen (with Auto Route Drawing)
@@ -1816,6 +2384,8 @@ class DriverCurrentRideScreen extends StatefulWidget {
   State<DriverCurrentRideScreen> createState() => _DriverCurrentRideScreenState();
 }
 
+
+// ============== ✂️✂️✂️  ابدأ النسخ من هنا ✂️✂️✂️ ==============
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide;
   bool _isLoading = false;
@@ -1831,7 +2401,12 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   void initState() {
     super.initState();
     _currentRide = widget.initialRide;
-    _initializeRide();
+    // استدعاء الدالة مباشرة بعد اكتمال بناء الويدجت لضمان الاستقرار
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _initializeRide();
+      }
+    });
   }
 
   @override
@@ -1840,28 +2415,60 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     super.dispose();
   }
 
+  // --- دالة معدلة وأكثر قوة لتهيئة الرحلة ورسم المسار تلقائيًا ---
   Future<void> _initializeRide() async {
-    final pickupPoint = LatLng(double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
-    try {
-      final hasPermission = await PermissionService.handleLocationPermission(context);
-      if (!hasPermission || !mounted) return;
+    // التأكد من أن الويدجت لا يزال موجودًا قبل أي عملية
+    if (!mounted) return;
 
-      geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high);
+    setState(() => _isLoading = true);
+
+    final pickupPoint = LatLng(
+      double.parse(_currentRide['pickup']['lat']),
+      double.parse(_currentRide['pickup']['lng']),
+    );
+
+    try {
+      // 1. طلب صلاحيات الموقع أولاً
+      final hasPermission = await PermissionService.handleLocationPermission(context);
+      if (!mounted || !hasPermission) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('إذن الموقع مطلوب لبدء الرحلة.')));
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // 2. جلب موقع السائق الحالي بدقة عالية
+      geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(
+          desiredAccuracy: geolocator.LocationAccuracy.high
+      );
+
+      if (!mounted) return;
+
       final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
 
-      if (mounted) {
-        setState(() {
-          _driverLocation = driverNowLocation;
-        });
-        _getRoute(driverNowLocation, pickupPoint); // Auto draw route on init
-        _mapController.move(driverNowLocation, 15);
-      }
+      setState(() {
+        _driverLocation = driverNowLocation;
+      });
+
+      // 3. تحريك الكاميرا إلى موقع السائق
+      _mapController.move(driverNowLocation, 15);
+
+      // 4. رسم المسار تلقائيًا من موقع السائق إلى موقع الزبون
+      await _getRoute(driverNowLocation, pickupPoint);
+
+      // 5. بدء التتبع المباشر لموقع السائق
+      _startDriverLocationTracking();
+
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك لبدء رسم المسار')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('فشل تهيئة الرحلة: ${e.toString()}'))
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
       }
     }
-    _startDriverLocationTracking();
   }
 
   void _startDriverLocationTracking() {
@@ -1883,7 +2490,6 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   }
 
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // CORRECT API KEY
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء إضافة مفتاح API صحيح لرسم المسار"), backgroundColor: Colors.red));
@@ -1911,7 +2517,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/update-ride-status'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'ride_id': _currentRide['id'], 'status': newStatus}));
+      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/update-ride-status'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'ride_id': _currentRide['id'], 'status': newStatus}));
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
@@ -2049,12 +2655,10 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     );
   }
 }
-
 // =============================================================================
 // Customer Quick Ride Screen (with Improved Location Selection)
 // =============================================================================
 enum BookingStage { selectingPickup, selectingDestination, confirmingRequest }
-
 class QuickRideMapScreen extends StatefulWidget {
   final String token;
   final AuthResult authResult;
@@ -2070,27 +2674,18 @@ class QuickRideMapScreen extends StatefulWidget {
   @override
   State<QuickRideMapScreen> createState() => _QuickRideMapScreenState();
 }
-
 class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   Map<String, dynamic>? _activeRide;
-  bool _isLoading = true;
+  bool _isLoading = false;
   Timer? _statusTimer;
   final _priceController = TextEditingController();
-  final _pickupAddressController = TextEditingController(); // For text input
 
-  // --- DRIVERS DISPLAY LOGIC (RESTORED) ---
-  Map<String, dynamic> _driversData = {};
-  Map<String, AnimationController> _animationControllers = {};
-  Map<String, Animation<LatLng>> _animations = {};
-  Map<String, ({LatLng begin, LatLng end})> _driverAnimationSegments = {};
-  Timer? _driversTimer;
-  final Map<String, double> _lastBearings = {};
-  // --- END OF DRIVERS DISPLAY LOGIC ---
-
-  BookingStage _bookingStage = BookingStage.selectingPickup;
   LatLng? _pickupLocation;
-  LatLng? _destinationLocation;
+  Map<String, dynamic>? _destinationData;
+  bool _isConfirmingRideDetails = false;
+  List<dynamic> _pendingOffers = [];
+
   LatLng? _currentUserLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
 
@@ -2100,13 +2695,18 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   double _assignedDriverBearing = 0.0;
   double _previousAssignedDriverBearing = 0.0;
 
+  Map<String, dynamic> _driversData = {};
+  final Map<String, AnimationController> _animationControllers = {};
+  final Map<String, Animation<LatLng>> _animations = {};
+  final Map<String, ({LatLng begin, LatLng end})> _driverAnimationSegments = {};
+  Timer? _driversTimer;
+  final Map<String, double> _lastBearings = {};
+
   @override
   void initState() {
     super.initState();
     _setupInitialLocation();
-    _checkForActiveRide();
-    // --- RESTORED TIMER ---
-    _driversTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+    _driversTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (_activeRide == null) _fetchActiveDrivers();
     });
   }
@@ -2114,11 +2714,10 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   @override
   void dispose() {
     _statusTimer?.cancel();
-    _driversTimer?.cancel(); // --- RESTORED ---
+    _driversTimer?.cancel();
     _liveTrackingTimer?.cancel();
     _locationStream?.cancel();
     _priceController.dispose();
-    _pickupAddressController.dispose();
     for (var controller in _animationControllers.values) {
       controller.dispose();
     }
@@ -2126,8 +2725,15 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
 
   Future<void> _setupInitialLocation() async {
+    setState(() => _isLoading = true);
     final hasPermission = await PermissionService.handleLocationPermission(context);
-    if (!hasPermission || !mounted) return;
+    if (!hasPermission) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يجب تفعيل إذن الموقع لاستخدام التطبيق')));
+        setState(() => _isLoading = false);
+      }
+      return;
+    }
     try {
       geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.bestForNavigation);
       if (mounted) {
@@ -2135,25 +2741,22 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
         setState(() {
           _currentUserLocation = initialLocation;
           _pickupLocation = initialLocation;
-          _pickupAddressController.text = "موقعي الحالي";
+          _isLoading = false;
         });
         _mapController.move(initialLocation, 16.0);
+        _fetchActiveDrivers();
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع الأولي.')));
-    }
-    _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.high, distanceFilter: 10)).listen((geolocator.Position position) {
       if (mounted) {
-        setState(() {
-          _currentUserLocation = LatLng(position.latitude, position.longitude);
-        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع. يرجى المحاولة مرة أخرى.')));
+        setState(() => _isLoading = false);
+      }
+    }
+    _locationStream = geolocator.Geolocator.getPositionStream().listen((geolocator.Position position) {
+      if (mounted) {
+        setState(() => _currentUserLocation = LatLng(position.latitude, position.longitude));
       }
     });
-  }
-
-  Future<void> _checkForActiveRide() async {
-    // This logic can be expanded to check for an active ride from the server on app start
-    setState(() => _isLoading = false);
   }
 
   void _startLiveTracking(String rideId) {
@@ -2182,37 +2785,30 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _stopLiveTracking() {
     _liveTrackingTimer?.cancel();
-    if (mounted)
+    if (mounted) {
       setState(() {
         _assignedDriverLocation = null;
         _routeToCustomer.clear();
       });
+    }
   }
 
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // CORRECT API KEY
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
-    if (orsApiKey.length < 50) {
-      return;
-    }
+    if (orsApiKey.length < 50) return;
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
     try {
       final response = await http.get(Uri.parse(url));
-      if (mounted) {
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final coordinates = data['features'][0]['geometry']['coordinates'] as List;
-          setState(() => _routeToCustomer = coordinates.map((c) => LatLng(c[1], c[0])).toList());
-        } else {
-          debugPrint("Failed to draw route: ${json.decode(response.body)['error']?['message'] ?? 'Server Error'}");
-        }
+      if (mounted && response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final coordinates = data['features'][0]['geometry']['coordinates'] as List;
+        setState(() => _routeToCustomer = coordinates.map((c) => LatLng(c[1], c[0])).toList());
       }
     } catch (e) {
       debugPrint("ORS Exception: ${e.toString()}");
     }
   }
 
-  // --- FETCH ACTIVE DRIVERS FUNCTION (RESTORED) ---
   Future<void> _fetchActiveDrivers() async {
     if (!mounted || _activeRide != null) return;
     try {
@@ -2245,7 +2841,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _startStatusTimer() {
     _statusTimer?.cancel();
-    _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (!mounted || _activeRide == null) {
         timer.cancel();
         return;
@@ -2257,18 +2853,31 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Future<void> _fetchRideStatus() async {
     if (_activeRide == null) return;
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/rides/status?ride_id=${_activeRide!['id']}'), headers: {'Authorization': 'Bearer ${widget.token}'});
+      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/rides/status?ride_id=${_activeRide!['id']}'), headers: {'Authorization': 'Bearer ${widget.token}'});
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
           final updatedRide = data['ride'];
           final bool statusChanged = _activeRide?['status'] != updatedRide['status'];
           final bool driverAssigned = _activeRide?['driver'] == null && updatedRide['driver'] != null;
+
           if (statusChanged || driverAssigned) {
             setState(() {
               _activeRide = updatedRide;
             });
           }
+
+          final List driverOffers = updatedRide['driver_offers'] ?? [];
+          if (updatedRide['status'] == 'pending') {
+            setState(() {
+              _pendingOffers = driverOffers.where((o) => o['status'] == 'pending').toList();
+            });
+          } else {
+            setState(() {
+              _pendingOffers = [];
+            });
+          }
+
           if (updatedRide['status'] == 'accepted' && _assignedDriverLocation == null) {
             _stopLiveTracking();
             _startLiveTracking(updatedRide['id'].toString());
@@ -2286,30 +2895,37 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
 
   Future<void> _requestRide() async {
-    if (_pickupLocation == null) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تحديد نقطة الانطلاق على الخريطة.')));
+    if (_pickupLocation == null || _destinationData == null || _priceController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء إكمال جميع الحقول')));
       return;
     }
-    if (_priceController.text.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تحديد سعر الكروة.')));
-      return;
-    }
-    final bool? confirmed = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('تأكيد الطلب'), content: Text('هل أنت متأكد من طلب رحلة من الموقع المحدد إلى الوجهة المحددة بسعر ${_priceController.text} د.ع؟'), actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('تعديل')), ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('تأكيد وإرسال'))]));
-    if (confirmed != true) return;
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/rides/request'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.token}'}, body: json.encode({'pickup': {'lat': _pickupLocation!.latitude, 'lng': _pickupLocation!.longitude, 'address': _pickupAddressController.text}, 'destination': _destinationLocation != null ? {'lat': _destinationLocation!.latitude, 'lng': _destinationLocation!.longitude} : {}, 'price': _priceController.text}));
+      final response = await http.post(
+        Uri.parse('${ApiService.baseUrl}/taxi/v2/rides/request'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.token}'},
+        body: json.encode({
+          'pickup': {'lat': _pickupLocation!.latitude, 'lng': _pickupLocation!.longitude},
+          'destination': {
+            'lat': _destinationData!['lat'],
+            'lng': _destinationData!['lng'],
+            'name': _destinationData!['name']
+          },
+          'price': _priceController.text
+        }),
+      );
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
-          setState(() => _activeRide = data['ride']);
+          setState(() {
+            _activeRide = data['ride'];
+            _isConfirmingRideDetails = false;
+          });
           _startStatusTimer();
         } else {
           throw Exception(data['message'] ?? 'فشل إرسال الطلب');
         }
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally {
@@ -2322,7 +2938,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     setState(() => _isLoading = true);
     try {
       final rideId = _activeRide!['id'];
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/rides/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.token}'}, body: json.encode({'ride_id': rideId}));
+      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/rides/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.token}'}, body: json.encode({'ride_id': rideId}));
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
@@ -2338,8 +2954,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           }
         }
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally {
@@ -2352,11 +2966,11 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     _stopLiveTracking();
     setState(() {
       _activeRide = null;
-      _bookingStage = BookingStage.selectingPickup;
-      _destinationLocation = null;
+      _isConfirmingRideDetails = false;
+      _destinationData = null;
       _priceController.clear();
       _pickupLocation = _currentUserLocation;
-      _pickupAddressController.text = "موقعي الحالي";
+      _pendingOffers = [];
     });
   }
 
@@ -2374,9 +2988,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       final pickupLatLng = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
       markers.add(Marker(point: pickupLatLng, child: const Icon(Icons.location_on, color: Colors.green, size: 40)));
     } else {
-      // --- MARKER LOGIC FOR DRIVERS (RESTORED) ---
-      for (var driverId in _driversData.keys) {
-        final driver = _driversData[driverId];
+      _driversData.forEach((driverId, driver) {
         final animation = _animations[driverId];
         final segment = _driverAnimationSegments[driverId];
         if (animation != null && segment != null) {
@@ -2388,13 +3000,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             return RotatingVehicleIcon(vehicleType: driver['vehicle_type']?.toString() ?? 'Car', bearing: value);
           })));
         }
-      }
-      if (_bookingStage != BookingStage.selectingPickup && _pickupLocation != null) {
-        markers.add(Marker(point: _pickupLocation!, width: 80, height: 80, child: const Icon(Icons.location_on, color: Colors.orange, size: 40)));
-      }
-      if (_bookingStage == BookingStage.confirmingRequest && _destinationLocation != null) {
-        markers.add(Marker(point: _destinationLocation!, width: 80, height: 80, child: const Icon(Icons.flag, color: Colors.blue, size: 40)));
-      }
+      });
     }
     return markers;
   }
@@ -2419,148 +3025,179 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: const LatLng(32.4741, 45.8336),
+              initialCenter: _currentUserLocation ?? const LatLng(32.4741, 45.8336),
               initialZoom: 15.0,
-              onPositionChanged: (position, hasGesture) {
-                if (hasGesture && _activeRide == null) {
-                  if (_bookingStage == BookingStage.selectingPickup) {
-                    setState(() {
-                      _pickupLocation = position.center;
-                      _pickupAddressController.text = "الموقع المحدد على الخريطة";
-                    });
-                  } else if (_bookingStage == BookingStage.selectingDestination) {
-                    setState(() => _destinationLocation = position.center);
-                  }
-                }
-              },
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-                subdomains: const ['a', 'b', 'c'],
-                userAgentPackageName: 'com.beytei.taxi',
-              ),
+              TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: const ['a', 'b', 'c'], userAgentPackageName: 'com.beytei.taxi'),
               if (_routeToCustomer.isNotEmpty) PolylineLayer(polylines: [Polyline(points: _routeToCustomer, color: Colors.blue, strokeWidth: 6)]),
               MarkerLayer(markers: _buildMarkers()),
-              RichAttributionWidget(
-                attributions: [
-                  TextSourceAttribution(
-                    '© OpenStreetMap France',
-                    onTap: () => launchUrl(Uri.parse('https://www.openstreetmap.fr/')),
-                  ),
-                  TextSourceAttribution(
-                    '© OpenStreetMap contributors',
-                    onTap: () => launchUrl(Uri.parse('https://openstreetmap.org/copyright')),
-                  ),
-                ],
-              ),
             ],
           ),
           Positioned(
-            top: 10,
-            left: 15,
-            right: 15,
+            top: 40, left: 15, right: 15,
             child: SafeArea(
-              child: Column(
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    height: 60,
-                    child: ProvinceTaxiButton(
-                      onPressed: () {
-                        widget.onChangeTab(1);
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    height: 60,
-                    decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(15),
-                        image: const DecorationImage(
-                          image: NetworkImage("https://beytei.com/wp-content/uploads/2024/08/zain-mastercard-banner.png"),
-                          fit: BoxFit.fill,
-                        )),
-                  )
-                ],
+              child: SizedBox(
+                width: double.infinity,
+                child: ProvinceTaxiButton(
+                  onPressed: () => widget.onChangeTab(1),
+                ),
               ),
             ),
           ),
-          if (_activeRide == null && (_bookingStage == BookingStage.selectingPickup || _bookingStage == BookingStage.selectingDestination)) Center(child: Padding(padding: const EdgeInsets.only(bottom: 40.0), child: Icon(Icons.location_pin, color: _bookingStage == BookingStage.selectingPickup ? Colors.orange : Colors.blue, size: 50))),
-          if (_isLoading) const Center(child: CircularProgressIndicator()),
-          if (!_isLoading && _activeRide != null)
-            Positioned(bottom: 0, left: 0, right: 0, child: ActiveRideInfoCard(ride: _activeRide!, onCancel: _cancelRide, authResult: widget.authResult))
-          else if (!_isLoading)
-            Positioned(bottom: 0, left: 0, right: 0, child: _buildRequestCard()),
-          if (!_isLoading) Positioned(bottom: (_activeRide == null) ? 280 : 160, right: 20, child: FloatingActionButton(onPressed: () {
-            if (_currentUserLocation != null) {
-              _mapController.move(_currentUserLocation!, 16.0);
-              setState(() {
-                if (_bookingStage == BookingStage.selectingPickup) {
-                  _pickupLocation = _currentUserLocation;
-                  _pickupAddressController.text = "موقعي الحالي";
-                }
-              });
-            }
-          }, backgroundColor: Colors.white, child: const Icon(Icons.my_location, color: Colors.blue))),
+          // --- (FIX): Use a helper function to decide which bottom card to show ---
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: _buildBottomCard(),
+          ),
+          if (_isLoading) Container(color: Colors.black.withOpacity(0.2), child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
 
-  Widget _buildRequestCard() {
+  // --- (FIX): Helper function to organize the logic for displaying bottom cards ---
+  Widget _buildBottomCard() {
+    if (_activeRide != null) {
+      // There is an active ride
+      if (_pendingOffers.isNotEmpty) {
+        // And there's a pending offer, show the offer card
+        return DriverOfferCard(
+          offer: _pendingOffers.first,
+          onAccept: () async {
+            final offer = _pendingOffers.first;
+            setState(() => _isLoading = true);
+            try {
+              final response = await ApiService.customerRespondToOffer(widget.token, _activeRide!['id'].toString(), offer['driver_id'].toString(), 'accepted');
+              if (mounted && response.statusCode == 200) {
+                _fetchRideStatus();
+              } else if (mounted) {
+                final data = json.decode(response.body);
+                throw Exception(data['message'] ?? 'فشل قبول العرض');
+              }
+            } catch (e) {
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+            } finally {
+              if (mounted) setState(() => _isLoading = false);
+            }
+          },
+          onFindAnother: () async {
+            // Reject the current offer officially via API
+            final offer = _pendingOffers.first;
+            setState(() {
+              _isLoading = true;
+              _pendingOffers.removeAt(0); // Remove immediately for better UX
+            });
+            try {
+              // Send the rejection to the server
+              await ApiService.customerRespondToOffer(
+                  widget.token,
+                  _activeRide!['id'].toString(),
+                  offer['driver_id'].toString(),
+                  'rejected' // Send 'rejected' action
+              );
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('فشل إرسال الرفض. حاول مرة أخرى.')));
+              }
+            } finally {
+              if (mounted) {
+                setState(() => _isLoading = false);
+              }
+            }
+          },
+        );
+      } else {
+        // No pending offers, show the active ride status card
+        return ActiveRideInfoCard(
+          ride: _activeRide!,
+          onCancel: _cancelRide,
+          authResult: widget.authResult,
+        );
+      }
+    } else if (_isConfirmingRideDetails) {
+      // No active ride, and user is in the confirmation stage
+      return _buildConfirmationSheet();
+    } else {
+      // No active ride, show the initial request button
+      return _buildInitialRequestSheet();
+    }
+  }
+
+  Widget _buildInitialRequestSheet() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: InkWell(
+          onTap: () async {
+            if (_pickupLocation == null) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("جاري تحديد موقعك الحالي...")));
+              return;
+            }
+            // NOTE: Ensure you have a 'DestinationSelectionScreen' widget defined,
+            // perhaps in your 'de.dart' file or elsewhere.
+            final result = await Navigator.of(context).push<Map<String, dynamic>>(
+              MaterialPageRoute(builder: (_) => DestinationSelectionScreen(initialPickup: _pickupLocation!)),
+            );
+            if (result != null && result['pickup'] != null && result['destination'] != null) {
+              setState(() {
+                _pickupLocation = result['pickup'];
+                _destinationData = result['destination'];
+                _isConfirmingRideDetails = true;
+              });
+            }
+          },
+          child: Card(
+            elevation: 8,
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  const Icon(Icons.search, color: Colors.grey),
+                  const SizedBox(width: 12),
+                  Text("إلى أين تريد أن تذهب؟", style: Theme.of(context).textTheme.titleMedium),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConfirmationSheet() {
     return Card(
-      margin: const EdgeInsets.all(16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      elevation: 5,
+      margin: const EdgeInsets.all(12),
+      elevation: 8,
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_bookingStage == BookingStage.selectingPickup) ...[
-              Text("حدد نقطة الانطلاق", style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _pickupAddressController,
-                decoration: const InputDecoration(labelText: "وصف مكان الانطلاق", prefixIcon: Icon(Icons.edit_location_alt)),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => setState(() {
-                _bookingStage = BookingStage.selectingDestination;
-                _destinationLocation = _mapController.camera.center;
-              }), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange), child: const Text('تأكيد نقطة الانطلاق'))),
-            ],
-            if (_bookingStage == BookingStage.selectingDestination) ...[
-              Text("حرك الخريطة لتحديد الوجهة (اختياري)", style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 16),
-              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => setState(() => _bookingStage = BookingStage.confirmingRequest), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue), child: const Text('تأكيد الوجهة'))),
-              TextButton(onPressed: () => setState(() {
-                _destinationLocation = null;
-                _bookingStage = BookingStage.confirmingRequest;
-              }), child: const Text("تخطي وتحديد السعر"))
-            ],
-            if (_bookingStage == BookingStage.confirmingRequest) ...[
-              Row(children: [const Icon(Icons.my_location, color: Colors.orange), const SizedBox(width: 8), Expanded(child: Text(_pickupAddressController.text, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)), TextButton(onPressed: () => setState(() => _bookingStage = BookingStage.selectingPickup), child: const Text("تغيير"))]),
-              const Divider(),
-              Row(children: [const Icon(Icons.flag_outlined, color: Colors.blue), const SizedBox(width: 8), Expanded(child: Text(_destinationLocation != null ? 'الوجهة محددة على الخريطة' : 'بدون وجهة', style: const TextStyle(fontWeight: FontWeight.bold))), TextButton(onPressed: () => setState(() => _bookingStage = BookingStage.selectingDestination), child: const Text("تغيير"))]),
-              const SizedBox(height: 12),
-              TextField(controller: _priceController, keyboardType: const TextInputType.numberWithOptions(decimal: false), decoration: const InputDecoration(labelText: 'السعر المعروض (الكروة)', prefixIcon: Icon(Icons.money))),
-              const SizedBox(height: 15),
-              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _requestRide, style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 16)), child: const Text('اطلب الآن'))),
-            ],
+            Row(children: [const Icon(Icons.my_location, color: Colors.green), const SizedBox(width: 8), Expanded(child: Text(_pickupLocation != null ? "من: موقعك المحدد" : "من: ...", style: const TextStyle(fontWeight: FontWeight.bold)))]),
+            const Divider(),
+            Row(children: [const Icon(Icons.flag_outlined, color: Colors.red), const SizedBox(width: 8), Expanded(child: Text("إلى: ${_destinationData?['name'] ?? 'وجهة محددة'}", style: const TextStyle(fontWeight: FontWeight.bold)))]),
+            const SizedBox(height: 12),
+            TextField(controller: _priceController, keyboardType: const TextInputType.numberWithOptions(decimal: false), decoration: const InputDecoration(labelText: 'السعر المعروض (الكروة)', prefixIcon: Icon(Icons.money))),
+            const SizedBox(height: 15),
+            Row(
+              children: [
+                TextButton(onPressed: (){
+                  setState(() {
+                    _isConfirmingRideDetails = false;
+                  });
+                }, child: const Text("إلغاء")),
+                const SizedBox(width: 10),
+                Expanded(child: ElevatedButton(onPressed: _requestRide, child: const Text('اطلب الآن'))),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 }
-
-// =============================================================================
-// ActiveRideInfoCard & TripListScreen
-// =============================================================================
-
 class ProvinceTaxiButton extends StatelessWidget {
   final VoidCallback onPressed;
   const ProvinceTaxiButton({super.key, required this.onPressed});
@@ -2692,7 +3329,7 @@ class _TripListScreenState extends State<TripListScreen> {
       error = '';
     });
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/trips'));
+      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/trips'));
       if (mounted) {
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
@@ -2718,7 +3355,7 @@ class _TripListScreenState extends State<TripListScreen> {
     required int quantity,
   }) async {
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/book'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'trip_id': tripId, 'name': name, 'phone': phone, 'address': address, 'quantity': quantity}));
+      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/book'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'trip_id': tripId, 'name': name, 'phone': phone, 'address': address, 'quantity': quantity}));
       final result = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && result['success'] == true) {
@@ -2737,7 +3374,7 @@ class _TripListScreenState extends State<TripListScreen> {
 
   Future<void> _cancelBooking(String tripId, String passengerId) async {
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'trip_id': tripId, 'passenger_id': passengerId}));
+      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'trip_id': tripId, 'passenger_id': passengerId}));
       final result = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && result['success'] == true) {
@@ -3069,7 +3706,7 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/create-trip'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'from': _fromController.text, 'to': _toController.text, 'date': _dateController.text, 'time': _timeController.text, 'seats': _seatsController.text}));
+      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/create-trip'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'from': _fromController.text, 'to': _toController.text, 'date': _dateController.text, 'time': _timeController.text, 'seats': _seatsController.text}));
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
@@ -3142,7 +3779,7 @@ class _DriverMyTripsScreenState extends State<DriverMyTripsScreen> {
   Future<void> _fetchMyTrips() async {
     setState(() => _isLoading = true);
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v1/driver/my-trips'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
+      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/my-trips'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
         setState(() => _myTrips = data['trips']);
@@ -4149,6 +4786,104 @@ class _RatingDialogState extends State<RatingDialog> {
           child: _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('إرسال التقييم'),
         ),
       ],
+    );
+  }
+}
+
+// --- (NEW WIDGET): This card is shown to the customer when a driver sends a counter-offer ---
+class DriverOfferCard extends StatelessWidget {
+  final Map<String, dynamic> offer;
+  final VoidCallback onAccept;
+  final VoidCallback onFindAnother;
+
+  const DriverOfferCard({
+    super.key,
+    required this.offer,
+    required this.onAccept,
+    required this.onFindAnother,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final driverDetails = offer['driver_details'] as Map<String, dynamic>? ?? {};
+    final price = offer['price'] ?? 0;
+
+    return Card(
+      margin: const EdgeInsets.all(12),
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "عرض السائق سعر اعلى هل توافق على السعر ام لا من ${driverDetails['name'] ?? 'سائق'}!",
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                color: Theme.of(context).primaryColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Divider(height: 20),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundImage: driverDetails['image'] != null && driverDetails['image'].isNotEmpty
+                      ? NetworkImage(driverDetails['image'])
+                      : null,
+                  child: driverDetails['image'] == null || driverDetails['image'].isEmpty
+                      ? const Icon(Icons.person)
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(driverDetails['name'] ?? 'سائق', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      Row(
+                        children: [
+                          const Icon(Icons.star, color: Colors.amber, size: 18),
+                          Text(" ${(double.tryParse(driverDetails['average_rating']?.toString() ?? '')?.toStringAsFixed(1)) ?? 'N/A'}"),
+                          const SizedBox(width: 12),
+                          Text(driverDetails['vehicle_type'] ?? ''),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  "$price د.ع",
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22, color: Colors.green),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: onFindAnother,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey[700],
+                      side: BorderSide(color: Colors.grey.shade400),
+                    ),
+                    child: const Text('البحث عن آخر'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: onAccept,
+                    child: const Text('قبول العرض'),
+                  ),
+                ),
+              ],
+            )
+          ],
+        ),
+      ),
     );
   }
 }
