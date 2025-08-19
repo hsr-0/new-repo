@@ -711,16 +711,11 @@ class _AuthGateState extends State<AuthGate> {
         return WelcomeScreen(onLoginSuccess: _updateAuthStatus);
       case AuthStatus.authenticated:
         if (_authResult!.isDriver) {
-          // ▼▼▼ هذا هو الجزء الذي تم تعديله ▼▼▼
-          switch (_authResult!.driverStatus) {
-            case 'approved':
-              return DriverMainScreen(authResult: _authResult!, onLogout: _logout);
-            case 'suspended': // <-- الحالة الجديدة
-              return DriverSuspendedScreen(onLogout: _logout);
-            default: // 'pending', 'rejected', or any other status
-              return DriverPendingScreen(onLogout: _logout, onCheckStatus: _updateAuthStatus, phone: _authResult!.displayName);
+          if (_authResult!.driverStatus == 'approved') {
+            return DriverMainScreen(authResult: _authResult!, onLogout: _logout);
+          } else {
+            return DriverPendingScreen(onLogout: _logout, onCheckStatus: _updateAuthStatus, phone: _authResult!.displayName);
           }
-          // ▲▲▲ نهاية الجزء المعدل ▲▲▲
         } else {
           return CustomerMainScreen(authResult: _authResult!, onLogout: _logout);
         }
@@ -1309,6 +1304,8 @@ class _DriverHubScreenState extends State<DriverHubScreen> {
             final hubData = snapshot.data!;
             final stats = hubData['stats'] as Map<String, dynamic>? ?? {};
             final walletBalance = hubData['wallet_balance'] ?? 0;
+            // ▼▼▼ جلب بيانات الحوافز من الـ API ▼▼▼
+            final incentives = List<Map<String, dynamic>>.from(hubData['incentives'] ?? []);
 
             return SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -1325,8 +1322,14 @@ class _DriverHubScreenState extends State<DriverHubScreen> {
                   _StatsGrid(stats: stats),
                   const SizedBox(height: 24),
 
-                  // يمكنك إضافة أقسام الحوافز والمتصدرين والجوائز هنا بنفس الطريقة
-                  // ...
+                  // ▼▼▼ القسم الجديد لعرض الحوافز ▼▼▼
+                  if (incentives.isNotEmpty) ...[
+                    Text("الحوافز المتاحة", style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 12),
+                    _IncentivesSection(incentives: incentives),
+                    const SizedBox(height: 24),
+                  ]
+                  // ▲▲▲ نهاية القسم الجديد ▲▲▲
                 ],
               ),
             );
@@ -1336,6 +1339,74 @@ class _DriverHubScreenState extends State<DriverHubScreen> {
     );
   }
 }
+
+class _IncentivesSection extends StatelessWidget {
+  final List<Map<String, dynamic>> incentives;
+
+  const _IncentivesSection({required this.incentives});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: incentives.length,
+      itemBuilder: (context, index) {
+        final incentive = incentives[index];
+        final progress = (incentive['progress'] as num?)?.toDouble() ?? 0.0;
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  incentive['title'] ?? 'حافز جديد',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  incentive['description'] ?? '',
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+                const SizedBox(height: 16),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 10,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'التقدم: ${incentive['completed_trips']}/${incentive['required_trips']} رحلة',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      'المكافأة: ${incentive['reward_amount']} د.ع',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                    )
+                  ],
+                )
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+
+
+
 
 // ويدجت لعرض بطاقة المحفظة
 class _WalletCard extends StatelessWidget {
