@@ -1345,6 +1345,18 @@ class _IncentivesSection extends StatelessWidget {
 
   const _IncentivesSection({required this.incentives});
 
+  // --- دالة جديدة لفتح واتساب مع رسالة مخصصة ---
+  Future<void> _launchWhatsAppForPrize(BuildContext context, String incentiveTitle) async {
+    const adminPhoneNumber = "+9647854076931"; // !! استبدل هذا برقم الواتساب الخاص بالمسؤول
+    final message = "مرحباً، لقد أكملت تحدي '$incentiveTitle' وأرغب في استلام جائزتي.";
+    final uri = Uri.parse("https://wa.me/$adminPhoneNumber?text=${Uri.encodeComponent(message)}");
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if(context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب. تأكد من تثبيته على جهازك.")));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
@@ -1354,49 +1366,71 @@ class _IncentivesSection extends StatelessWidget {
       itemBuilder: (context, index) {
         final incentive = incentives[index];
         final progress = (incentive['progress'] as num?)?.toDouble() ?? 0.0;
+        final bool isCompleted = incentive['is_completed_by_user'] ?? false;
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
+          color: isCompleted ? Colors.green[50] : null,
           child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  incentive['title'] ?? 'حافز جديد',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  incentive['description'] ?? '',
-                  style: TextStyle(color: Colors.grey[700]),
-                ),
-                const SizedBox(height: 16),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 10,
-                    backgroundColor: Colors.grey[300],
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'التقدم: ${incentive['completed_trips']}/${incentive['required_trips']} رحلة',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      'المكافأة: ${incentive['reward_amount']} د.ع',
-                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-                    )
-                  ],
-                )
-              ],
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              Text(
+              incentive['title'] ?? 'حافز جديد',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                incentive['description'] ?? '',
+                style: TextStyle(color: Colors.grey[700]),
+              ),
+              const SizedBox(height: 16),
+
+              // --- عرض زر واتساب أو شريط التقدم بناءً على حالة الإكمال ---
+              if (isCompleted)
+          SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => _launchWhatsAppForPrize(context, incentive['title'] ?? ''),
+            icon: const Icon(Icons.message),
+            label: const Text('تواصل لاستلام الجائزة'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
             ),
+          ),
+        )
+        else
+        Column(
+        children: [
+        ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: LinearProgressIndicator(
+        value: progress,
+        minHeight: 10,
+        backgroundColor: Colors.grey[300],
+        valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
+        ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+        Text(
+        'التقدم: ${incentive['completed_trips']}/${incentive['required_trips']} رحلة',
+        style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        Text(
+        'المكافأة: ${incentive['reward_amount']} د.ع',
+        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+        )
+        ],
+        )
+        ],
+        ),
+                ],
+              ),
           ),
         );
       },
@@ -2012,7 +2046,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
           BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي'),
           BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
           BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'لوحة المعلومات'),
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'جوائز وهدايا'),
         ],
       ),
     );
