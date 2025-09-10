@@ -358,7 +358,16 @@ class ApiService {
       return [];
     }
   }
-
+  static Future<List<dynamic>> getCustomerTripHistory(String token) async {
+    final response = await _get('/taxi/v2/customer/trip-history', token);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['success'] == true && data['history'] is List) {
+        return data['history'];
+      }
+    }
+    throw Exception('Failed to load trip history');
+  }
   static Future<LatLng?> getRideDriverLocation(String token, String rideId) async {
     try {
       final response = await _get('/taxi/v2/rides/driver-location?ride_id=$rideId', token);
@@ -453,6 +462,32 @@ class ApiService {
 
 
 
+
+// ========  الكود الجديد هنا ========
+  // دوال جديدة خاصة بنظام خطوط الطلاب للسائق
+
+  /// للسائق: إنشاء خط طلاب جديد
+  static Future<http.Response> createStudentLine(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/student-lines/create', token, body);
+  }
+
+  /// للسائق: جلب الخطوط التي أنشأها
+  static Future<List<dynamic>> getMyStudentLines(String token) async {
+    // تم تعديل المسار هنا ليتوافق مع الواجهة الخلفية
+    final response = await _get('/taxi/v2/student-lines/my-lines', token);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['success'] == true && data['lines'] is List) {
+        return data['lines'];
+      }
+    }
+    throw Exception('Failed to load my student lines');
+  }
+  /// للسائق: تحديث حالة طالب (استلام/توصيل)
+  static Future<http.Response> updateStudentStatus(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/student-lines/update-student-status', token, body);
+  }
+// ======== نهاية الكود الجديد ========
 
 
 
@@ -614,7 +649,6 @@ class _PulsingUserLocationMarkerState extends State<PulsingUserLocationMarker> w
           children: [
             Container(
               width: 15 + (15 * _controller.value),
-              height: 15 + (15 * _controller.value),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: Colors.blue.withOpacity(0.8 - (0.8 * _controller.value)),
@@ -1083,29 +1117,29 @@ class DriverRegistrationScreen extends StatefulWidget {
   State<DriverRegistrationScreen> createState() => _DriverRegistrationScreenState();
 }
 
+
 class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _modelController = TextEditingController();
   final _colorController = TextEditingController();
+  final _referralCodeController = TextEditingController(); // Controller for referral code
+
   String _vehicleType = 'Tuktuk';
   bool _isLoading = false;
   String? _errorMessage;
   final ImagePicker _picker = ImagePicker();
   XFile? _registrationImageFile;
-  XFile? _personalIdImageFile; // <--- 1. المتغير الجديد لصورة الهوية
+  XFile? _personalIdImageFile;
 
   bool _privacyPolicyAccepted = false;
-  Future<void> _pickPersonalIdImage() async {
-    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+
+  Future<void> _pickImage(ImageSource source, Function(XFile) onImagePicked) async {
+    final XFile? pickedFile = await _picker.pickImage(source: source, imageQuality: 70);
     if (pickedFile != null) {
-      setState(() => _personalIdImageFile = pickedFile);
+      onImagePicked(pickedFile);
     }
-  }
-  Future<void> _pickVehicleImage() async {
-    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) setState(() => _registrationImageFile = pickedFile);
   }
 
   Future<void> _submit() async {
@@ -1116,7 +1150,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    // التحقق من وجود الصورتين
     if (_registrationImageFile == null || _personalIdImageFile == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء رفع صورة السنوية والهوية الشخصية معًا'), backgroundColor: Colors.red));
       return;
@@ -1135,9 +1168,13 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         'car_color': _colorController.text
       });
 
-      // --- 3. إضافة الملفين معًا ---
-      request.files.add(await http.MultipartFile.fromPath('vehicle_registration', _registrationImageFile!.path));
-      request.files.add(await http.MultipartFile.fromPath('personal_id', _personalIdImageFile!.path)); // <--- الملف الجديد
+      if (_referralCodeController.text.isNotEmpty) {
+        request.fields['referral_code'] = _referralCodeController.text;
+      }
+
+      // ** CORRECTED FILE KEYS TO MATCH THE BACKEND **
+      request.files.add(await http.MultipartFile.fromPath('vehicle_registration_image', _registrationImageFile!.path));
+      request.files.add(await http.MultipartFile.fromPath('personal_id_image', _personalIdImageFile!.path));
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
@@ -1174,36 +1211,30 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
             const SizedBox(height: 15),
             DropdownButtonFormField<String>(value: _vehicleType, decoration: const InputDecoration(labelText: 'نوع المركبة'), items: const [DropdownMenuItem(value: 'Tuktuk', child: Text('توك توك')), DropdownMenuItem(value: 'Car', child: Text('سيارة'))], onChanged: (value) => setState(() => _vehicleType = value!)),
             const SizedBox(height: 15),
-            TextFormField(controller: _modelController, decoration: const InputDecoration(labelText: 'رقم لوحة المركبة '), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            TextFormField(controller: _modelController, decoration: const InputDecoration(labelText: 'رقم لوحة المركبة'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 15),
             TextFormField(controller: _colorController, decoration: const InputDecoration(labelText: 'لون وموديل المركبة'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            const SizedBox(height: 15),
+            TextFormField(
+              controller: _referralCodeController,
+              decoration: const InputDecoration(
+                labelText: 'رمز الإحالة (اختياري)',
+                prefixIcon: Icon(Icons.group),
+              ),
+            ),
             const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(12)),
-              child: Column(
-                children: [
-                  if (_registrationImageFile != null) ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(_registrationImageFile!.path), height: 150, width: double.infinity, fit: BoxFit.cover)),
-                  TextButton.icon(icon: const Icon(Icons.upload_file), label: Text(_registrationImageFile == null ? 'رفع صورة سنوية السيارة' : 'تغيير الصورة'), onPressed:  _pickVehicleImage),
-                ],
-              ),
-            ),const SizedBox(height: 15), // مسافة فاصلة
-
-// --- 2. الواجهة الجديدة لصورة الهوية ---
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(12)),
-              child: Column(
-                children: [
-                  if (_personalIdImageFile != null)
-                    ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(_personalIdImageFile!.path), height: 150, width: double.infinity, fit: BoxFit.cover)),
-                  TextButton.icon(
-                    icon: const Icon(Icons.badge_outlined),
-                    label: Text(_personalIdImageFile == null ? 'رفع صورة الهوية الشخصية' : 'تغيير الصورة'),
-                    onPressed: _pickPersonalIdImage, // استدعاء الدالة الجديدة
-                  ),
-                ],
-              ),
+            _buildImagePicker(
+              title: 'صورة سنوية السيارة',
+              icon: Icons.upload_file,
+              file: _registrationImageFile,
+              onPressed: () => _pickImage(ImageSource.gallery, (file) => setState(() => _registrationImageFile = file)),
+            ),
+            const SizedBox(height: 15),
+            _buildImagePicker(
+              title: 'صورة الهوية الشخصية',
+              icon: Icons.badge_outlined,
+              file: _personalIdImageFile,
+              onPressed: () => _pickImage(ImageSource.gallery, (file) => setState(() => _personalIdImageFile = file)),
             ),
             const SizedBox(height: 20),
             Row(
@@ -1211,9 +1242,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                 Checkbox(
                   value: _privacyPolicyAccepted,
                   onChanged: (value) {
-                    setState(() {
-                      _privacyPolicyAccepted = value ?? false;
-                    });
+                    setState(() { _privacyPolicyAccepted = value ?? false; });
                   },
                 ),
                 Expanded(
@@ -1225,12 +1254,10 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                         TextSpan(
                           text: 'شروط الخدمة وسياسة الخصوصية',
                           style: const TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
-                          recognizer: TapGestureRecognizer()
-                            ..onTap = () {
-                              Navigator.push(context, MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()));
-                            },
+                          recognizer: TapGestureRecognizer()..onTap = () {
+                            Navigator.push(context, MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()));
+                          },
                         ),
-                        const TextSpan(text: ' الخاصة بالتطبيق.'),
                       ],
                     ),
                   ),
@@ -1245,8 +1272,25 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
       ),
     );
   }
-}
 
+  Widget _buildImagePicker({required String title, required IconData icon, required XFile? file, required VoidCallback onPressed}) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        children: [
+          if (file != null)
+            ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(file.path), height: 150, width: double.infinity, fit: BoxFit.cover)),
+          TextButton.icon(
+            icon: Icon(icon),
+            label: Text(file == null ? 'رفع $title' : 'تغيير الصورة'),
+            onPressed: onPressed,
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 
 class DriverHubScreen extends StatefulWidget {
@@ -1618,7 +1662,7 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
           BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'طلب سريع'),
           BottomNavigationBarItem(icon: Icon(Icons.event_note_outlined), label: 'الرحلات'),
           BottomNavigationBarItem(icon: Icon(Icons.star_outline), label: 'طلب خصوصي'),
-          BottomNavigationBarItem(icon: Icon(Icons.local_offer_outlined), label: 'العروض'),
+          BottomNavigationBarItem(icon: Icon(Icons.history_edu_outlined), label: 'عروض ورحلاتي'),
         ],
       ),
     );
@@ -1628,6 +1672,10 @@ class _CustomerMainScreenState extends State<CustomerMainScreen> {
 // =============================================================================
 // Offers Screen for Customers
 // =============================================================================
+// =============================================================================
+//  شاشة رحلاتي والعروض (بديل شاشة العروض القديمة)
+// =============================================================================
+
 class OffersScreen extends StatefulWidget {
   final AuthResult authResult;
   const OffersScreen({super.key, required this.authResult});
@@ -1637,67 +1685,94 @@ class OffersScreen extends StatefulWidget {
 }
 
 class _OffersScreenState extends State<OffersScreen> {
-  late Future<List<dynamic>> _offersFuture;
+  // Future واحد لجلب البيانات من مصدرين مختلفين في نفس الوقت
+  late Future<List<List<dynamic>>> _dataFuture;
 
   @override
   void initState() {
     super.initState();
-    _loadOffers();
+    _loadAllData();
   }
 
-  void _loadOffers() {
+  // دالة لجلب العروض وسجل الرحلات معًا
+  void _loadAllData() {
     setState(() {
-      _offersFuture = ApiService.getOffers(widget.authResult.token);
+      _dataFuture = Future.wait([
+        ApiService.getOffers(widget.authResult.token),
+        ApiService.getCustomerTripHistory(widget.authResult.token),
+      ]);
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('رحلاتي والعروض'),
+        centerTitle: true,
+      ),
       body: RefreshIndicator(
-        onRefresh: () async => _loadOffers(),
-        child: FutureBuilder<List<dynamic>>(
-          future: _offersFuture,
+        onRefresh: () async => _loadAllData(),
+        child: FutureBuilder<List<List<dynamic>>>(
+          future: _dataFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return ListView.builder(itemCount: 5, itemBuilder: (ctx, i) => const ShimmerListItem());
+              // عرض شاشة تحميل أولية
+              return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return Center(child: Text('خطأ في تحميل العروض: ${snapshot.error}'));
+              return Center(child: Text('خطأ في تحميل البيانات: ${snapshot.error}'));
             }
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const EmptyStateWidget(
-                  svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>''',
-                  message: 'لا توجد عروض متاحة حالياً.');
+            if (!snapshot.hasData) {
+              return const Center(child: Text('لا توجد بيانات'));
             }
 
-            final offers = snapshot.data!;
-            return ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: offers.length,
-              itemBuilder: (context, index) {
-                final offer = offers[index];
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (offer['image_url'] != null && offer['image_url'].isNotEmpty)
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(offer['image_url'], width: double.infinity, height: 150, fit: BoxFit.cover),
-                          ),
-                        const SizedBox(height: 12),
-                        Text(offer['title'] ?? 'عرض جديد', style: Theme.of(context).textTheme.titleLarge),
-                        const SizedBox(height: 8),
-                        Text(offer['description'] ?? 'تفاصيل العرض غير متوفرة.', style: Theme.of(context).textTheme.bodyMedium),
-                      ],
+            // فصل البيانات: العروض في القائمة الأولى، والسجل في الثانية
+            final offers = snapshot.data![0];
+            final history = snapshot.data![1];
+
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // قسم العروض (أفقي)
+                  if (offers.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      child: Text('أحدث العروض', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                     ),
+                    SizedBox(
+                      height: 180, // ارتفاع محدد للشريط الأفقي
+                      child: ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        itemCount: offers.length,
+                        itemBuilder: (context, index) {
+                          return _OfferCard(offer: offers[index]);
+                        },
+                      ),
+                    ),
+                  ],
+
+                  // قسم سجل الرحلات (عمودي)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+                    child: Text('سجل رحلاتي', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                   ),
-                );
-              },
+                  if (history.isEmpty)
+                    const Center(child: Padding(padding: EdgeInsets.all(32.0), child: Text('لا يوجد رحلات في سجلك.')))
+                  else
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      itemCount: history.length,
+                      itemBuilder: (context, index) {
+                        return _TripHistoryCard(trip: history[index]);
+                      },
+                    ),
+                ],
+              ),
             );
           },
         ),
@@ -1706,6 +1781,119 @@ class _OffersScreenState extends State<OffersScreen> {
   }
 }
 
+// ويدجت جديد لعرض بطاقة العرض بشكل أفقي
+class _OfferCard extends StatelessWidget {
+  final Map<String, dynamic> offer;
+  const _OfferCard({required this.offer});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 300,
+      child: Card(
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (offer['image_url'] != null && offer['image_url'].isNotEmpty)
+              Image.network(
+                offer['image_url'],
+                height: 100,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const SizedBox(height: 100, child: Icon(Icons.local_offer)),
+              )
+            else
+              const SizedBox(height: 100, child: Center(child: Icon(Icons.local_offer, size: 40, color: Colors.grey))),
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(offer['title'] ?? 'عرض', style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Text(offer['description'] ?? '', style: TextStyle(fontSize: 12, color: Colors.grey[600]), maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ويدجت جديد لعرض بطاقة سجل الرحلات مع التفاصيل والأزرار
+class _TripHistoryCard extends StatelessWidget {
+  final Map<String, dynamic> trip;
+  const _TripHistoryCard({required this.trip});
+
+  @override
+  Widget build(BuildContext context) {
+    final driverInfo = trip['driver_info'] as Map<String, dynamic>?;
+    final driverPhone = driverInfo?['phone'] as String?;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // السطر الأول: نوع الرحلة والتاريخ
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Chip(
+                  label: Text(trip['trip_type'] ?? 'رحلة', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  backgroundColor: Colors.amber.withOpacity(0.2),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                Text('${trip['date']} - ${trip['start_time']}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              ],
+            ),
+            const Divider(height: 16),
+            // تفاصيل الرحلة
+            Text('${trip['from_location']} ⬅️ ${trip['to_location']}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if(driverInfo != null)
+              Text('السائق: ${driverInfo['name'] ?? 'غير معروف'}', style: const TextStyle(fontSize: 14)),
+            Text('السعر: ${trip['price'] ?? 'غير محدد'} د.ع', style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 12),
+            // أزرار الاتصال
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: driverPhone != null ? () => makePhoneCall(driverPhone, context) : null,
+                    icon: const Icon(Icons.call_outlined, size: 18),
+                    label: const Text('اتصل بالسائق'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 12, fontFamily: 'Cairo'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => makePhoneCall('07854076931', context), // رقم الدعم الفني
+                    icon: const Icon(Icons.support_agent_outlined, size: 18),
+                    label: const Text('اتصل بالدعم'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 12, fontFamily: 'Cairo'),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
 // =============================================================================
 // Driver Dashboard Screen
 // =============================================================================
@@ -1772,6 +1960,8 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                     value: '${data['total_earnings'] ?? 0} د.ع',
                     color: Colors.green,
                   ),
+
+
                   const SizedBox(height: 16),
                   _buildStatCard(
                     context,
@@ -1905,11 +2095,16 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   Map<String, dynamic>? _liveStats;
   Timer? _statsTimer;
 
+
+
+
   void _onRideAccepted(Map<String, dynamic> ride) {
     setState(() {
       _currentQuickRide = ride;
     });
   }
+
+
 
   void _onRideFinished() {
     setState(() {
@@ -2021,6 +2216,8 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => _changeTab(3)),
       DriverCreateTripScreen(authResult: widget.authResult),
       DriverHubScreen(authResult: widget.authResult),
+      DriverLinesManagementScreen(authResult: widget.authResult), // <-- أضف هذه الشاشة
+
     ];
     return Scaffold(
       appBar: AppBar(
@@ -2046,12 +2243,16 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
           BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي'),
           BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
           BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
+
           BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'جوائز وهدايا'),
+          BottomNavigationBarItem(icon: Icon(Icons.school_outlined), label: 'خطوط الطلاب'), // <-- أضف هذا التبويب الجديد
+
         ],
       ),
     );
   }
 }
+
 
 // =============================================================================
 // Modern Info Dialog & Driver Stats Bar
@@ -2393,6 +2594,10 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
   }
 }
 
+
+
+
+
 // --- ويدجت جديد: شريط المعلومات العلوي ---
 class TopRideInfoBar extends StatelessWidget {
   final String distance;
@@ -2469,6 +2674,9 @@ class RideInfoCard extends StatelessWidget {
       ),
     );
   }
+
+
+
 
   Widget _buildInfoRow(IconData icon, String label, String value) {
     return Row(children: [Icon(icon, color: Colors.grey, size: 20), const SizedBox(width: 8), Text(label, style: const TextStyle(color: Colors.grey)), const SizedBox(width: 4), Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis))]);
@@ -2853,7 +3061,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع. يرجى المحاولة مرة أخرى.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع. يرجى تفعيل صلاحيات الموقع .')));
         setState(() => _isLoading = false);
       }
     }
@@ -3139,18 +3347,38 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
               MarkerLayer(markers: _buildMarkers()),
             ],
           ),
+          // ========  الكود المصحح هنا ========
           Positioned(
-            top: 40, left: 15, right: 15,
+            top: 40,
+            left: 15,
+            right: 15,
             child: SafeArea(
-              child: SizedBox(
-                width: double.infinity,
-                child: ProvinceTaxiButton(
-                  onPressed: () => widget.onChangeTab(1),
-                ),
+              child: Column( // استخدام Column لترتيب الأزرار بشكل عمودي
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ProvinceTaxiButton(
+                      onPressed: () => widget.onChangeTab(1),
+                    ),
+                  ),
+                  const SizedBox(height: 12), // إضافة مسافة بين الزرين
+                  SizedBox(
+                    width: double.infinity,
+                    child: StudentLinesButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => StudentLinesHubScreen(authResult: widget.authResult)),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          // --- (FIX): Use a helper function to decide which bottom card to show ---
+          // ======== نهاية الكود المصحح ========
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: _buildBottomCard(),
@@ -3161,12 +3389,9 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     );
   }
 
-  // --- (FIX): Helper function to organize the logic for displaying bottom cards ---
   Widget _buildBottomCard() {
     if (_activeRide != null) {
-      // There is an active ride
       if (_pendingOffers.isNotEmpty) {
-        // And there's a pending offer, show the offer card
         return DriverOfferCard(
           offer: _pendingOffers.first,
           onAccept: () async {
@@ -3187,19 +3412,17 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             }
           },
           onFindAnother: () async {
-            // Reject the current offer officially via API
             final offer = _pendingOffers.first;
             setState(() {
               _isLoading = true;
-              _pendingOffers.removeAt(0); // Remove immediately for better UX
+              _pendingOffers.removeAt(0);
             });
             try {
-              // Send the rejection to the server
               await ApiService.customerRespondToOffer(
                   widget.token,
                   _activeRide!['id'].toString(),
                   offer['driver_id'].toString(),
-                  'rejected' // Send 'rejected' action
+                  'rejected'
               );
             } catch (e) {
               if (mounted) {
@@ -3214,7 +3437,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           },
         );
       } else {
-        // No pending offers, show the active ride status card
         return ActiveRideInfoCard(
           ride: _activeRide!,
           onCancel: _cancelRide,
@@ -3222,10 +3444,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
         );
       }
     } else if (_isConfirmingRideDetails) {
-      // No active ride, and user is in the confirmation stage
       return _buildConfirmationSheet();
     } else {
-      // No active ride, show the initial request button
       return _buildInitialRequestSheet();
     }
   }
@@ -3240,8 +3460,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("جاري تحديد موقعك الحالي...")));
               return;
             }
-            // NOTE: Ensure you have a 'DestinationSelectionScreen' widget defined,
-            // perhaps in your 'de.dart' file or elsewhere.
             final result = await Navigator.of(context).push<Map<String, dynamic>>(
               MaterialPageRoute(builder: (_) => DestinationSelectionScreen(initialPickup: _pickupLocation!)),
             );
@@ -3322,6 +3540,415 @@ class ProvinceTaxiButton extends StatelessWidget {
     );
   }
 }
+/// زر مخصص للانتقال إلى شاشة خطوط الطلاب
+// --- Button Widgets ---
+class StudentLinesButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const StudentLinesButton({super.key, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: const Icon(Icons.school_outlined, color: Colors.white),
+      label: const Text('خطوط الطلاب'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.deepPurple,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        textStyle: const TextStyle(fontFamily: 'Cairo', fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 2. الشاشة المحورية الجديدة للطلاب وأولياء الأمور
+// =============================================================================
+class StudentLinesHubScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const StudentLinesHubScreen({super.key, required this.authResult});
+
+  @override
+  State<StudentLinesHubScreen> createState() => _StudentLinesHubScreenState();
+}
+
+class _StudentLinesHubScreenState extends State<StudentLinesHubScreen> {
+  Future<List<dynamic>>? _linesFuture;
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLines();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadLines({String destination = ''}) async {
+    final uri = Uri.parse('${ApiService.baseUrl}/taxi/v2/student-lines/available').replace(queryParameters: {
+      'destination': destination
+    });
+
+    setState(() {
+      _linesFuture = http.get(
+          uri,
+          headers: {'Authorization': 'Bearer ${widget.authResult.token}'}
+      ).then((response) {
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          if (data['success'] == true && data['lines'] is List) {
+            return data['lines'];
+          }
+        }
+        throw Exception('Failed to load student lines');
+      });
+    });
+  }
+
+  void _showBookingDialog(Map<String, dynamic> line) {
+    final studentNameController = TextEditingController(text: widget.authResult.displayName);
+    // ========  الكود الجديد هنا ========
+    final studentPhoneController = TextEditingController(); // Controller جديد لهاتف الطالب
+    // ======== نهاية الكود الجديد ========
+    final parentPhoneController = TextEditingController();
+    final pickupAddressController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('حجز مقعد في خط طلاب', style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.deepPurple)),
+                  const SizedBox(height: 16),
+                  Text("إلى: ${line['destination_name']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 20),
+                  TextFormField(controller: studentNameController, decoration: const InputDecoration(labelText: 'اسم الطالب/الطالبة'), validator: (v) => v!.isEmpty ? 'الاسم مطلوب' : null),
+                  const SizedBox(height: 12),
+                  // ========  الكود الجديد هنا ========
+                  // حقل إدخال جديد لهاتف الطالب
+                  TextFormField(controller: studentPhoneController, decoration: const InputDecoration(labelText: 'رقم هاتف الطالب (للتواصل)'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'رقم هاتف الطالب مطلوب' : null),
+                  const SizedBox(height: 12),
+                  // ======== نهاية الكود الجديد ========
+                  TextFormField(controller: parentPhoneController, decoration: const InputDecoration(labelText: 'رقم هاتف ولي الأمر (للتتبع)'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'رقم ولي الأمر مطلوب' : null),
+                  const SizedBox(height: 12),
+                  TextFormField(controller: pickupAddressController, decoration: const InputDecoration(labelText: 'عنوان الاستلام'), validator: (v) => v!.isEmpty ? 'العنوان مطلوب' : null),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: () async {
+                      if (formKey.currentState?.validate() ?? false) {
+                        Navigator.pop(ctx);
+                        try {
+                          final response = await http.post(
+                            Uri.parse('${ApiService.baseUrl}/taxi/v2/student-lines/book'),
+                            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'},
+                            // ========  الكود الجديد هنا ========
+                            // إضافة الحقل الجديد إلى البيانات المرسلة
+                            body: json.encode({
+                              'line_id': line['id'],
+                              'student_name': studentNameController.text,
+                              'student_phone': studentPhoneController.text, // إرسال هاتف الطالب
+                              'parent_phone': parentPhoneController.text,
+                              'pickup_address': pickupAddressController.text,
+                            }),
+                            // ======== نهاية الكود الجديد ========
+                          );
+                          final data = json.decode(response.body);
+                          if(mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(data['message']), backgroundColor: response.statusCode == 200 ? Colors.green : Colors.red)
+                            );
+                            if(response.statusCode == 200) _loadLines();
+                          }
+                        } catch (e) {
+                          if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+                        }
+                      }
+                    },
+                    child: const Text('تأكيد الحجز'),
+                  )
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('خطوط الطلاب')),
+      body: Column(
+        children: [
+          Card(
+            margin: const EdgeInsets.all(12),
+            color: Colors.blue[50],
+            child: ListTile(
+              leading: const Icon(Icons.shield_outlined, color: Colors.blue, size: 30),
+              title: const Text('قسم أولياء الأمور', style: TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: const Text('لتتبع رحلة ابنك/ابنتك بشكل مباشر'),
+              trailing: const Icon(Icons.arrow_forward_ios),
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const ParentLoginScreen()));
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                  labelText: 'ابحث عن وجهة (مثال: جامعة الكوت)',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _searchController.clear();
+                      _loadLines();
+                    },
+                  )
+              ),
+              onSubmitted: (value) => _loadLines(destination: value),
+            ),
+          ),
+          Expanded(
+            child: FutureBuilder<List<dynamic>>(
+              future: _linesFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Center(child: Text("خطأ: ${snapshot.error}"));
+                }
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return const Center(child: Text('لا توجد خطوط طلاب تطابق بحثك.'));
+                }
+                final lines = snapshot.data!;
+                return ListView.builder(
+                  padding: const EdgeInsets.all(8),
+                  itemCount: lines.length,
+                  itemBuilder: (context, index) {
+                    final line = lines[index];
+                    final isFull = line['available_seats'] <= 0;
+                    return Card(
+                      color: isFull ? Colors.grey[300] : Colors.white,
+                      child: ListTile(
+                        leading: CircleAvatar(child: Icon(isFull ? Icons.do_not_disturb_on : Icons.school)),
+                        title: Text("إلى: ${line['destination_name']}"),
+                        subtitle: Text("السائق: ${line['driver']?['name'] ?? 'N/A'} | المقاعد المتاحة: ${line['available_seats']}"),
+                        trailing: ElevatedButton(
+                          onPressed: isFull ? null : () => _showBookingDialog(line),
+                          style: ElevatedButton.styleFrom(backgroundColor: isFull ? Colors.grey : Colors.deepPurple),
+                          child: Text(isFull ? 'مكتمل' : 'حجز'),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 3. شاشات تتبع أولياء الأمور (جديدة)
+// =============================================================================
+
+class ParentLoginScreen extends StatefulWidget {
+  const ParentLoginScreen({super.key});
+
+  @override
+  State<ParentLoginScreen> createState() => _ParentLoginScreenState();
+}
+
+class _ParentLoginScreenState extends State<ParentLoginScreen> {
+  final _phoneController = TextEditingController();
+  bool _isLoading = false;
+
+  void _trackTrip() async {
+    if (_phoneController.text.isEmpty) return;
+    setState(() => _isLoading = true);
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiService.baseUrl}/taxi/v2/student-lines/track-by-parent'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'phone_number': _phoneController.text}),
+      );
+      final data = json.decode(response.body);
+      if (mounted) {
+        if (response.statusCode == 200 && data['success'] == true) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ParentTrackingScreen(activeLineData: Map<String, dynamic>.from(data['active_line'])),
+            ),
+          );
+        } else {
+          throw Exception(data['message'] ?? 'فشل العثور على رحلات');
+        }
+      }
+    } catch (e) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if(mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('تتبع رحلة الأبناء')),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.shield_outlined, size: 80, color: Colors.blue),
+            const SizedBox(height: 20),
+            Text('أدخل رقم هاتفك المسجل عند الحجز لتتبع رحلة ابنك/ابنتك', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _phoneController,
+              decoration: const InputDecoration(labelText: 'رقم هاتف ولي الأمر'),
+              keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 30),
+            _isLoading
+                ? const CircularProgressIndicator()
+                : ElevatedButton(onPressed: _trackTrip, child: const Text('تتبع الرحلة')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ParentTrackingScreen extends StatefulWidget {
+  final Map<String, dynamic> activeLineData;
+  const ParentTrackingScreen({super.key, required this.activeLineData});
+
+  @override
+  State<ParentTrackingScreen> createState() => _ParentTrackingScreenState();
+}
+
+class _ParentTrackingScreenState extends State<ParentTrackingScreen> {
+  final MapController _mapController = MapController();
+  LatLng? _driverLocation;
+  Timer? _trackingTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // ========  الكود المصحح هنا ========
+    // تم نقل التحكم بالخريطة إلى ما بعد أول إطار
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _updateLocation(widget.activeLineData['driver_location']);
+      }
+    });
+    // ======== نهاية الكود المصحح ========
+    _startTracking();
+  }
+
+  @override
+  void dispose() {
+    _trackingTimer?.cancel();
+    super.dispose();
+  }
+
+  void _updateLocation(Map<String, dynamic>? locationData) {
+    if (locationData != null) {
+      final newLocation = LatLng(double.parse(locationData['lat']), double.parse(locationData['lng']));
+      setState(() {
+        _driverLocation = newLocation;
+      });
+
+    }
+  }
+
+  void _startTracking() {
+    _trackingTimer = Timer.periodic(const Duration(seconds: 15), (timer) async {
+      try {
+        // البحث عن رقم هاتف ولي الأمر ضمن قائمة الطلاب
+        final students = widget.activeLineData['line_info']?['students'] as List?;
+        if (students == null || students.isEmpty) return;
+
+        // نفترض أننا نبحث عن أول رقم هاتف متاح
+        final parentPhone = students.firstWhere((s) => s['parent_phone'] != null, orElse: () => null)?['parent_phone'];
+        if (parentPhone == null) return;
+
+        final response = await http.post(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/student-lines/track-by-parent'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'phone_number': parentPhone}),
+        );
+        if (mounted && response.statusCode == 200) {
+          final data = json.decode(response.body);
+          if(data['success'] == true) {
+            _updateLocation(data['active_line']['driver_location']);
+          }
+        }
+      } catch (e) {
+        debugPrint("Tracking Error: $e");
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lineInfo = widget.activeLineData['line_info'];
+    return Scaffold(
+      appBar: AppBar(title: Text("تتبع خط إلى ${lineInfo?['destination_name'] ?? ''}")),
+      body: _driverLocation == null
+          ? const Center(child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text("موقع السائق غير متاح حالياً... يتم التحديث"),
+        ],
+      ))
+          : FlutterMap(
+        mapController: _mapController,
+        options: MapOptions(initialCenter: _driverLocation!, initialZoom: 15.0),
+        children: [
+          TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'),
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _driverLocation!,
+                width: 80,
+                height: 80,
+                child: const Icon(Icons.directions_bus, color: Colors.blue, size: 50),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 class ActiveRideInfoCard extends StatelessWidget {
   final Map<String, dynamic> ride;
@@ -3416,130 +4043,142 @@ class TripListScreen extends StatefulWidget {
   @override
   State<TripListScreen> createState() => _TripListScreenState();
 }
-
 class _TripListScreenState extends State<TripListScreen> {
-  List<Map<String, dynamic>> trips = [];
-  bool isLoading = true;
-  String error = '';
+  String? _searchFromProvince;
+  String? _searchToProvince;
+  Future<List<Map<String, dynamic>>>? _tripsFuture;
+
+  final List<String> iraqiProvinces = [ 'بغداد', 'البصرة', 'نينوى (الموصل)', 'أربيل', 'السليمانية', 'دهوك', 'الأنبار', 'بابل', 'القادسية (الديوانية)', 'ديالى', 'ذي قار (الناصرية)', 'صلاح الدين', 'كركوك', 'كربلاء', 'المثنى (السماوة)', 'ميسان (العمارة)', 'النجف', 'واسط (الكوت)' ];
+
   @override
   void initState() {
     super.initState();
     _loadTrips();
   }
 
-  Future<void> _loadTrips() async {
-    if (!mounted) return;
-    setState(() {
-      isLoading = true;
-      error = '';
-    });
+  /// Fetches trips and performs client-side filtering.
+  Future<List<Map<String, dynamic>>> _fetchTrips() async {
+    final uri = Uri.parse('${ApiService.baseUrl}/taxi/v2/trips/search');
+
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/trips'));
-      if (mounted) {
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          if (data is List) setState(() => trips = List<Map<String, dynamic>>.from(data));
+      final response = await http.get(uri, headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
+      debugPrint('API Response Status: ${response.statusCode}');
+      debugPrint('API Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['trips'] is List) {
+          List<Map<String, dynamic>> allTrips = List<Map<String, dynamic>>.from(data['trips']);
+
+          // Client-side filtering logic
+          if (_searchFromProvince != null && _searchFromProvince!.isNotEmpty) {
+            allTrips = allTrips.where((trip) => trip['from_province']?.toString() == _searchFromProvince).toList();
+          }
+          if (_searchToProvince != null && _searchToProvince!.isNotEmpty) {
+            allTrips = allTrips.where((trip) => trip['to_province']?.toString() == _searchToProvince).toList();
+          }
+
+          return allTrips;
         } else {
-          throw Exception('فشل تحميل الرحلات');
+          throw Exception(data['message'] ?? 'Failed to parse trips from server');
         }
+      } else {
+        throw Exception('فشل تحميل الرحلات (Status Code: ${response.statusCode})');
       }
     } on SocketException {
-      if (mounted) setState(() => error = 'يرجى التحقق من اتصالك بالإنترنت');
+      throw Exception('يرجى التحقق من اتصالك بالإنترنت');
     } catch (e) {
-      if (mounted) setState(() => error = 'فشل تحميل البيانات. تحقق من اتصالك.');
-    } finally {
-      if (mounted) setState(() => isLoading = false);
+      throw Exception('حدث خطأ غير متوقع: ${e.toString()}');
     }
   }
 
-  Future<void> _bookTrip({
-    required String tripId,
-    required String name,
-    required String phone,
-    required String address,
-    required int quantity,
-  }) async {
+  /// Triggers a reload of the trips.
+  void _loadTrips() {
+    setState(() {
+      _tripsFuture = _fetchTrips();
+    });
+  }
+
+  /// Books seats for a trip.
+  Future<void> _bookTrip({required String tripId, required String name, required String phone, required String address, required int quantity}) async {
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/book'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'trip_id': tripId, 'name': name, 'phone': phone, 'address': address, 'quantity': quantity}));
+      final response = await http.post(
+        Uri.parse('${ApiService.baseUrl}/taxi/v2/book'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'},
+        body: json.encode({'trip_id': tripId, 'name': name, 'phone': phone, 'address': address, 'quantity': quantity}),
+      );
       final result = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && result['success'] == true) {
-          _updateTripLocally(Map<String, dynamic>.from(result['trip']));
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم الحجز بنجاح لـ $quantity مقاعد!'), backgroundColor: Colors.green));
+          _loadTrips(); // Refresh the list to show updated data
         } else {
           throw Exception(result['message'] ?? 'فشل الحجز');
         }
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خطأ في الحجز: يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.red));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الحجز: ${e.toString().replaceAll("Exception: ", "")}'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الحجز: ${e.toString().replaceAll("Exception: ", "")}'), backgroundColor: Colors.red));
+      }
     }
   }
 
+  /// Cancels a specific booking.
   Future<void> _cancelBooking(String tripId, String passengerId) async {
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/cancel'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'trip_id': tripId, 'passenger_id': passengerId}));
+      final response = await http.post(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/cancel'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'},
+          body: json.encode({'trip_id': tripId, 'passenger_id': passengerId})
+      );
       final result = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 200 && result['success'] == true) {
-          _updateTripLocally(Map<String, dynamic>.from(result['trip']));
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم إلغاء الحجز بنجاح!'), backgroundColor: Colors.green));
+          _loadTrips(); // Refresh the list
         } else {
           throw Exception(result['message'] ?? 'فشل الإلغاء');
         }
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خطأ في الإلغاء: يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.red));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الإلغاء: ${e.toString().replaceFirst("Exception: ", "")}'), backgroundColor: Colors.red));
-        _loadTrips();
       }
     }
   }
 
-  void _updateTripLocally(Map<String, dynamic> updatedTrip) {
-    setState(() {
-      final index = trips.indexWhere((t) => t['id'].toString() == updatedTrip['id'].toString());
-      if (index != -1) trips[index] = updatedTrip;
-    });
-  }
-
+  /// Shows the booking dialog with all required fields.
   void _showBookingDialog(Map<String, dynamic> trip) {
     final nameController = TextEditingController(text: widget.authResult.displayName);
     final phoneController = TextEditingController();
-    final addressController = TextEditingController();
-    final availableSeats = (trip['available_seats'] ?? 0) as int;
+    final addressController = TextEditingController(); // Address field is back
+    final pricePerSeat = double.tryParse(trip['price_per_seat']?.toString() ?? '0.0') ?? 0.0;
+    final passengers = (trip['passengers'] is List) ? trip['passengers'] as List : [];
+    final totalSeats = int.tryParse(trip['total_seats']?.toString() ?? '0') ?? 0;
+    final bookedSeats = passengers.fold<int>(0, (sum, p) => sum + (int.tryParse(p['quantity']?.toString() ?? '1') ?? 1));
+    final availableSeats = totalSeats - bookedSeats;
+
     int selectedQuantity = availableSeats > 0 ? 1 : 0;
     final formKey = GlobalKey<FormState>();
-    final ValueNotifier<bool> isButtonEnabled = ValueNotifier(false);
-    void validateFields() {
-      isButtonEnabled.value = (formKey.currentState?.validate() ?? false) && selectedQuantity > 0;
-    }
 
-    nameController.addListener(validateFields);
-    phoneController.addListener(validateFields);
-    addressController.addListener(validateFields);
-    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (context, setStateSB) {
-      void updateQuantityAndValidate(Function() updateFn) {
-        setStateSB(updateFn);
-        validateFields();
-      }
-
-      WidgetsBinding.instance.addPostFrameCallback((_) => validateFields());
-      return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Padding(
-              padding: const EdgeInsets.all(16.0),
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final totalPrice = selectedQuantity * pricePerSeat;
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
               child: Form(
-                  key: formKey,
-                  child: SingleChildScrollView(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       const Text('حجز مقعد', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.blue)),
                       const SizedBox(height: 16),
-                      Text('${trip['from']} → ${trip['to']}', style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-                      Text('${_formatDate(trip['date'].toString())} - ${trip['time']}', style: const TextStyle(color: Colors.grey)),
+                      Text('${trip['from']} ⬅️ ${trip['to']}', style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
                       const SizedBox(height: 20),
                       TextFormField(controller: nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', prefixIcon: Icon(Icons.person)), validator: (v) => v!.isEmpty ? 'الاسم مطلوب' : null),
                       const SizedBox(height: 12),
@@ -3547,105 +4186,189 @@ class _TripListScreenState extends State<TripListScreen> {
                       const SizedBox(height: 12),
                       TextFormField(controller: addressController, decoration: const InputDecoration(labelText: 'عنوان الاستلام', prefixIcon: Icon(Icons.location_on)), validator: (v) => v!.isEmpty ? 'العنوان مطلوب' : null),
                       const SizedBox(height: 20),
-                      Row(mainAxisAlignment: MainAxisAlignment.center, children: [const Text('عدد المقاعد:'), IconButton(icon: const Icon(Icons.remove), onPressed: selectedQuantity > 1 ? () => updateQuantityAndValidate(() => selectedQuantity--) : null), Text('$selectedQuantity'), IconButton(icon: const Icon(Icons.add), onPressed: selectedQuantity < availableSeats ? () => updateQuantityAndValidate(() => selectedQuantity++) : null)]),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('عدد المقاعد:'),
+                          IconButton(icon: const Icon(Icons.remove_circle_outline), color: Colors.red, onPressed: selectedQuantity > 1 ? () => setDialogState(() => selectedQuantity--) : null),
+                          Text('$selectedQuantity', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                          IconButton(icon: const Icon(Icons.add_circle_outline), color: Colors.green, onPressed: selectedQuantity < availableSeats ? () => setDialogState(() => selectedQuantity++) : null),
+                        ],
+                      ),
+                      const Divider(height: 20),
+                      Text("الإجمالي: ${NumberFormat.decimalPattern('ar').format(totalPrice)} د.ع", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green)),
                       const SizedBox(height: 20),
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-                        ValueListenableBuilder<bool>(
-                            valueListenable: isButtonEnabled,
-                            builder: (context, isEnabled, child) {
-                              return ElevatedButton(
-                                  onPressed: isEnabled
-                                      ? () async {
-                                    Navigator.pop(ctx);
-                                    await _bookTrip(tripId: trip['id'].toString(), name: nameController.text, phone: phoneController.text, address: addressController.text, quantity: selectedQuantity);
-                                  }
-                                      : null,
-                                  child: const Text('تأكيد الحجز'));
-                            })
-                      ]),
-                    ]),
-                  ))));
-    })).whenComplete(() {
-      nameController.dispose();
-      phoneController.dispose();
-      addressController.dispose();
-      isButtonEnabled.dispose();
-    });
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+                          ElevatedButton(
+                            onPressed: () async {
+                              if (formKey.currentState?.validate() ?? false) {
+                                Navigator.pop(ctx);
+                                await _bookTrip(tripId: trip['id'].toString(), name: nameController.text, phone: phoneController.text, address: addressController.text, quantity: selectedQuantity);
+                              }
+                            },
+                            child: const Text('تأكيد الحجز'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
+  /// Navigates to the passengers screen for a given trip.
   void _showPassengersScreen(Map<String, dynamic> trip) {
     if (mounted) {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => PassengersScreen(trip: trip, currentUserId: widget.authResult.userId, onCancelBooking: (passengerId) async => await _cancelBooking(trip['id'].toString(), passengerId), authResult: widget.authResult))).then((_) => _loadTrips());
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PassengersScreen(
+            trip: trip,
+            currentUserId: widget.authResult.userId,
+            onCancelBooking: (passengerId) async => await _cancelBooking(trip['id'].toString(), passengerId),
+            authResult: widget.authResult,
+          ),
+        ),
+      ).then((_) => _loadTrips()); // Refresh list when returning
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: isLoading
-          ? ListView.builder(itemCount: 3, itemBuilder: (context, index) => const ShimmerListItem())
-          : error.isNotEmpty
-          ? Center(child: Text(error, style: const TextStyle(color: Colors.red)))
-          : trips.isEmpty
-          ? const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>''', message: 'لا توجد رحلات مجدولة متاحة حالياً.')
-          : RefreshIndicator(
-        onRefresh: _loadTrips,
-        child: AnimationLimiter(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: trips.length,
-            itemBuilder: (context, index) {
-              final trip = trips[index];
-              final passengers = (trip['passengers'] as List?) ?? [];
-              final totalSeats = int.tryParse(trip['total_seats'].toString()) ?? 0;
-              final bookedSeatsCount = passengers.fold<int>(0, (sum, p) => sum + (p['quantity'] as int? ?? 1));
-              final availableSeats = totalSeats - bookedSeatsCount;
-              final userBookings = passengers.where((p) => p['user_id']?.toString() == widget.authResult.userId).toList();
-              final userBookedSeats = userBookings.fold<int>(0, (sum, p) => sum + (p['quantity'] as int? ?? 1));
-              final driver = (trip['driver'] as Map?) ?? {};
-              return AnimationConfiguration.staggeredList(
-                position: index,
-                duration: const Duration(milliseconds: 375),
-                child: SlideAnimation(
-                  verticalOffset: 50.0,
-                  child: FadeInAnimation(
-                    child: Card(
-                      margin: const EdgeInsets.only(bottom: 16),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+      body: Column(
+        children: [
+          _buildSearchBar(),
+          Expanded(child: _buildContent()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: DropdownButtonFormField<String>(value: _searchFromProvince, hint: const Text('من محافظة...'), items: iraqiProvinces.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(), onChanged: (val) => setState(() => _searchFromProvince = val), isExpanded: true)),
+              const SizedBox(width: 10),
+              Expanded(child: DropdownButtonFormField<String>(value: _searchToProvince, hint: const Text('إلى محافظة...'), items: iraqiProvinces.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(), onChanged: (val) => setState(() => _searchToProvince = val), isExpanded: true)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(child: ElevatedButton.icon(onPressed: _loadTrips, icon: const Icon(Icons.search), label: const Text('بحث'))),
+              const SizedBox(width: 10),
+              IconButton(icon: const Icon(Icons.clear, color: Colors.grey), onPressed: () { setState(() { _searchFromProvince = null; _searchToProvince = null; }); _loadTrips(); }, tooltip: 'مسح البحث'),
+            ],
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _tripsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return ListView.builder(itemCount: 5, itemBuilder: (context, index) => const ShimmerListItem());
+        }
+        if (snapshot.hasError) {
+          return Center(child: Padding(padding: const EdgeInsets.all(16.0), child: Text('${snapshot.error}'.replaceAll("Exception: ", ""), style: const TextStyle(color: Colors.red, fontSize: 16), textAlign: TextAlign.center)));
+        }
+        final trips = snapshot.data;
+        if (trips == null || trips.isEmpty) {
+          return EmptyStateWidget(svgAsset: '', message: 'لا توجد رحلات متاحة تطابق بحثك حالياً.', buttonText: 'اطلب سيارة خصوصي', onButtonPressed: () { final customerMainScreenState = context.findAncestorStateOfType<_CustomerMainScreenState>(); customerMainScreenState?._changeTab(2); });
+        }
+        return RefreshIndicator(
+          onRefresh: () async => _loadTrips(),
+          child: AnimationLimiter(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: trips.length,
+              itemBuilder: (context, index) {
+                final trip = trips[index];
+                final driver = (trip['driver'] is Map<String, dynamic>) ? trip['driver'] as Map<String, dynamic> : <String, dynamic>{};
+                final fromText = "${trip['from_province'] ?? ''} - ${trip['from'] ?? ''}";
+                final toText = "${trip['to_province'] ?? ''} - ${trip['to'] ?? ''}";
+                final pricePerSeat = double.tryParse(trip['price_per_seat']?.toString() ?? '0.0') ?? 0.0;
+                final passengers = (trip['passengers'] is List) ? trip['passengers'] as List : [];
+                final totalSeats = int.tryParse(trip['total_seats']?.toString() ?? '0') ?? 0;
+                final bookedSeatsCount = passengers.fold<int>(0, (sum, p) => sum + (int.tryParse(p['quantity']?.toString() ?? '1') ?? 1));
+                final availableSeats = totalSeats - bookedSeatsCount;
+                final userBookings = passengers.where((p) => p['user_id']?.toString() == widget.authResult.userId).toList();
+                final userBookedSeats = userBookings.fold<int>(0, (sum, p) => sum + (int.tryParse(p['quantity']?.toString() ?? '1') ?? 1));
+
+                return AnimationConfiguration.staggeredList(
+                  position: index,
+                  duration: const Duration(milliseconds: 375),
+                  child: SlideAnimation(
+                    verticalOffset: 50.0,
+                    child: FadeInAnimation(
+                      child: Card(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
                           children: [
-                            Row(children: [
-                              Container(width: 60, height: 60, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.blue, width: 2)), child: ClipOval(child: driver['image'] != null && driver['image'].toString().isNotEmpty ? Image.network(driver['image'].toString(), fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 30)) : const Icon(Icons.person, size: 30))),
-                              const SizedBox(width: 12),
-                              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(driver['name']?.toString() ?? 'غير معروف', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 4), Text('${driver['car_model'] ?? ''} - ${driver['car_color'] ?? ''}', style: const TextStyle(color: Colors.grey))]))
-                            ]),
-                            const Divider(height: 24),
-                            Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Expanded(child: Text(trip['from'].toString(), style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center)), const Icon(Icons.arrow_forward, color: Colors.blue), Expanded(child: Text(trip['to'].toString(), style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center))])),
-                            const SizedBox(height: 16),
-                            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [_buildInfoItem(Icons.calendar_today, _formatDate(trip['date'].toString()), Colors.blue), _buildInfoItem(Icons.access_time, trip['time'].toString(), Colors.orange), _buildInfoItem(Icons.event_seat, '$bookedSeatsCount/$totalSeats', availableSeats > 0 ? Colors.green : Colors.red)]),
-                            const SizedBox(height: 16),
-                            Row(children: [
-                              Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.people, size: 18), label: Text('عرض الركاب (${passengers.length})'), onPressed: passengers.isNotEmpty ? () => _showPassengersScreen(trip) : null)),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                  child: userBookedSeats > 0
-                                      ? ElevatedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 18), label: Text('إلغاء ($userBookedSeats)'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () => _showPassengersScreen(trip))
-                                      : ElevatedButton.icon(icon: const Icon(Icons.add_shopping_cart, size: 18), label: const Text('حجز مقعد'), style: ElevatedButton.styleFrom(backgroundColor: availableSeats > 0 ? Colors.blue : Colors.grey, foregroundColor: Colors.white), onPressed: availableSeats > 0 ? () => _showBookingDialog(trip) : null))
-                            ]),
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(children: [
+                                    Container(width: 60, height: 60, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.blue, width: 2)), child: ClipOval(child: driver['image'] != null && driver['image'].toString().isNotEmpty ? Image.network(driver['image'].toString(), fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 30)) : const Icon(Icons.person, size: 30))),
+                                    const SizedBox(width: 12),
+                                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(driver['name']?.toString() ?? 'غير معروف', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 4), Text('${driver['car_model'] ?? ''} - ${driver['car_color'] ?? ''}', style: const TextStyle(color: Colors.grey))])),
+                                    IconButton(icon: const Icon(Icons.call, color: Colors.green, size: 30), onPressed: () => makePhoneCall(driver['phone'], context), tooltip: 'الاتصال بالسائق')
+                                  ]),
+                                  const Divider(height: 24),
+                                  Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Expanded(child: Text(fromText, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center, overflow: TextOverflow.ellipsis)), const Icon(Icons.arrow_forward, color: Colors.blue), Expanded(child: Text(toText, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center, overflow: TextOverflow.ellipsis))])),
+                                  const SizedBox(height: 16),
+                                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [_buildInfoItem(Icons.calendar_today, _formatDate(trip['date'].toString()), Colors.blue), _buildInfoItem(Icons.access_time, trip['time'].toString(), Colors.orange), _buildInfoItem(Icons.event_seat, '$bookedSeatsCount/$totalSeats', availableSeats > 0 ? Colors.green : Colors.red)]),
+                                  const SizedBox(height: 16),
+                                  Row(children: [
+                                    Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.people, size: 18), label: Text('عرض الركاب (${passengers.length})'), onPressed: userBookings.isNotEmpty ? () => _showPassengersScreen(trip) : null)),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                        child: userBookedSeats > 0
+                                            ? ElevatedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 18), label: Text('إلغاء ($userBookedSeats)'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () => _showPassengersScreen(trip))
+                                            : ElevatedButton.icon(icon: const Icon(Icons.add_shopping_cart, size: 18), label: const Text('حجز مقعد'), style: ElevatedButton.styleFrom(backgroundColor: availableSeats > 0 ? Colors.blue : Colors.grey, foregroundColor: Colors.white), onPressed: availableSeats > 0 ? () => _showBookingDialog(trip) : null))
+                                  ]),
+                                ],
+                              ),
+                            ),
+                            Positioned(
+                              top: 0,
+                              left: 0,
+                              child: Chip(
+                                label: Text("${NumberFormat.decimalPattern('ar').format(pricePerSeat)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                                backgroundColor: Colors.green,
+                                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.only(bottomRight: Radius.circular(12))),
+                              ),
+                            ),
                           ],
                         ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -3654,9 +4377,9 @@ class _TripListScreenState extends State<TripListScreen> {
   }
 }
 
+
 // =============================================================================
-// All other remaining classes (PassengersScreen, Chat, Rating, etc.)
-// These are included here for completeness but are unchanged from the source.
+// PassengersScreen & RatingDialog (Required for TripListScreen)
 // =============================================================================
 
 class PassengersScreen extends StatelessWidget {
@@ -3686,17 +4409,26 @@ class PassengersScreen extends StatelessWidget {
     final isTripOver = DateTime.parse(trip['date']).isBefore(DateTime.now());
     final bool canRate = isTripOver && !isDriver && currentUserBookings.isNotEmpty;
 
+    // <-- FIX: Collect all participant IDs for group chat.
+    final Set<String> participantIds = {};
+    if (trip['driver']?['user_id'] != null) {
+      participantIds.add(trip['driver']['user_id'].toString());
+    }
+    for (var p in passengers) {
+      if (p['user_id'] != null) {
+        participantIds.add(p['user_id'].toString());
+      }
+    }
+    final Map<String, String> participantsMap = { for (var id in participantIds) id : id };
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('قائمة الركاب'),
         centerTitle: true,
         actions: [
+          // <-- FIX: Chat button is now fully functional for group chat.
           TextButton.icon(
-            icon: ChatIconWithBadge(
-              chatId: 'trip_${trip['id']}',
-              currentUserId: authResult.userId,
-              onPressed: () {},
-            ),
+            icon: const Icon(Icons.chat_bubble_outline),
             label: const Text("محادثة الرحلة"),
             onPressed: () {
               Navigator.of(context).push(MaterialPageRoute(
@@ -3704,7 +4436,7 @@ class PassengersScreen extends StatelessWidget {
                   chatId: 'trip_${trip['id']}',
                   chatName: 'مجموعة رحلة ${trip['from']} - ${trip['to']}',
                   authResult: authResult,
-                  participants: {},
+                  participants: participantsMap,
                 ),
               ));
             },
@@ -3716,18 +4448,10 @@ class PassengersScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [Text('${trip['from']} → ${trip['to']}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center), const SizedBox(height: 8), Text('${_formatDate(trip['date'].toString())} - ${trip['time']}', style: const TextStyle(color: Colors.grey)), const SizedBox(height: 8), Text('المقاعد: ${passengers.fold<int>(0, (sum, p) => sum + (p['quantity'] as int? ?? 1))}/$totalSeats (المتبقي: ${totalSeats - passengers.fold<int>(0, (sum, p) => sum + (p['quantity'] as int? ?? 1))})', style: const TextStyle(fontWeight: FontWeight.bold))]))),
+            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [Text('${trip['from']} → ${trip['to']}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center), const SizedBox(height: 8), Text('${_formatDate(trip['date'].toString())} - ${trip['time']}', style: const TextStyle(color: Colors.grey)), const SizedBox(height: 8), Text('المقاعد: ${passengers.fold<int>(0, (sum, p) => sum + (int.tryParse(p['quantity']?.toString() ?? '1') ?? 1))}/$totalSeats', style: const TextStyle(fontWeight: FontWeight.bold))]))),
             if (canRate) ...[
               const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () => _showRatingDialog(context),
-                  icon: const Icon(Icons.star),
-                  label: const Text('تقييم السائق'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-                ),
-              ),
+              SizedBox(width: double.infinity, child: ElevatedButton.icon(onPressed: () => _showRatingDialog(context), icon: const Icon(Icons.star), label: const Text('تقييم السائق'), style: ElevatedButton.styleFrom(backgroundColor: Colors.amber))),
             ],
             const SizedBox(height: 16),
             if (!isDriver) ...[
@@ -3743,14 +4467,10 @@ class PassengersScreen extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final passenger = currentUserBookings[index];
                   return ListTile(
-                    leading: CircleAvatar(backgroundColor: Colors.blue.withOpacity(0.2), child: Text('${index + 1}')),
+                    leading: CircleAvatar(backgroundColor: Colors.blue.withOpacity(0.2), child: Text('${passenger['quantity'] ?? 1}')),
                     title: Text(passenger['name']?.toString() ?? 'غير معروف'),
-                    subtitle: Text('معرف الحجز: ${passenger['id']?.toString() ?? ''}', style: const TextStyle(fontSize: 10, color: Colors.blueGrey)),
-                    trailing: IconButton(icon: const Icon(Icons.cancel, color: Colors.red), onPressed: () => showDialog(context: context, builder: (dialogContext) => AlertDialog(title: const Text('تأكيد الإلغاء'), content: const Text('هل أنت متأكد من إلغاء هذا المقعد؟'), actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('لا')), TextButton(onPressed: () async {
-                      Navigator.pop(dialogContext);
-                      await onCancelBooking(passenger['id'].toString());
-                      if (context.mounted) Navigator.pop(context);
-                    }, child: const Text('نعم، إلغاء'))]))),
+                    subtitle: Text('رقم الهاتف: ${passenger['phone']?.toString() ?? ''}', style: const TextStyle(fontSize: 12, color: Colors.blueGrey)),
+                    trailing: IconButton(icon: const Icon(Icons.cancel, color: Colors.red), onPressed: () => showDialog(context: context, builder: (dialogContext) => AlertDialog(title: const Text('تأكيد الإلغاء'), content: const Text('هل أنت متأكد من إلغاء هذا الحجز؟'), actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('لا')), TextButton(onPressed: () async { Navigator.pop(dialogContext); await onCancelBooking(passenger['id'].toString()); if (context.mounted) Navigator.pop(context); }, child: const Text('نعم، إلغاء'))]))),
                   );
                 },
               ),
@@ -3768,7 +4488,7 @@ class PassengersScreen extends StatelessWidget {
               itemBuilder: (context, index) {
                 final passenger = passengers[index];
                 return ListTile(
-                  leading: CircleAvatar(backgroundColor: Colors.grey.withOpacity(0.2), child: Text('${index + 1}')),
+                  leading: CircleAvatar(backgroundColor: Colors.grey.withOpacity(0.2), child: Text('${passenger['quantity'] ?? 1}')),
                   title: Text(passenger['name']?.toString() ?? 'غير معروف'),
                   subtitle: isDriver ? Text('العنوان: ${passenger['address']?.toString() ?? 'غير محدد'}', style: const TextStyle(fontSize: 12)) : null,
                   trailing: isDriver ? IconButton(icon: const Icon(Icons.call, color: Colors.green), onPressed: () => makePhoneCall(passenger['phone'], context)) : null,
@@ -3781,7 +4501,6 @@ class PassengersScreen extends StatelessWidget {
     );
   }
 }
-
 class DriverCreateTripScreen extends StatefulWidget {
   final AuthResult authResult;
   const DriverCreateTripScreen({super.key, required this.authResult});
@@ -3789,14 +4508,34 @@ class DriverCreateTripScreen extends StatefulWidget {
   State<DriverCreateTripScreen> createState() => _DriverCreateTripScreenState();
 }
 
+
 class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _fromController = TextEditingController();
-  final _toController = TextEditingController();
+  final _fromLocationController = TextEditingController();
+  final _toLocationController = TextEditingController();
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
   final _seatsController = TextEditingController();
+  final _priceController = TextEditingController();
+
+  String? _fromProvince;
+  String? _toProvince;
+
   bool _isLoading = false;
+
+  final List<String> iraqiProvinces = [ 'بغداد', 'البصرة', 'نينوى (الموصل)', 'أربيل', 'السليمانية', 'دهوك', 'الأنبار', 'بابل', 'القادسية (الديوانية)', 'ديالى', 'ذي قار (الناصرية)', 'صلاح الدين', 'كركوك', 'كربلاء', 'المثنى (السماوة)', 'ميسان (العمارة)', 'النجف', 'واسط (الكوت)' ];
+
+  @override
+  void dispose() {
+    _fromLocationController.dispose();
+    _toLocationController.dispose();
+    _dateController.dispose();
+    _timeController.dispose();
+    _seatsController.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
   Future<void> _selectDate() async {
     DateTime? picked = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 30)));
     if (picked != null) setState(() => _dateController.text = DateFormat('yyyy-MM-dd').format(picked));
@@ -3811,18 +4550,37 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/create-trip'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'from': _fromController.text, 'to': _toController.text, 'date': _dateController.text, 'time': _timeController.text, 'seats': _seatsController.text}));
+      final response = await http.post(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/create-trip'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'},
+          body: json.encode({
+            'from_province': _fromProvince,
+            'from': _fromLocationController.text,
+            'to_province': _toProvince,
+            'to': _toLocationController.text,
+            'date': _dateController.text,
+            'time': _timeController.text,
+            'seats': _seatsController.text,
+            'price_per_seat': _priceController.text
+          })
+      );
       final data = json.decode(response.body);
       if (mounted) {
         if (response.statusCode == 201 && data['success'] == true) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          NotificationService.showNotification('رحلة جديدة متاحة!', 'تم إضافة رحلة من ${_fromController.text} إلى ${_toController.text}. اضغط للحجز.', payload: '{"userType": "customer", "targetScreen": "trips"}', type: 'default');
-          _formKey.currentState?.reset();
-          _fromController.clear();
-          _toController.clear();
+
+          _fromLocationController.clear();
+          _toLocationController.clear();
           _dateController.clear();
           _timeController.clear();
           _seatsController.clear();
+          _priceController.clear();
+          setState(() {
+            _fromProvince = null;
+            _toProvince = null;
+          });
+          _formKey.currentState?.reset();
+
         } else {
           throw Exception(data['message'] ?? 'فشل إنشاء الرحلة');
         }
@@ -3845,15 +4603,33 @@ class _DriverCreateTripScreenState extends State<DriverCreateTripScreen> {
           key: _formKey,
           child: Column(
             children: [
-              TextFormField(controller: _fromController, decoration: const InputDecoration(labelText: 'من'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+              DropdownButtonFormField<String>(
+                value: _fromProvince,
+                decoration: const InputDecoration(labelText: 'محافظة الانطلاق'),
+                items: iraqiProvinces.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
+                onChanged: (val) => setState(() => _fromProvince = val),
+                validator: (v) => v == null ? 'الحقل مطلوب' : null,
+              ),
               const SizedBox(height: 15),
-              TextFormField(controller: _toController, decoration: const InputDecoration(labelText: 'إلى'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+              TextFormField(controller: _fromLocationController, decoration: const InputDecoration(labelText: 'من (المنطقة/العنوان)'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+              const SizedBox(height: 15),
+              DropdownButtonFormField<String>(
+                value: _toProvince,
+                decoration: const InputDecoration(labelText: 'محافظة الوصول'),
+                items: iraqiProvinces.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
+                onChanged: (val) => setState(() => _toProvince = val),
+                validator: (v) => v == null ? 'الحقل مطلوب' : null,
+              ),
+              const SizedBox(height: 15),
+              TextFormField(controller: _toLocationController, decoration: const InputDecoration(labelText: 'إلى (المنطقة/العنوان)'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
               const SizedBox(height: 15),
               TextFormField(controller: _dateController, decoration: const InputDecoration(labelText: 'التاريخ', prefixIcon: Icon(Icons.calendar_today)), readOnly: true, onTap: _selectDate, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
               const SizedBox(height: 15),
               TextFormField(controller: _timeController, decoration: const InputDecoration(labelText: 'الوقت', prefixIcon: Icon(Icons.access_time)), readOnly: true, onTap: _selectTime, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
               const SizedBox(height: 15),
               TextFormField(controller: _seatsController, decoration: const InputDecoration(labelText: 'عدد المقاعد'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+              const SizedBox(height: 15),
+              TextFormField(controller: _priceController, decoration: const InputDecoration(labelText: 'سعر المقعد الواحد (دينار عراقي)'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
               const SizedBox(height: 30),
               SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _isLoading ? null : _submit, child: _isLoading ? const CircularProgressIndicator() : const Text('إنشاء الرحلة'))),
             ],
@@ -3871,10 +4647,9 @@ class DriverMyTripsScreen extends StatefulWidget {
   @override
   State<DriverMyTripsScreen> createState() => _DriverMyTripsScreenState();
 }
-
 class _DriverMyTripsScreenState extends State<DriverMyTripsScreen> {
-  List<dynamic>? _myTrips;
-  bool _isLoading = true;
+  Future<List<dynamic>>? _myTripsFuture;
+
   @override
   void initState() {
     super.initState();
@@ -3882,65 +4657,91 @@ class _DriverMyTripsScreenState extends State<DriverMyTripsScreen> {
   }
 
   Future<void> _fetchMyTrips() async {
-    setState(() => _isLoading = true);
-    try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/my-trips'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
-      if (response.statusCode == 200 && mounted) {
-        final data = json.decode(response.body);
-        setState(() => _myTrips = data['trips']);
-      }
-    } on SocketException {
-      debugPrint("Network error fetching my trips.");
-    } catch (e) {
-      debugPrint("Failed to fetch my trips: $e");
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+    setState(() {
+      _myTripsFuture = http.get(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/my-trips'),
+          headers: {'Authorization': 'Bearer ${widget.authResult.token}'}
+      ).then((response) {
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          if (data['success'] == true && data['trips'] is List) {
+            return data['trips'];
+          }
+        }
+        throw Exception('Failed to load driver trips');
+      });
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _isLoading
-          ? ListView.builder(itemCount: 4, itemBuilder: (context, index) => const ShimmerListItem())
-          : _myTrips == null || _myTrips!.isEmpty
-          ? EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>''', message: 'لم تقم بإنشاء أي رحلات بعد.', buttonText: 'إنشاء رحلة جديدة', onButtonPressed: widget.navigateToCreate)
-          : RefreshIndicator(
-        onRefresh: _fetchMyTrips,
-        child: AnimationLimiter(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: _myTrips!.length,
-            itemBuilder: (context, index) {
-              final trip = _myTrips![index];
-              final passengers = (trip['passengers'] as List?) ?? [];
-              return AnimationConfiguration.staggeredList(
-                position: index,
-                duration: const Duration(milliseconds: 375),
-                child: SlideAnimation(
-                  verticalOffset: 50.0,
-                  child: FadeInAnimation(
-                    child: Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: ListTile(
-                        title: Text('${trip['from']} → ${trip['to']}'),
-                        subtitle: Text('${_formatDate(trip['date'])} - ${trip['time']}'),
-                        trailing: Text('${passengers.length} / ${trip['total_seats']} مقاعد'),
-                        onTap: () {
-                          if (mounted) {
-                            Navigator.push(context, MaterialPageRoute(builder: (_) => PassengersScreen(trip: trip, currentUserId: widget.authResult.userId, onCancelBooking: (_) {
-                              return Future.value();
-                            }, authResult: widget.authResult)));
-                          }
-                        },
+      body: FutureBuilder<List<dynamic>>(
+          future: _myTripsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return ListView.builder(itemCount: 4, itemBuilder: (context, index) => const ShimmerListItem());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text("خطأ: ${snapshot.error}"));
+            }
+            final myTrips = snapshot.data;
+            if (myTrips == null || myTrips.isEmpty) {
+              return Center(child: Text("لم تقم بإنشاء أي رحلات بعد."));
+            }
+
+            return RefreshIndicator(
+              onRefresh: _fetchMyTrips,
+              child: AnimationLimiter(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: myTrips.length,
+                  itemBuilder: (context, index) {
+                    final trip = myTrips[index];
+                    final passengers = (trip['passengers'] as List?) ?? [];
+
+                    // <-- FIX: Calculate total booked seats correctly by summing quantities.
+                    final bookedSeatsCount = passengers.fold<int>(0, (sum, p) {
+                      final quantity = int.tryParse(p['quantity']?.toString() ?? '1') ?? 1;
+                      return sum + quantity;
+                    });
+
+                    return AnimationConfiguration.staggeredList(
+                      position: index,
+                      duration: const Duration(milliseconds: 375),
+                      child: SlideAnimation(
+                        verticalOffset: 50.0,
+                        child: FadeInAnimation(
+                          child: Card(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            child: ListTile(
+                              title: Text('${trip['from']} → ${trip['to']}'),
+                              subtitle: Text('${_formatDate(trip['date'])} - ${trip['time']}'),
+                              // <-- FIX: Display the correct booked seats count.
+                              trailing: Text('$bookedSeatsCount / ${trip['total_seats']} مقاعد'),
+                              onTap: () {
+                                if (mounted) {
+                                  Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => PassengersScreen(
+                                          trip: trip,
+                                          currentUserId: widget.authResult.userId,
+                                          onCancelBooking: (_) async {}, // Driver cannot cancel bookings
+                                          authResult: widget.authResult
+                                      ))
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
-        ),
+              ),
+            );
+          }
       ),
     );
   }
@@ -4923,7 +5724,7 @@ class DriverOfferCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              "عرض السائق سعر اعلى هل توافق على السعر ام لا من ${driverDetails['name'] ?? 'سائق'}!",
+              "عرض السائق سعر اعلى هل توافق على السعر ام نبحث لكل عن سائق اخر ${driverDetails['name'] ?? 'سائق'}!",
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 color: Theme.of(context).primaryColor,
                 fontWeight: FontWeight.bold,
@@ -4987,6 +5788,588 @@ class DriverOfferCard extends StatelessWidget {
               ],
             )
           ],
+        ),
+      ),
+    );
+  }
+}
+// --- شاشة إدارة الخطوط للسائق ---
+class DriverLinesManagementScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const DriverLinesManagementScreen({super.key, required this.authResult});
+
+  @override
+  State<DriverLinesManagementScreen> createState() => _DriverLinesManagementScreenState();
+}
+
+class _DriverLinesManagementScreenState extends State<DriverLinesManagementScreen> {
+  Future<List<dynamic>>? _myLinesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMyLines();
+  }
+
+  Future<void> _loadMyLines() async {
+    setState(() {
+      _myLinesFuture = ApiService.getMyStudentLines(widget.authResult.token);
+    });
+  }
+
+  void _navigateAndRefresh() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => DriverCreateStudentLineScreen(authResult: widget.authResult)),
+    );
+    if (result == true && mounted) {
+      _loadMyLines();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: _loadMyLines,
+        child: FutureBuilder<List<dynamic>>(
+          future: _myLinesFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text("خطأ في تحميل البيانات: ${snapshot.error.toString()}"));
+            }
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return EmptyStateWidget(
+                svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>''',
+                message: 'لم تقم بإنشاء أي خطوط بعد.',
+                buttonText: 'إنشاء خط جديد الآن',
+                onButtonPressed: _navigateAndRefresh,
+              );
+            }
+            final lines = snapshot.data!;
+            return ListView.builder(
+              padding: const EdgeInsets.all(8.0),
+              itemCount: lines.length,
+              itemBuilder: (context, index) {
+                final line = lines[index];
+                final students = line['students'] as List? ?? [];
+                return Card(
+                  margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      child: const Icon(Icons.school_outlined),
+                      backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                    ),
+                    title: Text("خط إلى: ${line['destination_name']}"),
+                    subtitle: Text("المشتركون: ${students.length} / ${line['total_seats']}"),
+                    trailing: const Icon(Icons.arrow_forward_ios),
+                    // ========  الكود المصحح هنا ========
+                    // تم تفعيل الانتقال إلى شاشة التفاصيل الجديدة
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => DriverLineDetailsScreen(
+                            line: line,
+                            authResult: widget.authResult,
+                            onDataChanged: _loadMyLines, // تمرير دالة التحديث
+                          ),
+                        ),
+                      );
+                    },
+                    // ======== نهاية الكود المصحح ========
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _navigateAndRefresh,
+        label: const Text('إنشاء خط جديد'),
+        icon: const Icon(Icons.add),
+        backgroundColor: Colors.deepPurple,
+      ),
+    );
+  }
+}
+class DriverCreateStudentLineScreen extends StatefulWidget {
+  final AuthResult authResult;
+  const DriverCreateStudentLineScreen({super.key, required this.authResult});
+
+  @override
+  State<DriverCreateStudentLineScreen> createState() => _DriverCreateStudentLineScreenState();
+}
+
+class _DriverCreateStudentLineScreenState extends State<DriverCreateStudentLineScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _destinationController = TextEditingController();
+  final _timeController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _seatsController = TextEditingController();
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _destinationController.dispose();
+    _timeController.dispose();
+    _priceController.dispose();
+    _seatsController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _selectTime() async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _timeController.text = picked.format(context);
+      });
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _isLoading = true);
+
+    try {
+      final body = {
+        'destination_name': _destinationController.text,
+        'start_time': _timeController.text,
+        'price_per_seat': _priceController.text,
+        'total_seats': _seatsController.text,
+      };
+
+      final response = await ApiService.createStudentLine(widget.authResult.token, body);
+      final data = json.decode(response.body);
+
+      if (mounted) {
+        if (response.statusCode == 201 && data['success'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(data['message']), backgroundColor: Colors.green),
+          );
+          Navigator.of(context).pop(true); // الرجوع مع نتيجة إيجابية لتحديث القائمة
+        } else {
+          throw Exception(data['message'] ?? 'فشل إنشاء الخط');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('إنشاء خط طلاب جديد'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _destinationController,
+                decoration: const InputDecoration(labelText: 'اسم الوجهة (مثال: جامعة الكوت)'),
+                validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _timeController,
+                decoration: const InputDecoration(labelText: 'وقت الانطلاق', prefixIcon: Icon(Icons.access_time)),
+                readOnly: true,
+                onTap: _selectTime,
+                validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _priceController,
+                decoration: const InputDecoration(labelText: 'سعر الاشتراك (دينار عراقي)'),
+                keyboardType: TextInputType.number,
+                validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _seatsController,
+                decoration: const InputDecoration(labelText: 'إجمالي المقاعد المتاحة'),
+                keyboardType: TextInputType.number,
+                validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _submit,
+                  child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('تأكيد وإنشاء الخط'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+// =============================================================================
+// 5. شاشة جديدة: تفاصيل خط الطلاب (للسائق)
+class DriverLineDetailsScreen extends StatefulWidget {
+  final Map<String, dynamic> line;
+  final AuthResult authResult;
+  final VoidCallback onDataChanged; // Callback لتحديث الشاشة السابقة
+
+  const DriverLineDetailsScreen({
+    super.key,
+    required this.line,
+    required this.authResult,
+    required this.onDataChanged,
+  });
+
+  @override
+  State<DriverLineDetailsScreen> createState() => _DriverLineDetailsScreenState();
+}
+
+class _DriverLineDetailsScreenState extends State<DriverLineDetailsScreen> {
+  late List<dynamic> _students;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // نسخ قائمة الطلاب إلى متغير محلي للسماح بالتعديل الفوري في الواجهة
+    _students = List<dynamic>.from(widget.line['students'] ?? []);
+  }
+
+  Future<void> _updateStudentStatus(int studentIndex, String newStatus) async {
+    setState(() => _isLoading = true);
+    try {
+      final body = {
+        'line_id': widget.line['id'],
+        'student_row_index': studentIndex, // Backend يتوقع index يبدأ من 0
+        'new_status': newStatus,
+      };
+      final response = await ApiService.updateStudentStatus(widget.authResult.token, body);
+      final data = json.decode(response.body);
+
+      if (mounted) {
+        if (response.statusCode == 200 && data['success'] == true) {
+          // تحديث الحالة محلياً في الواجهة فوراً
+          setState(() {
+            _students[studentIndex]['pickup_status'] = newStatus;
+          });
+          widget.onDataChanged(); // إعلام الشاشة السابقة بوجود تغيير
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(data['message']), backgroundColor: Colors.green),
+          );
+        } else {
+          throw Exception(data['message'] ?? 'فشل تحديث الحالة');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // بناء قائمة المشاركين في المحادثة
+    final Set<String> participantIds = {widget.authResult.userId}; // إضافة السائق
+    for (var student in _students) {
+      if (student['booked_by_user_id'] != null) {
+        participantIds.add(student['booked_by_user_id'].toString());
+      }
+    }
+    final Map<String, String> participantsMap = { for (var id in participantIds) id : id };
+
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("تفاصيل خط: ${widget.line['destination_name']}"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.chat_bubble_outline),
+            tooltip: 'محادثة الخط',
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => ChatScreen(
+                  chatId: 'line_${widget.line['id']}',
+                  chatName: 'مجموعة خط ${widget.line['destination_name']}',
+                  authResult: widget.authResult,
+                  participants: participantsMap,
+                ),
+              ));
+            },
+          )
+        ],
+      ),
+      body: Stack(
+        children: [
+          _students.isEmpty
+              ? const Center(child: Text('لا يوجد طلاب مشتركين في هذا الخط بعد.'))
+              : ListView.builder(
+            padding: const EdgeInsets.all(12.0),
+            itemCount: _students.length,
+            itemBuilder: (context, index) {
+              final student = _students[index];
+              return _StudentStatusCard(
+                student: student,
+                onUpdateStatus: (newStatus) {
+                  _updateStudentStatus(index, newStatus);
+                },
+              );
+            },
+          ),
+          if (_isLoading) Container(color: Colors.black.withOpacity(0.2), child: const Center(child: CircularProgressIndicator())),
+        ],
+      ),
+    );
+  }
+}
+
+// ويدجت جديد لعرض بطاقة الطالب بشكل عصري
+class _StudentStatusCard extends StatelessWidget {
+  final Map<String, dynamic> student;
+  final Function(String) onUpdateStatus;
+
+  const _StudentStatusCard({required this.student, required this.onUpdateStatus});
+
+  @override
+  Widget build(BuildContext context) {
+    final currentStatus = student['pickup_status'] ?? 'pending';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // اسم الطالب
+            Text(
+              student['student_name'] ?? 'اسم غير معروف',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+            ),
+            const Divider(height: 20),
+
+            // معلومات الاتصال
+            _buildContactRow(
+              context,
+              icon: Icons.person_outline,
+              label: "هاتف الطالب:",
+              phone: student['student_phone'],
+              color: Colors.blue,
+            ),
+            const SizedBox(height: 8),
+            _buildContactRow(
+              context,
+              icon: Icons.shield_outlined,
+              label: "ولي الأمر:",
+              phone: student['parent_phone'],
+              color: Colors.green,
+            ),
+            const SizedBox(height: 8),
+            _buildInfoRow(Icons.location_on_outlined, "العنوان:", student['pickup_address']),
+
+            const Divider(height: 20),
+
+            // أزرار تحديث الحالة
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildStatusButton(
+                  context: context,
+                  label: 'تم الصعود',
+                  icon: Icons.directions_bus,
+                  status: 'picked_up',
+                  currentStatus: currentStatus,
+                  onPressed: () => onUpdateStatus('picked_up'),
+                ),
+                _buildStatusButton(
+                  context: context,
+                  label: 'وصلنا',
+                  icon: Icons.school,
+                  status: 'dropped_off',
+                  currentStatus: currentStatus,
+                  onPressed: () => onUpdateStatus('dropped_off'),
+                ),
+              ],
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String? value) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.grey[600], size: 20),
+        const SizedBox(width: 8),
+        Text(label, style: TextStyle(color: Colors.grey[700])),
+        const SizedBox(width: 4),
+        Expanded(child: Text(value ?? 'غير محدد', style: const TextStyle(fontWeight: FontWeight.bold))),
+      ],
+    );
+  }
+
+  Widget _buildContactRow(BuildContext context, {required IconData icon, required String label, required String? phone, required Color color}) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 8),
+        Text(label, style: TextStyle(color: Colors.grey[700])),
+        const SizedBox(width: 4),
+        Expanded(child: Text(phone ?? 'غير متوفر', style: const TextStyle(fontWeight: FontWeight.bold))),
+        IconButton(
+          icon: Icon(Icons.call, color: color),
+          onPressed: phone != null ? () => makePhoneCall(phone, context) : null,
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatusButton({
+    required BuildContext context,
+    required String label,
+    required IconData icon,
+    required String status,
+    required String currentStatus,
+    required VoidCallback onPressed,
+  }) {
+    final bool isActive = currentStatus == status;
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      label: Text(label),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isActive ? Colors.teal : Colors.grey[300],
+        foregroundColor: isActive ? Colors.white : Colors.black54,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 2. شاشة تسجيل دخول أولياء الأمور
+// =============================================================================
+// هذه الشاشة الآن تقوم بتسجيل دخول كامل وتحفظ الجلسة
+
+
+
+// =============================================================================
+// 3. لوحة تحكم أولياء الأمور
+// =============================================================================
+// هذه هي الشاشة الرئيسية لولي الأمر بعد تسجيل الدخول
+
+class ParentDashboardScreen extends StatefulWidget {
+  final AuthResult authResult;
+  final VoidCallback onLogout;
+  const ParentDashboardScreen({super.key, required this.authResult, required this.onLogout});
+
+  @override
+  State<ParentDashboardScreen> createState() => _ParentDashboardScreenState();
+}
+
+class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
+  Future<Map<String, dynamic>?>? _activeLineFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadActiveLine();
+  }
+
+  Future<void> _loadActiveLine() async {
+    setState(() {
+      _activeLineFuture = _fetchData();
+    });
+  }
+
+  Future<Map<String, dynamic>?> _fetchData() async {
+    try {
+      final phone = await ApiService._storage.read(key: 'phone_number');
+      if (phone == null) {
+        debugPrint("Parent phone number not found in storage.");
+        return null;
+      }
+
+      final response = await http.post(
+        Uri.parse('${ApiService.baseUrl}/taxi/v2/student-lines/track-by-parent'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'phone_number': phone}),
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['active_line'] != null) {
+          return Map<String, dynamic>.from(data['active_line']);
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint("Failed to fetch active line: $e");
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('مرحباً ${widget.authResult.displayName}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'تسجيل الخروج',
+            onPressed: widget.onLogout,
+          )
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _loadActiveLine,
+        child: FutureBuilder<Map<String, dynamic>?>(
+          future: _activeLineFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return const Center(child: Text('حدث خطأ أثناء تحميل البيانات.'));
+            }
+            if (snapshot.data == null) {
+              return EmptyStateWidget(
+                svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>''',
+                message: 'لا توجد رحلات نشطة لأبنائك حالياً.',
+              );
+            }
+            return ParentTrackingScreen(activeLineData: snapshot.data!);
+          },
         ),
       ),
     );

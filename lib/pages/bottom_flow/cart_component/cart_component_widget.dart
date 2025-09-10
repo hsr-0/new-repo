@@ -681,16 +681,16 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                                 0.0),
                                                                             child:
                                                                                 Text(
-                                                                              functions.formatPrice(
-                                                                                  functions.divideBy100(getJsonField(
-                                                                                    cartListItem,
-                                                                                    r'''$.prices.price''',
-                                                                                  ).toString()),
-                                                                                  FFAppState().thousandSeparator,
-                                                                                  FFAppState().decimalSeparator,
-                                                                                  FFAppState().decimalPlaces.toString(),
-                                                                                  FFAppState().currencyPosition,
-                                                                                  FFAppState().currency),
+                                                                                    functions.formatPrice(
+                                                                                        getJsonField(                           // <-- تم حذف الدالة
+                                                                                          cartListItem,
+                                                                                          r'''$.prices.price''',
+                                                                                        ).toString(),
+                                                                                        FFAppState().thousandSeparator,
+                                                                                        FFAppState().decimalSeparator,
+                                                                                        FFAppState().decimalPlaces.toString(),
+                                                                                        FFAppState().currencyPosition,
+                                                                                        FFAppState().currency),
                                                                               textAlign: TextAlign.start,
                                                                               style: FlutterFlowTheme.of(context).bodyMedium.override(
                                                                                     fontFamily: 'SF Pro Display',
@@ -823,7 +823,7 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                                                   ),
                                                                                                   TextSpan(
                                                                                                     text: functions.formatPrice(
-                                                                                                        functions.divideBy100(getJsonField(
+                                                                                                        (getJsonField(
                                                                                                           cartListItem,
                                                                                                           r'''$.totals.line_total''',
                                                                                                         ).toString()),
@@ -1799,10 +1799,10 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                               ),
                                                                             ),
                                                                             Text(
-                                                                              '-${functions.formatPrice(functions.divideBy100(getJsonField(
+                                                                              '-${functions.formatPrice(getJsonField(
                                                                                     couponeListItem,
                                                                                     r'''$.totals.total_discount''',
-                                                                                  ).toString()), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
+                                                                                  ).toString(), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
                                                                               textAlign: TextAlign.start,
                                                                               style: FlutterFlowTheme.of(context).bodyMedium.override(
                                                                                     fontFamily: 'SF Pro Display',

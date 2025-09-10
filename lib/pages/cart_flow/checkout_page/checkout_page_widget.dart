@@ -2030,7 +2030,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                           child:
                                                                               Text(
                                                                             functions.formatPrice(
-                                                                                functions.divideBy100(getJsonField(
+                                                                                (getJsonField(
                                                                                   cartListItem,
                                                                                   r'''$.prices.price''',
                                                                                 ).toString()),
@@ -2222,7 +2222,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                                 ),
                                                                                 TextSpan(
                                                                                   text: functions.formatPrice(
-                                                                                      functions.divideBy100(getJsonField(
+                                                                                      (getJsonField(
                                                                                         cartListItem,
                                                                                         r'''$.totals.line_total''',
                                                                                       ).toString()),
@@ -2873,20 +2873,20 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                             ),
                                                                           ),
                                                                           Text(
-                                                                            '-${functions.formatPrice(functions.divideBy100(getJsonField(
-                                                                                  couponeListItem,
-                                                                                  r'''$.totals.total_discount''',
-                                                                                ).toString()), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
+                                                                            '-${functions.formatPrice(getJsonField( // تم حذف الدالة الخاطئة من هنا
+                                                                              couponeListItem,
+                                                                              r'''$.totals.total_discount''',
+                                                                            ).toString(), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
                                                                             textAlign:
-                                                                                TextAlign.start,
+                                                                            TextAlign.start,
                                                                             style: FlutterFlowTheme.of(context).bodyMedium.override(
-                                                                                  fontFamily: 'SF Pro Display',
-                                                                                  color: FlutterFlowTheme.of(context).success,
-                                                                                  fontSize: 17.0,
-                                                                                  letterSpacing: 0.17,
-                                                                                  fontWeight: FontWeight.w500,
-                                                                                  useGoogleFonts: false,
-                                                                                  lineHeight: 1.5,
+                                                                              fontFamily: 'SF Pro Display',
+                                                                              color: FlutterFlowTheme.of(context).success,
+                                                                              fontSize: 17.0,
+                                                                              letterSpacing: 0.17,
+                                                                              fontWeight: FontWeight.w500,
+                                                                              useGoogleFonts: false,
+                                                                              lineHeight: 1.5,
                                                                                 ),
                                                                           ),
                                                                         ],
