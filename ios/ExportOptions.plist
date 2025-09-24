@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<!-- يحدد أن هذا الإصدار مخصص لمتجر التطبيقات -->
+<key>method</key>
+<string>app-store</string>
+
+<!-- يخبر Xcode أننا نستخدم التوقيع اليدوي الذي أعددناه -->
+<key>signingStyle</key>
+<string>manual</string>
+
+<!-- يربط معرّف التطبيق بالبروفايل الصحيح -->
+<key>provisioningProfiles</key>
+<dict>
+<!-- هذا هو معرّف الحزمة (Bundle ID) الخاص بتطبيقك -->
+<key>co.median.ios.wqwnby</key>
+<!-- ▼▼▼ هام: استبدل هذا بالاسم الدقيق الذي أعطيته للـ Provisioning Profile ▼▼▼ -->
+<string>Beytei App Store Profile</string>
+</dict>
+
+<!-- هذا هو معرّف فريقك في حساب مطوري آبل -->
+<key>teamID</key>
+<string>N9X252R2G</string>
+</dict>
+</plist>
+
