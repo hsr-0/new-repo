@@ -9,7 +9,6 @@ import '../../beytei_re/re.dart'as re;
 import '../../chat/chat.dart';
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
-import '../../pages/home_flow/sections_page_widget.dart';
 import '../../ph/ph.dart';
 import '../../taxi/tx.dart';
 import '../home_flow/splashbeytei.dart';
@@ -150,7 +149,7 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
     FFRoute(
       name: 'SectionsPage',
       path: '/sections',
-      builder: (context, _) => const  NotificationTestScreen(),
+      builder: (context, _) => const SectionsPageWidget(),
     ),
 
     // ✅ صفحة الـ Onboarding (كما كانت)
