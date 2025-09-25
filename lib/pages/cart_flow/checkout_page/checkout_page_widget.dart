@@ -50,10 +50,22 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
     _model = createModel(context, () => CheckoutPageModel());
 
     // On page load action.
+    // ...
     SchedulerBinding.instance.addPostFrameCallback((_) async {
       await action_blocks.responseAction(context);
-      safeSetState(() {});
+
+      // يجب أن يكون الكود الخاص بك هنا
+      final paymentMethods = functions.filterPaymentList(
+          FFAppState().paymentGatewaysList.where((e) => getJsonField(e, r'''$.enabled''') == true).toList()
+      );
+      if (paymentMethods.isNotEmpty) {
+        _model.select = getJsonField(paymentMethods.first, r'''$.id''').toString();
+        _model.selectedMethode = paymentMethods.first;
+      }
+
+      safeSetState(() {}); // هذا السطر يجب أن يكون في النهاية
     });
+//...
 
     _model.textController ??= TextEditingController()
       ..addListener(() {
@@ -2659,35 +2671,35 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                   ),
                                                                   Text(
                                                                     functions.formatPrice(
-                                                                        functions.divideBy100(PlantShopGroup.getCartCall.totalitems(
+                                                                        PlantShopGroup.getCartCall.totalitems(
                                                                           cartGetCartResponse
                                                                               .jsonBody,
-                                                                        )!),
+                                                                        )!.toString(),
                                                                         FFAppState().thousandSeparator,
                                                                         FFAppState().decimalSeparator,
                                                                         FFAppState().decimalPlaces.toString(),
                                                                         FFAppState().currencyPosition,
                                                                         FFAppState().currency),
                                                                     textAlign:
-                                                                        TextAlign
-                                                                            .start,
+                                                                    TextAlign
+                                                                        .start,
                                                                     style: FlutterFlowTheme.of(
-                                                                            context)
+                                                                        context)
                                                                         .bodyMedium
                                                                         .override(
-                                                                          fontFamily:
-                                                                              'SF Pro Display',
-                                                                          fontSize:
-                                                                              17.0,
-                                                                          letterSpacing:
-                                                                              0.17,
-                                                                          fontWeight:
-                                                                              FontWeight.w500,
-                                                                          useGoogleFonts:
-                                                                              false,
-                                                                          lineHeight:
-                                                                              1.5,
-                                                                        ),
+                                                                      fontFamily:
+                                                                      'SF Pro Display',
+                                                                      fontSize:
+                                                                      17.0,
+                                                                      letterSpacing:
+                                                                      0.17,
+                                                                      fontWeight:
+                                                                      FontWeight.w500,
+                                                                      useGoogleFonts:
+                                                                      false,
+                                                                      lineHeight:
+                                                                      1.5,
+                                                                    ),
                                                                   ),
                                                                 ],
                                                               ),
@@ -2947,32 +2959,32 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                       ),
                                                                     ),
                                                                     Text(
-                                                                      '+${functions.formatPrice(functions.divideBy100(PlantShopGroup.getCartCall.totalShipping(
-                                                                            cartGetCartResponse.jsonBody,
-                                                                          )!), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
+                                                                      '+${functions.formatPrice(PlantShopGroup.getCartCall.totalShipping(
+                                                                        cartGetCartResponse.jsonBody,
+                                                                      )!.toString(), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
                                                                       textAlign:
-                                                                          TextAlign
-                                                                              .start,
+                                                                      TextAlign
+                                                                          .start,
                                                                       style: FlutterFlowTheme.of(
-                                                                              context)
+                                                                          context)
                                                                           .bodyMedium
                                                                           .override(
-                                                                            fontFamily:
-                                                                                'SF Pro Display',
-                                                                            color:
-                                                                                FlutterFlowTheme.of(context).primaryText,
-                                                                            fontSize:
-                                                                                17.0,
-                                                                            letterSpacing:
-                                                                                0.17,
-                                                                            fontWeight:
-                                                                                FontWeight.w500,
-                                                                            useGoogleFonts:
-                                                                                false,
-                                                                            lineHeight:
-                                                                                1.5,
-                                                                          ),
-                                                                    ),
+                                                                        fontFamily:
+                                                                        'SF Pro Display',
+                                                                        color:
+                                                                        FlutterFlowTheme.of(context).primaryText,
+                                                                        fontSize:
+                                                                        17.0,
+                                                                        letterSpacing:
+                                                                        0.17,
+                                                                        fontWeight:
+                                                                        FontWeight.w500,
+                                                                        useGoogleFonts:
+                                                                        false,
+                                                                        lineHeight:
+                                                                        1.5,
+                                                                      ),
+                                                                    )
                                                                   ],
                                                                 ),
                                                               ),
@@ -3199,33 +3211,33 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                     ),
                                                                   ),
                                                                   Text(
-                                                                    '+${functions.formatPrice(functions.divideBy100(PlantShopGroup.getCartCall.totalTax(
-                                                                          cartGetCartResponse
-                                                                              .jsonBody,
-                                                                        )!), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
+                                                                    '+${functions.formatPrice(PlantShopGroup.getCartCall.totalTax(
+                                                                      cartGetCartResponse
+                                                                          .jsonBody,
+                                                                    )!.toString(), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
                                                                     textAlign:
-                                                                        TextAlign
-                                                                            .start,
+                                                                    TextAlign
+                                                                        .start,
                                                                     style: FlutterFlowTheme.of(
-                                                                            context)
+                                                                        context)
                                                                         .bodyMedium
                                                                         .override(
-                                                                          fontFamily:
-                                                                              'SF Pro Display',
-                                                                          color:
-                                                                              FlutterFlowTheme.of(context).primaryText,
-                                                                          fontSize:
-                                                                              17.0,
-                                                                          letterSpacing:
-                                                                              0.17,
-                                                                          fontWeight:
-                                                                              FontWeight.w500,
-                                                                          useGoogleFonts:
-                                                                              false,
-                                                                          lineHeight:
-                                                                              1.5,
-                                                                        ),
-                                                                  ),
+                                                                      fontFamily:
+                                                                      'SF Pro Display',
+                                                                      color:
+                                                                      FlutterFlowTheme.of(context).primaryText,
+                                                                      fontSize:
+                                                                      17.0,
+                                                                      letterSpacing:
+                                                                      0.17,
+                                                                      fontWeight:
+                                                                      FontWeight.w500,
+                                                                      useGoogleFonts:
+                                                                      false,
+                                                                      lineHeight:
+                                                                      1.5,
+                                                                    ),
+                                                                  )
                                                                 ],
                                                               ),
                                                             ),
@@ -3280,38 +3292,38 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                   ),
                                                                   Text(
                                                                     functions.formatPrice(
-                                                                        functions.divideBy100(PlantShopGroup.getCartCall.totalPrice(
+                                                                        PlantShopGroup.getCartCall.totalPrice(
                                                                           cartGetCartResponse
                                                                               .jsonBody,
-                                                                        )!),
+                                                                        )!.toString(),
                                                                         FFAppState().thousandSeparator,
                                                                         FFAppState().decimalSeparator,
                                                                         FFAppState().decimalPlaces.toString(),
                                                                         FFAppState().currencyPosition,
                                                                         FFAppState().currency),
                                                                     textAlign:
-                                                                        TextAlign
-                                                                            .start,
+                                                                    TextAlign
+                                                                        .start,
                                                                     style: FlutterFlowTheme.of(
-                                                                            context)
+                                                                        context)
                                                                         .bodyMedium
                                                                         .override(
-                                                                          fontFamily:
-                                                                              'SF Pro Display',
-                                                                          color:
-                                                                              FlutterFlowTheme.of(context).primaryText,
-                                                                          fontSize:
-                                                                              17.0,
-                                                                          letterSpacing:
-                                                                              0.17,
-                                                                          fontWeight:
-                                                                              FontWeight.w500,
-                                                                          useGoogleFonts:
-                                                                              false,
-                                                                          lineHeight:
-                                                                              1.5,
-                                                                        ),
-                                                                  ),
+                                                                      fontFamily:
+                                                                      'SF Pro Display',
+                                                                      color:
+                                                                      FlutterFlowTheme.of(context).primaryText,
+                                                                      fontSize:
+                                                                      17.0,
+                                                                      letterSpacing:
+                                                                      0.17,
+                                                                      fontWeight:
+                                                                      FontWeight.w500,
+                                                                      useGoogleFonts:
+                                                                      false,
+                                                                      lineHeight:
+                                                                      1.5,
+                                                                    ),
+                                                                  )
                                                                 ],
                                                               ),
                                                             ),
@@ -3788,7 +3800,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                               );
                                                             }
                                                           } else if (_model
-                                                                  .select ==
+                                                              .select ==
                                                               'razorpay') {
                                                             await actions
                                                                 .razorpayCustom(
@@ -3798,13 +3810,12 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                     .selectedMethode,
                                                                 r'''$.settings.key_id.value''',
                                                               ).toString(),
-                                                              functions.divideBy100(
-                                                                  PlantShopGroup
-                                                                      .getCartCall
-                                                                      .totalPrice(
+                                                              PlantShopGroup
+                                                                  .getCartCall
+                                                                  .totalPrice(
                                                                 cartGetCartResponse
                                                                     .jsonBody,
-                                                              )!),
+                                                              )!.toString(),
                                                               FFAppState()
                                                                   .currencyCode,
                                                               getJsonField(
@@ -4001,13 +4012,12 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                             await actions
                                                                 .stripeCustom(
                                                               context,
-                                                              functions.divideBy100(
-                                                                  PlantShopGroup
-                                                                      .getCartCall
-                                                                      .totalPrice(
+                                                              PlantShopGroup
+                                                                  .getCartCall
+                                                                  .totalPrice(
                                                                 cartGetCartResponse
                                                                     .jsonBody,
-                                                              )!),
+                                                              )!.toString(),
                                                               FFAppState()
                                                                   .currencyCode,
                                                               getJsonField(
@@ -4192,17 +4202,16 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                               context,
                                                               'AU9rVln8yvfm2UjNMWQKpcLwtAXfpDCg-Q_VlvB36I3u9T938qw25cNkqvzKQ78gmFT2Cwx60KdteEFN',
                                                               'EL7Wo0g7CYfYqbSRJxNDvIx9X2IgID5U6mXqEvkTKXXrGHbsMSZ7DpIC39KDmLnzOoHAy4fG02pthApQ',
-                                                              functions.divideBy100(
-                                                                  PlantShopGroup
-                                                                      .getCartCall
-                                                                      .totalPrice(
+                                                              PlantShopGroup
+                                                                  .getCartCall
+                                                                  .totalPrice(
                                                                 cartGetCartResponse
                                                                     .jsonBody,
-                                                              )!),
+                                                              )!.toString(),
                                                               FFAppState()
                                                                   .currencyCode,
                                                               'Order using paypal to byu a product',
-                                                              (transactionId) async {
+                                                                  (transactionId) async {
                                                                 _model.orderDetailPayPal =
                                                                     await action_blocks
                                                                         .createOrder(

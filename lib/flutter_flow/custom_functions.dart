@@ -2543,11 +2543,6 @@ dynamic findVariations(
   return productDetail;
 }
 
-String divideBy100(String price) {
-  int intValue = int.tryParse(price) ?? 0;
-  double result = intValue / 100;
-  return result.toStringAsFixed(2);
-}
 
 bool checkExpire(String date) {
   DateTime currentDate = DateTime.now();

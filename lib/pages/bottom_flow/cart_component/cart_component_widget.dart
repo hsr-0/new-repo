@@ -1593,34 +1593,34 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                     ),
                                                                     Text(
                                                                       functions.formatPrice(
-                                                                          functions.divideBy100(PlantShopGroup.getCartCall.totalitems(
+                                                                          PlantShopGroup.getCartCall.totalitems(
                                                                             cartGetCartResponse.jsonBody,
-                                                                          )!),
+                                                                          )!.toString(),
                                                                           FFAppState().thousandSeparator,
                                                                           FFAppState().decimalSeparator,
                                                                           FFAppState().decimalPlaces.toString(),
                                                                           FFAppState().currencyPosition,
                                                                           FFAppState().currency),
                                                                       textAlign:
-                                                                          TextAlign
-                                                                              .start,
+                                                                      TextAlign
+                                                                          .start,
                                                                       style: FlutterFlowTheme.of(
-                                                                              context)
+                                                                          context)
                                                                           .bodyMedium
                                                                           .override(
-                                                                            fontFamily:
-                                                                                'SF Pro Display',
-                                                                            fontSize:
-                                                                                17.0,
-                                                                            letterSpacing:
-                                                                                0.17,
-                                                                            fontWeight:
-                                                                                FontWeight.w500,
-                                                                            useGoogleFonts:
-                                                                                false,
-                                                                            lineHeight:
-                                                                                1.5,
-                                                                          ),
+                                                                        fontFamily:
+                                                                        'SF Pro Display',
+                                                                        fontSize:
+                                                                        17.0,
+                                                                        letterSpacing:
+                                                                        0.17,
+                                                                        fontWeight:
+                                                                        FontWeight.w500,
+                                                                        useGoogleFonts:
+                                                                        false,
+                                                                        lineHeight:
+                                                                        1.5,
+                                                                      ),
                                                                     ),
                                                                   ],
                                                                 ),
@@ -1870,23 +1870,23 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                         ),
                                                                       ),
                                                                       Text(
-                                                                        '+${functions.formatPrice(functions.divideBy100(PlantShopGroup.getCartCall.totalShipping(
-                                                                              cartGetCartResponse.jsonBody,
-                                                                            )!), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
+                                                                        '+${functions.formatPrice(PlantShopGroup.getCartCall.totalShipping(
+                                                                          cartGetCartResponse.jsonBody,
+                                                                        )!.toString(), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
                                                                         textAlign:
-                                                                            TextAlign.start,
+                                                                        TextAlign.start,
                                                                         style: FlutterFlowTheme.of(context)
                                                                             .bodyMedium
                                                                             .override(
-                                                                              fontFamily: 'SF Pro Display',
-                                                                              color: FlutterFlowTheme.of(context).primaryText,
-                                                                              fontSize: 17.0,
-                                                                              letterSpacing: 0.17,
-                                                                              fontWeight: FontWeight.w500,
-                                                                              useGoogleFonts: false,
-                                                                              lineHeight: 1.5,
-                                                                            ),
-                                                                      ),
+                                                                          fontFamily: 'SF Pro Display',
+                                                                          color: FlutterFlowTheme.of(context).primaryText,
+                                                                          fontSize: 17.0,
+                                                                          letterSpacing: 0.17,
+                                                                          fontWeight: FontWeight.w500,
+                                                                          useGoogleFonts: false,
+                                                                          lineHeight: 1.5,
+                                                                        ),
+                                                                      )
                                                                     ],
                                                                   ),
                                                                 ),
@@ -2098,32 +2098,32 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                       ),
                                                                     ),
                                                                     Text(
-                                                                      '+${functions.formatPrice(functions.divideBy100(PlantShopGroup.getCartCall.totalTax(
-                                                                            cartGetCartResponse.jsonBody,
-                                                                          )!), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
+                                                                      '+${functions.formatPrice(PlantShopGroup.getCartCall.totalTax(
+                                                                        cartGetCartResponse.jsonBody,
+                                                                      )!.toString(), FFAppState().thousandSeparator, FFAppState().decimalSeparator, FFAppState().decimalPlaces.toString(), FFAppState().currencyPosition, FFAppState().currency)}',
                                                                       textAlign:
-                                                                          TextAlign
-                                                                              .start,
+                                                                      TextAlign
+                                                                          .start,
                                                                       style: FlutterFlowTheme.of(
-                                                                              context)
+                                                                          context)
                                                                           .bodyMedium
                                                                           .override(
-                                                                            fontFamily:
-                                                                                'SF Pro Display',
-                                                                            color:
-                                                                                FlutterFlowTheme.of(context).primaryText,
-                                                                            fontSize:
-                                                                                17.0,
-                                                                            letterSpacing:
-                                                                                0.17,
-                                                                            fontWeight:
-                                                                                FontWeight.w500,
-                                                                            useGoogleFonts:
-                                                                                false,
-                                                                            lineHeight:
-                                                                                1.5,
-                                                                          ),
-                                                                    ),
+                                                                        fontFamily:
+                                                                        'SF Pro Display',
+                                                                        color:
+                                                                        FlutterFlowTheme.of(context).primaryText,
+                                                                        fontSize:
+                                                                        17.0,
+                                                                        letterSpacing:
+                                                                        0.17,
+                                                                        fontWeight:
+                                                                        FontWeight.w500,
+                                                                        useGoogleFonts:
+                                                                        false,
+                                                                        lineHeight:
+                                                                        1.5,
+                                                                      ),
+                                                                    )
                                                                   ],
                                                                 ),
                                                               ),
@@ -2170,37 +2170,37 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                     ),
                                                                     Text(
                                                                       functions.formatPrice(
-                                                                          functions.divideBy100(PlantShopGroup.getCartCall.totalPrice(
+                                                                          PlantShopGroup.getCartCall.totalPrice(
                                                                             cartGetCartResponse.jsonBody,
-                                                                          )!),
+                                                                          )!.toString(),
                                                                           FFAppState().thousandSeparator,
                                                                           FFAppState().decimalSeparator,
                                                                           FFAppState().decimalPlaces.toString(),
                                                                           FFAppState().currencyPosition,
                                                                           FFAppState().currency),
                                                                       textAlign:
-                                                                          TextAlign
-                                                                              .start,
+                                                                      TextAlign
+                                                                          .start,
                                                                       style: FlutterFlowTheme.of(
-                                                                              context)
+                                                                          context)
                                                                           .bodyMedium
                                                                           .override(
-                                                                            fontFamily:
-                                                                                'SF Pro Display',
-                                                                            color:
-                                                                                FlutterFlowTheme.of(context).primaryText,
-                                                                            fontSize:
-                                                                                17.0,
-                                                                            letterSpacing:
-                                                                                0.17,
-                                                                            fontWeight:
-                                                                                FontWeight.w500,
-                                                                            useGoogleFonts:
-                                                                                false,
-                                                                            lineHeight:
-                                                                                1.5,
-                                                                          ),
-                                                                    ),
+                                                                        fontFamily:
+                                                                        'SF Pro Display',
+                                                                        color:
+                                                                        FlutterFlowTheme.of(context).primaryText,
+                                                                        fontSize:
+                                                                        17.0,
+                                                                        letterSpacing:
+                                                                        0.17,
+                                                                        fontWeight:
+                                                                        FontWeight.w500,
+                                                                        useGoogleFonts:
+                                                                        false,
+                                                                        lineHeight:
+                                                                        1.5,
+                                                                      ),
+                                                                    )
                                                                   ],
                                                                 ),
                                                               ),
@@ -2284,35 +2284,35 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                             0.0),
                                                                 child: Text(
                                                                   functions.formatPrice(
-                                                                      functions.divideBy100(PlantShopGroup.getCartCall.totalPrice(
+                                                                      PlantShopGroup.getCartCall.totalPrice(
                                                                         cartGetCartResponse
                                                                             .jsonBody,
-                                                                      )!),
+                                                                      )!.toString(),
                                                                       FFAppState().thousandSeparator,
                                                                       FFAppState().decimalSeparator,
                                                                       FFAppState().decimalPlaces.toString(),
                                                                       FFAppState().currencyPosition,
                                                                       FFAppState().currency),
                                                                   textAlign:
-                                                                      TextAlign
-                                                                          .start,
+                                                                  TextAlign
+                                                                      .start,
                                                                   style: FlutterFlowTheme.of(
-                                                                          context)
+                                                                      context)
                                                                       .bodyMedium
                                                                       .override(
-                                                                        fontFamily:
-                                                                            'SF Pro Display',
-                                                                        fontSize:
-                                                                            18.0,
-                                                                        letterSpacing:
-                                                                            0.0,
-                                                                        fontWeight:
-                                                                            FontWeight.w600,
-                                                                        useGoogleFonts:
-                                                                            false,
-                                                                        lineHeight:
-                                                                            1.5,
-                                                                      ),
+                                                                    fontFamily:
+                                                                    'SF Pro Display',
+                                                                    fontSize:
+                                                                    18.0,
+                                                                    letterSpacing:
+                                                                    0.0,
+                                                                    fontWeight:
+                                                                    FontWeight.w600,
+                                                                    useGoogleFonts:
+                                                                    false,
+                                                                    lineHeight:
+                                                                    1.5,
+                                                                  ),
                                                                 ),
                                                               ),
                                                             ],
