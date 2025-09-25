@@ -1,1013 +1,189 @@
-import 'dart:async';
-
-import 'dart:convert';
-
-import 'dart:io';
-
-
-
 import 'package:flutter/material.dart';
-
-import 'package:go_router/go_router.dart';
-
-import 'package:http/http.dart' as http;
-
-import 'package:firebase_core/firebase_core.dart';
-
+import 'package:flutter/services.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-import 'package:carousel_slider/carousel_slider.dart';
-
-
-
-// --- الحزم المطلوبة ---
-
-import 'package:firebase_remote_config/firebase_remote_config.dart';
-
-import 'package:package_info_plus/package_info_plus.dart';
-
-import 'package:url_launcher/url_launcher.dart';
-
-import 'package:version/version.dart';
-
-import 'package:in_app_review/in_app_review.dart';
-
-import 'package:shared_preferences/shared_preferences.dart';
-
-import 'package:permission_handler/permission_handler.dart'; // [جديد] حزمة الأذونات
-
-
-
-import '../../doctore/medical_home_screen.dart';
-
-import '../webview_flow/webview_page.dart';
-
-
-
-
-
-// --- كلاس طلب التقييم مع تعديلات لتصحيح الأخطاء ---
-
-class AppReviewManager {
-
-  final InAppReview _inAppReview = InAppReview.instance;
-
-
-
-  Future<void> requestReviewIfAppropriate() async {
-
-    try {
-
-      final prefs = await SharedPreferences.getInstance();
-
-      int appOpenCount = prefs.getInt('appOpenCount') ?? 0;
-
-      bool hasRequestedReview = prefs.getBool('hasRequestedReview') ?? false;
-
-
-
-// [للتشخيص] طباعة الحالة الحالية
-
-      print('[AppReview] Open count: $appOpenCount, Has review been requested before? $hasRequestedReview');
-
-
-
-      if (hasRequestedReview) {
-
-        print('[AppReview] Review already requested. Skipping.');
-
-        return;
-
-      }
-
-
-
-      appOpenCount++;
-
-      await prefs.setInt('appOpenCount', appOpenCount);
-
-
-
-// غيرنا الشرط ليكون أكثر واقعية (مثلاً بعد 5 مرات)
-
-      if (appOpenCount >= 5) {
-
-        print('[AppReview] Threshold reached. Requesting review...');
-
-        if (await _inAppReview.isAvailable()) {
-
-          _inAppReview.requestReview();
-
-          await prefs.setBool('hasRequestedReview', true);
-
-          print('[AppReview] Review requested successfully and flag set to true.');
-
-        } else {
-
-          print('[AppReview] In-app review is not available on this device.');
-
-        }
-
-      } else {
-
-        print('[AppReview] Threshold not reached yet.');
-
-      }
-
-    } catch (e) {
-
-      print('[AppReview] Failed to request App Review: $e');
-
-    }
-
-  }
-
-}
-
-
-
-
-
-class BannerItem {
-
-  final String imageUrl;
-
-  final String targetType;
-
-  final String targetUrl;
-
-
-
-  BannerItem({required this.imageUrl, required this.targetType, required this.targetUrl});
-
-
-
-  factory BannerItem.fromJson(Map<String, dynamic> json) {
-
-    return BannerItem(
-
-      imageUrl: json['imageUrl'],
-
-      targetType: json['targetType'],
-
-      targetUrl: json['targetUrl'],
-
-    );
-
-  }
-
-}
-
-
-
-class SectionsPageWidget extends StatefulWidget {
-
-  const SectionsPageWidget({Key? key}) : super(key: key);
-
-
+/// This screen is a temporary tool for diagnosing iOS notification issues.
+/// It displays permission status, FCM token, and the critical APNs token.
+class NotificationTestScreen extends StatefulWidget {
+  const NotificationTestScreen({super.key});
 
   @override
-
-  State<SectionsPageWidget> createState() => _SectionsPageWidgetState();
-
+  State<NotificationTestScreen> createState() => _NotificationTestScreenState();
 }
 
-
-
-class _SectionsPageWidgetState extends State<SectionsPageWidget> {
-
-  List<BannerItem> banners = [];
-
-  bool showBanners = false;
-
-
+class _NotificationTestScreenState extends State<NotificationTestScreen> {
+  String _permissionStatus = 'Checking...';
+  String? _fcmToken;
+  String? _apnsToken;
+  bool _isLoading = false;
 
   @override
-
   void initState() {
-
     super.initState();
-
-    _initialize();
-
+    // Automatically check permissions when the screen loads.
+    _checkPermissionsAndTokens();
   }
 
-
-
-  Future<void> _initialize() async {
-
-// افترض أن تهيئة Firebase تمت في شاشة الـ splash
-
-
-
-// [جديد] طلب الأذونات أولاً
-
-    await _requestAllPermissions();
-
-
-
-    fetchBannerImages();
-
-    _checkForUpdate();
-
-    AppReviewManager().requestReviewIfAppropriate();
-
-  }
-
-
-
-// --- [جديد] دالة مجمعة لطلب كل الأذونات ---
-
-  Future<void> _requestAllPermissions() async {
-
-    if (Platform.isIOS) {
-
-      await _requestNotificationPermission();
-
-    }
-
-    await _requestLocationPermission();
-
-  }
-
-
-
-// دالة طلب إذن الإشعارات
-
-  Future<void> _requestNotificationPermission() async {
+  /// Requests notification permission and fetches both FCM and APNs tokens.
+  Future<void> _checkPermissionsAndTokens() async {
+    setState(() {
+      _isLoading = true;
+      _permissionStatus = 'Requesting permission...';
+      _fcmToken = null;
+      _apnsToken = null;
+    });
 
     FirebaseMessaging messaging = FirebaseMessaging.instance;
 
+    // Request permission from the user.
     NotificationSettings settings = await messaging.requestPermission(
-
       alert: true,
-
       badge: true,
-
       sound: true,
-
+      provisional: false,
     );
 
+    // Update the UI with the permission status.
+    setState(() {
+      _permissionStatus = settings.authorizationStatus.name.toUpperCase();
+    });
+
+    // If permission is granted, fetch the tokens.
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      try {
+        setState(() => _fcmToken = 'Fetching FCM Token...');
+        String? fcmToken = await messaging.getToken();
+        setState(() => _fcmToken = fcmToken ?? '== Failed to get FCM Token ==');
+      } catch (e) {
+        setState(() => _fcmToken = 'Error: ${e.toString()}');
+      }
 
-      print('[Permissions] Notification permission granted.');
-
+      // This is the most critical step for iOS diagnostics.
+      try {
+        setState(() => _apnsToken = 'Fetching APNs Token...');
+        String? apnsToken = await messaging.getAPNSToken();
+        setState(() => _apnsToken = apnsToken ?? '== FAILED TO GET APNs TOKEN (CRITICAL!) ==');
+      } catch (e) {
+        setState(() => _apnsToken = 'Error: ${e.toString()}');
+      }
     } else {
-
-      print('[Permissions] Notification permission denied.');
-
+      setState(() {
+        _fcmToken = 'Permission not granted.';
+        _apnsToken = 'Permission not granted.';
+      });
     }
 
+    setState(() => _isLoading = false);
   }
 
-
-
-// --- [جديد] دالة طلب إذن الموقع ---
-
-  Future<void> _requestLocationPermission() async {
-
-    var status = await Permission.location.status;
-
-    if (status.isDenied) {
-
-// إذا لم يتم طلب الإذن من قبل، اطلبه الآن
-
-      final result = await Permission.location.request();
-
-      if (result.isGranted) {
-
-        print('[Permissions] Location permission granted.');
-
-      } else {
-
-        print('[Permissions] Location permission denied.');
-
-      }
-
-    } else if (status.isPermanentlyDenied) {
-
-// إذا رفض المستخدم الإذن بشكل دائم
-
-      print('[Permissions] Location permission permanently denied. Opening app settings.');
-
-      await openAppSettings(); // فتح إعدادات التطبيق ليقوم المستخدم بتفعيله يدوياً
-
-    } else if (status.isGranted) {
-
-      print('[Permissions] Location permission already granted.');
-
-    }
-
-  }
-
-
-
-
-
-  Future<void> _checkForUpdate() async {
-
-    try {
-
-      final remoteConfig = FirebaseRemoteConfig.instance;
-
-      await remoteConfig.setConfigSettings(RemoteConfigSettings(
-
-        fetchTimeout: const Duration(seconds: 25),
-
-        minimumFetchInterval: const Duration(minutes: 5),
-
-      ));
-
-      await remoteConfig.fetchAndActivate();
-
-
-
-      final configString = remoteConfig.getString('app_update_config');
-
-      if (configString.isEmpty) return;
-
-
-
-      final config = jsonDecode(configString) as Map<String, dynamic>;
-
-      final platformConfig = (Platform.isIOS ? config['ios'] : config['android']) as Map<String, dynamic>;
-
-      final minimumVersionStr = platformConfig['minimum_version'] as String?;
-
-      final storeUrl = platformConfig['store_url'] as String?;
-
-
-
-      if (minimumVersionStr == null || storeUrl == null) return;
-
-
-
-      final minimumVersion = Version.parse(minimumVersionStr);
-
-      final packageInfo = await PackageInfo.fromPlatform();
-
-      final currentVersion = Version.parse(packageInfo.version);
-
-
-
-      if (currentVersion < minimumVersion) {
-
-        if (mounted) {
-
-          _showUpdateDialog(storeUrl);
-
-        }
-
-      }
-
-    } catch (e) {
-
-      print('Error checking for update: $e');
-
-    }
-
-  }
-
-
-
-  void _showUpdateDialog(String updateUrl) {
-
-    showDialog(
-
-      context: context,
-
-      barrierDismissible: false,
-
-      builder: (BuildContext context) {
-
-        return AlertDialog(
-
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-
-          title: const Text('تحديث إجباري', style: TextStyle(fontWeight: FontWeight.bold)),
-
-          content: const Text('يتوفر إصدار جديد من التطبيق. يرجى التحديث الآن لمتابعة استخدام أفضل الخدمات.'),
-
-          actions: <Widget>[
-
-            TextButton(
-
-              style: TextButton.styleFrom(backgroundColor: Colors.blue.shade700),
-
-              child: const Text('تحديث الآن', style: TextStyle(color: Colors.white)),
-
-              onPressed: () async {
-
-                final uri = Uri.parse(updateUrl);
-
-                if (await canLaunchUrl(uri)) {
-
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-
-                }
-
-              },
-
-            ),
-
-          ],
-
-        );
-
-      },
-
-    );
-
-  }
-
-
-
-  Future<void> fetchBannerImages() async {
-
-    final url = Uri.parse('https://banner.beytei.com/images/banners.json');
-
-    try {
-
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-
-        final jsonData = json.decode(response.body);
-
-        final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
-
-        if (mounted) {
-
-          setState(() {
-
-            showBanners = jsonData['showBanners'] ?? false;
-
-            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-
-          });
-
-        }
-
-      }
-
-    } catch (e) {
-
-      print('Error fetching banners: $e');
-
-    }
-
-  }
-
-
-
-  void _onBannerTapped(BannerItem banner) {
-
-    if (banner.targetType == 'route') {
-
-      GoRouter.of(context).push(banner.targetUrl);
-
-    } else if (banner.targetType == 'webview') {
-
-      Navigator.push(
-
-        context,
-
-        MaterialPageRoute(builder: (context) => WebViewPage(url: banner.targetUrl)),
-
+  /// Copies the fetched tokens to the clipboard.
+  void _copyTokensToClipboard() {
+    if (_fcmToken == null && _apnsToken == null) return;
+    final allTokens = """
+    --- Diagnostic Info ---
+    Permission: $_permissionStatus
+    FCM Token: $_fcmToken
+    APNs Token: $_apnsToken
+    """;
+    Clipboard.setData(ClipboardData(text: allTokens)).then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.green,
+          content: Text('تم نسخ معلومات التشخيص!'),
+        ),
       );
-
-    }
-
+    });
   }
-
-
 
   @override
-
   Widget build(BuildContext context) {
-
     return Scaffold(
-
       appBar: AppBar(
-
-        title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
-
-        centerTitle: true,
-
-        backgroundColor: Colors.white,
-
-        actions: [
-
-          IconButton(onPressed: () {}, icon: const Icon(Icons.discount)),
-
-        ],
-
+        title: const Text('Notification Diagnostics'),
+        backgroundColor: Colors.blueGrey[900],
       ),
-
-      body: SingleChildScrollView(
-
+      backgroundColor: Colors.blueGrey[800],
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-
-// ... باقي واجهة المستخدم كما هي
-
-            if (showBanners && banners.isNotEmpty) ...[
-
-              const Padding(
-
-                padding: EdgeInsets.fromLTRB(10, 20, 10, 10),
-
-                child: Text(
-
-                  'العروض المميزة',
-
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-
-                ),
-
-              ),
-
-              CarouselSlider(
-
-                options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true),
-
-                items: banners.map((banner) {
-
-                  return Builder(
-
-                    builder: (BuildContext context) {
-
-                      return GestureDetector(
-
-                        onTap: () => _onBannerTapped(banner),
-
-                        child: ClipRRect(
-
-                          borderRadius: BorderRadius.circular(15),
-
-                          child: Image.network(
-
-                            banner.imageUrl,
-
-                            fit: BoxFit.cover,
-
-                            width: double.infinity,
-
-                            loadingBuilder: (context, child, loadingProgress) {
-
-                              if (loadingProgress == null) return child;
-
-                              return const Center(child: CircularProgressIndicator());
-
-                            },
-
-                            errorBuilder: (context, error, stackTrace) {
-
-                              return const Center(child: Icon(Icons.error));
-
-                            },
-
-                          ),
-
-                        ),
-
-                      );
-
-                    },
-
-                  );
-
-                }).toList(),
-
-              ),
-
-            ],
-
-            const SizedBox(height: 20),
-
-            const Padding(
-
-              padding: EdgeInsets.symmetric(horizontal: 10),
-
-              child: Text(
-
-                'خدماتنا',
-
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-
-              ),
-
+            _buildInfoCard(
+              '1. Permission Status',
+              _permissionStatus,
+              _permissionStatus == 'AUTHORIZED' ? Colors.green : Colors.orange,
             ),
-
-            const SizedBox(height: 10),
-
-            Padding(
-
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-
-              child: GridView.count(
-
-                crossAxisCount: 2,
-
-                crossAxisSpacing: 10,
-
-                mainAxisSpacing: 10,
-
-                shrinkWrap: true,
-
-                physics: const NeverScrollableScrollPhysics(),
-
-                children: [
-
-// ... محتوى الـ GridView كما هو
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'منصة بيتي العقارية',
-
-                    description: '',
-
-                    imagePath: 'assets/images/beytei.png',
-
-                    onTap: () {
-
-                      Navigator.push(
-
-                        context,
-
-                        MaterialPageRoute(
-
-                            builder: (context) =>
-
-                            const WebViewPage(url: 'https://beytei.com')),
-
-                      );
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'الصيدليات ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/ph.png',
-
-                    onTap: () {
-
-                      context.push('/pharmacy-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'بوتيك وكوزمتك بيتي',
-
-                    description: '',
-
-                    imagePath: 'assets/images/cosmetics.png',
-
-                    onTap: () {
-
-                      context.push('/splash');
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'تكسي بيتي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/taxi.png',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/trb-store');
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'استشارة بيتي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/clinic.png',
-
-                    onTap: () {
-
-                      context.push('/medical-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'المطاعم ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/re.jpg',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/restaurants-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'الحجز الطبي',
-
-                    description: 'حجز موعد مع الطبيب',
-
-                    imagePath: 'assets/images/medical.png',
-
-                    onTap: () {
-
-                      Navigator.push(
-
-                        context,
-
-                        MaterialPageRoute(
-
-                            builder: (context) => MedicalHomeScreen()),
-
-                      );
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'مسواك بيتي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/ms.jpg',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/miswak-store');
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'سجل بيتي الطبي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/ph.png',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/do-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'المختبرات ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/lab.jpg',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/lab-store');
-
-                    },
-
-                  ),
-
-                ],
-
-              ),
-
+            const SizedBox(height: 16),
+            _buildInfoCard(
+              '2. Firebase Token (FCM)',
+              _fcmToken ?? 'Not available',
+              _fcmToken != null && !_fcmToken!.contains('Failed') ? Colors.green : Colors.red,
             ),
-
-            const SizedBox(height: 20),
-
-          ],
-
-        ),
-
-      ),
-
-      bottomNavigationBar: BottomNavigationBar(
-
-        items: const [
-
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'الرئيسية'),
-
-          BottomNavigationBarItem(icon: Icon(Icons.discount), label: 'الخصومات'),
-
-        ],
-
-      ),
-
-    );
-
-  }
-
-
-
-  Widget _buildGridCard({
-
-    required BuildContext context,
-
-    required String title,
-
-    required String description,
-
-    required String imagePath,
-
-    required VoidCallback onTap,
-
-  }) {
-
-    return GestureDetector(
-
-      onTap: onTap,
-
-      child: Card(
-
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-
-        child: Column(
-
-          crossAxisAlignment: CrossAxisAlignment.start,
-
-          children: [
-
-            Expanded(
-
-              child: ClipRRect(
-
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-
-                child: Image.asset(imagePath, width: double.infinity, fit: BoxFit.cover),
-
-              ),
-
+            const SizedBox(height: 16),
+            _buildInfoCard(
+              '3. Apple Token (APNs)',
+              _apnsToken ?? 'Not available',
+              _apnsToken != null && !_apnsToken!.contains('FAILED') ? Colors.green : Colors.red,
             ),
-
-            Padding(
-
-              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 5.0),
-
-              child: Text(
-
-                title,
-
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue),
-
+            const Spacer(),
+            if (_isLoading)
+              const Center(child: CircularProgressIndicator())
+            else
+              ElevatedButton.icon(
+                icon: const Icon(Icons.refresh),
+                label: const Text('Re-check Permissions & Tokens'),
+                onPressed: _checkPermissionsAndTokens,
               ),
-
-            ),
-
-            if (description.isNotEmpty)
-
-              Padding(
-
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-
-                child: Text(
-
-                  description,
-
-                  style: const TextStyle(fontSize: 14, color: Colors.black),
-
-                  maxLines: 2,
-
-                  overflow: TextOverflow.ellipsis,
-
-                ),
-
-              ),
-
             const SizedBox(height: 8),
-
+            ElevatedButton.icon(
+              icon: const Icon(Icons.copy),
+              label: const Text('Copy Info to Clipboard'),
+              onPressed: _copyTokensToClipboard,
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
+            ),
           ],
-
         ),
-
       ),
-
     );
-
   }
 
+  Widget _buildInfoCard(String title, String value, Color statusColor) {
+    return Card(
+      color: Colors.blueGrey[700],
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: SelectableText(
+                value,
+                style: TextStyle(
+                  color: statusColor,
+                  fontSize: 14,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
