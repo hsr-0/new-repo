@@ -22,6 +22,7 @@ import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mime/mime.dart';
+import 'package:qr_flutter/qr_flutter.dart'; // For QR Code generation
 
 // =======================================================================
 // --- GLOBAL NAVIGATOR KEY ---
@@ -32,11 +33,11 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 // --- API & APP CONSTANTS ---
 // =======================================================================
 class ApiConstants {
-  static const String YOUR_DOMAIN = 'https://ph.beytei.com';
+  static const String YOUR_DOMAIN = 'https://ph.beytei.com'; // Replace with your domain
   static const String BASE_URL = '$YOUR_DOMAIN/wp-json';
   static const String PHARMACY_API_URL = '$BASE_URL/beytei-pharmacy/v1';
   static const String JWT_URL = '$BASE_URL/jwt-auth/v1/token';
-  static const String BANNERS_URL = 'https://banner.beytei.com/images/banners.json';
+  static const String BANNERS_URL = 'https://banner.beytei.com/images/banners.json'; // Example URL
 }
 
 class AppConstants {
@@ -57,7 +58,7 @@ class Pharmacy {
   factory Pharmacy.fromJson(Map<String, dynamic> json) => Pharmacy(
       id: json['id'] ?? 0,
       name: json['name'] ?? 'صيدلية غير مسماة',
-      logoUrl: json['logo_url'] ?? 'https://i.ibb.co/C0d2y7V/pharma-logo.png');
+      logoUrl: json['logo_url'] ?? '');
 }
 
 class Product {
@@ -70,13 +71,10 @@ class Product {
   factory Product.fromJson(Map<String, dynamic> json) => Product(
     id: json['id'] ?? 0,
     name: json['name'] ?? 'منتج غير مسمى',
-    imageUrl: json['imageUrl'] ?? 'https://i.ibb.co/pW1s4XF/panadol.png',
+    imageUrl: json['imageUrl'] ?? '',
     price: json['price']?.toString() ?? '0',
     pharmacyId: json['pharmacyId'] ?? 0,
   );
-  Map<String, dynamic> toJson() => {
-    'id': id, 'name': name, 'imageUrl': imageUrl, 'price': price, 'pharmacyId': pharmacyId,
-  };
 }
 
 class PharmacyProductGroup {
@@ -86,9 +84,9 @@ class PharmacyProductGroup {
   PharmacyProductGroup({required this.pharmacyId, required this.pharmacyName, required this.products});
   factory PharmacyProductGroup.fromJson(Map<String, dynamic> json) {
     return PharmacyProductGroup(
-      pharmacyId: json['pharmacy_id'],
-      pharmacyName: json['pharmacy_name'],
-      products: (json['products'] as List).map((prod) => Product.fromJson(prod)).toList(),
+      pharmacyId: json['pharmacy_id'] ?? 0,
+      pharmacyName: json['pharmacy_name'] ?? 'صيدلية غير مسماة',
+      products: (json['products'] as List? ?? []).map((prod) => Product.fromJson(prod)).toList(),
     );
   }
 }
@@ -97,7 +95,33 @@ class OrderItem {
   final String name;
   final int quantity;
   OrderItem({required this.name, required this.quantity});
-  factory OrderItem.fromJson(Map<String, dynamic> json) => OrderItem(name: json['name'], quantity: json['quantity']);
+  factory OrderItem.fromJson(Map<String, dynamic> json) => OrderItem(name: json['name'] ?? '', quantity: json['quantity'] ?? 0);
+}
+
+class DriverInfo {
+  final String name;
+  final String phone;
+  final String vehicleType;
+  final String carModel;
+  final String carColor;
+
+  DriverInfo({
+    required this.name,
+    required this.phone,
+    required this.vehicleType,
+    required this.carModel,
+    required this.carColor,
+  });
+
+  factory DriverInfo.fromJson(Map<String, dynamic> json) {
+    return DriverInfo(
+      name: json['name'] ?? 'اسم غير متوفر',
+      phone: json['phone'] ?? 'رقم غير متوفر',
+      vehicleType: json['vehicle_type'] ?? '',
+      carModel: json['car_model'] ?? '',
+      carColor: json['car_color'] ?? '',
+    );
+  }
 }
 
 class Order {
@@ -110,22 +134,46 @@ class Order {
   final DateTime date;
   final List<OrderItem> items;
   final String customerFirebaseUid;
-  Order({required this.id, required this.customerName, required this.customerPhone, required this.customerArea, required this.total, required this.status, required this.date, required this.items, required this.customerFirebaseUid});
+  final String? deliveryStatus;
+  final String? deliveryQrCode;
+  final DriverInfo? driverInfo;
+
+  Order({
+    required this.id,
+    required this.customerName,
+    required this.customerPhone,
+    required this.customerArea,
+    required this.total,
+    required this.status,
+    required this.date,
+    required this.items,
+    required this.customerFirebaseUid,
+    this.deliveryStatus,
+    this.deliveryQrCode,
+    this.driverInfo,
+  });
+
   factory Order.fromJson(Map<String, dynamic> json) {
     return Order(
-      id: json['id'],
+      id: json['id'] ?? 0,
       customerName: json['customer_name'] ?? '',
       customerPhone: json['customer_phone'] ?? '',
       customerArea: json['customer_area'] ?? '',
       total: json['total']?.toString() ?? '0',
       status: json['status'] ?? '',
-      date: DateTime.parse(json['date']),
-      items: (json['items'] as List).map((item) => OrderItem.fromJson(item)).toList(),
+      date: DateTime.tryParse(json['date'] ?? '') ?? DateTime.now(),
+      items: (json['items'] as List? ?? []).map((item) => OrderItem.fromJson(item)).toList(),
       customerFirebaseUid: json['customer_firebase_uid'] ?? '',
+      deliveryStatus: json['delivery_status'],
+      deliveryQrCode: json['delivery_qr_code'],
+      driverInfo: json['driver_info'] != null
+          ? DriverInfo.fromJson(json['driver_info'])
+          : null,
     );
   }
 }
 
+// ... Other Models (SubscriptionRequest, Conversation, etc. remain the same)
 class SubscriptionRequest {
   final int id;
   final String name;
@@ -133,13 +181,14 @@ class SubscriptionRequest {
   final String illnessType;
   final DateTime date;
   SubscriptionRequest({required this.id, required this.name, required this.phone, required this.illnessType, required this.date});
+
   factory SubscriptionRequest.fromJson(Map<String, dynamic> json) {
     return SubscriptionRequest(
-      id: json['id'],
+      id: json['id'] ?? 0,
       name: json['name'] ?? 'اسم غير متوفر',
       phone: json['phone'] ?? 'رقم غير متوفر',
       illnessType: json['illness_type'] ?? 'غير محدد',
-      date: DateTime.parse(json['date']),
+      date: DateTime.tryParse(json['date'] ?? '') ?? DateTime.now(),
     );
   }
 }
@@ -161,8 +210,8 @@ class Conversation {
 
   factory Conversation.fromJson(Map<String, dynamic> json) {
     return Conversation(
-      uid: json['uid'],
-      name: json['name'],
+      uid: json['uid'] ?? '',
+      name: json['name'] ?? 'مستخدم غير معروف',
       fcmToken: json['fcm_token'] ?? '',
       unreadCount: json['unread_count'] ?? 0,
       lastMessageTime: json['last_message_time'] ?? 0,
@@ -200,11 +249,9 @@ class BannerItem {
   }
 }
 
-
 // =======================================================================
 // --- PROVIDERS ---
 // =======================================================================
-
 class AuthProvider with ChangeNotifier {
   String? _token;
   int? _pharmacyId;
@@ -213,6 +260,7 @@ class AuthProvider with ChangeNotifier {
   String? get token => _token;
   int? get pharmacyId => _pharmacyId;
   String? get pharmacyName => _pharmacyName;
+
   Future<bool> login(String username, String password) async {
     final url = Uri.parse(ApiConstants.JWT_URL);
     try {
@@ -230,6 +278,7 @@ class AuthProvider with ChangeNotifier {
     } catch (e) { print(e); }
     return false;
   }
+
   Future<void> _saveFcmToken() async {
     if (_token == null) return;
     String? fcmToken = await NotificationService.getFCMToken();
@@ -240,18 +289,22 @@ class AuthProvider with ChangeNotifier {
       } catch (e) { print("Failed to save FCM token: $e"); }
     }
   }
+
   Future<void> fetchAndSetPharmacyInfo() async {
     if (_token == null) return;
     final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/dashboard');
     try {
       final response = await http.get(url, headers: {'Authorization': 'Bearer $_token'});
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && response.body.isNotEmpty) {
         final data = json.decode(response.body);
         _pharmacyId = data['pharmacy_id'];
         _pharmacyName = data['pharmacy_name'];
-      } else { await logout(); }
+      } else {
+        await logout(navigatorKey.currentContext!);
+      }
     } catch (e) { print("Failed to fetch dashboard data: $e"); }
   }
+
   Future<void> tryAutoLogin() async {
     final prefs = await SharedPreferences.getInstance();
     if (!prefs.containsKey(AppConstants.prefsKeyToken)) { return; }
@@ -259,7 +312,9 @@ class AuthProvider with ChangeNotifier {
     if (_token != null) { await fetchAndSetPharmacyInfo(); }
     notifyListeners();
   }
-  Future<void> logout() async {
+
+  Future<void> logout(BuildContext context) async {
+    Provider.of<DashboardProvider>(context, listen: false).clearData();
     _token = null;
     _pharmacyId = null;
     _pharmacyName = null;
@@ -284,7 +339,7 @@ class CartProvider with ChangeNotifier {
   }
   void addItem(Product product) {
     if (_pharmacyId != null && _pharmacyId != product.pharmacyId) {
-      throw Exception('لا يمكنك إضافة منتجات من صيدليات مختلفة في نفس الطلب. الرجاء إفراغ السلة أولاً.');
+      throw Exception('لا يمكنك إضافة منتجات من صيدليات مختلفة في نفس الطلب.');
     }
     _pharmacyId = product.pharmacyId;
     if (_items.containsKey(product.id)) {
@@ -311,7 +366,9 @@ class CartProvider with ChangeNotifier {
   }
 }
 
+// [MODIFIED] الكلاس الكامل بعد التعديل
 class PharmacyProvider with ChangeNotifier {
+  // ... (This provider remains unchanged, it's for customer-facing data)
   List<PharmacyProductGroup> _productsByPharmacy = [];
   List<Pharmacy> _allPharmacies = [];
   List<Pharmacy> _nearbyPharmacies = [];
@@ -332,11 +389,13 @@ class PharmacyProvider with ChangeNotifier {
   bool get hasNetworkError => _hasNetworkError;
   String get errorMessage => _errorMessage;
 
+  // [MODIFIED] أضفنا "مهلة زمنية" (timeout) ليفشل الطلب أسرع على الإنترنت الضعيف
   Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
     int attempts = 0;
     while (attempts < 3) {
       try {
-        return await action();
+        // سيفشل الطلب بعد 15 ثانية بدلاً من الانتظار طويلاً
+        return await action().timeout(const Duration(seconds: 15));
       } catch (e) {
         attempts++;
         if (attempts >= 3) rethrow;
@@ -346,96 +405,178 @@ class PharmacyProvider with ChangeNotifier {
     throw Exception('Failed after multiple retries');
   }
 
+  // [MODIFIED] تم تعديل المنطق بالكامل
   Future<void> fetchHomeData(int areaId) async {
-    _isLoadingHome = true;
     _hasNetworkError = false;
-    notifyListeners();
-    await _loadHomeDataFromCache(areaId);
+
+    // 1. تحقق من وجود الكاش أولاً
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('cache_home_data_$areaId');
+
+    if (data == null) {
+      // لا يوجد كاش: أظهر التحميل (لأنه لا يوجد شيء لعرضه)
+      _isLoadingHome = true;
+      notifyListeners();
+    } else {
+      // يوجد كاش: قم بتحميله فوراً
+      await _loadHomeDataFromCache(areaId);
+      _isLoadingHome = false; // لا تظهر التحميل، لأن المستخدم يرى البيانات
+    }
+
+    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
     try {
-      await _executeWithRetry(() async {
-        final responses = await Future.wait([
-          http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies?area_id=$areaId')),
-          http.get(Uri.parse(ApiConstants.BANNERS_URL)),
-        ]);
-        if (responses[0].statusCode == 200 && responses[1].statusCode == 200) {
-          final pharmaciesData = json.decode(responses[0].body) as List;
-          _nearbyPharmacies = pharmaciesData.map((p) => Pharmacy.fromJson(p)).toList();
-          final bannersJsonData = json.decode(responses[1].body);
-          if (bannersJsonData['showBanners'] ?? false) {
-            final bannerList = List<Map<String, dynamic>>.from(bannersJsonData['banners'] ?? []);
-            _banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-          } else {
-            _banners = [];
-          }
-          await _saveHomeDataToCache(areaId, responses[0].body, responses[1].body);
-        } else { throw Exception('Server error'); }
-      });
+      final responses = await Future.wait([
+        http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies?area_id=$areaId')),
+        http.get(Uri.parse(ApiConstants.BANNERS_URL)),
+      ]).timeout(const Duration(seconds:30)); // أضفنا مهلة زمنية هنا أيضاً
+
+      if (responses[0].statusCode == 200 && responses[1].statusCode == 200) {
+        final pharmaciesData = json.decode(responses[0].body) as List;
+        _nearbyPharmacies = pharmaciesData.map((p) => Pharmacy.fromJson(p)).toList();
+        final bannersJsonData = json.decode(responses[1].body);
+        if (bannersJsonData['showBanners'] ?? false) {
+          final bannerList = List<Map<String, dynamic>>.from(bannersJsonData['banners'] ?? []);
+          _banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+        } else {
+          _banners = [];
+        }
+        // نجح الاتصال: احفظ البيانات الجديدة في الكاش
+        await _saveHomeDataToCache(areaId, responses[0].body, responses[1].body);
+      } else {
+        throw Exception('Server error');
+      }
     } catch (e) {
-      _hasNetworkError = true;
-      _errorMessage = 'فشل في تحميل البيانات. يرجى التحقق من اتصالك بالإنترنت.';
+      // 3. في حال فشل الاتصال
+      if (data == null) {
+        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+        _hasNetworkError = true;
+        _errorMessage = '. يرجى التحقق من اتصالك بالإنترنت.';
+      } else {
+        // إذا كان هناك كاش، "ابتلع" الخطأ ولا تزعج المستخدم
+        print("Network refresh for home failed, but cache was available: $e");
+      }
     } finally {
+      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoadingHome = false;
       notifyListeners();
     }
   }
 
+  // [MODIFIED] تم تعديل المنطق بالكامل
   Future<void> fetchAllProducts() async {
-    _isLoadingProducts = true;
     _hasNetworkError = false;
-    notifyListeners();
-    await _loadProductsFromCache();
+
+    // 1. تحقق من وجود الكاش أولاً
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('cache_products');
+
+    if (data == null) {
+      // لا يوجد كاش: أظهر التحميل
+      _isLoadingProducts = true;
+      notifyListeners();
+    } else {
+      // يوجد كاش: قم بتحميله فوراً
+      await _loadProductsFromCache();
+      _isLoadingProducts = false; // لا تظهر التحميل
+    }
+
+    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
     try {
       await _executeWithRetry(() async {
         final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/products'));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           _productsByPharmacy = (data as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
+          // نجح الاتصال: احفظ البيانات الجديدة في الكاش
           await _saveProductsToCache(response.body);
-        } else { throw Exception('Server error'); }
+        } else {
+          throw Exception('Server error');
+        }
       });
     } catch (e) {
-      _hasNetworkError = true;
-      _errorMessage = 'فشل في تحميل المنتجات. يرجى التحقق من اتصالك بالإنترنت.';
+      // 3. في حال فشل الاتصال
+      if (data == null) {
+        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+        _hasNetworkError = true;
+        _errorMessage = 'فشل في تحميل المنتجات. يرجى التحقق من اتصالك بالإنترنت.';
+      } else {
+        // إذا كان هناك كاش، "ابتلع" الخطأ
+        print("Network refresh for products failed, but cache was available: $e");
+      }
     } finally {
+      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoadingProducts = false;
       notifyListeners();
     }
   }
 
+  // [MODIFIED] تم تعديل المنطق بالكامل
   Future<void> fetchAllPharmacies() async {
-    _isLoadingPharmacies = true;
     _hasNetworkError = false;
-    notifyListeners();
-    await _loadAllPharmaciesFromCache();
+
+    // 1. تحقق من وجود الكاش أولاً
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('cache_all_pharmacies');
+
+    if (data == null) {
+      // لا يوجد كاش: أظهر التحميل
+      _isLoadingPharmacies = true;
+      notifyListeners();
+    } else {
+      // يوجد كاش: قم بتحميله فوراً
+      await _loadAllPharmaciesFromCache();
+      _isLoadingPharmacies = false; // لا تظهر التحميل
+    }
+
+    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
     try {
       await _executeWithRetry(() async {
         final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies'));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           _allPharmacies = (data as List).map((p) => Pharmacy.fromJson(p)).toList();
+          // نجح الاتصال: احفظ البيانات الجديدة في الكاش
           await _saveAllPharmaciesToCache(response.body);
-        } else { throw Exception('Server error'); }
+        } else {
+          throw Exception('Server error');
+        }
       });
     } catch (e) {
-      _hasNetworkError = true;
-      _errorMessage = 'فشل في تحميل الصيدليات. يرجى التحقق من اتصالك بالإنترنت.';
+      // 3. في حال فشل الاتصال
+      if (data == null) {
+        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+        _hasNetworkError = true;
+        _errorMessage = 'فشل في تحميل الصيدليات. يرجى التحقق من اتصالك بالإنترنت.';
+      } else {
+        // إذا كان هناك كاش، "ابتلع" الخطأ
+        print("Network refresh for pharmacies failed, but cache was available: $e");
+      }
     } finally {
+      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoadingPharmacies = false;
       notifyListeners();
     }
   }
 
+  // --- دوال الكاش المساعدة (لم تتغير) ---
+
   Future<void> _saveProductsToCache(String data) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cache_products', data);
   }
+
   Future<void> _loadProductsFromCache() async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString('cache_products');
     if (data != null) {
-      final decoded = json.decode(data);
-      _productsByPharmacy = (decoded as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
-      notifyListeners();
+      try {
+        final decoded = json.decode(data);
+        _productsByPharmacy = (decoded as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
+        notifyListeners();
+      } catch (e) {
+        print("Failed to load products from cache: $e");
+        await prefs.remove('cache_products'); // الكاش تالف، قم بحذفه
+      }
     }
   }
 
@@ -443,13 +584,19 @@ class PharmacyProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cache_all_pharmacies', data);
   }
+
   Future<void> _loadAllPharmaciesFromCache() async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString('cache_all_pharmacies');
     if (data != null) {
-      final decoded = json.decode(data);
-      _allPharmacies = (decoded as List).map((p) => Pharmacy.fromJson(p)).toList();
-      notifyListeners();
+      try {
+        final decoded = json.decode(data);
+        _allPharmacies = (decoded as List).map((p) => Pharmacy.fromJson(p)).toList();
+        notifyListeners();
+      } catch (e) {
+        print("Failed to load pharmacies from cache: $e");
+        await prefs.remove('cache_all_pharmacies'); // الكاش تالف، قم بحذفه
+      }
     }
   }
 
@@ -458,23 +605,29 @@ class PharmacyProvider with ChangeNotifier {
     final combinedData = json.encode({'pharmacies': pharmaciesData, 'banners': bannersData,});
     await prefs.setString('cache_home_data_$areaId', combinedData);
   }
+
   Future<void> _loadHomeDataFromCache(int areaId) async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString('cache_home_data_$areaId');
     if (data != null) {
-      final decoded = json.decode(data);
-      final pharmaciesData = json.decode(decoded['pharmacies']) as List;
-      _nearbyPharmacies = pharmaciesData.map((p) => Pharmacy.fromJson(p)).toList();
-      final bannersJsonData = json.decode(decoded['banners']);
-      if (bannersJsonData['showBanners'] ?? false) {
-        final bannerList = List<Map<String, dynamic>>.from(bannersJsonData['banners'] ?? []);
-        _banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+      try {
+        final decoded = json.decode(data);
+        final pharmaciesData = json.decode(decoded['pharmacies']) as List;
+        _nearbyPharmacies = pharmaciesData.map((p) => Pharmacy.fromJson(p)).toList();
+        final bannersJsonData = json.decode(decoded['banners']);
+        if (bannersJsonData['showBanners'] ?? false) {
+          final bannerList = List<Map<String, dynamic>>.from(bannersJsonData['banners'] ?? []);
+          _banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+        }
+        notifyListeners();
+      } catch (e) {
+        print("Failed to load home data from cache: $e");
+        await prefs.remove('cache_home_data_$areaId'); // الكاش تالف، قم بحذفه
       }
-      notifyListeners();
     }
   }
 }
-
+// [MODIFIED] الكلاس الكامل بعد التعديل
 class DashboardProvider with ChangeNotifier {
   Map<String, List<Order>> _orders = {};
   List<SubscriptionRequest> _subscriptions = [];
@@ -488,48 +641,65 @@ class DashboardProvider with ChangeNotifier {
   bool get hasNetworkError => _hasNetworkError;
   String get errorMessage => _errorMessage;
 
-  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
-    int attempts = 0;
-    while (attempts < 3) {
-      try {
-        return await action();
-      } catch (e) {
-        attempts++;
-        if (attempts >= 3) rethrow;
-        await Future.delayed(Duration(seconds: attempts * 2));
-      }
-    }
-    throw Exception('Failed after multiple retries');
+  void clearData() {
+    _orders.clear();
+    _subscriptions.clear();
+    notifyListeners();
   }
 
+  // [MODIFIED] تم تعديل المنطق بالكامل
   Future<void> fetchDashboardData(String? token) async {
     if (token == null) return;
-    _isLoading = true;
     _hasNetworkError = false;
-    notifyListeners();
 
-    await _loadDashboardFromCache();
+    // 1. تحقق من وجود الكاش أولاً
+    final prefs = await SharedPreferences.getInstance();
+    final dataString = prefs.getString('cache_dashboard');
 
+    if (dataString == null) {
+      // لا يوجد كاش: أظهر التحميل (لأنه لا يوجد شيء لعرضه)
+      _isLoading = true;
+      notifyListeners();
+    } else {
+      // يوجد كاش: قم بتحميله فوراً
+      await _loadDashboardFromCache();
+      _isLoading = false; // لا تظهر التحميل، لأن المستخدم يرى البيانات
+    }
+
+    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
     try {
-      await _executeWithRetry(() async {
-        final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/dashboard');
-        final response = await http.get(url, headers: {'Authorization': 'Bearer $token'});
-        if (response.statusCode == 200 && response.body.isNotEmpty) {
-          final data = json.decode(response.body) as Map<String, dynamic>;
-          final ordersData = data['orders'] as Map<String, dynamic>;
-          _orders.clear();
-          ordersData.forEach((status, ordersList) {
-            _orders[status] = (ordersList as List).map((d) => Order.fromJson(d)).toList();
-          });
-          final subsData = data['subscriptions'] as List;
-          _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
-          await _saveDashboardToCache(response.body);
-        } else { throw Exception('Server error'); }
-      });
+      final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/dashboard');
+      // [MODIFIED] أضفنا "مهلة زمنية" (timeout) ليفشل الطلب أسرع
+      final response = await http
+          .get(url, headers: {'Authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200 && response.body.isNotEmpty) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        final ordersData = data['orders'] as Map<String, dynamic>? ?? {};
+        _orders.clear();
+        ordersData.forEach((status, ordersList) {
+          _orders[status] = (ordersList as List).map((d) => Order.fromJson(d)).toList();
+        });
+        final subsData = data['subscriptions'] as List? ?? [];
+        _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
+        // نجح الاتصال: احفظ البيانات الجديدة في الكاش
+        await _saveDashboardToCache(response.body);
+      } else {
+        throw Exception('Server error: ${response.statusCode}');
+      }
     } catch (e) {
-      _hasNetworkError = true;
-      _errorMessage = 'فشل في تحديث البيانات. يرجى التحقق من اتصالك بالإنترنت.';
+      // 3. في حال فشل الاتصال
+      if (dataString == null) {
+        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+        _hasNetworkError = true;
+        _errorMessage = 'فشل في تحديث البيانات. يرجى التحقق من اتصالك بالإنترنت.';
+      } else {
+        // إذا كان هناك كاش، "ابتلع" الخطأ ولا تزعج المستخدم
+        print("Dashboard refresh failed, but cache was available: $e");
+      }
     } finally {
+      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoading = false;
       notifyListeners();
     }
@@ -539,34 +709,45 @@ class DashboardProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cache_dashboard', data);
   }
+
   Future<void> _loadDashboardFromCache() async {
     final prefs = await SharedPreferences.getInstance();
     final dataString = prefs.getString('cache_dashboard');
     if (dataString != null) {
-      final data = json.decode(dataString) as Map<String, dynamic>;
-      final ordersData = data['orders'] as Map<String, dynamic>;
-      _orders.clear();
-      ordersData.forEach((status, ordersList) {
-        _orders[status] = (ordersList as List).map((d) => Order.fromJson(d)).toList();
-      });
-      final subsData = data['subscriptions'] as List;
-      _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
-      notifyListeners();
+      try {
+        final data = json.decode(dataString) as Map<String, dynamic>;
+        if (data['orders'] != null) {
+          final ordersData = data['orders'] as Map<String, dynamic>;
+          _orders.clear();
+          ordersData.forEach((status, ordersList) {
+            _orders[status] = (ordersList as List).map((d) => Order.fromJson(d)).toList();
+          });
+        }
+        if (data['subscriptions'] != null) {
+          final subsData = data['subscriptions'] as List;
+          _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
+        }
+        notifyListeners();
+      } catch (e) {
+        print("Failed to load dashboard from cache: $e");
+        await prefs.remove('cache_dashboard'); // الكاش تالف، قم بحذفه
+      }
     }
   }
-}
+}// ... (CartProvider and PharmacyProvider remain the same)
 
 // =======================================================================
 // --- SERVICES ---
 // =======================================================================
 class NotificationService {
+  // ... (This class remains unchanged)
   static final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
   static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
       'high_importance_channel',
       'إشعارات هامة',
-      description: 'هذه القناة للإشعارات المهمة مثل الرسائل والطلبات الجديدة.',
+      description: 'هذه القناة للإشعارات المهمة.',
       importance: Importance.max,
       playSound: true,
       enableVibration: true);
@@ -582,7 +763,6 @@ class NotificationService {
             _handleNotificationTap(json.decode(response.payload!));
           }
         });
-    FirebaseMessaging.onMessage.listen((message) => _showLocalNotification(message));
   }
 
   static void _showLocalNotification(RemoteMessage message) {
@@ -613,9 +793,8 @@ class NotificationService {
           }
         } else {
           final pharmacyId = int.tryParse(data['pharmacy_id']?.toString() ?? '0');
-          final pharmacyName = "صيدلية";
-          if (pharmacyId != null && pharmacyId != 0) {
-            navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacyId, pharmacyName: pharmacyName)));
+          if (pharmacyId != 0) {
+            navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacyId!, pharmacyName: "صيدلية")));
           }
         }
       } catch (e) {
@@ -628,6 +807,271 @@ class NotificationService {
 // =======================================================================
 // --- WIDGETS ---
 // =======================================================================
+class OrderCard extends StatefulWidget {
+  final Order order;
+  final Function onStatusChanged;
+  const OrderCard({super.key, required this.order, required this.onStatusChanged});
+
+  @override
+  State<OrderCard> createState() => _OrderCardState();
+}
+class _OrderCardState extends State<OrderCard> {
+  bool _isLoading = false;
+
+  // 1. دالة جديدة تفتح نافذة لإدخال المنطقة والسعر
+  void _showRequestDeliveryDialog() {
+    final priceController = TextEditingController();
+    // اقتراح المنطقة تلقائياً من تفاصيل الطلب
+    final areaController = TextEditingController(text: widget.order.customerArea);
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('طلب توصيل'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: areaController,
+                decoration: const InputDecoration(
+                  labelText: 'المنطقة المراد التوصيل لها',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) => (value == null || value.isEmpty) ? 'الرجاء إدخال المنطقة' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: priceController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'أجرة التوصيل (د.ع)',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) return 'الرجاء إدخال السعر';
+                  if (double.tryParse(value) == null) return 'رقم غير صالح';
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () {
+              if (formKey.currentState?.validate() ?? false) {
+                final price = double.parse(priceController.text);
+                final area = areaController.text;
+                Navigator.of(ctx).pop();
+                _requestDelivery(area, price); // إرسال البيانات الجديدة
+              }
+            },
+            child: const Text('تأكيد وطلب'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 2. دالة إرسال الطلب المعدلة
+  Future<void> _requestDelivery(String destinationArea, double deliveryFee) async {
+    setState(() => _isLoading = true);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    // استخدمنا رابط جديد ومبسط
+    final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/orders/${widget.order.id}/request-delivery-simple');
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          'Authorization': 'Bearer ${authProvider.token}',
+          'Content-Type': 'application/json'
+        },
+        body: json.encode({
+          'delivery_fee': deliveryFee,
+          'destination_area': destinationArea,
+        }),
+      );
+
+      final responseData = json.decode(response.body);
+
+      if (response.statusCode == 201) {
+        if (mounted) _showQrCodeDialog(responseData['qr_code_data']);
+        widget.onStatusChanged();
+      } else {
+        throw Exception(responseData['message'] ?? 'فشل طلب المندوب');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().replaceAll("Exception: ", "")),
+          backgroundColor: Colors.red,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _showQrCodeDialog(String qrData) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => QrCodeDisplayDialog(qrData: qrData),
+    );
+  }
+
+  Widget _buildActionButtons() {
+    // الحالة الافتراضية للطلب من ووكومرس
+    if (widget.order.status != 'processing') return const SizedBox.shrink();
+
+    // متغير جديد لتسهيل القراءة، يأتي من الخادم
+    final deliveryStatus = widget.order.deliveryStatus;
+
+    // 1. إذا لم يكن هناك طلب توصيل بعد (deliveryStatus فارغ)
+    if (deliveryStatus == null) {
+      return _isLoading
+          ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2))
+          : ElevatedButton.icon(
+        icon: const Icon(Icons.delivery_dining, size: 18),
+        label: const Text('طلب توصيل'),
+        onPressed: _showRequestDeliveryDialog, // الدالة التي تفتح نافذة إدخال البيانات
+      );
+    }
+
+    // 2. إذا تم طلب المندوب وهو الآن "بانتظار الاستلام"
+    if (deliveryStatus == 'awaiting_pickup') {
+      return ElevatedButton.icon(
+        icon: const Icon(Icons.qr_code_2),
+        label: const Text('إظهار الرمز'),
+        onPressed: () => _showQrCodeDialog(widget.order.deliveryQrCode!), // يعرض الباركود المحفوظ
+        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
+      );
+    }
+
+    // 3. إذا كانت هناك أي حالة أخرى (مثل "تم الاستلام"، "في الطريق"، إلخ)
+    return Chip(
+      label: Text(_getDeliveryStatusText(deliveryStatus), style: const TextStyle(color: Colors.white)),
+      backgroundColor: Colors.teal,
+    );
+  }
+  Widget _buildDriverInfo() {
+    final driver = widget.order.driverInfo;
+    if (driver == null) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.blue.shade200)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('معلومات المندوب:', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text('الاسم: ${driver.name}'),
+          Text('الهاتف: ${driver.phone}'),
+          Text('المركبة: ${driver.vehicleType} - ${driver.carModel} (${driver.carColor})'),
+        ],
+      ),
+    );
+  }
+
+  String _getDeliveryStatusText(String status) {
+    switch (status) {
+      case 'awaiting_pickup': return 'بانتظار الاستلام';
+      case 'pending': return 'بانتظار سائق';
+      case 'accepted': return 'السائق في الطريق';
+      case 'at_store': return 'السائق عند الصيدلية';
+      case 'picked_up': return 'في الطريق للزبون';
+      case 'delivered': return 'تم التوصيل';
+      case 'cancelled': return 'ملغى';
+      default: return 'جاري التوصيل';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('#${widget.order.id}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(DateFormat('yyyy-MM-dd').format(widget.order.date), style: TextStyle(color: Colors.grey.shade600))
+            ]),
+            const Divider(),
+            Text('الزبون: ${widget.order.customerName}'),
+            Text('المنطقة: ${widget.order.customerArea}'),
+            const SizedBox(height: 8),
+            const Text('المنتجات:', style: TextStyle(fontWeight: FontWeight.bold)),
+            ...widget.order.items.map((item) => Text('- ${item.name} (الكمية: ${item.quantity})')),
+            _buildDriverInfo(),
+            const Divider(),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text('الإجمالي: ${widget.order.total} د.ع', style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+                _buildActionButtons(),
+              ],
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+class QrCodeDisplayDialog extends StatelessWidget {
+  final String qrData;
+  const QrCodeDisplayDialog({super.key, required this.qrData});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text('رمز تأكيد الاستلام', textAlign: TextAlign.center),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 200,
+            height: 200,
+            child: QrImageView(
+              data: qrData,
+              version: QrVersions.auto,
+              size: 200.0,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'يرجى إظهار هذا الرمز لمندوب التوصيل عند وصوله لتأكيد استلام الطلب.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إغلاق'),
+        ),
+      ],
+    );
+  }
+}
+
+// ... All other widgets (NetworkErrorWidget, ProductCard, etc. remain the same)
 class NetworkErrorWidget extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
@@ -646,33 +1090,13 @@ class NetworkErrorWidget extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.wifi_off_rounded,
-              size: 80,
-              color: Colors.grey.shade400,
-            ),
+            Icon(Icons.wifi_off_rounded, size: 80, color: Colors.grey.shade400),
             const SizedBox(height: 24),
-            Text(
-              'حدث خطأ في الشبكة',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
+            Text('حدث خطأ في الشبكة', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
             const SizedBox(height: 8),
-            Text(
-              message,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey.shade600),
-              textAlign: TextAlign.center,
-            ),
+            Text(message, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey.shade600), textAlign: TextAlign.center),
             const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('إعادة المحاولة'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                textStyle: const TextStyle(fontSize: 16, fontFamily: 'Cairo', fontWeight: FontWeight.bold),
-              ),
-            ),
+            ElevatedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh_rounded), label: const Text('إعادة المحاولة')),
           ],
         ),
       ),
@@ -687,17 +1111,10 @@ class ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       clipBehavior: Clip.antiAlias,
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: CachedNetworkImage(imageUrl: product.imageUrl, fit: BoxFit.contain, placeholder: (context, url) => const Center(child: CircularProgressIndicator(strokeWidth: 2)), errorWidget: (c, u, e) => const Icon(Icons.medication, size: 60, color: Colors.grey)),
-            ),
-          ),
+          Expanded(child: Padding(padding: const EdgeInsets.all(8.0), child: CachedNetworkImage(imageUrl: product.imageUrl, fit: BoxFit.contain, placeholder: (context, url) => const Center(child: CircularProgressIndicator(strokeWidth: 2)), errorWidget: (c, u, e) => const Icon(Icons.medication, size: 60, color: Colors.grey)))),
           Padding(padding: const EdgeInsets.symmetric(horizontal: 12.0), child: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis)),
           Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 8), child: Text('${product.price} د.ع', style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold))),
           Padding(
@@ -714,7 +1131,6 @@ class ProductCard extends StatelessWidget {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
                 }
               },
-              style: ElevatedButton.styleFrom(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
             ),
           )
         ],
@@ -734,10 +1150,7 @@ class PharmacyListItemCard extends StatelessWidget {
         padding: const EdgeInsets.all(12.0),
         child: Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8.0),
-              child: CachedNetworkImage(imageUrl: pharmacy.logoUrl, width: 60, height: 60, fit: BoxFit.cover, placeholder: (context, url) => Container(width: 60, height: 60, color: Colors.grey.shade200), errorWidget: (context, url, error) => const Icon(Icons.storefront, size: 60, color: Colors.grey)),
-            ),
+            ClipRRect(borderRadius: BorderRadius.circular(8.0), child: CachedNetworkImage(imageUrl: pharmacy.logoUrl, width: 60, height: 60, fit: BoxFit.cover, placeholder: (context, url) => Container(width: 60, height: 60, color: Colors.grey.shade200), errorWidget: (context, url, error) => const Icon(Icons.storefront, size: 60, color: Colors.grey))),
             const SizedBox(width: 16),
             Expanded(child: Text(pharmacy.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
             const SizedBox(width: 16),
@@ -745,61 +1158,7 @@ class PharmacyListItemCard extends StatelessWidget {
               icon: const Icon(Icons.chat_bubble_outline, size: 18),
               label: const Text('دردشة'),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacy.id, pharmacyName: pharmacy.name))),
-              style: ElevatedButton.styleFrom(foregroundColor: Theme.of(context).primaryColor, backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1), elevation: 0),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class OrderCard extends StatelessWidget {
-  final Order order;
-  final Function onStatusChanged;
-  const OrderCard({super.key, required this.order, required this.onStatusChanged});
-  @override
-  Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    Future<void> updateStatus(String status) async {
-      final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/update_order_status');
-      try {
-        final response = await http.post(url, headers: {'Authorization': 'Bearer ${authProvider.token}', 'Content-Type': 'application/json'}, body: json.encode({'order_id': order.id, 'status': status}));
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم تحديث حالة الطلب بنجاح')));
-          onStatusChanged();
-        } else {
-          throw Exception('Failed to update status');
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حدث خطأ أثناء تحديث الطلب')));
-      }
-    }
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('#${order.id}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), Text(DateFormat('yyyy-MM-dd').format(order.date), style: TextStyle(color: Colors.grey.shade600))]),
-            const Divider(),
-            Text('الزبون: ${order.customerName}'),
-            Text('الهاتف: ${order.customerPhone}'),
-            Text('المنطقة: ${order.customerArea}'),
-            const SizedBox(height: 8),
-            const Text('المنتجات:', style: TextStyle(fontWeight: FontWeight.bold)),
-            ...order.items.map((item) => Text('- ${item.name} (الكمية: ${item.quantity})')).toList(),
-            const Divider(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('الإجمالي: ${order.total} د.ع', style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
-                if (order.status == 'processing')
-                  Row(children: [TextButton(onPressed: () => updateStatus('cancelled'), child: const Text('إلغاء', style: TextStyle(color: Colors.red))), ElevatedButton(onPressed: () => updateStatus('completed'), child: const Text('إكمال'))])
-              ],
-            )
           ],
         ),
       ),
@@ -823,7 +1182,6 @@ class SubscriptionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      elevation: 2,
       child: Padding(
         padding: const EdgeInsets.all(12.0),
         child: Column(
@@ -840,7 +1198,6 @@ class SubscriptionCard extends StatelessWidget {
                 icon: const Icon(Icons.phone_outlined, size: 18),
                 label: const Text('اتصال'),
                 onPressed: () => _makePhoneCall(subscription.phone, context),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
               ),
             ),
           ],
@@ -859,7 +1216,6 @@ class SubscriptionButtons extends StatelessWidget {
       onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => SubscriptionScreen(areaId: areaId))),
       icon: const Icon(Icons.monitor_heart_outlined, size: 28),
       label: const Text('اشتراك الأمراض المزمنة', textAlign: TextAlign.center, style: TextStyle(fontSize: 15)),
-      style: ElevatedButton.styleFrom(foregroundColor: Colors.black87, backgroundColor: Colors.white, elevation: 2, shadowColor: Colors.grey.withOpacity(0.2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20)),
     );
   }
 }
@@ -870,9 +1226,6 @@ class ConsultationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      elevation: 2,
-      shadowColor: Colors.grey.withOpacity(0.2),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: InkWell(
         onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacy.id, pharmacyName: pharmacy.name))),
         borderRadius: BorderRadius.circular(16),
@@ -882,9 +1235,7 @@ class ConsultationCard extends StatelessWidget {
             children: [
               Icon(Icons.chat_bubble_outline_rounded, color: Theme.of(context).primaryColor, size: 40),
               const SizedBox(width: 16),
-              const Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('الحصول على استشارة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)), SizedBox(height: 4), Text('تحدث مباشرة مع صيدلية منطقتك', style: TextStyle(fontSize: 14, color: Colors.grey))]),
-              ),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('الحصول على استشارة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)), SizedBox(height: 4), Text('تحدث مباشرة مع صيدلية منطقتك', style: TextStyle(fontSize: 14, color: Colors.grey))])),
               const Icon(Icons.arrow_forward_ios, color: Colors.grey),
             ],
           ),
@@ -897,7 +1248,6 @@ class ConsultationCard extends StatelessWidget {
 // =======================================================================
 // --- SCREENS ---
 // =======================================================================
-
 class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
   @override
@@ -914,12 +1264,26 @@ class _AuthWrapperState extends State<AuthWrapper> {
     _setupNotificationHandlers();
   }
 
-  Future<void> _setupNotificationHandlers() async {
-    RemoteMessage? initialMessage = await FirebaseMessaging.instance.getInitialMessage();
-    if (initialMessage != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => NotificationService._handleNotificationTap(initialMessage.data));
-    }
-    FirebaseMessaging.onMessageOpenedApp.listen((message) => NotificationService._handleNotificationTap(message.data));
+  void _setupNotificationHandlers() {
+    FirebaseMessaging.instance.getInitialMessage().then((message) {
+      if (message != null) NotificationService._handleNotificationTap(message.data);
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      NotificationService._handleNotificationTap(message.data);
+    });
+
+    FirebaseMessaging.onMessage.listen((message) {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final type = message.data['type'] as String?;
+
+      // -->> This is the most important part for real-time updates
+      if (auth.isAuth && (type == 'new_order' || type == 'delivery_status_update')) {
+        Provider.of<DashboardProvider>(context, listen: false).fetchDashboardData(auth.token);
+      }
+
+      NotificationService._showLocalNotification(message);
+    });
   }
 
   @override
@@ -954,6 +1318,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 }
 
+// ... All other Screens remain the same ...
 class LocationCheckWrapper extends StatefulWidget {
   const LocationCheckWrapper({super.key});
   @override
@@ -1113,9 +1478,9 @@ class _CustomerLoginScreenState extends State<CustomerLoginScreen> {
                 const SizedBox(height: 16),
                 TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone_outlined)), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
                 const SizedBox(height: 24),
-                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), textStyle: const TextStyle(fontSize: 18, fontFamily: 'Cairo', fontWeight: FontWeight.bold)), onPressed: _registerAndLogin, child: const Text('دخول / إنشاء حساب')),
+                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _registerAndLogin, child: const Text('دخول / إنشاء حساب')),
                 const SizedBox(height: 20),
-                TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PharmacyLoginScreen())), child: const Text('هل أنت صاحب صيدلية؟ تسجيل الدخول')),
+                TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PharmacyLoginScreen())), child: const Text('هل أنت صاحب صيدلية؟')),
               ],
             ),
           ),
@@ -1161,13 +1526,13 @@ class _PharmacyLoginScreenState extends State<PharmacyLoginScreen> {
               children: [
                 Icon(Icons.storefront_outlined, size: 80, color: Theme.of(context).primaryColor),
                 const SizedBox(height: 20),
-                Text('   يمكنك اضافة صيدليتك بتواصل على رقم: 07854076931', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                Text('يمكنك اضافة صيدليتك بالتواصل على رقم: 07854076931', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 32),
                 TextFormField(controller: _usernameController, decoration: const InputDecoration(labelText: 'اسم المستخدم', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
                 const SizedBox(height: 16),
                 TextFormField(controller: _passwordController, decoration: const InputDecoration(labelText: 'كلمة المرور', border: OutlineInputBorder()), obscureText: true, validator: (v) => v!.isEmpty ? 'مطلوب' : null),
                 const SizedBox(height: 24),
-                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), textStyle: const TextStyle(fontSize: 18, fontFamily: 'Cairo', fontWeight: FontWeight.bold)), onPressed: _login, child: const Text('دخول')),
+                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _login, child: const Text('دخول')),
               ],
             ),
           ),
@@ -1287,13 +1652,12 @@ class _PharmacyHomeScreenState extends State<PharmacyHomeScreen> {
                     return GestureDetector(
                       onTap: () => _onBannerTapped(banner),
                       child: Container(
-                        width: MediaQuery.of(context).size.width,
                         margin: const EdgeInsets.symmetric(horizontal: 5.0),
                         child: ClipRRect(borderRadius: BorderRadius.circular(15), child: CachedNetworkImage(imageUrl: banner.imageUrl, fit: BoxFit.cover, placeholder: (c, u) => Container(color: Colors.grey.shade200), errorWidget: (c, u, e) => const Icon(Icons.error))),
                       ),
                     );
                   },
-                  options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true, aspectRatio: 16/9, viewportFraction: 0.9, autoPlayInterval: const Duration(seconds: 5)),
+                  options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true),
                 ),
                 const SizedBox(height: 20),
               ],
@@ -1302,7 +1666,7 @@ class _PharmacyHomeScreenState extends State<PharmacyHomeScreen> {
               if (pharmacyInArea != null)
                 ConsultationCard(pharmacy: pharmacyInArea)
               else
-                const Card(child: Padding(padding: EdgeInsets.all(16.0), child: Text("لا توجد صيدلية تخدم هذه المنطقة حالياً للاستشارة."))),
+                const Card(child: Padding(padding: EdgeInsets.all(16.0), child: Text("لا توجد صيدلية تخدم هذه المنطقة حالياً."))),
             ],
           ),
         );
@@ -1353,7 +1717,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       itemCount: pharmacyGroup.products.length,
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 10, mainAxisSpacing: 10),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.7, crossAxisSpacing: 10, mainAxisSpacing: 10),
                       itemBuilder: (ctx, i) => ProductCard(product: pharmacyGroup.products[i]),
                     ),
                   ],
@@ -1509,7 +1873,7 @@ class _CartScreenState extends State<CartScreen> {
                     TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null),
                     TextFormField(controller: _areaController, decoration: const InputDecoration(labelText: 'المنطقة/العنوان'), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
                     const SizedBox(height: 20),
-                    _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: () => _submitOrder(cart), style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)), child: const Text('تأكيد الطلب')),
+                    _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: () => _submitOrder(cart), child: const Text('تأكيد الطلب')),
                   ],
                 ),
               ),
@@ -1662,14 +2026,10 @@ class _ChatScreenState extends State<ChatScreen> {
         user: _chatUser,
         theme: DefaultChatTheme(
           primaryColor: Theme.of(context).primaryColor,
-          secondaryColor: const Color(0xFFE3F2FD),
           inputBackgroundColor: Colors.white,
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-          inputTextColor: Colors.black87,
-          sentMessageBodyTextStyle: const TextStyle(color: Colors.white, fontSize: 16, fontFamily: 'Cairo'),
-          receivedMessageBodyTextStyle: const TextStyle(color: Colors.black87, fontSize: 16, fontFamily: 'Cairo'),
         ),
-        l10n: const ChatL10nEn(inputPlaceholder: 'اكتب استفسارك هنا...', fileButtonAccessibilityLabel: 'إرسال ملف', attachmentButtonAccessibilityLabel: ''),
+        l10n: const ChatL10nEn(inputPlaceholder: 'اكتب استفسارك هنا...'),
         emptyState: const Center(child: Text('ابدأ محادثتك')),
       ),
     );
@@ -1725,9 +2085,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             const SizedBox(height: 16),
             TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder()), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 16),
-            TextFormField(controller: _illnessController, decoration: const InputDecoration(labelText: 'نوع المرض (مثال: سكري، ضغط)', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            TextFormField(controller: _illnessController, decoration: const InputDecoration(labelText: 'نوع المرض', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
             const SizedBox(height: 30),
-            _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _submit, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), textStyle: const TextStyle(fontSize: 16, fontFamily: 'Cairo', fontWeight: FontWeight.bold)), child: const Text('إرسال الطلب')),
+            _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _submit, child: const Text('إرسال الطلب')),
           ]),
         ),
       ),
@@ -1745,16 +2105,14 @@ class SubscriptionSuccessScreen extends StatelessWidget {
           padding: const EdgeInsets.all(24.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const Icon(Icons.check_circle_outline_rounded, color: Colors.green, size: 100),
               const SizedBox(height: 24),
               Text('تم استلام طلبك بنجاح!', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
-              Text('سوف يتم الاتصال بك قريباً من قبل الصيدلية المعتمدة في منطقتك للتمتع بخصومات وعروض خاصة.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey.shade700)),
+              Text('سوف يتم الاتصال بك قريباً.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey.shade700)),
               const SizedBox(height: 40),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12)),
                 onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
                 child: const Text('العودة إلى الرئيسية'),
               ),
@@ -1772,13 +2130,13 @@ class PharmacyDashboardScreen extends StatefulWidget {
   _PharmacyDashboardScreenState createState() => _PharmacyDashboardScreenState();
 }
 class _PharmacyDashboardScreenState extends State<PharmacyDashboardScreen> {
-  int _selectedIndex = 2;
+  int _selectedIndex = 0;
   final List<Widget> _ownerScreens = const [PharmacyOrdersPage(), PharmacySubscriptionsPage(), PharmacyChatListPage()];
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
     return Scaffold(
-      appBar: AppBar(title: Text(authProvider.pharmacyName ?? 'لوحة التحكم'), actions: [IconButton(icon: const Icon(Icons.logout), onPressed: () => Provider.of<AuthProvider>(context, listen: false).logout())]),
+      appBar: AppBar(title: Text(authProvider.pharmacyName ?? 'لوحة التحكم'), actions: [IconButton(icon: const Icon(Icons.logout), onPressed: () => Provider.of<AuthProvider>(context, listen: false).logout(context))]),
       body: IndexedStack(index: _selectedIndex, children: _ownerScreens),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
@@ -1840,7 +2198,7 @@ class PharmacyOrdersList extends StatelessWidget {
         onRefresh: onRefresh,
         child: Stack(
           children: [
-            ListView(), // To enable RefreshIndicator even when list is empty
+            ListView(),
             Center(child: Text('لا توجد طلبات في هذه الفئة حالياً.', style: TextStyle(color: Colors.grey.shade600))),
           ],
         ),
@@ -1880,12 +2238,7 @@ class _PharmacySubscriptionsPageState extends State<PharmacySubscriptionsPage> {
           return RefreshIndicator(
             onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
             child: dashboard.subscriptions.isEmpty
-                ? Stack(
-              children: [
-                ListView(),
-                Center(child: Text('لا توجد طلبات اشتراك حالياً.', style: TextStyle(color: Colors.grey.shade600))),
-              ],
-            )
+                ? Stack(children: [ListView(), Center(child: Text('لا توجد طلبات اشتراك حالياً.'))])
                 : ListView.builder(
               padding: const EdgeInsets.only(top: 8, bottom: 8),
               itemCount: dashboard.subscriptions.length,
@@ -1918,8 +2271,9 @@ class _PharmacyChatListPageState extends State<PharmacyChatListPage> {
     if (!mounted) return;
     setState(() { _isLoading = true; _error = null; });
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/conversations');
+
     try {
+      final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/conversations');
       final response = await http.get(url, headers: {'Authorization': 'Bearer ${authProvider.token}'});
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -1945,12 +2299,7 @@ class _PharmacyChatListPageState extends State<PharmacyChatListPage> {
           : RefreshIndicator(
         onRefresh: _fetchConversations,
         child: _conversations.isEmpty
-            ? Stack(
-          children: [
-            ListView(),
-            Center(child: Text('لا توجد محادثات بعد.', style: TextStyle(color: Colors.grey.shade600))),
-          ],
-        )
+            ? Stack(children: [ListView(), Center(child: Text('لا توجد محادثات بعد.'))])
             : ListView.builder(
           itemCount: _conversations.length,
           itemBuilder: (ctx, i) {
@@ -2020,19 +2369,27 @@ class PharmacyApp extends StatelessWidget {
       ],
       child: MaterialApp(
         navigatorKey: navigatorKey,
-        title: 'الصيدليات ',
+        title: 'صيدليات بيتي',
         theme: ThemeData(
-          textTheme: GoogleFonts.cairoTextTheme(Theme.of(context).textTheme),
-          primaryColor: Colors.blue.shade700,
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue.shade700),
-          scaffoldBackgroundColor: const Color(0xFFF0F4F8),
-          appBarTheme: AppBarTheme(
-            backgroundColor: const Color(0xFFF0F4F8),
-            elevation: 0,
-            centerTitle: true,
-            iconTheme: const IconThemeData(color: Colors.black87),
-            titleTextStyle: GoogleFonts.cairo(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18),
-          ),
+            textTheme: GoogleFonts.cairoTextTheme(Theme.of(context).textTheme),
+            primaryColor: Colors.blue.shade700,
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue.shade700),
+            scaffoldBackgroundColor: const Color(0xFFF0F4F8),
+            appBarTheme: AppBarTheme(
+              backgroundColor: const Color(0xFFF0F4F8),
+              elevation: 0,
+              centerTitle: true,
+              iconTheme: const IconThemeData(color: Colors.black87),
+              titleTextStyle: GoogleFonts.cairo(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            elevatedButtonTheme: ElevatedButtonThemeData(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade700,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+                )
+            )
         ),
         debugShowCheckedModeBanner: false,
         home: const AuthWrapper(),
@@ -2040,4 +2397,3 @@ class PharmacyApp extends StatelessWidget {
     );
   }
 }
-

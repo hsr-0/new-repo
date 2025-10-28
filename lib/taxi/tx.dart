@@ -13,6 +13,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -79,16 +80,14 @@ class FirebaseApi {
         // تم قبول الرحلة، مرر البيانات مباشرة
         final rideData = json.decode(message.data['ride_data']);
         acceptedRideNotifier.value = rideData;
-      } else {
-        // إشعار عادي
-        final notificationType = message.data['notification_type'] ?? 'default';
-        NotificationService.showNotification(
-          notification.title ?? 'إشعار جديد',
-          notification.body ?? '',
-          payload: json.encode(message.data),
-          type: notificationType,
-        );
-      }
+      }  // الحالة 2: يوجد طلب توصيل جديد
+      NotificationService.showNotification(
+        notification.title ?? 'طلب توصيل جديد',
+        notification.body ?? '',
+        payload: json.encode(message.data),
+        type: 'high_priority', // اجعل الإشعار بأولوية عالية
+      );
+
     });
   }
 }
@@ -303,6 +302,10 @@ class ApiService {
     return http.get(Uri.parse('$baseUrl$endpoint'), headers: {'Authorization': 'Bearer $token'});
   }
 
+  static Future<http.Response> createUnifiedDelivery(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/delivery/create', token, body);
+  }
+
   static Future<void> updateFcmToken(String authToken, String fcmToken) async {
     try {
       await http.post(
@@ -412,6 +415,42 @@ class ApiService {
     }
     throw Exception('Failed to load driver hub data');
   }
+
+
+  // للسائق: جلب طلبات التوصيل المتاحة
+  static Future<List<dynamic>> getAvailableDeliveries(String token) async {
+    try {
+      final response = await _get('/taxi/v2/delivery/available', token);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['orders'] is List) {
+          return data['orders'];
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint("Failed to fetch deliveries: $e");
+      return [];
+    }
+  }
+
+  /// للسائق: قبول طلب توصيل
+  static Future<http.Response> acceptDelivery(String token, String orderId) {
+    return _post('/taxi/v2/delivery/accept', token, {'order_id': orderId});
+  }
+
+  /// للسائق: تحديث حالة طلب التوصيل
+  static Future<http.Response> updateDeliveryStatus(String token, String orderId, String newStatus) {
+    return _post('/taxi/v2/delivery/update-status', token, {'order_id': orderId, 'status': newStatus});
+  }
+
+  static Future<http.Response> confirmPickupByCode(String token, String orderId, String pickupCode) {
+    return _post('/taxi/v2/delivery/confirm-pickup', token, {
+      'order_id': orderId,
+      'pickup_code': pickupCode,
+    });
+  }
+
 
   static Future<http.Response> acceptPrivateRequest(String token, String requestId) {
     return _post('/taxi/v2/private-requests/accept', token, {'request_id': requestId});
@@ -1128,6 +1167,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 
   String _vehicleType = 'Tuktuk';
   bool _isLoading = false;
+  bool _isDeliveryDriver = false;
   String? _errorMessage;
   final ImagePicker _picker = ImagePicker();
   XFile? _registrationImageFile;
@@ -1165,7 +1205,11 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         'phone': _phoneController.text,
         'vehicle_type': _vehicleType,
         'car_model': _modelController.text,
+        'is_delivery': _isDeliveryDriver.toString(), // <--- أضف هذا السطر المهم
+
         'car_color': _colorController.text
+
+
       });
 
       if (_referralCodeController.text.isNotEmpty) {
@@ -2091,11 +2135,23 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   int _selectedIndex = 0;
   bool _isDriverActive = true;
   StreamSubscription<geolocator.Position>? _positionStream;
+  // State management for current jobs
   Map<String, dynamic>? _currentQuickRide;
+  Map<String, dynamic>? _currentDelivery; // <-- تأكد من وجود هذا المتغير
+
+
   Map<String, dynamic>? _liveStats;
   Timer? _statsTimer;
 
 
+  void _refreshAllLists() {
+    // هذه الدالة ستعيد تحميل الطلبات في الشاشات الأخرى عند الحاجة
+    // يمكنك تعديلها لتكون أكثر تحديداً إذا أردت
+    setState(() {
+      // إعادة تهيئة الـ Futures سيؤدي إلى إعادة تحميل البيانات
+      // (هذا يعتمد على كيفية بنائك لشاشات عرض الطلبات)
+    });
+  }
 
 
   void _onRideAccepted(Map<String, dynamic> ride) {
@@ -2105,6 +2161,15 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   }
 
 
+  // --- NEW: Handlers for delivery jobs ---
+  void _onDeliveryAccepted(Map<String, dynamic> delivery) {
+    setState(() {
+      _currentDelivery = delivery;
+      _selectedIndex = 1; // Switch to delivery tab
+    });
+  }
+  void _onDeliveryFinished() => setState(() => _currentDelivery = null);
+  // ---
 
   void _onRideFinished() {
     setState(() {
@@ -2124,6 +2189,11 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       acceptedRideNotifier.value = null;
     }
   }
+
+
+
+
+
 
   @override
   void initState() {
@@ -2206,17 +2276,28 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
+      // Tab 0: Quick Rides
       _currentQuickRide == null
           ? DriverAvailableRidesScreen(authResult: widget.authResult, onRideAccepted: _onRideAccepted)
           : DriverCurrentRideScreen(initialRide: _currentQuickRide!, authResult: widget.authResult, onRideFinished: _onRideFinished),
+
+      // Tab 1: Deliveries (NEW)
+      _currentDelivery == null
+          ? DriverAvailableDeliveriesScreen(authResult: widget.authResult, onDeliveryAccepted: _onDeliveryAccepted)
+          : DriverCurrentDeliveryScreen(
+        initialDelivery: _currentDelivery!,
+        authResult: widget.authResult,
+        onDeliveryFinished: _onDeliveryFinished,
+        onDataChanged: _refreshAllLists, //  <-- قم بإضافة هذا السطر الناقص هنا
+      ),
       DriverPrivateRequestsScreen(authResult: widget.authResult),
-      DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => _changeTab(3)),
+      DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => setState(() => _selectedIndex = 3)),
       DriverCreateTripScreen(authResult: widget.authResult),
       DriverHubScreen(authResult: widget.authResult),
-      DriverLinesManagementScreen(authResult: widget.authResult), // <-- أضف هذه الشاشة
 
     ];
     return Scaffold(
@@ -2241,6 +2322,8 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), label: 'الطلبات'),
           BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي'),
+          BottomNavigationBarItem(icon: Icon(Icons.delivery_dining), label: 'توصيل'), // <-- NEW TAB
+
           BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
           BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
 
@@ -2252,6 +2335,362 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     );
   }
 }
+// =============================================================================
+// NEW SCREEN: DriverAvailableDeliveriesScreen
+// =============================================================================
+class DriverAvailableDeliveriesScreen extends StatefulWidget {
+  final AuthResult authResult;
+  final Function(Map<String, dynamic>) onDeliveryAccepted;
+  const DriverAvailableDeliveriesScreen({super.key, required this.authResult, required this.onDeliveryAccepted});
+
+  @override
+  State<DriverAvailableDeliveriesScreen> createState() => _DriverAvailableDeliveriesScreenState();
+}
+
+class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliveriesScreen> {
+  Future<List<dynamic>>? _deliveriesFuture;
+  Timer? _refreshTimer;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDeliveries();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 25), (timer) {
+      if (mounted) _loadDeliveries();
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadDeliveries() async {
+    if (!mounted) return;
+    setState(() {
+      _deliveriesFuture = ApiService.getAvailableDeliveries(widget.authResult.token);
+    });
+  }
+
+  Future<void> _acceptDelivery(String orderId) async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await ApiService.acceptDelivery(widget.authResult.token, orderId);
+      final data = json.decode(response.body);
+      if (mounted && response.statusCode == 200 && data['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
+        widget.onDeliveryAccepted(data['delivery_order']);
+      } else if (mounted) {
+        throw Exception(data['message'] ?? 'فشل قبول الطلب');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+        _loadDeliveries();
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          RefreshIndicator(
+            onRefresh: _loadDeliveries,
+            child: FutureBuilder<List<dynamic>>(
+              future: _deliveriesFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting && !_isLoading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Center(child: Text("خطأ: ${snapshot.error}"));
+                }
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return const EmptyStateWidget(
+                    svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>''',
+                    message: 'لا توجد طلبات توصيل متاحة حالياً في منطقتك.',
+                  );
+                }
+                final orders = snapshot.data!;
+                return ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: orders.length,
+                  itemBuilder: (context, index) {
+                    final order = orders[index];
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // عرض اسم الصيدلية والمنطقة
+                            Text("من: ${order['pickup_location_name']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text("إلى: ${order['destination_address']}", style: const TextStyle(fontSize: 16)),
+                            const Divider(height: 16),
+
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                // عرض السعر
+                                Chip(label: Text('${order['delivery_fee']} د.ع', style: const TextStyle(fontWeight: FontWeight.bold)), backgroundColor: Colors.green.withOpacity(0.1)),
+                                ElevatedButton(
+                                  onPressed: () => _acceptDelivery(order['id'].toString()),
+                                  child: const Text('قبول'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          if (_isLoading) Container(color: Colors.black.withOpacity(0.2), child: const Center(child: CircularProgressIndicator())),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// NEW SCREEN: DriverCurrentDeliveryScreen
+// =============================================================================
+class DriverCurrentDeliveryScreen extends StatefulWidget {
+  final Map<String, dynamic> initialDelivery;
+  final AuthResult authResult;
+  final VoidCallback onDeliveryFinished;
+  final VoidCallback onDataChanged; //  <-- أضف هذا السطر
+
+
+  const DriverCurrentDeliveryScreen({
+    super.key,
+    required this.initialDelivery,
+    required this.authResult,
+    required this.onDeliveryFinished,
+    required this.onDataChanged, //  <-- أضف هذا السطر
+
+  });
+
+  @override
+  State<DriverCurrentDeliveryScreen> createState() => _DriverCurrentDeliveryScreenState();
+}
+
+class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScreen> {
+  late Map<String, dynamic> _currentDelivery;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentDelivery = widget.initialDelivery;
+  }
+
+  Future<void> _updateStatus(String newStatus) async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await ApiService.updateDeliveryStatus(
+        widget.authResult.token,
+        _currentDelivery['id'].toString(),
+        newStatus,
+      );
+      final data = json.decode(response.body);
+      if (mounted && response.statusCode == 200 && data['success'] == true) {
+        if (newStatus == 'delivered' || newStatus == 'cancelled') {
+          widget.onDeliveryFinished();
+        } else {
+          setState(() => _currentDelivery = data['delivery_order']);
+        }
+      } else if (mounted) {
+        throw Exception(data['message'] ?? 'فشل تحديث الحالة');
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+// داخل class _DriverCurrentDeliveryScreenState
+
+// استبدل الدالة القديمة بهذه الدالة الجديدة بالكامل
+  Future<void> _showPickupCodeDialog() async {
+    final codeController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    final String? enteredCode = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('تأكيد الاستلام'),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              controller: codeController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'أدخل رمز الاستلام (4 أرقام)'),
+              validator: (v) => v == null || v.isEmpty ? 'الرمز مطلوب' : null,
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('إلغاء')),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState!.validate()) {
+                  Navigator.of(context).pop(codeController.text);
+                }
+              },
+              child: const Text('تأكيد'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (enteredCode == null) return; // أغلق المستخدم النافذة
+
+    setState(() => _isLoading = true);
+    try {
+      // استدعاء دالة API الجديدة
+      final response = await ApiService.confirmPickupByCode(
+          widget.authResult.token,
+          _currentDelivery['id'].toString(),
+          enteredCode
+      );
+
+      final data = json.decode(response.body);
+      if (mounted) {
+        if (response.statusCode == 200 && data['success'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
+          setState(() => _currentDelivery['order_status'] = 'picked_up');
+          widget.onDataChanged(); // تحديث القوائم الأخرى
+        } else {
+          throw Exception(data['message'] ?? 'فشل تأكيد الاستلام');
+        }
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+  Widget _buildActionButton() {
+    final status = _currentDelivery['order_status'];
+    switch (status) {
+      case 'accepted':
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.storefront), label: const Text('وصلت إلى المصدر'), onPressed: _isLoading ? null : () => _updateStatus('at_store'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue)));
+      case 'at_store':
+      // ✨ التعديل هنا فقط ✨
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.pin), label: const Text('أدخل رمز الاستلام'), onPressed: _isLoading ? null : _showPickupCodeDialog, style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)));
+      case 'picked_up':
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_circle), label: const Text('إنهاء التوصيل'), onPressed: _isLoading ? null : () => _updateStatus('delivered'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)));
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _currentDelivery['order_status'] ?? 'pending';
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('مهمة التوصيل الحالية')),
+      body: Stack(
+        children: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Card(
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text("حالة الطلب: $status", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const Divider(height: 20),
+                      _buildInfoRow(Icons.store, "استلام من:", _currentDelivery['pickup_location_name']),
+                      const SizedBox(height: 8),
+                      _buildInfoRow(Icons.description, "الوصف:", _currentDelivery['order_description']),
+                      const SizedBox(height: 8),
+                      _buildInfoRow(Icons.payments, "أجرة التوصيل:", "${_currentDelivery['delivery_fee']} د.ع"),
+                      const SizedBox(height: 24),
+                      _buildActionButton(),
+                      const SizedBox(height: 12),
+                      if (status != 'delivered' && status != 'cancelled')
+                        TextButton(onPressed: _isLoading ? null : () => _updateStatus('cancelled'), child: const Text('إلغاء الطلب', style: TextStyle(color: Colors.red))),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_isLoading) Container(color: Colors.black.withOpacity(0.2), child: const Center(child: CircularProgressIndicator())),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: Colors.grey[600], size: 20),
+      const SizedBox(width: 8),
+      Text(label, style: TextStyle(color: Colors.grey[700])),
+      const SizedBox(width: 4),
+      Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold))),
+    ]);
+  }
+}
+
+// =============================================================================
+// NEW SCREEN: QR Code Scanner
+// =============================================================================
+class QRScannerScreen extends StatefulWidget {
+  const QRScannerScreen({super.key});
+
+  @override
+  State<QRScannerScreen> createState() => _QRScannerScreenState();
+}
+
+class _QRScannerScreenState extends State<QRScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController();
+  bool _isScanComplete = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('امسح رمز الاستلام')),
+      body: MobileScanner(
+        controller: _controller,
+        onDetect: (capture) {
+          if(!_isScanComplete) {
+            final String? code = capture.barcodes.first.rawValue;
+            if (code != null) {
+              setState(() => _isScanComplete = true);
+              Navigator.of(context).pop(code);
+            }
+          }
+        },
+      ),
+    );
+  }
+}
+
 
 
 // =============================================================================
