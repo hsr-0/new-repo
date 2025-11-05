@@ -13,7 +13,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -2907,42 +2906,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
 // =============================================================================
 // NEW SCREEN: QR Code Scanner
 // =============================================================================
-class QRScannerScreen extends StatefulWidget {
-  const QRScannerScreen({super.key});
 
-  @override
-  State<QRScannerScreen> createState() => _QRScannerScreenState();
-}
-
-class _QRScannerScreenState extends State<QRScannerScreen> {
-  final MobileScannerController _controller = MobileScannerController();
-  bool _isScanComplete = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('امسح رمز الاستلام')),
-      body: MobileScanner(
-        controller: _controller,
-        onDetect: (capture) {
-          if(!_isScanComplete) {
-            final String? code = capture.barcodes.first.rawValue;
-            if (code != null) {
-              setState(() => _isScanComplete = true);
-              Navigator.of(context).pop(code);
-            }
-          }
-        },
-      ),
-    );
-  }
-}
 
 
 

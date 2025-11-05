@@ -1140,6 +1140,8 @@ class _LoyaltyChallengeWidgetState extends State<LoyaltyChallengeWidget> {
     );
   }
 }
+// (الصق هذا الكلاس بالكامل بدلاً من CartProvider القديم)
+
 class CartProvider with ChangeNotifier {
   final List<FoodItem> _items = [];
   List<FoodItem> get items => _items;
@@ -1274,8 +1276,19 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // ✨ --- استبدل الدالة القديمة بهذه --- ✨
+  // ✨ --- [ هذا هو الإصلاح ] --- ✨
+  // (استبدل الدالة القديمة بهذه)
   void addToCart(FoodItem foodItem, BuildContext context) {
+
+    // 1. التحقق من حالة المنتج قبل إضافته
+    if (!foodItem.isDeliverable) {
+      // إذا كان المنتج غير متاح (بسبب إغلاق المطعم)
+      _showItemUnavailableDialog(context, foodItem); // اعرض رسالة خطأ
+      return; // 👈 لا تقم بإضافة المنتج
+    }
+    // --- [ نهاية الإصلاح ] ---
+
+    // 2. إذا كان المنتج متاحاً، أكمل المنطق العادي
     final existingIndex = _items.indexWhere((item) => item.id == foodItem.id);
     if (existingIndex != -1) {
       _items[existingIndex].quantity++;
@@ -1289,12 +1302,27 @@ class CartProvider with ChangeNotifier {
           imageUrl: foodItem.imageUrl,
           quantity: 1,
           categoryId: foodItem.categoryId,
-          isDeliverable: foodItem.isDeliverable // <-- ✨ هذا هو التعديل المطلوب
+          isDeliverable: foodItem.isDeliverable
       ));
     }
     notifyListeners();
-    _showAddToCartDialog(context, foodItem);
+    _showAddToCartDialog(context, foodItem); // رسالة "تمت الإضافة"
   }
+
+  // ✨ --- [ أضف هذه الدالة المساعدة الجديدة ] ---
+  void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("عذراً، المنتج غير متاح"),
+        content: Text("لا يمكن إضافة '${item.name}' إلى السلة لأن المطعم الخاص به مغلق حالياً."),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً")),
+        ],
+      ),
+    );
+  }
+  // --- [ نهاية الإضافة ] ---
 
   void incrementQuantity(FoodItem foodItem) {
     final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
