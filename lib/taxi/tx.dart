@@ -2165,7 +2165,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   void _onDeliveryAccepted(Map<String, dynamic> delivery) {
     setState(() {
       _currentDelivery = delivery;
-      _selectedIndex = 1; // Switch to delivery tab
+      _selectedIndex = 2; // Switch to delivery tab
     });
   }
   void _onDeliveryFinished() => setState(() => _currentDelivery = null);
@@ -2276,30 +2276,41 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     }
   }
 
-
   @override
   Widget build(BuildContext context) {
+    // ✨ --- [هذا هو الكود الصحيح لقائمة pages] --- ✨
     final List<Widget> pages = [
-      // Tab 0: Quick Rides
+      // Tab 0: الطلبات (Quick Rides)
       _currentQuickRide == null
           ? DriverAvailableRidesScreen(authResult: widget.authResult, onRideAccepted: _onRideAccepted)
           : DriverCurrentRideScreen(initialRide: _currentQuickRide!, authResult: widget.authResult, onRideFinished: _onRideFinished),
 
-      // Tab 1: Deliveries (NEW)
+      // Tab 1: طلبات الخصوصي
+      DriverPrivateRequestsScreen(authResult: widget.authResult),
+
+      // Tab 2: توصيل
       _currentDelivery == null
           ? DriverAvailableDeliveriesScreen(authResult: widget.authResult, onDeliveryAccepted: _onDeliveryAccepted)
           : DriverCurrentDeliveryScreen(
         initialDelivery: _currentDelivery!,
         authResult: widget.authResult,
         onDeliveryFinished: _onDeliveryFinished,
-        onDataChanged: _refreshAllLists, //  <-- قم بإضافة هذا السطر الناقص هنا
+        onDataChanged: _refreshAllLists,
       ),
-      DriverPrivateRequestsScreen(authResult: widget.authResult),
-      DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => setState(() => _selectedIndex = 3)),
+
+      // Tab 3: رحلاتي
+      DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => setState(() => _selectedIndex = 4)), // <-- تم تصحيح الرقم هنا
+
+      // Tab 4: إنشاء رحلة
       DriverCreateTripScreen(authResult: widget.authResult),
+
+      // Tab 5: جوائز وهدايا
       DriverHubScreen(authResult: widget.authResult),
 
+      // Tab 6: خطوط الطلاب (كانت مفقودة)
+      DriverLinesManagementScreen(authResult: widget.authResult),
     ];
+    // ✨ --- [نهاية التعديل] --- ✨
     return Scaffold(
       appBar: AppBar(
         title: const Text('واجهة السائق'),
@@ -2469,16 +2480,14 @@ class DriverCurrentDeliveryScreen extends StatefulWidget {
   final Map<String, dynamic> initialDelivery;
   final AuthResult authResult;
   final VoidCallback onDeliveryFinished;
-  final VoidCallback onDataChanged; //  <-- أضف هذا السطر
-
+  final VoidCallback onDataChanged;
 
   const DriverCurrentDeliveryScreen({
     super.key,
     required this.initialDelivery,
     required this.authResult,
     required this.onDeliveryFinished,
-    required this.onDataChanged, //  <-- أضف هذا السطر
-
+    required this.onDataChanged,
   });
 
   @override
@@ -2489,12 +2498,149 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
   late Map<String, dynamic> _currentDelivery;
   bool _isLoading = false;
 
+  // --- متغيرات الخريطة والتتبع (منسوخة من شاشة التاكسي) ---
+  final MapController _mapController = MapController();
+  StreamSubscription<geolocator.Position>? _positionStream;
+  LatLng? _driverLocation;
+  List<LatLng> _routePoints = [];
+  double _distanceToTarget = 0.0;
+  String _distanceToTargetString = "...";
+  double _driverBearing = 0.0;
+  double _previousDriverBearing = 0.0;
+  // --- نهاية متغيرات الخريطة ---
+
   @override
   void initState() {
     super.initState();
     _currentDelivery = widget.initialDelivery;
+    // استدعاء الدالة مباشرة بعد اكتمال بناء الويدجت لضمان الاستقرار
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _initializeDelivery();
+      }
+    });
   }
 
+  @override
+  void dispose() {
+    _positionStream?.cancel();
+    super.dispose();
+  }
+
+  // --- دالة جديدة: لتهيئة الرحلة ورسم المسار تلقائيًا ---
+  Future<void> _initializeDelivery() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+
+    // تحديد النقطة المستهدفة (إما المطعم أو الزبون)
+    final targetPoint = _getTargetPoint();
+    if (targetPoint == null) {
+      widget.onDeliveryFinished(); // إنهاء المهمة إذا لم تكن هناك إحداثيات
+      return;
+    }
+
+    try {
+      final hasPermission = await PermissionService.handleLocationPermission(context);
+      if (!mounted || !hasPermission) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('إذن الموقع مطلوب لبدء الرحلة.')));
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(
+          desiredAccuracy: geolocator.LocationAccuracy.high
+      );
+
+      if (!mounted) return;
+      final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
+
+      setState(() {
+        _driverLocation = driverNowLocation;
+      });
+
+      _mapController.move(driverNowLocation, 15);
+      await _getRoute(driverNowLocation, targetPoint);
+      _startDriverLocationTracking();
+
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('فشل تهيئة الرحلة: ${e.toString()}')));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // --- دالة جديدة: تحدد النقطة المستهدفة بناءً على حالة الطلب ---
+  LatLng? _getTargetPoint() {
+    final status = _currentDelivery['order_status'];
+    String? latStr, lngStr;
+
+    if (status == 'accepted' || status == 'at_store') {
+      // الهدف هو المطعم (نقطة الاستلام)
+      latStr = _currentDelivery['pickup_lat'];
+      lngStr = _currentDelivery['pickup_lng'];
+    } else if (status == 'picked_up') {
+      // الهدف هو الزبون (نقطة التوصيل)
+      latStr = _currentDelivery['destination_lat'];
+      lngStr = _currentDelivery['destination_lng'];
+    }
+
+    if (latStr != null && lngStr != null && latStr != "0" && lngStr != "0") {
+      return LatLng(double.parse(latStr), double.parse(lngStr));
+    }
+    return null; // لا يوجد هدف لرسم المسار
+  }
+
+  // --- دالة جديدة: بدء التتبع المباشر ---
+  void _startDriverLocationTracking() {
+    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((geolocator.Position position) {
+      if (mounted) {
+        final newLocation = LatLng(position.latitude, position.longitude);
+        double newBearing = _driverBearing;
+
+        if (_driverLocation != null && (newLocation.latitude != _driverLocation!.latitude || newLocation.longitude != _driverLocation!.longitude)) {
+          newBearing = calculateBearing(_driverLocation!, newLocation);
+        }
+
+        final targetPoint = _getTargetPoint();
+        String newDistanceString = "...";
+
+        if (targetPoint != null) {
+          _distanceToTarget = geolocator.Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, targetPoint.latitude, targetPoint.longitude);
+          newDistanceString = _distanceToTarget < 1000 ? "${_distanceToTarget.round()} متر" : "${(_distanceToTarget / 1000).toStringAsFixed(1)} كم";
+        }
+
+        setState(() {
+          _previousDriverBearing = _driverBearing;
+          _driverLocation = newLocation;
+          _driverBearing = newBearing;
+          _distanceToTargetString = newDistanceString;
+        });
+      }
+    });
+  }
+
+  // --- دالة جديدة: جلب المسار من API ---
+  Future<void> _getRoute(LatLng start, LatLng end) async {
+    // هذا المفتاح خاص بخدمة OpenRouteService المجانية، يمكنك استخدامه
+    const String orsApiKey = '5b3ce3597851110001cf62485a059801409ca93224409611d1cfabd94d7a09fb5f49edl6714de153';
+
+    final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (mounted && response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final coordinates = data['features'][0]['geometry']['coordinates'] as List;
+        setState(() => _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList());
+      } else if(mounted) {
+        debugPrint("فشل رسم المسار: ${json.decode(response.body)['error']?['message'] ?? 'خطأ من الخادم'}");
+      }
+    } catch (e) {
+      if (mounted) debugPrint("فشل رسم المسار: ${e.toString()}");
+    }
+  }
+
+  // --- دالة تحديث الحالة (معدلة لكي ترسم المسار الجديد) ---
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
@@ -2506,9 +2652,18 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       final data = json.decode(response.body);
       if (mounted && response.statusCode == 200 && data['success'] == true) {
         if (newStatus == 'delivered' || newStatus == 'cancelled') {
-          widget.onDeliveryFinished();
+          widget.onDeliveryFinished(); // إنهاء المهمة
         } else {
+          // تحديث بيانات الطلب
           setState(() => _currentDelivery = data['delivery_order']);
+
+          // ✨ [جديد]: إذا استلم السائق الطلب، ارسم المسار الجديد إلى الزبون
+          if (newStatus == 'picked_up' && _driverLocation != null) {
+            final destinationPoint = _getTargetPoint(); // سيجلب إحداثيات الزبون
+            if (destinationPoint != null) {
+              await _getRoute(_driverLocation!, destinationPoint);
+            }
+          }
         }
       } else if (mounted) {
         throw Exception(data['message'] ?? 'فشل تحديث الحالة');
@@ -2520,10 +2675,9 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     }
   }
 
-// داخل class _DriverCurrentDeliveryScreenState
-
-// استبدل الدالة القديمة بهذه الدالة الجديدة بالكامل
+  // --- دالة نافذة إدخال الرمز (معدلة لتحديث المسار) ---
   Future<void> _showPickupCodeDialog() async {
+    // ... (نفس كود النافذة المنبثقة من الخطوة السابقة)
     final codeController = TextEditingController();
     final formKey = GlobalKey<FormState>();
 
@@ -2556,11 +2710,10 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       },
     );
 
-    if (enteredCode == null) return; // أغلق المستخدم النافذة
-
+    if (enteredCode == null) return;
     setState(() => _isLoading = true);
+
     try {
-      // استدعاء دالة API الجديدة
       final response = await ApiService.confirmPickupByCode(
           widget.authResult.token,
           _currentDelivery['id'].toString(),
@@ -2568,14 +2721,23 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       );
 
       final data = json.decode(response.body);
-      if (mounted) {
-        if (response.statusCode == 200 && data['success'] == true) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-          setState(() => _currentDelivery['order_status'] = 'picked_up');
-          widget.onDataChanged(); // تحديث القوائم الأخرى
-        } else {
-          throw Exception(data['message'] ?? 'فشل تأكيد الاستلام');
+      if (mounted && response.statusCode == 200 && data['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
+
+        // تحديث الحالة محلياً
+        setState(() => _currentDelivery['order_status'] = 'picked_up');
+        widget.onDataChanged();
+
+        // ✨ [جديد]: ارسم المسار إلى الزبون بعد تأكيد الاستلام
+        if (_driverLocation != null) {
+          final destinationPoint = _getTargetPoint(); // سيجلب إحداثيات الزبون
+          if (destinationPoint != null) {
+            await _getRoute(_driverLocation!, destinationPoint);
+          }
         }
+
+      } else if(mounted) {
+        throw Exception(data['message'] ?? 'فشل تأكيد الاستلام');
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
@@ -2583,63 +2745,154 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       if (mounted) setState(() => _isLoading = false);
     }
   }
+
+  // --- دالة بناء أزرار الأكشن (تم تعديلها لتخطي الرمز إذا أردت) ---
   Widget _buildActionButton() {
     final status = _currentDelivery['order_status'];
     switch (status) {
       case 'accepted':
+      // "وصلت إلى المصدر"
         return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.storefront), label: const Text('وصلت إلى المصدر'), onPressed: _isLoading ? null : () => _updateStatus('at_store'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue)));
+
       case 'at_store':
-      // ✨ التعديل هنا فقط ✨
-        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.pin), label: const Text('أدخل رمز الاستلام'), onPressed: _isLoading ? null : _showPickupCodeDialog, style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)));
+      // [تم الإلغاء]: لم نعد نسأل عن الرمز
+      // "تأكيد استلام الطلب"
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_box_outlined), label: const Text('تأكيد استلام الطلب'), onPressed: _isLoading ? null : () => _updateStatus('picked_up'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)));
+
       case 'picked_up':
+      // "إنهاء التوصيل"
         return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_circle), label: const Text('إنهاء التوصيل'), onPressed: _isLoading ? null : () => _updateStatus('delivered'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)));
+
       default:
         return const SizedBox.shrink();
     }
   }
 
+  // --- دالة بناء الماركرز (جديدة) ---
+  List<Marker> _buildMarkers() {
+    final List<Marker> markers = [];
+    final status = _currentDelivery['order_status'];
+
+    // 1. ماركر السائق (دائماً موجود)
+    if (_driverLocation != null) {
+      markers.add(Marker(
+          point: _driverLocation!,
+          width: 40,
+          height: 40,
+          child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing),
+              duration: const Duration(milliseconds: 800),
+              builder: (context, value, child) {
+                return RotatingVehicleIcon(vehicleType: 'Tuktuk', bearing: value); // يمكنك تغيير نوع المركبة
+              }
+          )
+      ));
+    }
+
+    // 2. ماركر المطعم (نقطة الاستلام)
+    final pickupPoint = LatLng(double.parse(_currentDelivery['pickup_lat']), double.parse(_currentDelivery['pickup_lng']));
+    markers.add(Marker(
+      point: pickupPoint,
+      child: Icon(Icons.store, color: Colors.green, size: 40),
+    ));
+
+    // 3. ماركر الزبون (نقطة التوصيل)
+    if (_currentDelivery['destination_lat'] != null && _currentDelivery['destination_lat'] != "0") {
+      final destinationPoint = LatLng(double.parse(_currentDelivery['destination_lat']), double.parse(_currentDelivery['destination_lng']));
+      markers.add(Marker(
+        point: destinationPoint,
+        child: Icon(Icons.flag, color: (status == 'picked_up') ? Colors.red : Colors.grey, size: 40),
+      ));
+    }
+
+    return markers;
+  }
+
+  // --- دالة بناء الواجهة الرئيسية (Build) ---
   @override
   Widget build(BuildContext context) {
     final status = _currentDelivery['order_status'] ?? 'pending';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('مهمة التوصيل الحالية')),
+      appBar: AppBar(
+        title: const Text('مهمة التوصيل الحالية'),
+        actions: [
+          // زر الاتصال بالزبون
+          IconButton(
+            icon: const Icon(Icons.call, color: Colors.green),
+            onPressed: () => makePhoneCall(_currentDelivery['end_customer_phone'], context),
+            tooltip: 'الاتصال بالزبون',
+          ),
+          // زر الاتصال بالمصدر (المطعم) - (يمكنك إضافة رقم هاتف المطعم لاحقاً)
+          // IconButton(
+          //   icon: const Icon(Icons.store, color: Colors.blue),
+          //   onPressed: () => makePhoneCall(null, context), // مرر رقم هاتف المطعم هنا
+          //   tooltip: 'الاتصال بالمطعم',
+          // ),
+        ],
+      ),
       body: Stack(
         children: [
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Card(
-                elevation: 4,
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text("حالة الطلب: $status", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      const Divider(height: 20),
-                      _buildInfoRow(Icons.store, "استلام من:", _currentDelivery['pickup_location_name']),
-                      const SizedBox(height: 8),
-                      _buildInfoRow(Icons.description, "الوصف:", _currentDelivery['order_description']),
-                      const SizedBox(height: 8),
-                      _buildInfoRow(Icons.payments, "أجرة التوصيل:", "${_currentDelivery['delivery_fee']} د.ع"),
-                      const SizedBox(height: 24),
-                      _buildActionButton(),
-                      const SizedBox(height: 12),
-                      if (status != 'delivered' && status != 'cancelled')
-                        TextButton(onPressed: _isLoading ? null : () => _updateStatus('cancelled'), child: const Text('إلغاء الطلب', style: TextStyle(color: Colors.red))),
-                    ],
-                  ),
+          // الخريطة
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+                initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
+                initialZoom: 14.0
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c'],
+                userAgentPackageName: 'com.beytei.taxi',
+              ),
+              if (_routePoints.isNotEmpty)
+                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 6)]),
+              MarkerLayer(markers: _buildMarkers()),
+            ],
+          ),
+
+          // بطاقة المعلومات السفلية
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Card(
+              margin: const EdgeInsets.all(12),
+              elevation: 8,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // شريط المسافة والوقت
+                    if (status == 'accepted' || status == 'at_store')
+                      _buildInfoRow(Icons.store, "الوجهة:", "إلى المطعم (${_distanceToTargetString})"),
+                    if (status == 'picked_up')
+                      _buildInfoRow(Icons.flag, "الوجهة:", "إلى الزبون (${_distanceToTargetString})"),
+
+                    const Divider(height: 20),
+                    _buildInfoRow(Icons.payments, "أجرة التوصيل:", "${_currentDelivery['delivery_fee']} د.ع"),
+                    const SizedBox(height: 24),
+                    // الزر الديناميكي
+                    _buildActionButton(),
+                    const SizedBox(height: 12),
+                    // زر الإلغاء
+                    if (status != 'delivered' && status != 'cancelled')
+                      TextButton(onPressed: _isLoading ? null : () => _updateStatus('cancelled'), child: const Text('إلغاء الطلب', style: TextStyle(color: Colors.red))),
+                  ],
                 ),
               ),
             ),
           ),
+
           if (_isLoading) Container(color: Colors.black.withOpacity(0.2), child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
 
+  // دالة مساعدة لعرض الصفوف
   Widget _buildInfoRow(IconData icon, String label, String value) {
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Icon(icon, color: Colors.grey[600], size: 20),
@@ -3437,6 +3690,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Map<String, dynamic>? _destinationData;
   bool _isConfirmingRideDetails = false;
   List<dynamic> _pendingOffers = [];
+  String _selectedVehicleType = 'Car'; // القيمة الافتراضية هي "سيارة"
 
   LatLng? _currentUserLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
@@ -3663,7 +3917,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             'lng': _destinationData!['lng'],
             'name': _destinationData!['name']
           },
-          'price': _priceController.text
+          'price': _priceController.text,
+          'vehicle_type': _selectedVehicleType, // ✨ --- أضف هذا السطر --- ✨
         }),
       );
       final data = json.decode(response.body);
@@ -3889,6 +4144,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     }
   }
 
+// (داخل _QuickRideMapScreenState)
+
   Widget _buildInitialRequestSheet() {
     return SafeArea(
       child: Padding(
@@ -3914,11 +4171,41 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             elevation: 8,
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Row(
+              child: Column( // ✨ [جديد]: تم التغيير إلى Column
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.search, color: Colors.grey),
-                  const SizedBox(width: 12),
-                  Text("إلى أين تريد أن تذهب؟", style: Theme.of(context).textTheme.titleMedium),
+                  // 1. زر "إلى أين تريد أن تذهب؟"
+                  Row(
+                    children: [
+                      const Icon(Icons.search, color: Colors.grey),
+                      const SizedBox(width: 12),
+                      Text("إلى أين تريد أن تذهب؟", style: Theme.of(context).textTheme.titleMedium),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  // 2. ✨ [جديد]: أزرار اختيار نوع المركبة
+                  ToggleButtons(
+                    isSelected: [_selectedVehicleType == 'Car', _selectedVehicleType == 'Tuktuk'],
+                    onPressed: (index) {
+                      setState(() {
+                        _selectedVehicleType = (index == 0) ? 'Car' : 'Tuktuk';
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    selectedColor: Colors.black,
+                    selectedBorderColor: Colors.amber,
+                    fillColor: Colors.amber.withOpacity(0.2),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                        child: Row(children: [const Icon(Icons.local_taxi), const SizedBox(width: 8), Text('سيارة')]),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                        child: Row(children: [const Icon(Icons.two_wheeler), const SizedBox(width: 8), Text('تكتك')]),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -3927,7 +4214,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       ),
     );
   }
-
   Widget _buildConfirmationSheet() {
     return Card(
       margin: const EdgeInsets.all(12),
