@@ -1399,6 +1399,33 @@ class ApiService {
       throw Exception('Server error ${response.statusCode}');
     });
   }
+
+
+
+  Future<bool> updateMyLocation(String token, String lat, String lng) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        // هذا هو المسار الجديد الذي أنشأناه في PHP
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-my-location'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json'
+        },
+        body: json.encode({
+          'lat': lat,
+          'lng': lng,
+        }),
+      );
+      // إذا نجح (200)، سيعود true
+      return response.statusCode == 200;
+    });
+  }
+// --- [ نهاية الإضافة ] ---
+
+
+
+
+
   // ✨ --- [ تم تعديل هذه الدالة ] ---
   Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
     const fields = 'id,name,image,count,meta_data';
@@ -3985,11 +4012,12 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee) {
+  // ✨ --- [ دالة عرض ملخص السعر (محدثة) ] ---
+  // (هذه الدالة تم تحديثها قليلاً لتكون أوضح عند الفشل)
+  Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee, String feeMessage) {
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
     final discountFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalDiscountAmount);
 
-    // حساب الإجمالي النهائي
     final double finalTotal = (cart.discountedTotal) + (deliveryFee ?? 0);
     final finalTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(finalTotal);
 
@@ -4022,12 +4050,11 @@ class _CartScreenState extends State<CartScreen> {
             ),
           ],
 
-          // 3. خدمة التوصيل (الجزء العصري)
+          // 3. خدمة التوصيل
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // --- هذا هو الجزء المقنع ---
               Row(
                 children: [
                   Icon(Icons.delivery_dining_outlined, size: 20, color: Colors.blue.shade700),
@@ -4035,9 +4062,6 @@ class _CartScreenState extends State<CartScreen> {
                   const Text('خدمة التوصيل', style: TextStyle(fontSize: 14)),
                 ],
               ),
-              // ---------------------------
-
-              // --- هذا هو الجزء الديناميكي ---
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 300),
                 transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
@@ -4046,12 +4070,28 @@ class _CartScreenState extends State<CartScreen> {
                     : Text(
                   deliveryFee != null ? '${NumberFormat('#,###', 'ar_IQ').format(deliveryFee)} د.ع' : '---',
                   key: const ValueKey('fee'),
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      // ✨ إظهار الخطأ في السعر
+                      color: deliveryFee == null && !isCalculatingFee ? Colors.red : Colors.black
+                  ),
                 ),
               ),
-              // ---------------------------
             ],
           ),
+
+          // ✨ إظهار رسالة الخطأ (إن وجدت)
+          if (!isCalculatingFee && deliveryFee == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Text(
+                feeMessage.contains('خطأ') ? feeMessage.replaceAll("Exception: ", "") : "الرجاء تحديد الموقع لحساب السعر",
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: Colors.red),
+              ),
+            ),
+
 
           const Divider(height: 20),
 
@@ -4063,28 +4103,21 @@ class _CartScreenState extends State<CartScreen> {
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 300),
                 child: isCalculatingFee || deliveryFee == null
-                    ? const SizedBox.shrink() // إخفاء الإجمالي حتى يكتمل الحساب
+                    ? const SizedBox.shrink()
                     : Text(
                   '$finalTotalFormatted د.ع',
-                  key: ValueKey(finalTotalFormatted), // مفتاح لضمان التحريك
+                  key: ValueKey(finalTotalFormatted),
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 5),
-          if (!isCalculatingFee && deliveryFee != null)
-            const Text(
-              "سيتم توصيل طلبك طازجاً وساخناً إلى باب البيت .",
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            )
-
         ],
       ),
     );
   }
 
+  // ✨ --- [ تم تحديث هذه الدالة بالكامل ] ---
   void _showCheckoutDialog(BuildContext context, CartProvider cart) {
     _nameController.clear();
     _phoneController.clear();
@@ -4092,17 +4125,13 @@ class _CartScreenState extends State<CartScreen> {
     _couponController.text = cart.appliedCoupon ?? '';
     bool isSubmitting = false;
 
-    // --- ✨ متغيرات الحالة الجديدة للنافذة ---
-    bool _shareLocation = true;
     geolocator.Position? _capturedPosition;
-    bool _isGettingLocation = true;
+    bool _isGettingLocation = true; // (يبدأ بتحديد الموقع تلقائياً)
     String _locationMessage = "جاري تحديد موقعك...";
 
-    // --- ✨ متغيرات سعر التوصيل العصرية ---
     double? _deliveryFee;
     bool _isCalculatingFee = false;
-    String _feeMessage = "جاري حساب كلفة التوصيل...";
-    // ---
+    String _feeMessage = "يرجى تحديد الموقع لحساب كلفة التوصيل...";
 
     showDialog(
       context: context,
@@ -4110,30 +4139,31 @@ class _CartScreenState extends State<CartScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
 
-          // --- ✨ دالة جلب الموقع (معدلة) ---
+          // --- دالة جلب الموقع (معدلة) ---
           Future<void> getCurrentLocation() async {
             setDialogState(() {
               _isGettingLocation = true;
               _locationMessage = "جاري تحديد موقعك...";
+              _capturedPosition = null; // إعادة تعيين الموقع
               _deliveryFee = null; // إعادة تعيين السعر
               _isCalculatingFee = true; // البدء بحساب السعر
               _feeMessage = "جاري حساب كلفة التوصيل...";
             });
 
+            // 1. التحقق من الصلاحيات والخدمة
             final hasPermission = await PermissionService.handleLocationPermission(context);
             if (!hasPermission) {
               setDialogState(() {
                 _isGettingLocation = false;
-                _locationMessage = "تم رفض إذن الموقع!";
+                _locationMessage = "فشل: تم رفض إذن الموقع!";
                 _isCalculatingFee = false;
-                _feeMessage = "لا يمكن حساب السعر بدون موقع.";
-                _shareLocation = false;
+                _feeMessage = "خطأ: لا يمكن حساب السعر بدون موقع.";
               });
               return;
             }
 
             try {
-              // 1. التقاط موقع الزبون
+              // 2. التقاط موقع الزبون
               _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
                   desiredAccuracy: geolocator.LocationAccuracy.high);
 
@@ -4142,49 +4172,31 @@ class _CartScreenState extends State<CartScreen> {
                 _locationMessage = "تم تحديد الموقع بنجاح!";
               });
 
-              // 2. جلب إحداثيات المطعم (من الذاكرة)
-              // (نحتاج AuthProvider لجلب إحداثيات المطعم المخزنة)
-              // ملاحظة: هذا يتطلب أن تكون إحداثيات المطعم محفوظة!
-              // هذا الكود يفترض أنك تستخدم `re.dart` الذي أرسلته سابقاً
-              // وأن المطعم قام بتسجيل الدخول وحفظ إحداثياته
-
-              // --- هذا الجزء يحتاج تعديل بناءً على منطق تطبيقك ---
-              // كيف سنعرف إحداثيات المطعم الذي يطلب منه الزبون؟
-              // الحل الأسهل: جلب إحداثيات *أول مطعم* في السلة
-              // (نفترض أن السلة من مطعم واحد)
-
+              // 3. التحقق من السلة
               if (cart.items.isEmpty) throw Exception("السلة فارغة!");
               final restaurantId = cart.items.first.categoryId;
 
-              // (يجب تعديل ApiService لإضافة دالة جلب إحداثيات المطعم)
-              // كحل مؤقت، سنستخدم إحداثيات ثابتة للاختبار
-              // final restaurantLat = 32.5000; // مثال: إحداثيات مطعم ثابتة
-              // final restaurantLng = 44.4000;
-
-              // --- الحل الأفضل: جلب المطعم من CustomerProvider ---
-              final restaurant = Provider.of<CustomerProvider>(context, listen: false)
-                  .allRestaurants
-                  .firstWhere((r) => r.id == restaurantId);
-
-              // (هذا يتطلب أن نموذج Restaurant يحتوي على lat/lng)
-              // إذا لم يكن موجوداً، يجب تعديل API جلب المطاعم
-
-              // ----------------------------------------------------
-              // --- ✨ سنفترض وجود الإحداثيات الآن للمتابعة ---
-              // (استخدم إحداثيات اختبارية إذا لم تكن جاهزة)
-              // ----------------------------------------------------
-              final prefs = await SharedPreferences.getInstance();
-              final double? restaurantLat = prefs.getDouble('restaurant_lat');
-              final double? restaurantLng = prefs.getDouble('restaurant_lng');
-
-              if (restaurantLat == null || restaurantLng == null) {
-                throw Exception("إحداثيات المطعم غير معرفة. (يجب على المدير تسجيل الدخول وتحديدها)");
+              // 4. جلب المطعم من CustomerProvider (للحصول على إحداثياته)
+              Restaurant? restaurant;
+              try {
+                restaurant = Provider.of<CustomerProvider>(context, listen: false)
+                    .allRestaurants
+                    .firstWhere((r) => r.id == restaurantId);
+              } catch (e) {
+                // (معالجة حالة نادرة: إذا كان المطعم غير موجود في القائمة)
+                throw Exception("خطأ: لا يمكن العثور على بيانات المطعم (ID: $restaurantId).");
               }
 
-              // 3. جلب سعر التوصيل من الخادم
+              // 5. التحقق من إحداثيات المطعم
+              if (restaurant.latitude == 0.0 || restaurant.longitude == 0.0) {
+                // هذا يعني أن المطعم لم يحدد موقعه عند تسجيل الدخول
+                throw Exception("خطأ: المطعم (المصدر) لم يحدد موقعه. لا يمكن حساب المسافة.");
+              }
+
+              // 6. جلب سعر التوصيل من الخادم
               final feeResponse = await _apiService.getDeliveryFee(
-                restaurantLat: restaurantLat,
-                restaurantLng: restaurantLng,
+                restaurantLat: restaurant.latitude,
+                restaurantLng: restaurant.longitude,
                 customerLat: _capturedPosition!.latitude,
                 customerLng: _capturedPosition!.longitude,
               );
@@ -4199,15 +4211,18 @@ class _CartScreenState extends State<CartScreen> {
               setDialogState(() {
                 _isGettingLocation = false;
                 _isCalculatingFee = false;
-                _locationMessage = "فشل تحديد الموقع.";
+                _capturedPosition = null; // فشل
+                _locationMessage = "فشل تحديد الموقع. حاول مجدداً.";
                 _feeMessage = "خطأ: ${e.toString().replaceAll("Exception: ", "")}";
               });
             }
           }
 
-          // --- استدعاء الدالة تلقائياً ---
+          // --- استدعاء الدالة تلقائياً عند فتح النافذة ---
           if (_isGettingLocation && !isSubmitting) {
-            getCurrentLocation();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              getCurrentLocation();
+            });
           }
 
           return AlertDialog(
@@ -4223,29 +4238,59 @@ class _CartScreenState extends State<CartScreen> {
                     const SizedBox(height: 15),
                     TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الرجاء إدخال رقم الهاتف' : null, enabled: !isSubmitting),
                     const SizedBox(height: 15),
-                    TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان بالتفصيل (اختياري)'), maxLines: 2, enabled: !isSubmitting),
-                    const SizedBox(height: 15),
 
-                    // --- ويدجت الموقع (كما هو) ---
-                    SwitchListTile(
-                      title: Text(_locationMessage, style: TextStyle(color: _locationMessage.contains('فشل') || _locationMessage.contains('رفض') ? Colors.red : Colors.black87)),
-                      value: _shareLocation,
-                      secondary: _isGettingLocation
-                          ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
-                          : Icon(Icons.my_location, color: Theme.of(context).primaryColor),
-                      onChanged: isSubmitting ? null : (value) {
-                        setDialogState(() => _shareLocation = value);
-                        if (_shareLocation) getCurrentLocation();
-                        else {
-                          setDialogState(() {
-                            _capturedPosition = null;
-                            _locationMessage = "استخدام موقعي الحالي للتوصيل";
-                            _deliveryFee = null;
-                            _feeMessage = "يجب تحديد الموقع لحساب التوصيل";
-                          });
-                        }
-                      },
+                    // ✨ --- [ تعديل حقل العنوان (إجباري) ] ---
+                    TextFormField(
+                        controller: _addressController,
+                        decoration: const InputDecoration(labelText: 'العنوان بالتفصيل'), // (تم حذف "اختياري")
+                        maxLines: 2,
+                        enabled: !isSubmitting,
+                        validator: (v) => v!.isEmpty ? 'الرجاء إدخال العنوان بالتفصيل' : null // (إضافة التحقق)
                     ),
+                    const SizedBox(height: 20),
+
+                    // ✨ --- [ ويدجت الموقع الإجباري الجديد ] ---
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (_isGettingLocation)
+                                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                              if (!_isGettingLocation && _capturedPosition != null)
+                                const Icon(Icons.check_circle, color: Colors.green),
+                              if (!_isGettingLocation && _capturedPosition == null)
+                                const Icon(Icons.error, color: Colors.red),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _locationMessage,
+                                  style: TextStyle(
+                                      color: _capturedPosition != null ? Colors.green.shade800 : (_isGettingLocation ? Colors.black87 : Colors.red.shade700),
+                                      fontWeight: FontWeight.bold
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          // ✨ زر إعادة المحاولة
+                          if (!_isGettingLocation && _capturedPosition == null)
+                            TextButton.icon(
+                              icon: const Icon(Icons.refresh),
+                              label: const Text("إعادة محاولة تحديد الموقع"),
+                              onPressed: isSubmitting ? null : getCurrentLocation, // استدعاء الدالة مجدداً
+                            ),
+                        ],
+                      ),
+                    ),
+                    // --- نهاية الويدجت الجديد ---
+
                     const SizedBox(height: 15),
                     TextFormField(controller: _couponController, decoration: InputDecoration(labelText: 'كود الخصم (إن وجد)', suffixIcon: TextButton(child: const Text("تطبيق"), onPressed: () async {
                       final result = await cart.applyCoupon(_couponController.text);
@@ -4253,10 +4298,8 @@ class _CartScreenState extends State<CartScreen> {
                       setDialogState(() {});
                     }))),
 
-                    // --- ✨ العرض العصري والحديث للسعر ---
                     const Divider(height: 30),
-                    _buildPriceSummary(cart, _deliveryFee, _isCalculatingFee),
-                    // --- نهاية العرض العصري ---
+                    _buildPriceSummary(cart, _deliveryFee, _isCalculatingFee, _feeMessage),
 
                   ],
                 ),
@@ -4267,27 +4310,24 @@ class _CartScreenState extends State<CartScreen> {
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
 
-                // --- ✨ تعطيل الزر حتى يتم حساب السعر ---
-                onPressed: isSubmitting || _isCalculatingFee || _deliveryFee == null
+                // ✨ --- [ تعديل شروط تفعيل الزر ] ---
+                // (يجب أن يكون السعر محسوباً والموقع محدداً)
+                onPressed: isSubmitting || _isCalculatingFee || _deliveryFee == null || _capturedPosition == null
                     ? null // <-- تعطيل الزر
                     : () async {
-                  // ... (نفس منطق الإرسال)
                   if (!_formKey.currentState!.validate()) return;
-                  if (_shareLocation && _capturedPosition == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء الانتظار حتى يتم تحديد موقعك.'), backgroundColor: Colors.orange));
-                    return;
-                  }
+                  // (لا نحتاج للتحقق من _capturedPosition == null لأن الزر سيكون معطلاً)
 
                   setDialogState(() => isSubmitting = true);
                   try {
                     final createdOrder = await _apiService.submitOrder(
                         name: _nameController.text,
                         phone: _phoneController.text,
-                        address: _addressController.text.isNotEmpty ? _addressController.text : "تم تحديد الموقع على الخريطة",
+                        address: _addressController.text, // (استخدام الحقل الإجباري)
                         cartItems: cart.items,
                         couponCode: cart.appliedCoupon,
                         position: _capturedPosition,
-                        deliveryFee: _deliveryFee // <-- ✨ إرسال السعر
+                        deliveryFee: _deliveryFee // (إرسال السعر)
                     );
 
                     if (!mounted) return;
@@ -4312,7 +4352,11 @@ class _CartScreenState extends State<CartScreen> {
         });
       },
     );
-  }  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
+  }
+
+  // --- (الدوال المساعدة تبقى كما هي) ---
+
+  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
     return Card(margin: const EdgeInsets.only(bottom: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Padding(padding: const EdgeInsets.all(10.0), child: Row(children: [
       ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: item.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
       const SizedBox(width: 15),
@@ -4350,8 +4394,6 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 }
-
-
 
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
@@ -4424,20 +4466,23 @@ class _RestaurantLoginScreenState extends State<RestaurantLoginScreen> {
   final _lngController = TextEditingController();
   bool _isLoading = false;
   String _locationStatus = 'لم يتم تحديد موقع المطعم';
-
+  final ApiService _apiService = ApiService();
   // دالة تحديد الموقع الحالي
   Future<void> _getCurrentLocation() async {
     setState(() => _locationStatus = 'جاري تحديد الموقع...');
 
     try {
-      // 1. طلب الصلاحيات
-      // تأكد من استيراد LocationPermission و Position من 'package:geolocator/geolocator.dart'
-      LocationPermission permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        throw Exception('صلاحية الوصول للموقع مرفوضة.');
-      }
+      // 1. استخدام خدمة الصلاحيات الشاملة (التي تتحقق من تفعيل GPS ومن الإذن)
+      // (تأكد من استيراد PermissionService إذا كان في ملف آخر)
+      final hasPermission = await PermissionService.handleLocationPermission(context);
 
-      // 2. الحصول على الموقع
+      if (!hasPermission) {
+        // الرسالة ستظهر للزبون من داخل handleLocationPermission
+        throw Exception('صلاحية الوصول للموقع مرفوضة أو الخدمة معطلة.');
+      }
+      // --- [ نهاية التصحيح ] ---
+
+      // 2. الحصول على الموقع (الآن نحن متأكدون أن الخدمة تعمل)
       Position position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high
       );
@@ -4452,11 +4497,11 @@ class _RestaurantLoginScreenState extends State<RestaurantLoginScreen> {
 
     } catch (e) {
       setState(() {
-        _locationStatus = 'خطأ في تحديد الموقع: ${e.toString()}';
+        _locationStatus = 'خطأ في تحديد الموقع: ${e.toString().replaceAll("Exception: ", "")}';
         _latController.clear();
         _lngController.clear();
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('الرجاء تفعيل خدمة الموقع.')));
+      // لا داعي لإظهار SnackBar هنا، لأن PermissionService تقوم بذلك بالفعل
     }
   }
   // ------------------------------------------
@@ -4475,7 +4520,7 @@ class _RestaurantLoginScreenState extends State<RestaurantLoginScreen> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-    // ✨ الاستدعاء الآن صحيح بعد تعديل دالة login في AuthProvider
+    // 1. محاولة تسجيل الدخول (كما كانت)
     final success = await authProvider.login(
       _usernameController.text,
       _passwordController.text,
@@ -4484,14 +4529,47 @@ class _RestaurantLoginScreenState extends State<RestaurantLoginScreen> {
     );
 
     if (!mounted) return;
+
+    // 2. إذا نجح تسجيل الدخول...
     if (success) {
-      Navigator.of(context).pop();
+
+      // ✨ --- [ هذا هو التعديل الأهم ] ---
+      // 3. ...حاول إرسال الموقع إلى الخادم
+      try {
+        final token = authProvider.token!; // التوكن موجود لأن success = true
+        final lat = _latController.text;
+        final lng = _lngController.text;
+
+        // استدعاء الدالة الجديدة التي أضفناها لـ ApiService
+        await _apiService.updateMyLocation(token, lat, lng);
+
+        // نجح كل شيء، انتقل للوحة التحكم
+        Navigator.of(context).pop();
+
+      } catch (e) {
+        // (في حال فشل إرسال الموقع، ولكن تسجيل الدخول نجح)
+        if(mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('تم تسجيل الدخول، لكن فشل حفظ الموقع على الخادم: $e'),
+                backgroundColor: Colors.orange,
+              )
+          );
+        }
+        // انتقل للوحة التحكم على أي حال (لأن الدخول نجح)
+        Navigator.of(context).pop();
+      }
+      // --- [ نهاية التعديل ] ---
+
     } else {
+      // (إذا فشل تسجيل الدخول من الأساس)
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تسجيل الدخول. الرجاء التأكد من البيانات.')));
     }
-    setState(() => _isLoading = false);
-  }
 
+    if(mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
