@@ -214,10 +214,24 @@ class CustomerProvider with ChangeNotifier {
   // ===================================================================
   // ✨ --- الدوال الأساسية (معدلة لتستخدم الكاش) ---
   // ===================================================================
+// --- Fetch Home Screen Data (Modified with Caching & Refresh Logic) ---
+  Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
 
-  // --- Fetch Home Screen Data (Modified with Caching) ---
-  Future<void> fetchHomeData(int areaId) async {
-    // 1. إذا كانت البيانات فارغة، أظهر شاشة التحميل (Shimmer)
+    // 1. [الهدف: لا تكرر التحميل]
+    // إذا كانت البيانات موجودة، ولسنا نجبر التحديث، اخرج فوراً.
+    if (_homeData.isNotEmpty && !isRefresh) {
+      return;
+    }
+
+    // 2. [الهدف: التحميل التدريجي]
+    // إذا كان هذا تحديثاً إجبارياً (pull-to-refresh)، امسح البيانات القديمة لإظهار Shimmer
+    if (isRefresh) {
+      _homeData = {};
+      _allRestaurants = []; // امسح المطاعم أيضاً ليتم تحديثها
+    }
+
+    // 3. [الهدف: استخدام الكاش]
+    // إذا كانت البيانات فارغة (تحميل أول مرة)، أظهر Shimmer
     if (_homeData.isEmpty) {
       _isLoadingHome = true;
       _hasError = false;
@@ -226,20 +240,19 @@ class CustomerProvider with ChangeNotifier {
       await _loadHomeDataFromCache(areaId);
     }
 
-    // 2. إذا كانت البيانات موجودة (من الكاش)، لا تظهر شاشة التحميل
-    _isLoadingHome = _homeData.isEmpty; // التحميل فقط إذا كان الكاش فارغاً
+    // 4. [الهدف: إظهار Shimmer]
+    // أظهر Shimmer فقط إذا كان الكاش فارغاً
+    _isLoadingHome = _homeData.isEmpty;
     _hasError = false;
-    // 🚫 لا تقم بمسح البيانات القديمة هنا
     notifyListeners();
 
-    // 3. تأكد من جلب قائمة المطاعم (ستستخدم الكاش الخاص بها إذا وجد)
-    if (_allRestaurants.isEmpty) {
-      // (isRefresh: false) ليستخدم الكاش الخاص به أولاً
-      await fetchAllRestaurants(areaId, isRefresh: false);
-    }
-
+    // 5. [الهدف: جلب البيانات]
     try {
-      // 4. جلب المنتجات (هذا من الكود الخاص بك)
+      // 5a. تأكد من جلب قائمة المطاعم (ستستخدم الكاش الخاص بها إذا وجد)
+      // (isRefresh: isRefresh) نمرر نفس حالة التحديث
+      await fetchAllRestaurants(areaId, isRefresh: isRefresh);
+
+      // 5b. جلب المنتجات (هذا من الكود الخاص بك)
       final allRestaurantsList = _allRestaurants;
       final restaurantStatusMap = {for (var r in allRestaurantsList) r.id: r.isOpen};
 
@@ -249,7 +262,7 @@ class CustomerProvider with ChangeNotifier {
         _apiService.getProductsByTag(areaId: areaId, tagName: "عائلي"),
       ]);
 
-      // 5. تحديث البيانات الجديدة
+      // 5c. تحديث البيانات الجديدة
       _homeData['restaurants'] = allRestaurantsList;
       _homeData['onSale'] = _filterFoodItemsByStatus(restaurantStatusMap, productResults[0]);
       _homeData['breakfast'] = _filterFoodItemsByStatus(restaurantStatusMap, productResults[1] as List<FoodItem>);
@@ -269,25 +282,20 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // --- دالة الفلترة (كما هي من الكود الخاص بك) ---
-  List<FoodItem> _filterFoodItemsByStatus(Map<int, bool> restaurantStatusMap, List<FoodItem> items) {
-    return items.map((item) {
-      bool isRestaurantOpen = restaurantStatusMap[item.categoryId] ?? false;
-      item.isDeliverable = isRestaurantOpen;
-      return item;
-    }).toList();
-  }
-
-  // --- fetchAllRestaurants (Modified with Caching) ---
+  // --- fetchAllRestaurants (Modified with Caching & Refresh Logic) ---
   Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
+
+    // 1. [الهدف: لا تكرر التحميل]
+    if (_allRestaurants.isNotEmpty && !isRefresh) {
+      return; // اخرج فوراً
+    }
+
+    // 2. إذا كان تحديثاً إجبارياً، امسح البيانات القديمة
     if (isRefresh) {
       _allRestaurants = [];
     }
 
-    // 1. تحقق إذا كانت البيانات موجودة (ولا يوجد طلب تحديث)
-    if (_allRestaurants.isNotEmpty && !isRefresh) return;
-
-    // 2. إذا البيانات فارغة، أظهر التحميل وحاول جلب الكاش
+    // 3. [الهدف: استخدام الكاش]
     if (_allRestaurants.isEmpty) {
       _isLoadingRestaurants = true;
       _hasError = false;
@@ -295,20 +303,20 @@ class CustomerProvider with ChangeNotifier {
       await _loadRestaurantsFromCache(areaId); // جلب الكاش
     }
 
-    // 3. التحميل فقط إذا كان الكاش فارغاً
+    // 4. [الهدف: إظهار Shimmer]
     _isLoadingRestaurants = _allRestaurants.isEmpty;
     _hasError = false;
     notifyListeners();
 
     try {
-      // 4. جلب البيانات من الشبكة
+      // 5. [الهدف: جلب البيانات]
       final allRestaurantsList = await _apiService.getAllRestaurants(areaId: areaId);
       for (var r in allRestaurantsList) {
-        r.isDeliverable = true; // (من الكود الخاص بك)
+        r.isDeliverable = true;
       }
       _allRestaurants = allRestaurantsList; // تحديث
       _hasError = false;
-      await _saveRestaurantsToCache(areaId); // 5. حفظ في الكاش
+      await _saveRestaurantsToCache(areaId); // 6. حفظ في الكاش
 
     } catch (e) {
       print("Error fetching all restaurants for area $areaId: $e");
@@ -320,6 +328,14 @@ class CustomerProvider with ChangeNotifier {
       notifyListeners();
     }
   }
+  List<FoodItem> _filterFoodItemsByStatus(Map<int, bool> restaurantStatusMap, List<FoodItem> items) {
+    return items.map((item) {
+      bool isRestaurantOpen = restaurantStatusMap[item.categoryId] ?? false;
+      item.isDeliverable = isRestaurantOpen;
+      return item;
+    }).toList();
+  }
+
 
   // --- fetchMenuForRestaurant (كما هي من الكود الخاص بك - قوية كفاية) ---
   Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
@@ -360,7 +376,8 @@ class CustomerProvider with ChangeNotifier {
       notifyListeners();
     }
   }
-}class DashboardProvider with ChangeNotifier {
+}
+class DashboardProvider with ChangeNotifier {
   Map<String, List<Order>> _orders = {};
   RestaurantRatingsDashboard? _ratingsDashboard;
 
@@ -396,37 +413,56 @@ class CustomerProvider with ChangeNotifier {
 
   Future<void> fetchDashboardData(String? token) async {
     if (token == null) return;
-    _isLoading = true;
-    _hasNetworkError = false;
-    notifyListeners();
-
+    final ApiService _apiService = ApiService();
+    // 1. جلب البيانات من الكاش (كما كان)
+    // (هذا سيجعل التحميل أسرع إذا كانت البيانات موجودة)
     await _loadDashboardFromCache();
 
+    // 2. تحديد حالة التحميل الأولية
+    // إذا وجدنا كاش، أظهر "تحديث" بدلاً من "تحميل"
+    if (_orders.isNotEmpty || _ratingsDashboard != null) {
+      _isLoading = false; // أوقف التحميل، لأن لدينا بيانات قديمة
+      _hasNetworkError = false;
+    } else {
+      _isLoading = true; // لا يوجد كاش، أظهر شاشة التحميل
+      _hasNetworkError = false;
+    }
+    notifyListeners(); // أظهر البيانات القديمة أو شاشة التحميل
+
     try {
-      final apiService = ApiService();
-      final results = await Future.wait([
-        apiService.getRestaurantOrders(status: 'active', token: token),
-        apiService.getRestaurantOrders(status: 'completed', token: token),
-        apiService.getDashboardRatings(token),
-      ]);
+      // 3. [الإصلاح الأهم] جلب البيانات بالتسلسل (واحدة تلو الأخرى)
 
-      _orders['active'] = results[0] as List<Order>;
-      _orders['completed'] = results[1] as List<Order>;
-      _ratingsDashboard = results[2] as RestaurantRatingsDashboard;
+      // 3a. جلب الطلبات النشطة أولاً
+      final activeOrders = await _apiService.getRestaurantOrders(status: 'active', token: token);
+      _orders['active'] = activeOrders;
+      _isLoading = false; // تم تحميل الجزء الأول
+      notifyListeners(); // تحديث الواجهة فوراً بالطلبات الجديدة
 
+      // 3b. جلب الطلبات المكتملة ثانياً
+      final completedOrders = await _apiService.getRestaurantOrders(status: 'completed', token: token);
+      _orders['completed'] = completedOrders;
+      // (لا داعي لـ notifyListeners() هنا، سننتظر التقييمات)
+
+      // 3c. جلب التقييمات أخيراً
+      final ratings = await _apiService.getDashboardRatings(token);
+      _ratingsDashboard = ratings;
+
+      _hasNetworkError = false; // نجح كل شيء
+
+      // 4. حفظ كل شيء في الكاش بعد نجاح جميع الطلبات
       await _saveDashboardToCache();
 
     } catch (e) {
+      // إذا فشل أي طلب، أظهر رسالة خطأ (فقط إذا لم يكن لدينا كاش)
       if (_orders.isEmpty && _ratingsDashboard == null) {
         _hasNetworkError = true;
         _errorMessage = 'فشل في تحديث البيانات. يرجى التحقق من اتصالك بالإنترنت.';
       }
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      _isLoading = false; // أنهِ التحميل في كل الأحوال
+      notifyListeners(); // التحديث النهائي للواجهة
     }
   }
-
   Future<void> _saveDashboardToCache() async {
     final prefs = await SharedPreferences.getInstance();
     final dataToCache = json.encode({
@@ -1500,12 +1536,8 @@ class ApiService {
       return response.statusCode == 200;
     });
   }
-
-// في ملف re.dart (تحت قسم SERVICES -> class ApiService)
-// ✨ 1. أضف هذه الدالة الجديدة لجلب سعر التوصيل
   Future<Map<String, dynamic>> getDeliveryFee({
-    required double restaurantLat,
-    required double restaurantLng,
+    required int restaurantId, // ✨ [تم التعديل] أصبح يستقبل رقم المطعم
     required double customerLat,
     required double customerLng,
   }) async {
@@ -1514,8 +1546,7 @@ class ApiService {
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-fee'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'restaurant_lat': restaurantLat,
-          'restaurant_lng': restaurantLng,
+          'restaurant_id': restaurantId, // ✨ [تم التعديل] إرسال الرقم
           'customer_lat': customerLat,
           'customer_lng': customerLng,
         }),
@@ -1523,7 +1554,15 @@ class ApiService {
       if (response.statusCode == 200) {
         return json.decode(response.body);
       }
-      throw Exception('Failed to get delivery fee');
+
+      // ✨ [تحسين] إظهار رسالة الخطأ القادمة من الخادم
+      try {
+        final errorBody = json.decode(response.body);
+        // هذا سيجلب الرسالة من الخادم (مثل: خطأ: الخادم لم يعثر على إحداثيات...)
+        throw Exception(errorBody['message'] ?? 'فشل حساب سعر التوصيل');
+      } catch (e) {
+        throw Exception('فشل حساب سعر التوصيل');
+      }
     });
   }
 // ✨ إضافة دالة جلب إعدادات المطعم للمدير
@@ -3419,48 +3458,57 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 }
+// (في ملف re.dart)
+// (في ملف re.dart)
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-
-class _HomeScreenState extends State<HomeScreen> {
-  final TextEditingController _searchController = TextEditingController();
-  final List<String> bannerImages = ['https://beytei.com/wp-content/uploads/2023/05/banner1.jpg', 'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg', 'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg'];
-  int? _selectedAreaId;
-  String? _selectedAreaName;
+class HomeScreenState extends State<HomeScreen> {
+  final TextEditingController searchController = TextEditingController();
+  int? selectedAreaId;
+  String? selectedAreaName;
 
   @override
   void initState() {
     super.initState();
-    // تأكد من أننا نحمّل بيانات الولاء في CartProvider عند بدء التشغيل
-    // (هذه الخطوة تتم ضمن دورة حياة Provider في MaterialApp)
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
+    WidgetsBinding.instance.addPostFrameCallback((_) => loadInitialData());
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
-    _selectedAreaId = prefs.getInt('selectedAreaId');
-    _selectedAreaName = prefs.getString('selectedAreaName');
-    if (_selectedAreaId != null) {
-      Provider.of<CustomerProvider>(context, listen: false).fetchHomeData(_selectedAreaId!);
+
+    selectedAreaId = prefs.getInt('selectedAreaId');
+    selectedAreaName = prefs.getString('selectedAreaName');
+    if (selectedAreaId != null) {
+      // [التحسين] استدعاء الدالة المحسّنة من CustomerProvider
+      // (isRefresh: false) يعني: حمّل البيانات فقط إذا لم تكن موجودة
+      await Provider.of<CustomerProvider>(context, listen: false)
+          .fetchHomeData(selectedAreaId!, isRefresh: false);
     }
+    // (تمت إضافة setState هنا لضمان تحديث الواجهة باسم المنطقة)
     setState(() {});
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    searchController.dispose();
     super.dispose();
   }
 
-  void _onSearchSubmitted(String query) {
-    if (query.isNotEmpty && _selectedAreaId != null) {
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => SearchScreen(searchQuery: query, selectedAreaId: _selectedAreaId!)));
+  void onSearchSubmitted(String query) {
+    if (query.isNotEmpty && selectedAreaId != null) {
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SearchScreen(
+          searchQuery: query,
+          selectedAreaId: selectedAreaId!,
+        ),
+      ));
     }
   }
 
@@ -3470,47 +3518,79 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: InkWell(
           onTap: () async {
-            final result = await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SelectLocationScreen(isCancellable: true)));
-            if (result == true) _loadInitialData();
+            final result = await Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => SelectLocationScreen(isCancellable: true)));
+            // إذا غيّر المستخدم المنطقة (result == true)، أعد تحميل البيانات
+            if (result == true) loadInitialData();
           },
-          child: Row(mainAxisSize: MainAxisSize.min, children: [Text(_selectedAreaName ?? "اختر منطقة", style: const TextStyle(fontSize: 16)), const Icon(Icons.keyboard_arrow_down, size: 20)]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(selectedAreaName ?? 'اختر المنطقة'),
+              const Icon(Icons.keyboard_arrow_down, size: 20),
+            ],
+          ),
         ),
         centerTitle: true,
-        actions: [IconButton(icon: const Icon(Icons.login), tooltip: "دخول مدير المطعم", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen())))],
+        // ✨ --- [ هذا هو التعديل المطلوب ] ---
+        // تم إرجاع زر دخول مدير المطعم
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.login),
+              tooltip: "دخول مدير المطعم",
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen())))
+        ],
+        // --- [ نهاية التعديل ] ---
       ),
       body: Consumer<CustomerProvider>(
         builder: (context, provider, child) {
-          if (_selectedAreaId == null) {
-            return const Center(child: Text("يرجى تحديد منطقة لعرض المطاعم"));
+          if (selectedAreaId == null) {
+            return const Center(child: Text('يرجى اختيار المنطقة أولاً'));
           }
+
+          // [التحسين] هذا المنطق سليم الآن بسبب التعديلات على Provider
           if (provider.isLoadingHome && provider.homeData.isEmpty) {
             return const ShimmerHomeScreen();
           }
           if (provider.hasError && provider.homeData.isEmpty) {
-            return NetworkErrorWidget(message: 'تحقق من اتصال الانترنيت .', onRetry: () => provider.fetchHomeData(_selectedAreaId!));
+            return NetworkErrorWidget(
+              message: "خطأ في الاتصال، اسحب للتحديث أو تحقق من الإنترنت",
+              // [التحسين] عند "إعادة المحاولة" يجب أن نجبر التحديث
+              onRetry: () => provider.fetchHomeData(selectedAreaId!, isRefresh: true),
+            );
           }
 
-          final restaurants = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
-          final onSale = (provider.homeData['onSale'] as List<dynamic>? ?? []).cast<FoodItem>();
-          final breakfast = (provider.homeData['breakfast'] as List<dynamic>? ?? []).cast<FoodItem>();
-          final family = (provider.homeData['family'] as List<dynamic>? ?? []).cast<FoodItem>();
+          // هذا المنطق سليم
+          final restaurants = provider.homeData['restaurants'] as List<dynamic>? ?? [];
+          final onSale = provider.homeData['onSale'] as List<dynamic>? ?? [];
+          final breakfast = provider.homeData['breakfast'] as List<dynamic>? ?? [];
+          final family = provider.homeData['family'] as List<dynamic>? ?? [];
 
           return RefreshIndicator(
-            onRefresh: () => provider.fetchHomeData(_selectedAreaId!),
+            // [التحسين] "السحب للتحديث" يجب أن يجبر التحديث
+            onRefresh: () => provider.fetchHomeData(selectedAreaId!, isRefresh: true),
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 10.0),
               children: [
-
-                // ✨ NEW: إضافة ويدجت التحدي والولاء
+                // (إعادة ويدجت الولاء)
                 const LoyaltyChallengeWidget(),
 
-                Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSearchBar()),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                  child: buildSearchBar(),
+                ),
                 const SizedBox(height: 20),
-                _buildBannerSlider(),
-                _buildSection<Restaurant>(title: 'المطاعم', onViewAll: () => Provider.of<NavigationProvider>(context, listen: false).changeTab(1), items: restaurants, listBuilder: (items) => _buildRestaurantsList(items)),
-                _buildSection<FoodItem>(title: 'عروض وخصومات', items: onSale, listBuilder: (items) => _buildFoodsList(items)),
-                _buildSection<FoodItem>(title: 'الفطور', items: breakfast, listBuilder: (items) => _buildFoodsList(items)),
-                _buildSection<FoodItem>(title: 'وجبات عائلية', items: family, listBuilder: (items) => _buildFoodsList(items)),
+                buildBannerSlider(), // هذا سليم لأنه يستخدم CachedNetworkImage
+                buildSection<Restaurant>(
+                  title: "المطاعم",
+                  items: restaurants.cast<Restaurant>(), // تحويل آمن
+                  listBuilder: buildRestaurantsList,
+                  onViewAll: () => Provider.of<NavigationProvider>(context, listen: false).changeTab(1),
+                ),
+                buildSection<FoodItem>(title: "عروض وخصومات", items: onSale.cast<FoodItem>(), listBuilder: buildFoodsList),
+                buildSection<FoodItem>(title: "الفطور", items: breakfast.cast<FoodItem>(), listBuilder: buildFoodsList),
+                buildSection<FoodItem>(title: "وجبات عائلية", items: family.cast<FoodItem>(), listBuilder: buildFoodsList),
               ],
             ),
           );
@@ -3519,21 +3599,123 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildSection<T>({required String title, VoidCallback? onViewAll, required List<T> items, required Widget Function(List<T>) listBuilder}) {
-    if (items.isEmpty) return const SizedBox.shrink();
-    return Column(children: [
-      Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSectionTitle(title, onViewAll)),
-      const SizedBox(height: 10),
-      listBuilder(items),
-      const SizedBox(height: 20),
-    ]);
+  // --- دوال الـ Build المساعدة (كما هي، لا تحتاج تعديل) ---
+
+  Widget buildSearchBar() {
+    return TextField(
+      controller: searchController,
+      textInputAction: TextInputAction.search,
+      onSubmitted: onSearchSubmitted,
+      decoration: InputDecoration(
+        hintText: "ابحث عن وجبة أو مطعم...",
+        prefixIcon: const Icon(Icons.search, color: Colors.grey),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(30),
+          borderSide: BorderSide.none,
+        ),
+        filled: true,
+        fillColor: Colors.grey.shade100,
+        contentPadding: EdgeInsets.zero,
+      ),
+    );
   }
 
-  Widget _buildBannerSlider() => CarouselSlider(options: CarouselOptions(height: 150.0, autoPlay: true, enlargeCenterPage: true, aspectRatio: 16/9, viewportFraction: 0.9), items: bannerImages.map((i) => Builder(builder: (ctx) => Container(width: MediaQuery.of(ctx).size.width, margin: const EdgeInsets.symmetric(horizontal: 5.0), decoration: BoxDecoration(borderRadius: BorderRadius.circular(15), image: DecorationImage(image: CachedNetworkImageProvider(i), fit: BoxFit.cover))))).toList());
-  Widget _buildSearchBar() => TextField(controller: _searchController, textInputAction: TextInputAction.search, onSubmitted: _onSearchSubmitted, decoration: InputDecoration(hintText: 'ابحث عن وجبة أو مطعم...', prefixIcon: const Icon(Icons.search, color: Colors.grey), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade100, contentPadding: EdgeInsets.zero));
-  Widget _buildSectionTitle(String title, VoidCallback? onViewAll) => Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), if(onViewAll != null) TextButton(onPressed: onViewAll, child: Text('عرض الكل', style: TextStyle(color: Theme.of(context).primaryColor)))]);
-  Widget _buildFoodsList(List<FoodItem> foods) => SizedBox(height: 270, child: ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 5), itemCount: foods.length, itemBuilder: (context, index) => FoodCard(food: foods[index])));
-  Widget _buildRestaurantsList(List<Restaurant> restaurants) => SizedBox(height: 130, child: ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 5), itemCount: restaurants.length > 5 ? 5 : restaurants.length, itemBuilder: (context, index) => HorizontalRestaurantCard(restaurant: restaurants[index])));
+  Widget buildBannerSlider() {
+    final bannerImages = [
+      "https://beytei.com/wp-content/uploads/2023/05/banner1.jpg",
+      "https://beytei.com/wp-content/uploads/2023/05/banner2.jpg",
+      "https://beytei.com/wp-content/uploads/2023/05/banner3.jpg",
+    ];
+    return CarouselSlider(
+      options: CarouselOptions(
+        height: 150.0,
+        autoPlay: true,
+        enlargeCenterPage: true,
+        aspectRatio: 16 / 9,
+        viewportFraction: 0.9,
+      ),
+      items: bannerImages.map((i) {
+        return Builder(
+          builder: (ctx) => Container(
+            width: MediaQuery.of(ctx).size.width,
+            margin: const EdgeInsets.symmetric(horizontal: 5.0),
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: CachedNetworkImage(
+              imageUrl: i,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => Shimmer.fromColors(
+                baseColor: Colors.grey[300]!,
+                highlightColor: Colors.grey[100]!,
+                child: Container(color: Colors.white),
+              ),
+              errorWidget: (context, url, error) => const Icon(Icons.error),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget buildSection<T>({
+    required String title,
+    required List<T> items,
+    required Widget Function(List<T>) listBuilder,
+    VoidCallback? onViewAll,
+  }) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: buildSectionTitle(title, onViewAll),
+        ),
+        const SizedBox(height: 10),
+        listBuilder(items),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget buildSectionTitle(String title, [VoidCallback? onViewAll]) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        if (onViewAll != null)
+          TextButton(
+            onPressed: onViewAll,
+            child: Text("عرض الكل", style: TextStyle(color: Theme.of(context).primaryColor)),
+          ),
+      ],
+    );
+  }
+
+  Widget buildFoodsList(List<FoodItem> foods) {
+    return SizedBox(
+      height: 270,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 5),
+        itemCount: foods.length,
+        itemBuilder: (context, index) => FoodCard(food: foods[index]),
+      ),
+    );
+  }
+
+  Widget buildRestaurantsList(List<Restaurant> restaurants) {
+    return SizedBox(
+      height: 130,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 5),
+        itemCount: restaurants.length > 5 ? 5 : restaurants.length,
+        itemBuilder: (context, index) => HorizontalRestaurantCard(restaurant: restaurants[index]),
+      ),
+    );
+  }
 }
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
@@ -3979,6 +4161,9 @@ class CartScreen extends StatefulWidget {
   State<CartScreen> createState() => _CartScreenState();
 }
 
+// (في ملف re.dart)
+// (استبدل الكلاس القديم بالكامل بهذا الكلاس المحدث V18)
+
 class _CartScreenState extends State<CartScreen> {
   final _apiService = ApiService();
   final _nameController = TextEditingController();
@@ -4012,8 +4197,7 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  // ✨ --- [ دالة عرض ملخص السعر (محدثة) ] ---
-  // (هذه الدالة تم تحديثها قليلاً لتكون أوضح عند الفشل)
+  // --- دالة عرض ملخص السعر (تبقى كما هي) ---
   Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee, String feeMessage) {
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
     final discountFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalDiscountAmount);
@@ -4029,7 +4213,6 @@ class _CartScreenState extends State<CartScreen> {
       ),
       child: Column(
         children: [
-          // 1. سعر الطلبات
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -4037,8 +4220,6 @@ class _CartScreenState extends State<CartScreen> {
               Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
             ],
           ),
-
-          // 2. الخصم (إن وجد)
           if (cart.totalDiscountAmount > 0) ...[
             const SizedBox(height: 8),
             Row(
@@ -4049,8 +4230,6 @@ class _CartScreenState extends State<CartScreen> {
               ],
             ),
           ],
-
-          // 3. خدمة التوصيل
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4073,15 +4252,12 @@ class _CartScreenState extends State<CartScreen> {
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      // ✨ إظهار الخطأ في السعر
                       color: deliveryFee == null && !isCalculatingFee ? Colors.red : Colors.black
                   ),
                 ),
               ),
             ],
           ),
-
-          // ✨ إظهار رسالة الخطأ (إن وجدت)
           if (!isCalculatingFee && deliveryFee == null)
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
@@ -4091,11 +4267,7 @@ class _CartScreenState extends State<CartScreen> {
                 style: const TextStyle(fontSize: 12, color: Colors.red),
               ),
             ),
-
-
           const Divider(height: 20),
-
-          // 4. الإجمالي النهائي
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -4117,7 +4289,8 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  // ✨ --- [ تم تحديث هذه الدالة بالكامل ] ---
+  // ✨ --- [ هذا هو الإصلاح V18.0 ] ---
+  // (هذه الدالة المحدثة ترسل ID المطعم إلى الخادم)
   void _showCheckoutDialog(BuildContext context, CartProvider cart) {
     _nameController.clear();
     _phoneController.clear();
@@ -4139,18 +4312,18 @@ class _CartScreenState extends State<CartScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
 
-          // --- دالة جلب الموقع (معدلة) ---
+          // --- دالة جلب الموقع (معدلة لتطبيق V18) ---
           Future<void> getCurrentLocation() async {
             setDialogState(() {
               _isGettingLocation = true;
               _locationMessage = "جاري تحديد موقعك...";
-              _capturedPosition = null; // إعادة تعيين الموقع
-              _deliveryFee = null; // إعادة تعيين السعر
-              _isCalculatingFee = true; // البدء بحساب السعر
+              _capturedPosition = null;
+              _deliveryFee = null;
+              _isCalculatingFee = true;
               _feeMessage = "جاري حساب كلفة التوصيل...";
             });
 
-            // 1. التحقق من الصلاحيات والخدمة
+            // 1. التحقق من الصلاحيات والخدمة (كما كان)
             final hasPermission = await PermissionService.handleLocationPermission(context);
             if (!hasPermission) {
               setDialogState(() {
@@ -4163,7 +4336,7 @@ class _CartScreenState extends State<CartScreen> {
             }
 
             try {
-              // 2. التقاط موقع الزبون
+              // 2. التقاط موقع الزبون (كما كان)
               _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
                   desiredAccuracy: geolocator.LocationAccuracy.high);
 
@@ -4172,34 +4345,20 @@ class _CartScreenState extends State<CartScreen> {
                 _locationMessage = "تم تحديد الموقع بنجاح!";
               });
 
-              // 3. التحقق من السلة
+              // 3. التحقق من السلة (كما كان)
               if (cart.items.isEmpty) throw Exception("السلة فارغة!");
               final restaurantId = cart.items.first.categoryId;
 
-              // 4. جلب المطعم من CustomerProvider (للحصول على إحداثياته)
-              Restaurant? restaurant;
-              try {
-                restaurant = Provider.of<CustomerProvider>(context, listen: false)
-                    .allRestaurants
-                    .firstWhere((r) => r.id == restaurantId);
-              } catch (e) {
-                // (معالجة حالة نادرة: إذا كان المطعم غير موجود في القائمة)
-                throw Exception("خطأ: لا يمكن العثور على بيانات المطعم (ID: $restaurantId).");
-              }
+              // --- ✨ [ هذا هو الإصلاح V18.0 ] ---
+              // 4. (تم حذف) كل الكود القديم الذي كان يبحث عن المطعم محلياً
 
-              // 5. التحقق من إحداثيات المطعم
-              if (restaurant.latitude == 0.0 || restaurant.longitude == 0.0) {
-                // هذا يعني أن المطعم لم يحدد موقعه عند تسجيل الدخول
-                throw Exception("خطأ: المطعم (المصدر) لم يحدد موقعه. لا يمكن حساب المسافة.");
-              }
-
-              // 6. جلب سعر التوصيل من الخادم
+              // 5. [جديد] إرسال الطلب إلى الخادم مع رقم المطعم
               final feeResponse = await _apiService.getDeliveryFee(
-                restaurantLat: restaurant.latitude,
-                restaurantLng: restaurant.longitude,
+                restaurantId: restaurantId, // ✨ [تم التعديل] إرسال الرقم
                 customerLat: _capturedPosition!.latitude,
                 customerLng: _capturedPosition!.longitude,
               );
+              // --- ✨ [ نهاية الإصلاح V18.0 ] ---
 
               setDialogState(() {
                 _deliveryFee = (feeResponse['delivery_fee'] as num).toDouble();
@@ -4211,8 +4370,10 @@ class _CartScreenState extends State<CartScreen> {
               setDialogState(() {
                 _isGettingLocation = false;
                 _isCalculatingFee = false;
-                _capturedPosition = null; // فشل
+                _capturedPosition = null;
                 _locationMessage = "فشل تحديد الموقع. حاول مجدداً.";
+                // ✨ [تحسين] إظهار الخطأ القادم من الخادم مباشرة
+                // (هنا سيظهر الخطأ الذي أضفناه في PHP إذا لم يجد الإحداثيات)
                 _feeMessage = "خطأ: ${e.toString().replaceAll("Exception: ", "")}";
               });
             }
@@ -4225,6 +4386,7 @@ class _CartScreenState extends State<CartScreen> {
             });
           }
 
+          // --- بقية النافذة (تبقى كما هي) ---
           return AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             title: const Text('إتمام الطلب'),
@@ -4238,18 +4400,14 @@ class _CartScreenState extends State<CartScreen> {
                     const SizedBox(height: 15),
                     TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الرجاء إدخال رقم الهاتف' : null, enabled: !isSubmitting),
                     const SizedBox(height: 15),
-
-                    // ✨ --- [ تعديل حقل العنوان (إجباري) ] ---
                     TextFormField(
                         controller: _addressController,
-                        decoration: const InputDecoration(labelText: 'العنوان بالتفصيل'), // (تم حذف "اختياري")
+                        decoration: const InputDecoration(labelText: 'العنوان بالتفصيل'),
                         maxLines: 2,
                         enabled: !isSubmitting,
-                        validator: (v) => v!.isEmpty ? 'الرجاء إدخال العنوان بالتفصيل' : null // (إضافة التحقق)
+                        validator: (v) => v!.isEmpty ? 'الرجاء إدخال العنوان بالتفصيل' : null
                     ),
                     const SizedBox(height: 20),
-
-                    // ✨ --- [ ويدجت الموقع الإجباري الجديد ] ---
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
@@ -4279,28 +4437,23 @@ class _CartScreenState extends State<CartScreen> {
                               ),
                             ],
                           ),
-                          // ✨ زر إعادة المحاولة
                           if (!_isGettingLocation && _capturedPosition == null)
                             TextButton.icon(
                               icon: const Icon(Icons.refresh),
                               label: const Text("إعادة محاولة تحديد الموقع"),
-                              onPressed: isSubmitting ? null : getCurrentLocation, // استدعاء الدالة مجدداً
+                              onPressed: isSubmitting ? null : getCurrentLocation,
                             ),
                         ],
                       ),
                     ),
-                    // --- نهاية الويدجت الجديد ---
-
                     const SizedBox(height: 15),
                     TextFormField(controller: _couponController, decoration: InputDecoration(labelText: 'كود الخصم (إن وجد)', suffixIcon: TextButton(child: const Text("تطبيق"), onPressed: () async {
                       final result = await cart.applyCoupon(_couponController.text);
                       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['message']), backgroundColor: result['valid'] ? Colors.green : Colors.red));
                       setDialogState(() {});
                     }))),
-
                     const Divider(height: 30),
                     _buildPriceSummary(cart, _deliveryFee, _isCalculatingFee, _feeMessage),
-
                   ],
                 ),
               ),
@@ -4309,25 +4462,21 @@ class _CartScreenState extends State<CartScreen> {
               TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-
-                // ✨ --- [ تعديل شروط تفعيل الزر ] ---
-                // (يجب أن يكون السعر محسوباً والموقع محدداً)
                 onPressed: isSubmitting || _isCalculatingFee || _deliveryFee == null || _capturedPosition == null
-                    ? null // <-- تعطيل الزر
+                    ? null
                     : () async {
                   if (!_formKey.currentState!.validate()) return;
-                  // (لا نحتاج للتحقق من _capturedPosition == null لأن الزر سيكون معطلاً)
 
                   setDialogState(() => isSubmitting = true);
                   try {
                     final createdOrder = await _apiService.submitOrder(
                         name: _nameController.text,
                         phone: _phoneController.text,
-                        address: _addressController.text, // (استخدام الحقل الإجباري)
+                        address: _addressController.text,
                         cartItems: cart.items,
                         couponCode: cart.appliedCoupon,
                         position: _capturedPosition,
-                        deliveryFee: _deliveryFee // (إرسال السعر)
+                        deliveryFee: _deliveryFee
                     );
 
                     if (!mounted) return;
@@ -4353,6 +4502,7 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
   }
+
 
   // --- (الدوال المساعدة تبقى كما هي) ---
 
@@ -4394,7 +4544,6 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 }
-
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
   @override
