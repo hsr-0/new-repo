@@ -1,0 +1,61 @@
+workflows:
+  beytei-ios-release:
+    name: Build & Publish Beytei iOS
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      vars:
+        APP_STORE_CONNECT_ISSUER_ID: "84eb9662-6707-4afc-9a02-c1d1d2d9d824" # ✅ عدّل هذه إن لزم
+        APP_STORE_CONNECT_KEY_IDENTIFIER: "668NQ5UL7K"
+        APP_STORE_CONNECT_PRIVATE_KEY: Encrypted(************) # أضف مفتاحك هنا من Codemagic variables
+        BUNDLE_ID: "co.median.ios.wqwnby"
+        APPLE_APP_ID: "1234567890" # ضع رقم App ID الخاص بتطبيقك من App Store Connect
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      groups:
+        - appstore_credentials
+        - ios_credentials
+
+    scripts:
+      # 🧹 1. تنظيف المشروع والبودز قبل البناء
+      - name: Clean Flutter and Pods
+        script: |
+          echo "🧹 Cleaning Flutter & iOS Pods"
+          cd ios
+          rm -rf Pods Podfile.lock
+          pod cache clean --all
+          pod install
+          cd ..
+          flutter clean
+          flutter pub get
+
+      # 🏗️ 2. بناء نسخة iOS للإصدار
+      - name: Build iOS Release
+        script: |
+          echo "🚀 Building iOS Release"
+          flutter build ipa --release --no-tree-shake-icons
+
+      # 🧽 3. إصلاح مشكلة Razorpay داخل الـ IPA
+      - name: Fix Razorpay Nested Frameworks
+        script: |
+          echo "🧽 Removing nested frameworks from Razorpay.framework"
+          find "$CM_BUILD_DIR/build/ios/iphoneos/Runner.app/Frameworks/Razorpay.framework" -type d -name "Frameworks" -exec rm -rf {} +
+          echo "✅ Razorpay.framework cleaned"
+
+      # 📤 4. رفع التطبيق إلى App Store Connect
+      - name: Publish to App Store Connect
+        script: |
+          echo "📤 Uploading to App Store Connect"
+          app-store-connect publish \
+            --path "$CM_BUILD_DIR/build/ios/ipa/Beytei.ipa" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --private-key "$APP_STORE_CONNECT_PRIVATE_KEY"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+
+    publishing:
+      app_store_connect:
+        auth: integration
