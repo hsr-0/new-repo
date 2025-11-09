@@ -42,8 +42,27 @@ target 'Runner' do
 
 end
 
+# --- ✨ [ هذا هو الكود المدمج V7 ] ---
 post_install do |installer|
+
+  # (1) هذا هو الكود الأصلي الخاص بك
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
   end
+
+  # (2) هذا هو كود تنظيف Razorpay الذي أضفته
+  puts "--- [Beytei Script] Starting Razorpay cleanup ---"
+
+  # المسار إلى المجلد المخالف
+  framework_path = Pod::Config.instance.project_pods_root + 'razorpay-pod/Razorpay.framework/Frameworks'
+
+  if File.directory?(framework_path)
+    puts "Found nested Frameworks at: #{framework_path}"
+    puts "Deleting nested Frameworks directory..."
+    FileUtils.rm_rf(framework_path)
+    puts "--- [Beytei Script] Razorpay cleanup finished ---"
+  else
+    puts "--- [Beytei Script] Nested Frameworks directory not found, skipping cleanup ---"
+  end
+  # --- [ نهاية الكود المدمج ] ---
 end
