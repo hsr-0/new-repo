@@ -4338,7 +4338,7 @@ class _CartScreenState extends State<CartScreen> {
             try {
               // 2. التقاط موقع الزبون (كما كان)
               _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
-                  desiredAccuracy: geolocator.LocationAccuracy.high);
+                  desiredAccuracy: geolocator.LocationAccuracy.medium,);
 
               setDialogState(() {
                 _isGettingLocation = false;
