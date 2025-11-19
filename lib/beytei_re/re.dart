@@ -125,6 +125,8 @@ class CustomerProvider with ChangeNotifier {
   List<Restaurant> _allRestaurants = []; // Stores all restaurants for the "Restaurants" screen
   Map<int, List<FoodItem>> _menuItems = {}; // Map<restaurantId, List<FoodItem>> for individual menus
 
+  int _lastLoadedAreaId = -1; // لتتبع آخر منطقة تم تحميلها
+
   bool _isLoadingHome = false;
   bool _isLoadingRestaurants = false;
   bool _isLoadingMenu = false;
@@ -144,200 +146,161 @@ class CustomerProvider with ChangeNotifier {
     _homeData = {};
     _allRestaurants = [];
     _menuItems = {};
+    _lastLoadedAreaId = -1;
     _hasError = false;
     notifyListeners();
   }
 
-  // ===================================================================
-  // ✨ --- دوال التخزين المؤقت (Caching) الجديدة ---
-  // ===================================================================
-
-  Future<void> _loadHomeDataFromCache(int areaId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final cachedString = prefs.getString('$CACHE_HOME_DATA_KEY$areaId');
-    if (cachedString != null) {
-      try {
-        final data = json.decode(cachedString);
-        // التحميل من الكاش
-        _homeData['restaurants'] = (data['restaurants'] as List).map((d) => Restaurant.fromJson(d)).toList();
-        _homeData['onSale'] = (data['onSale'] as List).map((d) => FoodItem.fromJson(d)).toList();
-        _homeData['breakfast'] = (data['breakfast'] as List).map((d) => FoodItem.fromJson(d)).toList();
-        _homeData['family'] = (data['family'] as List).map((d) => FoodItem.fromJson(d)).toList();
-        notifyListeners(); // <-- عرض البيانات القديمة فوراً
-      } catch (e) {
-        print("Failed to load home cache: $e");
-      }
-    }
-  }
-
-  Future<void> _saveHomeDataToCache(int areaId) async {
-    if (_homeData.isEmpty || _homeData['restaurants'] == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    try {
-      final dataToCache = json.encode({
-        'restaurants': _homeData['restaurants']?.map((r) => (r as Restaurant).toJson()).toList(),
-        'onSale': _homeData['onSale']?.map((f) => (f as FoodItem).toJson()).toList(),
-        'breakfast': _homeData['breakfast']?.map((f) => (f as FoodItem).toJson()).toList(),
-        'family': _homeData['family']?.map((f) => (f as FoodItem).toJson()).toList(),
-      });
-      await prefs.setString('$CACHE_HOME_DATA_KEY$areaId', dataToCache);
-    } catch (e) {
-      print("Failed to save home cache: $e");
-    }
-  }
-
-  Future<void> _loadRestaurantsFromCache(int areaId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final cachedString = prefs.getString('$CACHE_RESTAURANTS_KEY$areaId');
-    if (cachedString != null) {
-      try {
-        final data = json.decode(cachedString) as List;
-        _allRestaurants = data.map((d) => Restaurant.fromJson(d)).toList();
-        notifyListeners(); // عرض المطاعم المخزنة
-      } catch (e) {
-        print("Failed to load restaurants cache: $e");
-      }
-    }
-  }
-
-  Future<void> _saveRestaurantsToCache(int areaId) async {
-    if (_allRestaurants.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    try {
-      final dataToCache = json.encode(_allRestaurants.map((r) => r.toJson()).toList());
-      await prefs.setString('$CACHE_RESTAURANTS_KEY$areaId', dataToCache);
-    } catch (e) {
-      print("Failed to save restaurants cache: $e");
-    }
-  }
-
-  // ===================================================================
-  // ✨ --- الدوال الأساسية (معدلة لتستخدم الكاش) ---
-  // ===================================================================
-// --- Fetch Home Screen Data (Modified with Caching & Refresh Logic) ---
+  // --- ✨ [ هذا هو الكود الجديد V3 - الطريقة الهجينة (المرنة والسريعة) ] ---
+  // (استبدل fetchHomeData بالكامل بهذا)
   Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
 
-    // 1. [الهدف: لا تكرر التحميل]
-    // إذا كانت البيانات موجودة، ولسنا نجبر التحديث، اخرج فوراً.
-    if (_homeData.isNotEmpty && !isRefresh) {
+    // 1. [تحسين] (كما هو) لا تقم بإعادة التحميل إذا كانت البيانات موجودة
+    if (_homeData.isNotEmpty && !isRefresh && _lastLoadedAreaId == areaId) {
       return;
     }
 
-    // 2. [الهدف: التحميل التدريجي]
-    // إذا كان هذا تحديثاً إجبارياً (pull-to-refresh)، امسح البيانات القديمة لإظهار Shimmer
-    if (isRefresh) {
-      _homeData = {};
-      _allRestaurants = []; // امسح المطاعم أيضاً ليتم تحديثها
-    }
-
-    // 3. [الهدف: استخدام الكاش]
-    // إذا كانت البيانات فارغة (تحميل أول مرة)، أظهر Shimmer
-    if (_homeData.isEmpty) {
+    // 2. [تحسين] (كما هو) أظهر الشيمر فقط إذا كانت البيانات فارغة
+    if (_homeData.isEmpty || _lastLoadedAreaId != areaId) {
       _isLoadingHome = true;
       _hasError = false;
+      _homeData = {};
       notifyListeners();
-      // وحاول تحميل البيانات القديمة إن وجدت
-      await _loadHomeDataFromCache(areaId);
     }
 
-    // 4. [الهدف: إظهار Shimmer]
-    // أظهر Shimmer فقط إذا كان الكاش فارغاً
-    _isLoadingHome = _homeData.isEmpty;
-    _hasError = false;
-    notifyListeners();
+    _lastLoadedAreaId = areaId;
 
-    // 5. [الهدف: جلب البيانات]
+    // --- ✨ [ هذا هو التغيير الجوهري: منطق الطلبات المنفردة ] ---
+
+    // 3. الخطوة 1: جلب البيانات الحرجة (المطاعم)
+    Set<int> deliverableRestaurantIds;
+    List<Restaurant> allRestaurantsList;
+    Map<int, bool> restaurantStatusMap;
+
     try {
-      // 5a. تأكد من جلب قائمة المطاعم (ستستخدم الكاش الخاص بها إذا وجد)
-      // (isRefresh: isRefresh) نمرر نفس حالة التحديث
-      await fetchAllRestaurants(areaId, isRefresh: isRefresh);
-
-      // 5b. جلب المنتجات (هذا من الكود الخاص بك)
-      final allRestaurantsList = _allRestaurants;
-      final restaurantStatusMap = {for (var r in allRestaurantsList) r.id: r.isOpen};
-
-      final productResults = await Future.wait([
-        _apiService.getOnSaleItems(areaId: areaId),
-        _apiService.getProductsByTag(areaId: areaId, tagName: "فطور"),
-        _apiService.getProductsByTag(areaId: areaId, tagName: "عائلي"),
+      final criticalResults = await Future.wait([
+        _apiService.getDeliverableRestaurantIds(areaId),
+        _apiService.getAllRestaurants(areaId: areaId),
       ]);
 
-      // 5c. تحديث البيانات الجديدة
-      _homeData['restaurants'] = allRestaurantsList;
-      _homeData['onSale'] = _filterFoodItemsByStatus(restaurantStatusMap, productResults[0]);
-      _homeData['breakfast'] = _filterFoodItemsByStatus(restaurantStatusMap, productResults[1] as List<FoodItem>);
-      _homeData['family'] = _filterFoodItemsByStatus(restaurantStatusMap, productResults[2] as List<FoodItem>);
+      deliverableRestaurantIds = criticalResults[0] as Set<int>;
+      allRestaurantsList = criticalResults[1] as List<Restaurant>;
 
-      _hasError = false;
-      await _saveHomeDataToCache(areaId); // 6. حفظ البيانات الجديدة في الكاش
+      // بناء الخرائط التي سنحتاجها لاحقاً
+      final deliverableRestaurantsForDisplay = _filterRestaurantsByArea(deliverableRestaurantIds, allRestaurantsList);
+      restaurantStatusMap = {for (var r in allRestaurantsList) r.id: r.isOpen};
+
+      // [ العرض الأول ] - عرض المطاعم
+      _homeData['restaurants'] = deliverableRestaurantsForDisplay;
+      _hasError = false; // نجحنا في جلب الأساسيات
+      _isLoadingHome = false; // أوقف الشيمر
+      notifyListeners(); // 👈 تحديث الواجهة (ستظهر المطاعم)
 
     } catch (e) {
-      print("Error fetching home data for area $areaId: $e");
-      if (_homeData.isEmpty) { // أظهر الخطأ فقط إذا لم يكن لدينا بيانات قديمة
+      // إذا فشلت الأساسيات، أوقف كل شيء
+      print("Error fetching CRITICAL home data: $e");
+      if (_homeData.isEmpty) { // أظهر الخطأ فقط إذا لا يوجد كاش
         _hasError = true;
       }
-    } finally {
       _isLoadingHome = false;
-      notifyListeners(); // تحديث الواجهة بالبيانات الجديدة
-    }
-  }
-
-  // --- fetchAllRestaurants (Modified with Caching & Refresh Logic) ---
-  Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
-
-    // 1. [الهدف: لا تكرر التحميل]
-    if (_allRestaurants.isNotEmpty && !isRefresh) {
-      return; // اخرج فوراً
-    }
-
-    // 2. إذا كان تحديثاً إجبارياً، امسح البيانات القديمة
-    if (isRefresh) {
-      _allRestaurants = [];
-    }
-
-    // 3. [الهدف: استخدام الكاش]
-    if (_allRestaurants.isEmpty) {
-      _isLoadingRestaurants = true;
-      _hasError = false;
       notifyListeners();
-      await _loadRestaurantsFromCache(areaId); // جلب الكاش
+      return; // 👈 إيقاف الدالة
     }
 
-    // 4. [الهدف: إظهار Shimmer]
-    _isLoadingRestaurants = _allRestaurants.isEmpty;
-    _hasError = false;
-    notifyListeners();
+    // 4. الخطوة 2: جلب العروض (طلب منفرد ومرن)
 
+    // 5. الخطوة 3: جلب الفطور (طلب منفرد ومرن)
+
+
+    // 6. الخطوة 4: جلب الوجبات العائلية (طلب منفرد ومرن)
     try {
-      // 5. [الهدف: جلب البيانات]
-      final allRestaurantsList = await _apiService.getAllRestaurants(areaId: areaId);
-      for (var r in allRestaurantsList) {
-        r.isDeliverable = true;
-      }
-      _allRestaurants = allRestaurantsList; // تحديث
-      _hasError = false;
-      await _saveRestaurantsToCache(areaId); // 6. حفظ في الكاش
-
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      final onSaleItems = await _apiService.getOnSaleItems();
+      _homeData['onSale'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, onSaleItems);
+      notifyListeners(); // 👈 تحديث الواجهة (ستظهر العروض)
     } catch (e) {
-      print("Error fetching all restaurants for area $areaId: $e");
-      if (_allRestaurants.isEmpty) { // إظهار الخطأ فقط إذا فشل الكاش
-        _hasError = true;
-      }
-    } finally {
-      _isLoadingRestaurants = false;
+      print("Error fetching (optional) onSale items: $e");
+      _homeData['onSale'] = []; // ضع قائمة فارغة في حال الفشل
       notifyListeners();
     }
+
+    // 5. الخطوة 3: جلب الفطور (طلب منفرد ومرن)
+    try {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      final breakfastItems = await _apiService.getProductsByTag(tagName: "فطور");
+      _homeData['breakfast'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, breakfastItems);
+      notifyListeners(); // 👈 تحديث الواجهة (سيظهر الفطور)
+    } catch (e) {
+      print("Error fetching (optional) breakfast items: $e");
+      _homeData['breakfast'] = [];
+      notifyListeners();
+    }
+
+    // 6. الخطوة 4: جلب الوجبات العائلية (طلب منفرد ومرن)
+    try {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      final familyItems = await _apiService.getProductsByTag(tagName: "عائلي");
+      _homeData['family'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, familyItems);
+      notifyListeners(); // 👈 تحديث الواجهة (ستظهر الوجبات العائلية)
+    } catch (e) {
+      print("Error fetching (optional) family items: $e");
+      _homeData['family'] = [];
+      notifyListeners();
+    }
+    // 7. التأكد من إيقاف التحميل في النهاية (حتى لو فشلت بعض الطلبات الاختيارية)
+    _isLoadingHome = false;
+    notifyListeners();
   }
-  List<FoodItem> _filterFoodItemsByStatus(Map<int, bool> restaurantStatusMap, List<FoodItem> items) {
+  // --- نهاية الدالة المستبدلة ---
+
+
+  // --- Helper: Filter Restaurants by Delivery Area ---
+  List<Restaurant> _filterRestaurantsByArea(Set<int> deliverableIds, List<Restaurant> restaurants) {
+    return restaurants.map((r) {
+      r.isDeliverable = deliverableIds.contains(r.id);
+      return r; // Return the restaurant with the updated flag
+    }).toList();
+  }
+
+  List<FoodItem> _filterFoodItems(Set<int> deliverableRestaurantIds, Map<int, bool> restaurantStatusMap, List<FoodItem> items) {
     return items.map((item) {
+      bool isInDeliverableArea = deliverableRestaurantIds.contains(item.categoryId);
       bool isRestaurantOpen = restaurantStatusMap[item.categoryId] ?? false;
-      item.isDeliverable = isRestaurantOpen;
+      item.isDeliverable = isInDeliverableArea && isRestaurantOpen;
       return item;
     }).toList();
   }
 
 
-  // --- fetchMenuForRestaurant (كما هي من الكود الخاص بك - قوية كفاية) ---
+  // --- بقية الدوال تبقى كما هي ---
+  Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
+    if (isRefresh) {
+      _allRestaurants = [];
+    }
+    if (_allRestaurants.isNotEmpty && !isRefresh) return;
+
+    _isLoadingRestaurants = true;
+    _hasError = false;
+    notifyListeners();
+    try {
+      final allRestaurantsList = await _apiService.getAllRestaurants(areaId: areaId);
+      final deliverableIds = await _apiService.getDeliverableRestaurantIds(areaId);
+
+      for (var r in allRestaurantsList) {
+        r.isDeliverable = deliverableIds.contains(r.id);
+      }
+      _allRestaurants = allRestaurantsList;
+      _hasError = false;
+    } catch (e) {
+      print("Error fetching all restaurants for area $areaId: $e");
+      _hasError = true;
+      _allRestaurants = [];
+    } finally {
+      _isLoadingRestaurants = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
     if (isRefresh) {
       _menuItems.remove(restaurantId);
@@ -347,19 +310,21 @@ class CustomerProvider with ChangeNotifier {
     _isLoadingMenu = true;
     _hasError = false;
     notifyListeners();
-
     try {
       final newItems = await _apiService.getMenuForRestaurant(restaurantId);
 
-      Restaurant? restaurant;
-      try {
-        restaurant = _allRestaurants.firstWhere((r) => r.id == restaurantId);
-      } catch (e) {
-        print("Restaurant not found in list, fetching by ID...");
-        restaurant = await _apiService.getRestaurantById(restaurantId);
-      }
+      final restaurant = _allRestaurants.firstWhere(
+              (r) => r.id == restaurantId,
+          orElse: () {
+            final homeRestaurants = (_homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+            return homeRestaurants.firstWhere(
+                    (r) => r.id == restaurantId,
+                orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '00:00', autoCloseTime: '00:00', latitude: 0, longitude: 0)
+            );
+          }
+      );
 
-      final bool isRestaurantReady = (restaurant.isDeliverable) && (restaurant.isOpen);
+      final bool isRestaurantReady = restaurant.isDeliverable && restaurant.isOpen;
 
       for (var item in newItems) {
         item.isDeliverable = isRestaurantReady;
@@ -381,7 +346,7 @@ class DashboardProvider with ChangeNotifier {
   Map<String, List<Order>> _orders = {};
   RestaurantRatingsDashboard? _ratingsDashboard;
 
-  // 1. الذاكرة المؤقتة للرموز
+  // لتخزين أكواد التوصيل ومنع التكرار
   Map<int, String> _pickupCodes = {};
 
   bool _isLoading = false;
@@ -393,76 +358,114 @@ class DashboardProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get hasNetworkError => _hasNetworkError;
   String get errorMessage => _errorMessage;
-
-  // ✨ 2. Getter للوصول إلى الرموز (كان هذا ناقصاً)
   Map<int, String> get pickupCodes => _pickupCodes;
 
-  // ✨ 3. دالة لحفظ الرمز الجديد (كان هذا ناقصاً)
   void setPickupCode(int orderId, String code) {
     _pickupCodes[orderId] = code;
-    // لا نحتاج notifyListeners() هنا لأن fetchDashboardData سيقوم بذلك
   }
 
-  // ✨ 4. تحديث دالة clearData (تمت إضافة _pickupCodes.clear())
   void clearData() {
     _orders = {};
     _ratingsDashboard = null;
-    _pickupCodes = {}; // <-- الإضافة المهمة هنا
+    _pickupCodes = {};
+    notifyListeners();
+  }
+
+  // ✨ الوظيفة الجديدة: الأتمتة الكاملة
+  Future<void> checkAndAutoRequestDelivery(String token) async {
+    if (_orders['active'] == null || _orders['active']!.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final restaurantLat = prefs.getDouble('restaurant_lat');
+    final restaurantLng = prefs.getDouble('restaurant_lng');
+    final restaurantName = prefs.getString('restaurant_name') ?? 'مطعم بيتي';
+
+    if (restaurantLat == null || restaurantLng == null) return;
+
+    final api = ApiService();
+
+    for (var order in _orders['active']!) {
+      // إذا كان الطلب جديد (processing) ولم نطلب له مندوب بعد
+      if (order.status == 'processing' && !_pickupCodes.containsKey(order.id)) {
+
+        print("🚀 [Auto] طلب جديد #${order.id}.. استدعاء المندوب تلقائياً...");
+
+        try {
+          // إرسال الطلب فوراً باستخدام البيانات المحفوظة والسعر التلقائي
+          final result = await api.createUnifiedDeliveryRequest(
+            token: token,
+            sourceType: 'restaurant',
+            sourceOrderId: order.id.toString(),
+            pickupName: restaurantName,
+            pickupLat: restaurantLat,
+            pickupLng: restaurantLng,
+            destinationAddress: order.address,
+            destinationLat: double.tryParse(order.destinationLat ?? '0'),
+            destinationLng: double.tryParse(order.destinationLng ?? '0'),
+            deliveryFee: order.shippingTotal, // ✨ السعر التلقائي
+            orderDescription: "توصيل تلقائي - طلب #${order.id}\nمحتويات: ${order.lineItems.map((i) => "${i.quantity}x ${i.name}").join(', ')}",
+            endCustomerPhone: order.phone,
+          );
+
+          final code = result['pickup_code']?.toString();
+          if (code != null) {
+            setPickupCode(order.id, code);
+            // تغيير الحالة في السيرفر ليظهر "المندوب قادم"
+            await api.updateOrderStatus(order.id, 'out-for-delivery');
+            print("✅ تم طلب المندوب بنجاح للطلب #${order.id}");
+          }
+        } catch (e) {
+          print("❌ فشل الطلب التلقائي للطلب #${order.id}: $e");
+        }
+      }
+    }
     notifyListeners();
   }
 
   Future<void> fetchDashboardData(String? token) async {
     if (token == null) return;
     final ApiService _apiService = ApiService();
-    // 1. جلب البيانات من الكاش (كما كان)
-    // (هذا سيجعل التحميل أسرع إذا كانت البيانات موجودة)
     await _loadDashboardFromCache();
 
-    // 2. تحديد حالة التحميل الأولية
-    // إذا وجدنا كاش، أظهر "تحديث" بدلاً من "تحميل"
     if (_orders.isNotEmpty || _ratingsDashboard != null) {
-      _isLoading = false; // أوقف التحميل، لأن لدينا بيانات قديمة
+      _isLoading = false;
       _hasNetworkError = false;
     } else {
-      _isLoading = true; // لا يوجد كاش، أظهر شاشة التحميل
+      _isLoading = true;
       _hasNetworkError = false;
     }
-    notifyListeners(); // أظهر البيانات القديمة أو شاشة التحميل
+    notifyListeners();
 
     try {
-      // 3. [الإصلاح الأهم] جلب البيانات بالتسلسل (واحدة تلو الأخرى)
-
-      // 3a. جلب الطلبات النشطة أولاً
       final activeOrders = await _apiService.getRestaurantOrders(status: 'active', token: token);
       _orders['active'] = activeOrders;
-      _isLoading = false; // تم تحميل الجزء الأول
-      notifyListeners(); // تحديث الواجهة فوراً بالطلبات الجديدة
+      _isLoading = false;
+      notifyListeners();
 
-      // 3b. جلب الطلبات المكتملة ثانياً
+      // ✨ تشغيل الأتمتة فوراً عند وصول البيانات
+      checkAndAutoRequestDelivery(token);
+
       final completedOrders = await _apiService.getRestaurantOrders(status: 'completed', token: token);
       _orders['completed'] = completedOrders;
-      // (لا داعي لـ notifyListeners() هنا، سننتظر التقييمات)
 
-      // 3c. جلب التقييمات أخيراً
       final ratings = await _apiService.getDashboardRatings(token);
       _ratingsDashboard = ratings;
 
-      _hasNetworkError = false; // نجح كل شيء
-
-      // 4. حفظ كل شيء في الكاش بعد نجاح جميع الطلبات
+      _hasNetworkError = false;
       await _saveDashboardToCache();
 
     } catch (e) {
-      // إذا فشل أي طلب، أظهر رسالة خطأ (فقط إذا لم يكن لدينا كاش)
       if (_orders.isEmpty && _ratingsDashboard == null) {
         _hasNetworkError = true;
-        _errorMessage = 'فشل في تحديث البيانات. يرجى التحقق من اتصالك بالإنترنت.';
+        _errorMessage = 'فشل في تحديث البيانات.';
       }
     } finally {
-      _isLoading = false; // أنهِ التحميل في كل الأحوال
-      notifyListeners(); // التحديث النهائي للواجهة
+      _isLoading = false;
+      notifyListeners();
     }
   }
+
+  // ... (دوال الكاش _saveDashboardToCache و _loadDashboardFromCache تبقى كما هي)
   Future<void> _saveDashboardToCache() async {
     final prefs = await SharedPreferences.getInstance();
     final dataToCache = json.encode({
@@ -478,19 +481,14 @@ class DashboardProvider with ChangeNotifier {
     final cachedString = prefs.getString('cache_dashboard');
     if (cachedString != null) {
       final data = json.decode(cachedString);
-      if(data['orders_active'] != null) {
-        _orders['active'] = (data['orders_active'] as List).map((d) => Order.fromJson(d)).toList();
-      }
-      if(data['orders_completed'] != null) {
-        _orders['completed'] = (data['orders_completed'] as List).map((d) => Order.fromJson(d)).toList();
-      }
-      if(data['ratings'] != null) {
-        _ratingsDashboard = RestaurantRatingsDashboard.fromJson(data['ratings']);
-      }
+      if(data['orders_active'] != null) _orders['active'] = (data['orders_active'] as List).map((d) => Order.fromJson(d)).toList();
+      if(data['orders_completed'] != null) _orders['completed'] = (data['orders_completed'] as List).map((d) => Order.fromJson(d)).toList();
+      if(data['ratings'] != null) _ratingsDashboard = RestaurantRatingsDashboard.fromJson(data['ratings']);
       notifyListeners();
     }
   }
-}// ✨ NEW: Restaurant Settings Provider
+}
+// ✨ NEW: Restaurant Settings Provider
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
   bool _isRestaurantOpen = true;
@@ -765,13 +763,16 @@ class FoodItem {
   final double price;
   final double? salePrice;
   final String imageUrl;
-  int quantity; // Quantity in cart, mutable
-  final int categoryId; // Represents the Restaurant (WooCommerce category ID)
-  bool isDeliverable; // Flag: Can this item be ordered now? (Checks area AND restaurant open status)
+  int quantity;
+  final int categoryId;
+  bool isDeliverable;
   final double averageRating;
   final int ratingCount;
 
-  // Constructor
+  // ✨ [جديد] حقول لاستقبال موقع المطعم مع المنتج
+  final double restaurantLat;
+  final double restaurantLng;
+
   FoodItem({
     required this.id,
     required this.name,
@@ -779,119 +780,101 @@ class FoodItem {
     required this.price,
     this.salePrice,
     required this.imageUrl,
-    this.quantity = 1, // Default quantity when added to cart
+    this.quantity = 1,
     required this.categoryId,
-    this.isDeliverable = false, // Default state, updated by CustomerProvider
+    this.isDeliverable = false,
     this.averageRating = 0.0,
     this.ratingCount = 0,
+    // ✨ تهيئة القيم
+    this.restaurantLat = 0.0,
+    this.restaurantLng = 0.0,
   });
 
-  // Factory constructor to create a FoodItem from JSON data (API response)
   factory FoodItem.fromJson(Map<String, dynamic> json) {
-    // Helper function to safely parse double values
+    // دالة مساعدة لقراءة الأرقام بأمان
     double safeParseDouble(dynamic value, [double defaultValue = 0.0]) {
       if (value == null) return defaultValue;
-      return double.tryParse(value.toString()) ?? defaultValue;
+      if (value is double) return value;
+      if (value is int) return value.toDouble();
+      return double.tryParse(value.toString().trim()) ?? defaultValue;
     }
 
-    // Helper function to safely parse int values
     int safeParseInt(dynamic value, [int defaultValue = 0]) {
       if (value == null) return defaultValue;
       return int.tryParse(value.toString()) ?? defaultValue;
     }
 
-    // Extract image URL safely
     String extractImageUrl(dynamic images) {
-      if (images is List &&
-          images.isNotEmpty &&
-          images[0] is Map &&
-          images[0]['src'] != null &&
-          images[0]['src'] != false) {
+      if (images is List && images.isNotEmpty && images[0] is Map && images[0]['src'] != null) {
         return images[0]['src'];
       }
-      return 'https://via.placeholder.com/150'; // Default placeholder
+      return 'https://via.placeholder.com/150';
     }
 
     int extractRestaurantId(Map<String, dynamic> json) {
-      // 1. Try reading the new field from meta_data (more accurate)
       if (json['meta_data'] != null && json['meta_data'] is List) {
         final metaData = json['meta_data'] as List;
-        var parentIdMeta = metaData.firstWhere(
-                (m) => m is Map && m['key'] == '_restaurant_parent_id',
-            orElse: () => null);
-        if (parentIdMeta != null && parentIdMeta['value'] != 0) {
+        var parentIdMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_parent_id', orElse: () => null);
+        if (parentIdMeta != null && parentIdMeta['value'] != null) {
           return int.tryParse(parentIdMeta['value'].toString()) ?? 0;
         }
       }
-
-      // 2. If the first method fails, use the old method
       dynamic categories = json['categories'];
-      if (categories is List &&
-          categories.isNotEmpty &&
-          categories[0] is Map &&
-          categories[0]['id'] != null) {
+      if (categories is List && categories.isNotEmpty && categories[0] is Map) {
         return categories[0]['id'];
       }
-      return 0; // Default category ID if none found
+      return 0;
     }
 
-    // Clean up description (remove HTML tags)
     String cleanDescription(dynamic desc) {
-      if (desc is String) {
-        // Use RegExp to remove HTML tags
-        return desc.replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim();
-      }
-      return ''; // Return empty string if description is not a string
+      if (desc is String) return desc.replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim();
+      return '';
+    }
+
+    // ✨ استخراج الإحداثيات بدقة من الميتا داتا
+    double rLat = 0.0;
+    double rLng = 0.0;
+    if (json['meta_data'] != null && json['meta_data'] is List) {
+      final metaData = json['meta_data'] as List;
+
+      var latMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_latitude', orElse: () => null);
+      if (latMeta != null) rLat = safeParseDouble(latMeta['value']);
+
+      var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
+      if (lngMeta != null) rLng = safeParseDouble(lngMeta['value']);
     }
 
     return FoodItem(
-      id: json['id'] ?? 0, // Default ID if null
-      name: json['name'] ?? 'اسم غير متوفر', // Default name
+      id: json['id'] ?? 0,
+      name: json['name'] ?? 'اسم غير متوفر',
       description: cleanDescription(json['short_description']),
       price: safeParseDouble(json['regular_price']),
-      // Handle potential empty string or null for sale_price
-      salePrice: (json['sale_price'] != '' && json['sale_price'] != null)
-          ? safeParseDouble(
-          json['sale_price'], -1.0) // Use -1 or another flag
-          : null, // Explicitly null if empty or null
+      salePrice: (json['sale_price'] != '' && json['sale_price'] != null) ? safeParseDouble(json['sale_price'], -1.0) : null,
       imageUrl: extractImageUrl(json['images']),
       categoryId: extractRestaurantId(json),
       averageRating: safeParseDouble(json['average_rating']),
       ratingCount: safeParseInt(json['rating_count']),
-      // 'isDeliverable' is set later by the CustomerProvider logic
-      // 'quantity' defaults to 1 in the constructor
+      // ✨ تمرير الإحداثيات المستخرجة
+      restaurantLat: rLat,
+      restaurantLng: rLng,
     );
   }
 
-  // --- Getters ---
+  double get displayPrice => salePrice != null && salePrice! >= 0 ? salePrice! : price;
 
-  // Returns the price to display (sale price if available, otherwise regular price)
-  double get displayPrice => salePrice != null && salePrice! >= 0 ? salePrice! : price; // Check salePrice >= 0
-
-  // Formats the display price for the UI (e.g., "3,375 د.ع")
   String get formattedPrice {
-    // Use Iraqi Dinar format
     final format = NumberFormat('#,###', 'ar_IQ');
     return '${format.format(displayPrice)} د.ع';
   }
 
-  // --- toJson() Method ---
-  // Converts the FoodItem object back into a JSON map (useful for caching or sending data)
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
-    'short_description': description, // Assumes description doesn't need HTML re-added
-    'regular_price': price.toString(),
-    'sale_price': salePrice?.toString() ?? '', // Convert null to empty string
-    'images': [{'src': imageUrl}], // Matches fromJson structure
-    'categories': [{'id': categoryId}], // Matches fromJson structure
-    'average_rating': averageRating.toString(),
-    'rating_count': ratingCount,
-    // Note: 'quantity' and 'isDeliverable' are usually runtime states
-    // and might not be needed when serializing back to basic product info.
+    'quantity': quantity,
+    'categoryId': categoryId,
+    // يمكنك إضافة الإحداثيات هنا إذا كنت تريد حفظ السلة محلياً
   };
-
-} // End of FoodItem class
+}
 class Order {
   final int id;
   final String status;
@@ -901,9 +884,9 @@ class Order {
   final String address;
   final String phone;
   final List<LineItem> lineItems;
-  // --- ✨ الحقول الجديدة هنا ---
   final String? destinationLat;
   final String? destinationLng;
+  final String shippingTotal; // ✨ جديد: سعر التوصيل
 
   Order({
     required this.id,
@@ -914,9 +897,9 @@ class Order {
     required this.address,
     required this.phone,
     required this.lineItems,
-    // --- ✨ أضفها إلى الكونستركتر ---
     this.destinationLat,
     this.destinationLng,
+    required this.shippingTotal, // ✨
   });
 
   Map<String, dynamic> toJson() => {
@@ -942,19 +925,20 @@ class Order {
       address: json['address'] ?? shipping?['address_1'] ?? billing?['address_1'] ?? 'N/A',
       phone: json['phone'] ?? billing?['phone'] ?? 'N/A',
       lineItems: (json['line_items'] as List).map((i) => LineItem.fromJson(i)).toList(),
-      // --- ✨ قراءة الحقول الجديدة من الـ JSON ---
       destinationLat: json['destination_lat'],
       destinationLng: json['destination_lng'],
+      // ✨ قراءة سعر التوصيل التلقائي
+      shippingTotal: json['shipping_total'] ?? '0',
     );
   }
 
   Map<String, dynamic> get statusDisplay {
-    // ... (هذا الجزء يبقى كما هو)
     switch (status) {
       case 'processing':
-        return {'text': 'جاري تحضير طلبك', 'icon': Icons.soup_kitchen_outlined, 'color': Colors.blue};
+        return {'text': 'جاري تحضير الطلب', 'icon': Icons.soup_kitchen_outlined, 'color': Colors.blue};
       case 'out-for-delivery':
-        return {'text': 'طلبك في الطريق', 'icon': Icons.delivery_dining, 'color': Colors.orange.shade700};
+      // ✨ تغيير النص
+        return {'text': 'المندوب قادم إليك 🛵', 'icon': Icons.delivery_dining, 'color': Colors.orange.shade700};
       case 'completed':
         return {'text': 'تم توصيل الطلب', 'icon': Icons.check_circle, 'color': Colors.green};
       case 'cancelled':
@@ -965,7 +949,6 @@ class Order {
     }
   }
 }
-
 class LineItem {
   final String name;
   final int quantity;
@@ -1025,7 +1008,50 @@ class Review {
 // =======================================================================
 // --- SERVICES ---
 // =======================================================================
+class DeliveryConfig {
+  final double baseFee;
+  final double feePerKm;
+  final double maxDistanceKm;
 
+  DeliveryConfig({
+    required this.baseFee,
+    required this.feePerKm,
+    required this.maxDistanceKm,
+  });
+
+  factory DeliveryConfig.fromJson(Map<String, dynamic> json) {
+    return DeliveryConfig(
+      baseFee: (json['base_fee'] as num? ?? 1500).toDouble(),
+      feePerKm: (json['fee_per_km'] as num? ?? 500).toDouble(),
+      maxDistanceKm: (json['max_distance_km'] as num? ?? 25).toDouble(),
+    );
+  }
+}
+class DeliveryProvider with ChangeNotifier {
+  // ✨ إعدادات ثابتة (لتجنب أخطاء الخادم)
+  final DeliveryConfig _defaultConfig = DeliveryConfig(
+    baseFee: 1000.0,       // السعر الأساسي
+    feePerKm: 250.0,        // سعر الكيلومتر
+    maxDistanceKm: 25.0,    // أقصى مسافة
+  );
+
+  DeliveryConfig? _config;
+
+  bool get isLoading => false;
+  bool get hasError => false;
+  String? get errorMessage => null;
+
+  DeliveryConfig? get config => _config;
+
+  DeliveryProvider() {
+    _config = _defaultConfig;
+  }
+
+  Future<bool> fetchConfig() async {
+    _config = _defaultConfig;
+    return true;
+  }
+}
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
@@ -1315,36 +1341,35 @@ class CartProvider with ChangeNotifier {
   // ✨ --- [ هذا هو الإصلاح ] --- ✨
   // (استبدل الدالة القديمة بهذه)
   void addToCart(FoodItem foodItem, BuildContext context) {
-
-    // 1. التحقق من حالة المنتج قبل إضافته
+    // 1. التحقق من توفر المنتج
     if (!foodItem.isDeliverable) {
-      // إذا كان المنتج غير متاح (بسبب إغلاق المطعم)
-      _showItemUnavailableDialog(context, foodItem); // اعرض رسالة خطأ
-      return; // 👈 لا تقم بإضافة المنتج
+      _showItemUnavailableDialog(context, foodItem);
+      return;
     }
-    // --- [ نهاية الإصلاح ] ---
 
-    // 2. إذا كان المنتج متاحاً، أكمل المنطق العادي
     final existingIndex = _items.indexWhere((item) => item.id == foodItem.id);
     if (existingIndex != -1) {
       _items[existingIndex].quantity++;
     } else {
+      // 2. إضافة المنتج للسلة مع نسخ الإحداثيات
       _items.add(FoodItem(
-          id: foodItem.id,
-          name: foodItem.name,
-          description: foodItem.description,
-          price: foodItem.price,
-          salePrice: foodItem.salePrice,
-          imageUrl: foodItem.imageUrl,
-          quantity: 1,
-          categoryId: foodItem.categoryId,
-          isDeliverable: foodItem.isDeliverable
+        id: foodItem.id,
+        name: foodItem.name,
+        description: foodItem.description,
+        price: foodItem.price,
+        salePrice: foodItem.salePrice,
+        imageUrl: foodItem.imageUrl,
+        quantity: 1,
+        categoryId: foodItem.categoryId,
+        isDeliverable: foodItem.isDeliverable,
+        // ✅✅✅ هنا الإصلاح: نقل الإحداثيات من المنتج الأصلي إلى السلة ✅✅✅
+        restaurantLat: foodItem.restaurantLat,
+        restaurantLng: foodItem.restaurantLng,
       ));
     }
     notifyListeners();
-    _showAddToCartDialog(context, foodItem); // رسالة "تمت الإضافة"
+    _showAddToCartDialog(context, foodItem);
   }
-
   // ✨ --- [ أضف هذه الدالة المساعدة الجديدة ] ---
   void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
     showDialog(
@@ -1481,7 +1506,6 @@ class ApiService {
     });
   }
   // ✨ --- [ نهاية التعديل ] ---
-
   // ✨ --- [ دالة جديدة مضافة ] ---
   Future<Restaurant> getRestaurantById(int restaurantId) async {
     const fields = 'id,name,image,count,meta_data';
@@ -1625,31 +1649,31 @@ class ApiService {
       throw Exception('Failed to fetch deliverable restaurants (Custom Endpoint)');
     });
   }
-
-  Future<List<FoodItem>> _getProducts(String params, String cacheKey, {required int areaId}) async {
+  Future<List<FoodItem>> _getProducts(String params, String cacheKey) async {
     return _executeWithRetry(() async {
-      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count';
-      // ✨ لاحظ الإضافة: &area_id=$areaId (إلا إذا كانت 0)
-      final areaParam = areaId == 0 ? '' : '&area_id=$areaId';
-      final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields$areaParam';
+      // ✨ [الإصلاح]: أضفنا meta_data هنا لنتمكن من قراءة ID المطعم الأب
+      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+
+      // ✨ [الإصلاح]: حذفنا areaParam من الرابط
+      final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields';
 
       final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
       if (response.statusCode == 200) {
         await _cacheService.saveData(cacheKey, response.body);
-        // لا نحتاج للفلترة هنا
         return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
       }
       throw Exception('Failed to fetch products');
     });
   }
-  Future<List<FoodItem>> getOnSaleItems({required int areaId}) =>
-      _getProducts('on_sale=true&per_page=20', 'onsale_items_area_$areaId', areaId: areaId);
+  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> getOnSaleItems() =>
+      _getProducts('on_sale=true&per_page=20', 'onsale_items');
 
-  Future<List<FoodItem>> searchProducts({required int areaId, required String query}) =>
-      _getProducts('search=$query&per_page=20', 'search_${query}_area_$areaId', areaId: areaId);
-
-  // دالة جلب المنتجات بالتاغ
-  Future<List<FoodItem>> getProductsByTag({required int areaId, required String tagName}) async {
+  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> searchProducts({required String query}) =>
+      _getProducts('search=$query&per_page=20', 'search_$query');
+  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> getProductsByTag({required String tagName}) async {
     return _executeWithRetry(() async {
       final tagsResponse = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wc/v3/products/tags?search=$tagName&_fields=id'), headers: {'Authorization': _authString});
       if (tagsResponse.statusCode != 200) throw Exception('Failed to find tag');
@@ -1657,24 +1681,34 @@ class ApiService {
       if (tags.isEmpty) return [];
       final tagId = tags[0]['id'];
 
-      // ✨ مرر areaId هنا
-      return _getProducts('tag=$tagId&per_page=10', 'tag_${tagId}_area_$areaId', areaId: areaId);
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      return _getProducts('tag=$tagId&per_page=10', 'tag_$tagId');
     });
   }
-
   // ✨ --- [ تم تعديل هذه الدالة ] ---
   // تم تغيير per_page=10 إلى per_page=100 لجلب كل منتجات المنيو
+// (استبدل الدالة القديمة بهذه)
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
-      _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100', areaId: 0); // areaId: 0 هنا يعني "لا تفلتر حسب المنطقة"
+      _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
+
   Future<Order?> submitOrder({
-    required String name, required String phone, required String address,
-    required List<FoodItem> cartItems, String? couponCode,
+    required String name,
+    required String phone,
+    required String address,
+    required List<FoodItem> cartItems,
+    String? couponCode,
     geolocator.Position? position,
-    double? deliveryFee, // <-- ✨ الإضافة الجديدة هنا
+    double? deliveryFee,
   }) async {
 
+    if (cartItems.isEmpty) return null;
+
+    // 1. ✨ [جديد] استخراج رقم المطعم من أول منتج في السلة
+    // (نفترض أن السلة تحتوي على منتجات من مطعم واحد فقط وهو المعيار في تطبيقات التوصيل)
+    final int restaurantId = cartItems.first.categoryId;
+
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
-// <-- ✨ الإضافة الجديدة هنا: تجهيز سطر الشحن
+
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{
       "method_id": "flat_rate",
@@ -1682,28 +1716,38 @@ class ApiService {
       "total": deliveryFee.toString()
     }]
         : [];
-    // 1. جلب توكن FCM الحالي للزبون
+
     String? fcmToken = await FirebaseMessaging.instance.getToken();
 
-    // 2. بناء الـ bodyPayload مع بيانات التوكن + الإحداثيات
     Map<String, dynamic> bodyPayload = {
-      "payment_method": "cod", "payment_method_title": "الدفع عند الاستلام",
-      "billing": {"first_name": name, "last_name":".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001", "email": "customer@example.com"},
-      "shipping": {"first_name": name, "last_name":".", "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001"},
-      "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
+      "payment_method": "cod",
+      "payment_method_title": "الدفع عند الاستلام",
+      "set_paid": false,
+      // ✨ [جديد] تحديد الحالة "processing" مباشرة ليظهر فوراً في الطلبات النشطة
+      "status": "processing",
+
+      "billing": {"first_name": name, "last_name": ".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode": "10001", "email": "customer@example.com"},
+      "shipping": {"first_name": name, "last_name": ".", "address_1": address, "country": "IQ", "city": "Default", "postcode": "10001"},
+
+      "line_items": cartItems.map((item) => {
+        "product_id": item.id,
+        "quantity": item.quantity
+        // ملاحظة: ووكومرس عادة يربط المنتج بالمطعم هنا تلقائياً، لكن سنضيف الربط اليدوي في الأسفل لضمان ذلك
+      }).toList(),
+
       "coupon_lines": couponLines,
-      "shipping_lines": shippingLines, // <-- ✨ الإضافة الجديدة هنا
-      // ✨ إرسال التوكن + الإحداثيات (هذا هو التعديل)
+      "shipping_lines": shippingLines,
+
       "meta_data": [
-        if (fcmToken != null)
-          {"key": "_customer_fcm_token", "value": fcmToken},
-        // --- ✨ الإضافة الجديدة هنا ---
-        // (يجب أن يكون الـ Backend معداً لقراءة هذه الحقول)
-        if (position != null)
-          {"key": "_customer_destination_lat", "value": position.latitude.toString()},
-        if (position != null)
-          {"key": "_customer_destination_lng", "value": position.longitude.toString()}
-        // --- نهاية الإضافة ---
+        if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
+        if (position != null) {"key": "_customer_destination_lat", "value": position.latitude.toString()},
+        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()},
+
+        // ✨✨✨ [الحل الجذري] إرسال معرف المطعم صراحة ✨✨✨
+        // هذا يساعد الباكد اند (خاصة لو تستخدم WCFM أو Dokan أو منطق مخصص) لربط الطلب بالمطعم
+        {"key": "_restaurant_id", "value": restaurantId.toString()},
+        {"key": "vendor_id", "value": restaurantId.toString()}, // (احتياطياً لبعض الإضافات)
+        {"key": "_wcfm_vendor_id", "value": restaurantId.toString()}, // (إذا كنت تستخدم WCFM)
       ],
     };
 
@@ -1780,6 +1824,23 @@ class ApiService {
       throw Exception('Failed to load dashboard ratings');
     });
   }
+
+
+// --- ✨ ألصق الكود هنا (المكان الصحيح) ✨ ---
+  Future<DeliveryConfig> getDeliveryConfig() async {
+    return _executeWithRetry(() async {
+      // (تأكد من أن هذا الرابط يطابق ما أنشأته في PHP)
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-config'),
+      );
+      if (response.statusCode == 200) {
+        return DeliveryConfig.fromJson(json.decode(response.body));
+      }
+      throw Exception('Failed to load delivery config');
+    });
+  }
+  // --- نهاية اللصق ---
+
   Future<Map<String, dynamic>> createUnifiedDeliveryRequest({
     required String token,
     required String sourceType, // 'restaurant', 'pharmacy', 'store', 'customer'
@@ -2674,26 +2735,50 @@ class _OrderCardState extends State<OrderCard> {
   }
 
   Widget _buildActionButtons(BuildContext context) {
+
+    // ✨ إذا تم طلب المندوب (تلقائياً أو يدوياً)، نظهر رسالة بدلاً من الأزرار
+    if (widget.order.status == 'out-for-delivery') {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.orange.shade200)
+        ),
+        child: Column(
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.delivery_dining, color: Colors.orange),
+                SizedBox(width: 8),
+                Text("المندوب قادم إليك لاستلام الطلب", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+              ],
+            ),
+            if(widget.pickupCode != null)
+              Text("رمز التسليم: ${widget.pickupCode}", style: const TextStyle(fontSize: 12, color: Colors.black54))
+          ],
+        ),
+      );
+    }
+
+    // الأزرار تظهر فقط للحظات قبل أن تعمل الأتمتة
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Column(
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(child: OutlinedButton(onPressed: () => _updateStatus('cancelled'), style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700, side: BorderSide(color: Colors.red.shade200), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)), child: const Text('إلغاء الطلب'))),
-              const SizedBox(width: 12),
-              Expanded(child: ElevatedButton(onPressed: () => _updateStatus('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)), child: const Text('إكمال الطلب'))),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.delivery_dining, color: Colors.white), label: const Text('إرسال للتوصيل', style: TextStyle(color: Colors.white, fontSize: 16)), onPressed: () => _updateStatus('out-for-delivery'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade600, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)))),
-              const SizedBox(width: 12),
-              Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.two_wheeler, color: Colors.white), label: const Text('طلب تكسي بيتي', style: TextStyle(color: Colors.white, fontSize: 16)), onPressed: () => _showDeliveryRequestDialog(context, widget.order), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)))),
-            ],
-          ),
+          Expanded(child: OutlinedButton(
+              onPressed: () => _updateStatus('cancelled'),
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700, side: BorderSide(color: Colors.red.shade200), padding: const EdgeInsets.symmetric(vertical: 12)),
+              child: const Text('رفض الطلب')
+          )),
+          // تم حذف زر "طلب تكسي" اليدوي
         ],
+
+
+
       ),
     );
   }
@@ -2931,33 +3016,7 @@ class ReviewCard extends StatelessWidget {
 }
 
 
-class ShimmerHomeScreen extends StatelessWidget {
-  const ShimmerHomeScreen({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 10.0),
-        children: [
-          Container(margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10), height: 50, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(30))),
-          Container(margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 10), height: 150, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15))),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Container(height: 20, width: 150, color: Colors.white), Container(height: 20, width: 70, color: Colors.white)]),
-          ),
-          SizedBox(height: 130, child: ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 5), itemCount: 5, itemBuilder: (context, index) => const ShimmerHorizontalRestaurantCard())),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10),
-            child: Container(height: 20, width: 200, color: Colors.white),
-          ),
-          SizedBox(height: 270, child: ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 5), itemCount: 3, itemBuilder: (context, index) => const ShimmerFoodCard())),
-        ],
-      ),
-    );
-  }
-}
-
+// (الصق هذا بدلاً من ShimmerHomeScreen القديم)
 class ShimmerHorizontalRestaurantCard extends StatelessWidget {
   const ShimmerHorizontalRestaurantCard({super.key});
   @override
@@ -3068,11 +3127,12 @@ class _RestaurantModuleState extends State<RestaurantModule> {
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
-        ChangeNotifierProvider(create: (_) => CustomerProvider()), // NEW
+        ChangeNotifierProvider(create: (_) => CustomerProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         // ✨ NEW: إضافة RestaurantSettingsProvider
         ChangeNotifierProvider(create: (_) => RestaurantSettingsProvider()),
-
+        // (تم حذف السطر المكرر من هنا)
+        ChangeNotifierProvider(create: (_) => DeliveryProvider()), // <-- هذا صحيح
         ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
           create: (_) => DashboardProvider(),
           update: (_, auth, dashboard) {
@@ -3469,128 +3529,132 @@ class HomeScreen extends StatefulWidget {
 }
 
 class HomeScreenState extends State<HomeScreen> {
-  final TextEditingController searchController = TextEditingController();
-  int? selectedAreaId;
-  String? selectedAreaName;
+  final TextEditingController _searchController = TextEditingController();
+  final List<String> bannerImages = ['https://beytei.com/wp-content/uploads/2023/05/banner1.jpg', 'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg', 'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg'];
+  int _currentBannerIndex = 0;
+  int? _selectedAreaId;
+  String? _selectedAreaName;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => loadInitialData());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
   }
 
-  Future<void> loadInitialData() async {
+  Future<void> _loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
-
-    selectedAreaId = prefs.getInt('selectedAreaId');
-    selectedAreaName = prefs.getString('selectedAreaName');
-    if (selectedAreaId != null) {
-      // [التحسين] استدعاء الدالة المحسّنة من CustomerProvider
-      // (isRefresh: false) يعني: حمّل البيانات فقط إذا لم تكن موجودة
-      await Provider.of<CustomerProvider>(context, listen: false)
-          .fetchHomeData(selectedAreaId!, isRefresh: false);
+    _selectedAreaId = prefs.getInt('selectedAreaId');
+    _selectedAreaName = prefs.getString('selectedAreaName');
+    if (_selectedAreaId != null) {
+      Provider.of<CustomerProvider>(context, listen: false).fetchHomeData(_selectedAreaId!, isRefresh: false);
     }
-    // (تمت إضافة setState هنا لضمان تحديث الواجهة باسم المنطقة)
     setState(() {});
   }
 
   @override
   void dispose() {
-    searchController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
-  void onSearchSubmitted(String query) {
-    if (query.isNotEmpty && selectedAreaId != null) {
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => SearchScreen(
-          searchQuery: query,
-          selectedAreaId: selectedAreaId!,
-        ),
-      ));
+  void _onSearchSubmitted(String query) {
+    if (query.isNotEmpty && _selectedAreaId != null) {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => SearchScreen(searchQuery: query, selectedAreaId: _selectedAreaId!)));
     }
   }
 
+  // --- 🚀 دالة build بالتصميم الجديد (لعرض المطاعم) ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: InkWell(
           onTap: () async {
-            final result = await Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => SelectLocationScreen(isCancellable: true)));
-            // إذا غيّر المستخدم المنطقة (result == true)، أعد تحميل البيانات
-            if (result == true) loadInitialData();
+            final result = await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SelectLocationScreen(isCancellable: true)));
+            if (result == true) {
+              final prefs = await SharedPreferences.getInstance();
+              _selectedAreaId = prefs.getInt('selectedAreaId');
+              _selectedAreaName = prefs.getString('selectedAreaName');
+              setState(() {});
+              if(_selectedAreaId != null) {
+                Provider.of<CustomerProvider>(context, listen: false).fetchHomeData(_selectedAreaId!, isRefresh: true);
+              }
+            }
           },
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(selectedAreaName ?? 'اختر المنطقة'),
-              const Icon(Icons.keyboard_arrow_down, size: 20),
-            ],
-          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [Text(_selectedAreaName ?? "اختر منطقة", style: const TextStyle(fontSize: 16)), const Icon(Icons.keyboard_arrow_down, size: 20)]),
         ),
         centerTitle: true,
-        // ✨ --- [ هذا هو التعديل المطلوب ] ---
-        // تم إرجاع زر دخول مدير المطعم
-        actions: [
-          IconButton(
-              icon: const Icon(Icons.login),
-              tooltip: "دخول مدير المطعم",
-              onPressed: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen())))
-        ],
-        // --- [ نهاية التعديل ] ---
+        actions: [IconButton(icon: const Icon(Icons.login), tooltip: "دخول مدير المطعم", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen())))],
       ),
       body: Consumer<CustomerProvider>(
         builder: (context, provider, child) {
-          if (selectedAreaId == null) {
-            return const Center(child: Text('يرجى اختيار المنطقة أولاً'));
+          if (_selectedAreaId == null) {
+            return const Center(child: Text("يرجى تحديد منطقة لعرض المطاعم"));
           }
 
-          // [التحسين] هذا المنطق سليم الآن بسبب التعديلات على Provider
-          if (provider.isLoadingHome && provider.homeData.isEmpty) {
-            return const ShimmerHomeScreen();
-          }
           if (provider.hasError && provider.homeData.isEmpty) {
-            return NetworkErrorWidget(
-              message: "خطأ في الاتصال، اسحب للتحديث أو تحقق من الإنترنت",
-              // [التحسين] عند "إعادة المحاولة" يجب أن نجبر التحديث
-              onRetry: () => provider.fetchHomeData(selectedAreaId!, isRefresh: true),
-            );
+            return NetworkErrorWidget(message: 'تحقق من اتصال الانترنيت .', onRetry: () => provider.fetchHomeData(_selectedAreaId!, isRefresh: true));
           }
 
-          // هذا المنطق سليم
-          final restaurants = provider.homeData['restaurants'] as List<dynamic>? ?? [];
-          final onSale = provider.homeData['onSale'] as List<dynamic>? ?? [];
-          final breakfast = provider.homeData['breakfast'] as List<dynamic>? ?? [];
-          final family = provider.homeData['family'] as List<dynamic>? ?? [];
+          // [ الخطوة 2 ] - تجهيز البيانات (المطاعم فقط)
+          final restaurants = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
 
+          // [ الخطوة 3 ] - بناء الواجهة
           return RefreshIndicator(
-            // [التحسين] "السحب للتحديث" يجب أن يجبر التحديث
-            onRefresh: () => provider.fetchHomeData(selectedAreaId!, isRefresh: true),
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 10.0),
+            onRefresh: () => provider.fetchHomeData(_selectedAreaId!, isRefresh: true),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // (إعادة ويدجت الولاء)
                 const LoyaltyChallengeWidget(),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 20.0), child: _buildSearchBar()),
+                _buildBannerSlider(),
 
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                  child: buildSearchBar(),
+                // --- ✨ [ هذا هو التعديل ] ---
+                // 1. حذفنا شريط المطاعم الأفقي (لم يعد مطلوباً)
+
+                // 2. تغيير العنوان
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 5),
+                  child: Text(
+                      "المطاعم المتاحة", // <-- تم تغيير العنوان
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)
+                  ),
                 ),
-                const SizedBox(height: 20),
-                buildBannerSlider(), // هذا سليم لأنه يستخدم CachedNetworkImage
-                buildSection<Restaurant>(
-                  title: "المطاعم",
-                  items: restaurants.cast<Restaurant>(), // تحويل آمن
-                  listBuilder: buildRestaurantsList,
-                  onViewAll: () => Provider.of<NavigationProvider>(context, listen: false).changeTab(1),
+
+                // 3. تغيير الشبكة لعرض المطاعم
+                Expanded(
+                  child: () {
+                    // إذا كان (التحميل شغال) AND (لا توجد مطاعم بعد)
+                    if (provider.isLoadingHome && restaurants.isEmpty) {
+                      // اعرض شيمر المطاعم
+                      return _buildRestaurantGridShimmer();
+                    }
+                    // إذا (التحميل توقف) AND (لا توجد مطاعم)
+                    if (!provider.isLoadingHome && restaurants.isEmpty) {
+                      return const Center(child: Text("لا توجد مطاعم متاحة حالياً في هذه المنطقة"));
+                    }
+
+                    // إذا (المطاعم موجودة)
+                    // اعرض الجريد
+                    return GridView.builder(
+                      padding: const EdgeInsets.all(8),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 0.7, // <-- نسبة العرض للارتفاع لبطاقة المطعم
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                      ),
+                      physics: const BouncingScrollPhysics(),
+                      itemCount: restaurants.length,
+                      itemBuilder: (context, index) {
+                        // ✨ استبدال FoodCard بـ RestaurantCard
+                        return RestaurantCard(restaurant: restaurants[index]);
+                      },
+                    );
+                  }(),
                 ),
-                buildSection<FoodItem>(title: "عروض وخصومات", items: onSale.cast<FoodItem>(), listBuilder: buildFoodsList),
-                buildSection<FoodItem>(title: "الفطور", items: breakfast.cast<FoodItem>(), listBuilder: buildFoodsList),
-                buildSection<FoodItem>(title: "وجبات عائلية", items: family.cast<FoodItem>(), listBuilder: buildFoodsList),
+                // --- ✨ [ نهاية التعديل ] ---
               ],
             ),
           );
@@ -3598,126 +3662,91 @@ class HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+  // --- نهاية دالة build ---
 
-  // --- دوال الـ Build المساعدة (كما هي، لا تحتاج تعديل) ---
 
-  Widget buildSearchBar() {
-    return TextField(
-      controller: searchController,
-      textInputAction: TextInputAction.search,
-      onSubmitted: onSearchSubmitted,
-      decoration: InputDecoration(
-        hintText: "ابحث عن وجبة أو مطعم...",
-        prefixIcon: const Icon(Icons.search, color: Colors.grey),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(30),
-          borderSide: BorderSide.none,
-        ),
-        filled: true,
-        fillColor: Colors.grey.shade100,
-        contentPadding: EdgeInsets.zero,
-      ),
-    );
-  }
+  // --- 🚀 الدوال المساعدة للتصميم الجديد ---
 
-  Widget buildBannerSlider() {
-    final bannerImages = [
-      "https://beytei.com/wp-content/uploads/2023/05/banner1.jpg",
-      "https://beytei.com/wp-content/uploads/2023/05/banner2.jpg",
-      "https://beytei.com/wp-content/uploads/2023/05/banner3.jpg",
-    ];
-    return CarouselSlider(
-      options: CarouselOptions(
-        height: 150.0,
-        autoPlay: true,
-        enlargeCenterPage: true,
-        aspectRatio: 16 / 9,
-        viewportFraction: 0.9,
-      ),
-      items: bannerImages.map((i) {
-        return Builder(
-          builder: (ctx) => Container(
-            width: MediaQuery.of(ctx).size.width,
-            margin: const EdgeInsets.symmetric(horizontal: 5.0),
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(15),
-            ),
-            child: CachedNetworkImage(
-              imageUrl: i,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => Shimmer.fromColors(
-                baseColor: Colors.grey[300]!,
-                highlightColor: Colors.grey[100]!,
-                child: Container(color: Colors.white),
+  // (1) دالة بناء البانر
+  Widget _buildBannerSlider() {
+    return Container(
+      height: 150,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          CarouselSlider(
+            items: bannerImages.map((imageUrl) => Builder(builder: (ctx) => Container(
+              width: MediaQuery.of(ctx).size.width,
+              margin: const EdgeInsets.symmetric(horizontal: 5.0),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(15),
+                image: DecorationImage(
+                  image: CachedNetworkImageProvider(imageUrl),
+                  fit: BoxFit.cover,
+                ),
               ),
-              errorWidget: (context, url, error) => const Icon(Icons.error),
+            ))).toList(),
+            options: CarouselOptions(
+              height: 150.0,
+              autoPlay: true,
+              enlargeCenterPage: true,
+              aspectRatio: 16/9,
+              viewportFraction: 0.9,
+              onPageChanged: (index, _) => setState(() => _currentBannerIndex = index),
             ),
           ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget buildSection<T>({
-    required String title,
-    required List<T> items,
-    required Widget Function(List<T>) listBuilder,
-    VoidCallback? onViewAll,
-  }) {
-    if (items.isEmpty) return const SizedBox.shrink();
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: buildSectionTitle(title, onViewAll),
-        ),
-        const SizedBox(height: 10),
-        listBuilder(items),
-        const SizedBox(height: 20),
-      ],
-    );
-  }
-
-  Widget buildSectionTitle(String title, [VoidCallback? onViewAll]) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        if (onViewAll != null)
-          TextButton(
-            onPressed: onViewAll,
-            child: Text("عرض الكل", style: TextStyle(color: Theme.of(context).primaryColor)),
+          Positioned(
+            bottom: 10,
+            child: Row(
+              children: bannerImages.map((url) {
+                int index = bannerImages.indexOf(url);
+                return Container(
+                  width: 8,
+                  height: 8,
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _currentBannerIndex == index
+                        ? Theme.of(context).primaryColor
+                        : Colors.white.withOpacity(0.7),
+                  ),
+                );
+              }).toList(),
+            ),
           ),
-      ],
-    );
-  }
-
-  Widget buildFoodsList(List<FoodItem> foods) {
-    return SizedBox(
-      height: 270,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 5),
-        itemCount: foods.length,
-        itemBuilder: (context, index) => FoodCard(food: foods[index]),
+        ],
       ),
     );
   }
 
-  Widget buildRestaurantsList(List<Restaurant> restaurants) {
-    return SizedBox(
-      height: 130,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 5),
-        itemCount: restaurants.length > 5 ? 5 : restaurants.length,
-        itemBuilder: (context, index) => HorizontalRestaurantCard(restaurant: restaurants[index]),
+  // (2) ✨ تم حذف دالة _buildRestaurantCategories()
+
+  // (3) دالة شريط البحث
+  Widget _buildSearchBar() => TextField(controller: _searchController, textInputAction: TextInputAction.search, onSubmitted: _onSearchSubmitted, decoration: InputDecoration(hintText: 'ابحث عن وجبة أو مطعم...', prefixIcon: const Icon(Icons.search, color: Colors.grey), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade100, contentPadding: EdgeInsets.zero));
+
+  // (4) ✨ دالة شيمر معدلة (لعرض شيمر المطاعم)
+  Widget _buildRestaurantGridShimmer() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: GridView.builder(
+        padding: const EdgeInsets.all(10),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          childAspectRatio: 0.7, // <-- مطابقة النسبة
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+        ),
+        itemCount: 6,
+        itemBuilder: (context, index) {
+          // ✨ استخدام شيمر المطعم
+          return const ShimmerRestaurantCard();
+        },
       ),
     );
   }
-}
-class SelectLocationScreen extends StatefulWidget {
+}class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
   const SelectLocationScreen({super.key, this.isCancellable = false});
   @override
@@ -4005,19 +4034,22 @@ class _SearchScreenState extends State<SearchScreen> {
 
   void _loadAndFilterSearch() {
     setState(() {
-      // ✨ تم التعديل: الخادم يقوم بالفلترة، نحتاج فقط لجلب الحالات
-      _searchFuture = _apiService.searchProducts(areaId: widget.selectedAreaId, query: widget.searchQuery).then((allResults) async {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      _searchFuture = _apiService.searchProducts(query: widget.searchQuery).then((allResults) async {
 
-        // نحتاج معرفة حالة المطاعم التي ظهرت في البحث
+        // (الكود التالي سليم ومهم للفلترة داخل التطبيق)
+        final deliverableIds = await _apiService.getDeliverableRestaurantIds(widget.selectedAreaId);
+
         final provider = Provider.of<CustomerProvider>(context, listen: false);
-        // محاولة جلب الحالات من القوائم المحملة مسبقاً
         final statusMap = { for (var r in provider.allRestaurants) r.id : r.isOpen };
-        // (يمكن تحسين هذا بجلب المطاعم التي لا نعرف حالتها، ولكنه جيد كنقطة بداية)
 
-        return allResults.map((item) {
-          // تطبيق الحالة
-          item.isDeliverable = statusMap[item.categoryId] ?? false; // الافتراضي مغلق إذا لم نجد المطعم
-          return item;
+        // ✨ [الإصلاح الأهم]: الفلترة حسب المنطقة تتم هنا الآن
+        return allResults.where((item) {
+          final isDeliverable = deliverableIds.contains(item.categoryId);
+          if (!isDeliverable) return false; // فلترة المنطقة
+
+          item.isDeliverable = statusMap[item.categoryId] ?? false; // فلترة حالة الفتح
+          return true;
         }).toList();
       });
     });
@@ -4164,6 +4196,7 @@ class CartScreen extends StatefulWidget {
 // (في ملف re.dart)
 // (استبدل الكلاس القديم بالكامل بهذا الكلاس المحدث V18)
 
+// --- ✨ [ الخطوة 2هـ: استبدال كلاس _CartScreenState بالكامل ] ---
 class _CartScreenState extends State<CartScreen> {
   final _apiService = ApiService();
   final _nameController = TextEditingController();
@@ -4197,7 +4230,7 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  // --- دالة عرض ملخص السعر (تبقى كما هي) ---
+  // (دالة بناء ملخص السعر - تم تعديلها)
   Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee, String feeMessage) {
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
     final discountFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalDiscountAmount);
@@ -4258,13 +4291,14 @@ class _CartScreenState extends State<CartScreen> {
               ),
             ],
           ),
-          if (!isCalculatingFee && deliveryFee == null)
+          // [الإصلاح] إظهار رسالة الخطأ أو "الرجاء تحديد الموقع"
+          if (feeMessage.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
               child: Text(
-                feeMessage.contains('خطأ') ? feeMessage.replaceAll("Exception: ", "") : "الرجاء تحديد الموقع لحساب السعر",
+                feeMessage.replaceAll("Exception: ", ""),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.red),
+                style: TextStyle(fontSize: 12, color: Colors.red.shade700),
               ),
             ),
           const Divider(height: 20),
@@ -4288,10 +4322,13 @@ class _CartScreenState extends State<CartScreen> {
       ),
     );
   }
-
-  // ✨ --- [ هذا هو الإصلاح V18.0 ] ---
-  // (هذه الدالة المحدثة ترسل ID المطعم إلى الخادم)
   void _showCheckoutDialog(BuildContext context, CartProvider cart) {
+
+    // ✨ --- [الإصلاح 1: حفظ السياق الأصلي] ---
+    // هذا هو سياق شاشة السلة، وهو يضمن الوصول الصحيح للـ Providers والـ ScaffoldMessenger
+    final BuildContext cartScreenContext = context;
+    // --- [نهاية الإصلاح] ---
+
     _nameController.clear();
     _phoneController.clear();
     _addressController.clear();
@@ -4299,94 +4336,154 @@ class _CartScreenState extends State<CartScreen> {
     bool isSubmitting = false;
 
     geolocator.Position? _capturedPosition;
-    bool _isGettingLocation = true; // (يبدأ بتحديد الموقع تلقائياً)
+    bool _isGettingLocation = true;
     String _locationMessage = "جاري تحديد موقعك...";
 
     double? _deliveryFee;
     bool _isCalculatingFee = false;
-    String _feeMessage = "يرجى تحديد الموقع لحساب كلفة التوصيل...";
+    String _feeMessage = "";
 
     showDialog(
-      context: context,
+      context: cartScreenContext, // <-- ✨ [الإصلاح 2: استخدام السياق الصحيح لفتح النافذة]
       barrierDismissible: !isSubmitting,
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
 
-          // --- دالة جلب الموقع (معدلة لتطبيق V18) ---
+          // --- دالة جلب الموقع (معدلة لتجاهل اتصال الخادم للإعدادات) ---
+// --- دالة جلب الموقع والحساب (النسخة الذكية مع نظام احتياطي) ---
+// --- نسخة التشخيص (Debugging Version) ---
           Future<void> getCurrentLocation() async {
+            final deliveryProvider = Provider.of<DeliveryProvider>(cartScreenContext, listen: false);
+            final customerProvider = Provider.of<CustomerProvider>(cartScreenContext, listen: false);
+
+            print("🚀 [DEBUG] Starting location check...");
+
             setDialogState(() {
               _isGettingLocation = true;
-              _locationMessage = "جاري تحديد موقعك...";
+              _locationMessage = "جاري التحقق...";
               _capturedPosition = null;
               _deliveryFee = null;
-              _isCalculatingFee = true;
-              _feeMessage = "جاري حساب كلفة التوصيل...";
+              _feeMessage = "";
             });
 
-            // 1. التحقق من الصلاحيات والخدمة (كما كان)
-            final hasPermission = await PermissionService.handleLocationPermission(context);
-            if (!hasPermission) {
+            final config = deliveryProvider.config!;
+
+            if (cart.items.isEmpty) {
+              print("❌ [DEBUG] Cart is empty.");
+              setDialogState(() { _isGettingLocation = false; _feeMessage = "السلة فارغة!"; });
+              return;
+            }
+
+            // 1. محاولة قراءة الإحداثيات من أول عنصر في السلة
+            final firstItem = cart.items.first;
+            double restLat = firstItem.restaurantLat;
+            double restLng = firstItem.restaurantLng;
+
+            print("🧐 [DEBUG] Item Name: ${firstItem.name}");
+            print("📍 [DEBUG] Coords from Cart Item: Lat=$restLat, Lng=$restLng");
+
+            // 2. نظام الطوارئ: إذا كانت الإحداثيات صفرية، نحاول جلبها من الكاش أو السيرفر
+            if (restLat == 0.0 || restLng == 0.0) {
+              print("⚠️ [DEBUG] Coords are ZERO! Activating fallback...");
+              setDialogState(() => _locationMessage = "جاري جلب موقع المطعم...");
+
+              try {
+                Restaurant? restaurant;
+
+                // أ) البحث في قائمة المطاعم المحملة (Tab المطاعم)
+                try {
+                  final temp = customerProvider.allRestaurants.firstWhere((r) => r.id == firstItem.categoryId);
+                  if (temp.latitude != 0.0 && temp.longitude != 0.0) {
+                    restaurant = temp;
+                    print("✅ [DEBUG] Found valid coords in 'allRestaurants' cache.");
+                  }
+                } catch (_) {}
+
+                // ب) البحث في بيانات الصفحة الرئيسية (Home Tab)
+                if (restaurant == null) {
+                  try {
+                    final homeList = (customerProvider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+                    final temp = homeList.firstWhere((r) => r.id == firstItem.categoryId);
+                    if (temp.latitude != 0.0 && temp.longitude != 0.0) {
+                      restaurant = temp;
+                      print("✅ [DEBUG] Found valid coords in 'HomeData' cache.");
+                    }
+                  } catch (_) {}
+                }
+
+                // ج) الحل الأخير: طلب مباشر من السيرفر (API Call)
+                if (restaurant == null) {
+                  print("🌐 [DEBUG] Fetching fresh restaurant data from Server (ID: ${firstItem.categoryId})...");
+                  // تأكد من أن دالة getRestaurantById موجودة في ApiService
+                  restaurant = await ApiService().getRestaurantById(firstItem.categoryId);
+                  print("✅ [DEBUG] Server Response: Lat=${restaurant.latitude}, Lng=${restaurant.longitude}");
+                }
+
+                // اعتماد القيم الجديدة
+                if (restaurant.latitude != 0.0) {
+                  restLat = restaurant.latitude;
+                  restLng = restaurant.longitude;
+                }
+
+              } catch (e) {
+                print("💥 [DEBUG] Fallback failed: $e");
+              }
+            }
+
+            print("🏁 [DEBUG] Final Coords Used for Calc: Lat=$restLat, Lng=$restLng");
+
+            // 3. التحقق النهائي قبل البدء بحساب المسافة
+            if (restLat == 0.0 || restLng == 0.0) {
               setDialogState(() {
                 _isGettingLocation = false;
-                _locationMessage = "فشل: تم رفض إذن الموقع!";
-                _isCalculatingFee = false;
-                _feeMessage = "خطأ: لا يمكن حساب السعر بدون موقع.";
+                _feeMessage = "عذراً، بيانات موقع المطعم غير متوفرة.";
+                _locationMessage = "بيانات ناقصة";
               });
               return;
             }
 
-            try {
-              // 2. التقاط موقع الزبون (كما كان)
-              _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
-                  desiredAccuracy: geolocator.LocationAccuracy.medium,);
+            // 4. طلب صلاحية الموقع
+            final hasPermission = await PermissionService.handleLocationPermission(cartScreenContext);
+            if (!hasPermission) {
+              print("❌ [DEBUG] Location permission denied.");
+              setDialogState(() { _isGettingLocation = false; _locationMessage = "لا توجد صلاحية";_feeMessage = "يجب تفعيل الموقع"; });
+              return;
+            }
 
+            // 5. حساب المسافة والسعر
+            try {
+              _capturedPosition = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.medium);
+              print("📍 [DEBUG] User Location: Lat=${_capturedPosition!.latitude}, Lng=${_capturedPosition!.longitude}");
+
+              final double distanceInMeters = geolocator.Geolocator.distanceBetween(
+                  _capturedPosition!.latitude, _capturedPosition!.longitude, restLat, restLng);
+              final double distanceInKm = distanceInMeters / 1000;
+
+              print("📏 [DEBUG] Distance: ${distanceInKm.toStringAsFixed(2)} km");
+
+              if (distanceInKm > config.maxDistanceKm) throw Exception("المطعم بعيد جداً (${distanceInKm.toStringAsFixed(1)} كم)");
+
+              final calculatedFee = config.baseFee + (distanceInKm * config.feePerKm);
               setDialogState(() {
                 _isGettingLocation = false;
-                _locationMessage = "تم تحديد الموقع بنجاح!";
+                _deliveryFee = (calculatedFee / 250).ceil() * 250.0;
+                if (_deliveryFee! < config.baseFee) _deliveryFee = config.baseFee;
+                _feeMessage = "";
               });
-
-              // 3. التحقق من السلة (كما كان)
-              if (cart.items.isEmpty) throw Exception("السلة فارغة!");
-              final restaurantId = cart.items.first.categoryId;
-
-              // --- ✨ [ هذا هو الإصلاح V18.0 ] ---
-              // 4. (تم حذف) كل الكود القديم الذي كان يبحث عن المطعم محلياً
-
-              // 5. [جديد] إرسال الطلب إلى الخادم مع رقم المطعم
-              final feeResponse = await _apiService.getDeliveryFee(
-                restaurantId: restaurantId, // ✨ [تم التعديل] إرسال الرقم
-                customerLat: _capturedPosition!.latitude,
-                customerLng: _capturedPosition!.longitude,
-              );
-              // --- ✨ [ نهاية الإصلاح V18.0 ] ---
-
-              setDialogState(() {
-                _deliveryFee = (feeResponse['delivery_fee'] as num).toDouble();
-                _isCalculatingFee = false;
-                _feeMessage = "كلفة التوصيل: ${feeResponse['delivery_fee']} د.ع (مسافة ${feeResponse['distance_km']} كم)";
-              });
+              print("💰 [DEBUG] Fee Calculated: $_deliveryFee");
 
             } catch (e) {
-              setDialogState(() {
-                _isGettingLocation = false;
-                _isCalculatingFee = false;
-                _capturedPosition = null;
-                _locationMessage = "فشل تحديد الموقع. حاول مجدداً.";
-                // ✨ [تحسين] إظهار الخطأ القادم من الخادم مباشرة
-                // (هنا سيظهر الخطأ الذي أضفناه في PHP إذا لم يجد الإحداثيات)
-                _feeMessage = "خطأ: ${e.toString().replaceAll("Exception: ", "")}";
-              });
+              print("❌ [DEBUG] Calculation Error: $e");
+              setDialogState(() { _isGettingLocation = false; _feeMessage = e.toString().replaceAll("Exception: ", ""); });
             }
           }
 
-          // --- استدعاء الدالة تلقائياً عند فتح النافذة ---
           if (_isGettingLocation && !isSubmitting) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               getCurrentLocation();
             });
           }
 
-          // --- بقية النافذة (تبقى كما هي) ---
           return AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             title: const Text('إتمام الطلب'),
@@ -4448,12 +4545,13 @@ class _CartScreenState extends State<CartScreen> {
                     ),
                     const SizedBox(height: 15),
                     TextFormField(controller: _couponController, decoration: InputDecoration(labelText: 'كود الخصم (إن وجد)', suffixIcon: TextButton(child: const Text("تطبيق"), onPressed: () async {
+                      // ✨ --- [الإصلاح 6: استخدام cartScreenContext هنا] ---
                       final result = await cart.applyCoupon(_couponController.text);
-                      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['message']), backgroundColor: result['valid'] ? Colors.green : Colors.red));
+                      if(mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text(result['message']), backgroundColor: result['valid'] ? Colors.green : Colors.red));
                       setDialogState(() {});
                     }))),
                     const Divider(height: 30),
-                    _buildPriceSummary(cart, _deliveryFee, _isCalculatingFee, _feeMessage),
+                    _buildPriceSummary(cart, _deliveryFee, _isGettingLocation, _feeMessage),
                   ],
                 ),
               ),
@@ -4462,7 +4560,7 @@ class _CartScreenState extends State<CartScreen> {
               TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                onPressed: isSubmitting || _isCalculatingFee || _deliveryFee == null || _capturedPosition == null
+                onPressed: isSubmitting || _isGettingLocation || _deliveryFee == null || _capturedPosition == null
                     ? null
                     : () async {
                   if (!_formKey.currentState!.validate()) return;
@@ -4482,12 +4580,18 @@ class _CartScreenState extends State<CartScreen> {
                     if (!mounted) return;
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب على السيرفر.');
 
+                    await cart._recordSuccessfulOrder();
+
                     Navigator.of(dialogContext).pop();
                     cart.clearCart();
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('✅ تم تأكيد وارسال طلبك الى مطعم  رقم #${createdOrder.id}!'), duration: const Duration(seconds: 5), action: SnackBarAction(label: 'سجل الطلبات', onPressed: () => Provider.of<NavigationProvider>(context, listen: false).changeTab(2))));
+
+                    // ✨ --- [الإصلاح 7: استخدام cartScreenContext هنا] ---
+                    ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('✅ تم تأكيد وارسال طلبك الى مطعم  رقم #${createdOrder.id}!'), duration: const Duration(seconds: 5), action: SnackBarAction(label: 'سجل الطلبات', onPressed: () => Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2))));
+
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في إرسال الطلب: ${e.toString()}')));
+                    // ✨ --- [الإصلاح 8: استخدام cartScreenContext هنا] ---
+                    ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ في إرسال الطلب: ${e.toString()}')));
                   } finally {
                     if (mounted) setDialogState(() => isSubmitting = false);
                   }
@@ -4502,8 +4606,6 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
   }
-
-
   // --- (الدوال المساعدة تبقى كما هي) ---
 
   Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
@@ -5067,13 +5169,7 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
       ),
       // --- [ نهاية التعديل ] ---
 
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showPrivateDeliveryRequestDialog(context),
-        icon: const Icon(Icons.two_wheeler_outlined),
-        label: const Text('طلب توصيل خاص'),
-        backgroundColor: Colors.orange.shade700,
-        foregroundColor: Colors.white,
-      ),
+
     );
   }
 }
@@ -5183,10 +5279,10 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
             }(),
           ),
           // (يمكنك إضافة زر لإضافة منتج جديد هنا لاحقاً)
-          // floatingActionButton: FloatingActionButton(
-          //   onPressed: () { /* _navigateToAddScreen() */ },
-          //   child: Icon(Icons.add),
-          // ),
+          floatingActionButton: FloatingActionButton(
+            onPressed: () { /* _navigateToAddScreen() */ },
+           child: Icon(Icons.add),
+           ),
         );
       },
     );
@@ -5464,4 +5560,3 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
     );
   }
 }
-
