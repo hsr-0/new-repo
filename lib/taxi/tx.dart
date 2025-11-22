@@ -26,6 +26,7 @@ import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'cash.dart';
 import 'de.dart';
 
 final ValueNotifier<Map<String, dynamic>?> acceptedRideNotifier = ValueNotifier(null);
@@ -645,14 +646,51 @@ class RotatingVehicleIcon extends StatelessWidget {
   final String vehicleType;
   final double bearing;
   const RotatingVehicleIcon({super.key, required this.vehicleType, required this.bearing});
+
   @override
   Widget build(BuildContext context) {
+    // 1. أيقونة السيارة (بيضاء ورمادية - كما كانت)
     const String carSvg = '''<svg viewBox="0 0 80 160" xmlns="http://www.w3.org/2000/svg"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dx="2" dy="5" result="offsetblur"/><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g transform="translate(0, 0)" filter="url(#shadow)"><path d="M25,10 C15,10 10,20 10,30 L10,130 C10,140 15,150 25,150 L55,150 C65,150 70,140 70,130 L70,30 C70,20 65,10 55,10 L25,10 Z" fill="#FFFFFF"/><path d="M20,25 C15,25 15,30 15,35 L15,70 L65,70 L65,35 C65,30 65,25 60,25 L20,25 Z" fill="#424242" opacity="0.8"/><path d="M15,80 L15,120 C15,125 20,125 20,125 L60,125 C65,125 65,120 65,120 L65,80 L15,80 Z" fill="#616161" opacity="0.7"/></g></svg>''';
-    const String tuktukSvg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 17.17V10c0-2.21-1.79-4-4-4h-2.1c-.83-2.32-3.07-4-5.9-4-3.31 0-6 2.69-6 6s2.69 6 6 6c.34 0 .67-.04 1-.09V17H2v2h18v-2h-2zm-8-2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM5 8c0-2.21 1.79-4 4-4s4 1.79 4 4-1.79 4-4 4-4-1.79-4-4z"/></svg>''';
-    return Transform.rotate(angle: bearing * (pi / 180), child: SvgPicture.string(vehicleType.toLowerCase() == 'tuktuk' ? tuktukSvg : carSvg));
+
+    // 2. 🔥 أيقونة التوك توك الجديدة (تصميم علوي - أصفر وأسود)
+    const String tuktukSvg = '''
+    <svg width="80" height="160" viewBox="0 0 80 160" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+          <feOffset dx="1" dy="3" result="offsetblur"/>
+          <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
+          <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <g filter="url(#shadow)">
+        <rect x="5" y="100" width="12" height="25" rx="3" fill="#333" />
+        <rect x="63" y="100" width="12" height="25" rx="3" fill="#333" />
+        <rect x="34" y="10" width="12" height="25" rx="3" fill="#333" />
+        
+        <path d="M20,40 L60,40 L70,80 L70,140 Q70,150 60,150 L20,150 Q10,150 10,140 L10,80 Z" fill="#FFD700" stroke="#E6BE00" stroke-width="2"/>
+        
+        <path d="M30,25 L50,25 L60,40 L20,40 Z" fill="#FFD700" />
+
+        <rect x="15" y="50" width="50" height="70" rx="5" fill="#222" />
+        
+        <path d="M22,42 L58,42 L56,48 L24,48 Z" fill="#87CEEB" opacity="0.8" />
+        
+        <circle cx="25" cy="40" r="3" fill="#FFFFFF" />
+        <circle cx="55" cy="40" r="3" fill="#FFFFFF" />
+      </g>
+    </svg>
+    ''';
+
+    return Transform.rotate(
+      angle: bearing * (pi / 180),
+      child: SvgPicture.string(
+        vehicleType.toLowerCase() == 'tuktuk' ? tuktukSvg : carSvg,
+        height: vehicleType.toLowerCase() == 'tuktuk' ? 50 : 80, // تصغير التوك توك قليلاً لأنه أقصر
+      ),
+    );
   }
 }
-
 class PulsingUserLocationMarker extends StatefulWidget {
   const PulsingUserLocationMarker({super.key});
   @override
@@ -2836,22 +2874,39 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-                initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
-                initialZoom: 14.0
+              initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
+              initialZoom: 14.0,
+              // إعدادات توفير الرصيد
+              maxZoom: 18.0,
+              minZoom: 10.0,
+              // لون الخلفية لتقليل الوميض الأبيض أثناء التحميل
+              backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-                subdomains: const ['a', 'b', 'c'],
+                // رابط Mapbox الرسمي
+                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+                // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
+                tileProvider: MapboxCachedTileProvider(),
+
+                additionalOptions: const {
+                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+                  'id': 'mapbox/streets-v12',
+                },
                 userAgentPackageName: 'com.beytei.taxi',
+
+                // إعدادات السلاسة (التحميل المسبق للمناطق المحيطة)
+                panBuffer: 2,
+                keepBuffer: 5,
               ),
+
               if (_routePoints.isNotEmpty)
                 PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 6)]),
+
               MarkerLayer(markers: _buildMarkers()),
             ],
-          ),
-
-          // بطاقة المعلومات السفلية
+          ),          // بطاقة المعلومات السفلية
           Positioned(
             bottom: 0,
             left: 0,
@@ -3209,8 +3264,36 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
         children: [
           FlutterMap(
             mapController: _mapController,
-            options: MapOptions(initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336), initialZoom: 14.0),
-            children: [TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: const ['a', 'b', 'c']), MarkerLayer(markers: _buildMarkers())],
+            options: MapOptions(
+              initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
+              initialZoom: 14.0,
+              // إعدادات توفير الرصيد
+              maxZoom: 18.0,
+              minZoom: 10.0,
+              // لون الخلفية لتقليل الوميض الأبيض
+              backgroundColor: const Color(0xFFE5E5E5),
+            ),
+            children: [
+              TileLayer(
+                // رابط Mapbox الرسمي
+                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+                // 🔥 تفعيل الكاش (هام جداً لعدم إعادة تحميل الصور وتوفير الرصيد)
+                tileProvider: MapboxCachedTileProvider(),
+
+                additionalOptions: const {
+                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+                  'id': 'mapbox/streets-v12',
+                },
+                userAgentPackageName: 'com.beytei.taxi',
+
+                // إعدادات السلاسة (تحميل المناطق المحيطة مسبقاً)
+                panBuffer: 2,
+                keepBuffer: 5,
+              ),
+
+              MarkerLayer(markers: _buildMarkers()),
+            ],
           ),
           if (_availableRides != null && _availableRides!.isNotEmpty) Positioned(top: 40, left: 0, right: 0, child: Center(child: TopRideInfoBar(distance: _distanceToPickup))),
           if (_isLoading)
@@ -3563,33 +3646,57 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         children: [
           FlutterMap(
             mapController: _mapController,
-            options: MapOptions(initialCenter: pickupPoint, initialZoom: 14.0),
+            options: MapOptions(
+              initialCenter: pickupPoint,
+              initialZoom: 14.0,
+              // إعدادات توفير الرصيد
+              maxZoom: 18.0,
+              minZoom: 10.0,
+              // لون الخلفية لتقليل الوميض
+              backgroundColor: const Color(0xFFE5E5E5),
+            ),
             children: [
               TileLayer(
-                urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-                subdomains: const ['a', 'b', 'c'],
+                // رابط Mapbox الرسمي
+                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+                // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
+                tileProvider: MapboxCachedTileProvider(),
+
+                additionalOptions: const {
+                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+                  'id': 'mapbox/streets-v12',
+                },
                 userAgentPackageName: 'com.beytei.taxi',
+
+                // إعدادات السلاسة
+                panBuffer: 2,
+                keepBuffer: 5,
               ),
-              if (_routePoints.isNotEmpty) PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 6)]),
+
+              if (_routePoints.isNotEmpty)
+                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 6)]),
+
               MarkerLayer(markers: [
                 Marker(point: pickupPoint, child: const Icon(Icons.location_on, color: Colors.green, size: 40)),
-                if (destinationPoint != null) Marker(point: destinationPoint, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
-                if (_driverLocation != null) Marker(point: _driverLocation!, width: 40, height: 40, child: TweenAnimationBuilder<double>(tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing), duration: const Duration(milliseconds: 800), builder: (context, value, child) {
-                  return RotatingVehicleIcon(vehicleType: _currentRide['driver']?['vehicle_type'] ?? 'Car', bearing: value);
-                })),
+
+                if (destinationPoint != null)
+                  Marker(point: destinationPoint, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
+
+                if (_driverLocation != null)
+                  Marker(
+                      point: _driverLocation!,
+                      width: 40,
+                      height: 40,
+                      child: TweenAnimationBuilder<double>(
+                          tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing),
+                          duration: const Duration(milliseconds: 800),
+                          builder: (context, value, child) {
+                            return RotatingVehicleIcon(vehicleType: _currentRide['driver']?['vehicle_type'] ?? 'Car', bearing: value);
+                          }
+                      )
+                  ),
               ]),
-              RichAttributionWidget(
-                attributions: [
-                  TextSourceAttribution(
-                    '© OpenStreetMap France',
-                    onTap: () => launchUrl(Uri.parse('https://www.openstreetmap.fr/')),
-                  ),
-                  TextSourceAttribution(
-                    '© OpenStreetMap contributors',
-                    onTap: () => launchUrl(Uri.parse('https://openstreetmap.org/copyright')),
-                  ),
-                ],
-              ),
             ],
           ),
           Positioned(
@@ -3998,14 +4105,37 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             options: MapOptions(
               initialCenter: _currentUserLocation ?? const LatLng(32.4741, 45.8336),
               initialZoom: 15.0,
+              // إعدادات توفير الرصيد
+              maxZoom: 18.0,
+              minZoom: 10.0,
+              // لون الخلفية لتقليل الوميض
+              backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
-              TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: const ['a', 'b', 'c'], userAgentPackageName: 'com.beytei.taxi'),
-              if (_routeToCustomer.isNotEmpty) PolylineLayer(polylines: [Polyline(points: _routeToCustomer, color: Colors.blue, strokeWidth: 6)]),
+              TileLayer(
+                // رابط Mapbox الرسمي
+                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+                // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
+                tileProvider: MapboxCachedTileProvider(),
+
+                additionalOptions: const {
+                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+                  'id': 'mapbox/streets-v12',
+                },
+                userAgentPackageName: 'com.beytei.taxi',
+
+                // إعدادات السلاسة
+                panBuffer: 2,
+                keepBuffer: 5,
+              ),
+
+              if (_routeToCustomer.isNotEmpty)
+                PolylineLayer(polylines: [Polyline(points: _routeToCustomer, color: Colors.blue, strokeWidth: 6)]),
+
               MarkerLayer(markers: _buildMarkers()),
             ],
           ),
-          // ========  الكود المصحح هنا ========
           Positioned(
             top: 40,
             left: 15,
@@ -4617,11 +4747,37 @@ class _ParentTrackingScreenState extends State<ParentTrackingScreen> {
           Text("موقع السائق غير متاح حالياً... يتم التحديث"),
         ],
       ))
-          : FlutterMap(
+          :
+      FlutterMap(
         mapController: _mapController,
-        options: MapOptions(initialCenter: _driverLocation!, initialZoom: 15.0),
+        options: MapOptions(
+          initialCenter: _driverLocation!,
+          initialZoom: 15.0,
+          // إعدادات توفير الرصيد
+          maxZoom: 18.0,
+          minZoom: 10.0,
+          // لون الخلفية لتقليل الوميض
+          backgroundColor: const Color(0xFFE5E5E5),
+        ),
         children: [
-          TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'),
+          TileLayer(
+            // رابط Mapbox الرسمي
+            urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+            // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
+            tileProvider: MapboxCachedTileProvider(),
+
+            additionalOptions: const {
+              'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+              'id': 'mapbox/streets-v12',
+            },
+            userAgentPackageName: 'com.beytei.taxi',
+
+            // إعدادات السلاسة
+            panBuffer: 2,
+            keepBuffer: 5,
+          ),
+
           MarkerLayer(
             markers: [
               Marker(
@@ -4633,8 +4789,7 @@ class _ParentTrackingScreenState extends State<ParentTrackingScreen> {
             ],
           ),
         ],
-      ),
-    );
+      ),    );
   }
 }
 

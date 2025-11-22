@@ -15,7 +15,9 @@
         android:label="منصة بيتي "
         tools:replace="android:label"
         android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true">
+
 
         <activity
             android:name=".MainActivity"

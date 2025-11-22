@@ -5,6 +5,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import 'cash.dart';
+
 // --- (الواجهة الرئيسية): تجمع بين الإدخال اليدوي وخيار الخريطة ---
 class DestinationSelectionScreen extends StatefulWidget {
   final LatLng initialPickup;
@@ -158,8 +160,6 @@ class _DestinationSelectionScreenState extends State<DestinationSelectionScreen>
     );
   }
 }
-
-// --- (شاشة الخريطة): الواجهة التفاعلية التي يتم فتحها ---
 class MapPickerScreen extends StatefulWidget {
   final LatLng initialLocation;
   final String appBarTitle;
@@ -175,10 +175,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   final _addressController = TextEditingController();
   bool _isGeocoding = false;
 
+  // متغير لتجنب كثرة الطلبات عند التحريك السريع
+  Timer? _debounceTimer;
+
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
+    // جلب العنوان للموقع الأولي عند الفتح
     _fetchAddress(widget.initialLocation);
   }
 
@@ -186,12 +190,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   void dispose() {
     _mapController.dispose();
     _addressController.dispose();
+    _debounceTimer?.cancel();
     super.dispose();
   }
 
   String _shortenAddress(String longAddress) {
     if (longAddress.isEmpty) return 'مكان غير معروف';
     List<String> parts = longAddress.split(',').map((e) => e.trim()).toList();
+    // تنظيف العنوان من الأرقام الطويلة واسم الدولة
     parts.removeWhere((part) => part.contains(RegExp(r'^\d{5,}$')) || part.toLowerCase() == 'iraq' || part.toLowerCase() == 'العراق');
     var distinctParts = <String>[];
     for (var part in parts) {
@@ -211,8 +217,10 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         final longAddress = data['display_name'] as String? ?? 'مكان غير معروف';
         final shortAddress = _shortenAddress(longAddress);
         if (mounted) {
-          _addressController.text = shortAddress;
-          _selectedData = {'name': shortAddress, 'lat': point.latitude, 'lng': point.longitude};
+          setState(() {
+            _addressController.text = shortAddress;
+            _selectedData = {'name': shortAddress, 'lat': point.latitude, 'lng': point.longitude};
+          });
         }
       }
     } catch (e) {
@@ -227,19 +235,18 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.appBarTitle),
+        // قمنا بإزالة الزر العلوي لأنه أصبح مدمجاً تلقائياً، أو يمكنك تركه كخيار إضافي
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
             child: IconButton(
-              icon: const Icon(Icons.gps_fixed),
+              icon: const Icon(Icons.my_location),
               onPressed: () {
-                final centerPoint = _mapController.camera.center;
-                _fetchAddress(centerPoint);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("تم تثبيت العنوان"), backgroundColor: Colors.green),
-                );
+                // العودة للموقع الحالي (يمكنك تفعيل هذا الزر ليعيد الكاميرا لموقع المستخدم)
+                _mapController.move(widget.initialLocation, 16);
+                _fetchAddress(widget.initialLocation);
               },
-              tooltip: 'تثبيت العنوان المحدد تحت الدبوس',
+              tooltip: 'العودة لموقعي',
             ),
           ),
         ],
@@ -249,19 +256,60 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         children: [
           FlutterMap(
             mapController: _mapController,
-            options: MapOptions(initialCenter: widget.initialLocation, initialZoom: 16.0),
+            options: MapOptions(
+              initialCenter: widget.initialLocation,
+              initialZoom: 16.0,
+              // إعدادات توفير الرصيد
+              maxZoom: 18.0,
+              minZoom: 10.0,
+              // لون الخلفية
+              backgroundColor: const Color(0xFFE5E5E5),
+
+              // 🔥 هذا هو السطر السحري: عند توقف الحركة، اجلب العنوان تلقائياً
+              onMapEvent: (MapEvent event) {
+                // نتحقق هل انتهت حركة الخريطة (سواء بالسحب أو الانزلاق)
+                if (event is MapEventMoveEnd || event is MapEventFlingAnimationEnd) {
+
+                  _debounceTimer?.cancel();
+                  _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+                    // التأكد من أن الويدجت لا يزال موجوداً
+                    if (!mounted) return;
+
+                    final center = _mapController.camera.center;
+                    _fetchAddress(center);
+                  });
+
+                }
+              },
+            ),
             children: [
               TileLayer(
-                urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-                subdomains: const ['a', 'b', 'c'],
+                // رابط Mapbox الرسمي
+                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+                // 🔥 تفعيل الكاش
+                tileProvider: MapboxCachedTileProvider(),
+
+                additionalOptions: const {
+                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+                  'id': 'mapbox/streets-v12',
+                },
                 userAgentPackageName: 'com.beytei.taxi',
+
+                // إعدادات السلاسة
+                panBuffer: 2,
+                keepBuffer: 5,
               ),
             ],
           ),
+
+          // أيقونة الدبوس في المنتصف
           Padding(
             padding: const EdgeInsets.only(bottom: 40.0),
             child: Icon(Icons.location_pin, size: 50, color: Colors.red.shade700),
           ),
+
+          // الكارت السفلي وزر التأكيد
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: SafeArea(
@@ -272,27 +320,56 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // حقل عرض العنوان
                       TextField(
                         controller: _addressController,
                         readOnly: true,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
                         decoration: InputDecoration(
-                          hintText: 'حرك الخريطة وثبت الموقع...',
+                          hintText: 'جاري تحديد الموقع...',
+                          border: InputBorder.none,
                           prefixIcon: _isGeocoding
-                              ? const Padding(padding: EdgeInsets.all(14.0), child: CircularProgressIndicator(strokeWidth: 2))
-                              : const Icon(Icons.flag_outlined),
+                              ? const Padding(padding: EdgeInsets.all(12.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
+                              : const Icon(Icons.map, color: Colors.green),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 8),
+
+                      // 🔥 زر التأكيد (تم دمجه مع الجلب)
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: () {
-                            if (_selectedData != null) {
+                          onPressed: () async {
+                            // 1. نجلب مركز الخريطة الحالي بدقة
+                            final center = _mapController.camera.center;
+
+                            // 2. إذا كان العنوان لم يتم جلبه بعد أو المستخدم حرك الخريطة بسرعة وضغط فوراً
+                            if (_selectedData == null ||
+                                _selectedData!['lat'] != center.latitude ||
+                                _selectedData!['lng'] != center.longitude) {
+
+                              // نظهر تحميل
+                              setState(() => _isGeocoding = true);
+
+                              // نجلب العنوان فوراً
+                              await _fetchAddress(center);
+                            }
+
+                            // 3. نغلق الشاشة ونرسل البيانات
+                            if (mounted && _selectedData != null) {
                               Navigator.of(context).pop(_selectedData);
                             }
                           },
-                          style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                          child: const Text('تأكيد هذا الموقع'),
+                          style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              backgroundColor: Colors.amber[700],
+                              foregroundColor: Colors.black
+                          ),
+                          child: _isGeocoding
+                              ? const Text('جاري تحديد العنوان...')
+                              : const Text('تأكيد هذا الموقع', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                         ),
                       ),
                     ],
