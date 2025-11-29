@@ -9,7 +9,7 @@ import '../../beytei_re/re.dart'as re;
 import '../../chat/chat.dart';
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
-import '../../ph/ph.dart';
+import '../../ph/ph.dart' hide LocationCheckWrapper;
 import '../../taxi/tx.dart';
 import '../home_flow/splashbeytei.dart';
 import '/home_flow/splash_home_page_widget.dart'; // ✅ استيراد صفحة splash الجديدة
@@ -190,11 +190,11 @@ builder: (context, params) => HomeMainPageWidget(),
 ),
     FFRoute(
       name: 'MiswakStorePage',
+      // تم تصحيح الاسم ليكون متطابقاً مع زر الدخول
       path: '/miswak-store',
-      builder: (context, params) => const MiswakStoreScreen(),
+      // ✅ التغيير هنا: نستدعي الغلاف (Wrapper) بدلاً من الشاشة مباشرة
+      builder: (context, params) => const LocationCheckWrapper(),
     ),
-
-
 
     FFRoute(
       name: 'medicalstorepage',

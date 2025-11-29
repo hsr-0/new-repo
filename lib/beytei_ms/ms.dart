@@ -1,10 +1,3 @@
-// =======================================================================
-// --- Beytei Miswak (Supermarket) App - FULL (Customer + Admin) ---
-// =======================================================================
-// هذا الملف يحتوي على:
-// 1. تطبيق الزبون (الكود الذي أرسلته)
-// 2. تطبيق المدير (لوحة التحكم المنسوخة من تطبيق المطعم)
-// =======================================================================
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -1936,7 +1929,7 @@ class CustomerApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.grey[50],
       ),
       debugShowCheckedModeBanner: false,
-      home: const MiswakStoreScreen(), // (يبدأ بشاشة المسواك)
+      home: const LocationCheckWrapper(), // (يبدأ بشاشة المسواك)
     );
   }
 }
@@ -2054,11 +2047,167 @@ class _AuthWrapperState extends State<AuthWrapper> {
     );
   }
 }
+class LocationService {
+  static const String BEYTEI_URL = 'https://beytei.com';
+
+  Future<List<Area>> getAreas() async {
+    try {
+      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
+      if (response.statusCode == 200) {
+        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
+      }
+      throw Exception('Server error');
+    } catch (e) {
+      throw Exception('Failed to load areas');
+    }
+  }
+}
+
+
+
+
+// 3. شاشة اختيار الموقع
+class SelectLocationScreen extends StatefulWidget {
+  final bool isCancellable;
+  const SelectLocationScreen({super.key, this.isCancellable = false});
+  @override
+  State<SelectLocationScreen> createState() => _SelectLocationScreenState();
+}
+
+class _SelectLocationScreenState extends State<SelectLocationScreen> {
+  final LocationService _locationService = LocationService();
+  final TextEditingController _searchController = TextEditingController();
+  List<Area> _allAreas = [];
+  List<Area> _filteredAreas = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAreas();
+    _searchController.addListener(_filterAreas);
+  }
+
+  Future<void> _loadAreas() async {
+    try {
+      final areas = await _locationService.getAreas();
+      if (mounted) setState(() { _allAreas = areas; _filteredAreas = areas; _isLoading = false; });
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _filterAreas() {
+    final query = _searchController.text.toLowerCase();
+    setState(() => _filteredAreas = _allAreas.where((area) => area.name.toLowerCase().contains(query)).toList());
+  }
+
+  Future<void> _saveSelection(int areaId, String areaName) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('selectedAreaId', areaId);
+    await prefs.setString('selectedAreaName', areaName); // حفظ الاسم للعرض
+
+    if(mounted) {
+      if (widget.isCancellable) {
+        Navigator.of(context).pop(true);
+      } else {
+        // الانتقال للشاشة الرئيسية للمسواك
+        Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MiswakStoreScreen()),
+                (route) => false
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final governorates = _filteredAreas.where((a) => a.parentId == 0).toList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('اختر منطقة التوصيل'), automaticallyImplyLeading: widget.isCancellable),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(controller: _searchController, decoration: InputDecoration(hintText: 'ابحث عن مدينتك...', prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade200)),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+              itemCount: governorates.length,
+              itemBuilder: (context, index) {
+                final governorate = governorates[index];
+                final cities = _filteredAreas.where((a) => a.parentId == governorate.id).toList();
+                return ExpansionTile(
+                  title: Text(governorate.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  children: cities.map((city) => ListTile(title: Text(city.name), onTap: () => _saveSelection(city.id, city.name))).toList(),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+// هذا الكلاس هو نقطة الدخول لقسم المسواك
+class LocationCheckWrapper extends StatefulWidget {
+  const LocationCheckWrapper({super.key});
+
+  @override
+  State<LocationCheckWrapper> createState() => _LocationCheckWrapperState();
+}
+
+class _LocationCheckWrapperState extends State<LocationCheckWrapper> {
+  Future<int?> _checkLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('selectedAreaId');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<int?>(
+      future: _checkLocation(),
+      builder: (context, snapshot) {
+        // 1. أثناء التحميل (فحص الذاكرة)
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        // 2. إذا كانت المنطقة موجودة في الذاكرة -> اذهب للمتجر
+        if (snapshot.hasData && snapshot.data != null) {
+          return const MiswakStoreScreen();
+        }
+
+        // 3. إذا لم تكن موجودة -> اذهب لشاشة اختيار المنطقة
+        // (isCancellable: false) تعني أنه مجبر على الاختيار
+        return const SelectLocationScreen(isCancellable: false);
+      },
+    );
+  }
+}
+
+
+
+
+
+
+
+
 
 // =======================================================================
 // --- (كود تطبيق الزبون - كما أرسلته) ---
 // =======================================================================
-
+class Area {
+  final int id;
+  final String name;
+  final int parentId;
+  Area({required this.id, required this.name, required this.parentId});
+  factory Area.fromJson(Map<String, dynamic> json) => Area(id: json['id'], name: json['name'], parentId: json['parent']);
+}
 class Product {
   final int id;
   final String name;
@@ -2108,8 +2257,12 @@ class MiswakStoreScreen extends StatefulWidget {
 }
 
 class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
+  // متغيرات البيانات
   List<Product> products = [];
   List<Product> cartItems = [];
+  List<dynamic> mainCategories = [];
+
+  // متغيرات الحالة
   bool isLoading = true;
   bool showCart = false;
   bool showCheckout = false;
@@ -2117,20 +2270,24 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   bool _hasMore = true;
   int _page = 1;
   double totalPrice = 0.0;
-  List<dynamic> mainCategories = [];
   int? _currentCategoryId;
   bool _isConnected = true;
   bool _isCategoriesVisible = true;
-  final ScrollController _scrollController = ScrollController();
 
+  // ✨ متغيرات المنطقة الجديدة
+  int? _selectedAreaId;
+  String? _selectedAreaName;
+
+  // المتحكمات
+  final ScrollController _scrollController = ScrollController();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
-
   bool _isSubmitting = false;
 
+  // صور البانر
   List<String> bannerImages = [
     'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
     'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
@@ -2142,6 +2299,21 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   void initState() {
     super.initState();
     _scrollController.addListener(_scrollListener);
+
+    // ✨ التعديل 1: بدلاً من فحص الاتصال مباشرة، نقوم بتحميل المنطقة أولاً
+    _initializeWithLocation();
+  }
+
+  // ✨ دالة جديدة لتهيئة الموقع
+  Future<void> _initializeWithLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _selectedAreaId = prefs.getInt('selectedAreaId');
+        _selectedAreaName = prefs.getString('selectedAreaName');
+      });
+    }
+    // بعد تحميل المنطقة، نقوم بفحص الاتصال وجلب المنتجات
     _checkConnection();
   }
 
@@ -2174,16 +2346,22 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
     if (!loadMore) {
       _page = 1;
       _hasMore = true;
-      setState(() => isLoading = true);
+      if(mounted) setState(() => isLoading = true);
     } else {
       if (!_hasMore) return;
       _page++;
-      setState(() => _isLoadingMore = true);
+      if(mounted) setState(() => _isLoadingMore = true);
     }
 
     try {
-      // (استخدام الثوابت المعرفة بالأعلى)
+      // ✨ التعديل 2: إضافة area_id للرابط
       String apiUrl = 'https://beytei.com/wp-json/wc/v3/products?page=$_page&per_page=10';
+
+      // إرسال المنطقة للسيرفر إذا كانت محددة
+      if (_selectedAreaId != null) {
+        apiUrl += '&area_id=$_selectedAreaId';
+      }
+
       if (searchQuery.isNotEmpty) apiUrl += '&search=$searchQuery';
       if (categoryId != null && categoryId != 0) apiUrl += '&category=$categoryId';
 
@@ -2212,7 +2390,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
           });
         }
       }
-    }  catch (e) {
+    } catch (e) {
       if (mounted) {
         setState(() {
           isLoading = false;
@@ -2231,7 +2409,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   Future<void> _fetchMainCategories() async {
     try {
       final response = await http.get(
-        Uri.parse('https://beytei.com/wp-json/wc/v3/products/categories?parent=0&per_page=3'),
+        Uri.parse('https://beytei.com/wp-json/wc/v3/products/categories?parent=0&per_page=100'), // جلب كل التصنيفات
         headers: {
           'Authorization': 'Basic ${base64Encode(utf8.encode('$CUSTOMER_CONSUMER_KEY:$CUSTOMER_CONSUMER_SECRET'))}',
         },
@@ -2249,17 +2427,12 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
     final direction = _scrollController.position.userScrollDirection;
 
     if (direction == ScrollDirection.forward) {
-      if (!_isCategoriesVisible) {
-        setState(() => _isCategoriesVisible = true);
-      }
+      if (!_isCategoriesVisible) setState(() => _isCategoriesVisible = true);
     } else if (direction == ScrollDirection.reverse) {
-      if (_isCategoriesVisible) {
-        setState(() => _isCategoriesVisible = false);
-      }
+      if (_isCategoriesVisible) setState(() => _isCategoriesVisible = false);
     }
 
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent * 0.9 &&
-        !_isLoadingMore) {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent * 0.9 && !_isLoadingMore) {
       _fetchProducts(
         searchQuery: _searchController.text,
         categoryId: _currentCategoryId,
@@ -2268,6 +2441,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
     }
   }
 
+  // --- دوال السلة والدفع (بقيت كما هي) ---
   void addToCart(Product product) {
     setState(() {
       final existingIndex = cartItems.indexWhere((item) => item.id == product.id);
@@ -2287,7 +2461,6 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
       _calculateTotal();
       showCart = true;
     });
-
     _showAddToCartDialog(product);
   }
 
@@ -2298,19 +2471,13 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
         title: const Text("تمت الإضافة إلى السلة"),
         content: Text("${product.name} تمت إضافته إلى سلة التسوق"),
         actions: [
-          TextButton(
-            child: const Text("مواصلة التسوق"),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
+          TextButton(child: const Text("مواصلة التسوق"), onPressed: () => Navigator.of(context).pop()),
           ElevatedButton(
             child: const Text("إتمام الطلب"),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[300]),
             onPressed: () {
               Navigator.of(context).pop();
-              setState(() {
-                showCart = true;
-                showCheckout = true;
-              });
+              setState(() { showCart = true; showCheckout = true; });
             },
           ),
         ],
@@ -2342,7 +2509,12 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   }
 
   void _calculateTotal() {
-    totalPrice = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
+    double productTotal = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
+    if (cartItems.isEmpty) {
+      totalPrice = 0.0;
+    } else {
+      totalPrice = productTotal + 1000.0;
+    }
   }
 
   void _showCheckoutForm() => setState(() => showCheckout = true);
@@ -2350,20 +2522,11 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
 
   void _submitOrder() {
     if (_isSubmitting) return;
-
-    if (_nameController.text.isEmpty ||
-        _phoneController.text.isEmpty ||
-        _addressController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الرجاء تعبئة جميع الحقول')),
-      );
+    if (_nameController.text.isEmpty || _phoneController.text.isEmpty || _addressController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تعبئة جميع الحقول')));
       return;
     }
-
-    setState(() {
-      _isSubmitting = true;
-    });
-
+    setState(() => _isSubmitting = true);
     _sendOrderToWooCommerce();
   }
 
@@ -2378,54 +2541,38 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
         body: json.encode({
           "payment_method": "cod",
           "payment_method_title": "الدفع عند الاستلام",
-          "customer_note": "طلب من تطبيق مسواك بيتي",
-          "billing": {
-            "first_name": _nameController.text,
-            "phone": _phoneController.text,
-          },
-          "shipping": {
-            "address_1": _addressController.text,
-          },
-          "line_items": cartItems.map((product) => {
-            "product_id": product.id,
-            "quantity": product.quantity,
-          }).toList(),
+          "customer_note": "طلب من تطبيق مسواك بيتي - المنطقة: ${_selectedAreaName ?? 'غير محدد'}",
+          "billing": { "first_name": _nameController.text, "phone": _phoneController.text },
+          "shipping": { "address_1": _addressController.text },
+          "line_items": cartItems.map((product) => { "product_id": product.id, "quantity": product.quantity }).toList(),
+          "fee_lines": [{ "name": "أجرة التوصيل", "total": "1000", "tax_status": "none" }],
+
+          // إرسال المنطقة المختارة في الميتا داتا (اختياري)
+          "meta_data": [
+            if (_selectedAreaId != null) {"key": "_selected_area_id", "value": _selectedAreaId.toString()}
+          ]
         }),
       );
 
       if (response.statusCode == 201) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم تأكيد طلبك بنجاح انتظر اتصال المندوب !')),
-        );
-
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم تأكيد طلبك بنجاح انتظر اتصال المندوب !')));
         if (mounted) {
           setState(() {
-            cartItems.clear();
-            totalPrice = 0.0;
-            showCart = false;
-            showCheckout = false;
-            _nameController.clear();
-            _phoneController.clear();
-            _addressController.clear();
+            cartItems.clear(); totalPrice = 0.0; showCart = false; showCheckout = false;
+            _nameController.clear(); _phoneController.clear(); _addressController.clear();
           });
         }
       } else {
         throw Exception('فشل إرسال الطلب: ${response.body}');
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('حدث خطأ في إرسال الطلب: $e')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حدث خطأ في إرسال الطلب: $e')));
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
+
+  // --- Widgets ---
 
   void _showProductDetails(Product product) {
     showModalBottomSheet(
@@ -2439,67 +2586,22 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: Text(
-                    product.name,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(context),
-                ),
+                Expanded(child: Text(product.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
               ],
             ),
             const SizedBox(height: 10),
-            Text(
-              'الفئة: ${product.category}',
-              style: TextStyle(color: Colors.blue[800]),
-            ),
+            Text('الفئة: ${product.category}', style: TextStyle(color: Colors.blue[800])),
             const SizedBox(height: 20),
-            Center(
-              child: CachedNetworkImage(
-                imageUrl: product.imageUrl.replaceAll('-300x300', ''),
-                height: 200,
-                fit: BoxFit.contain,
-                placeholder: (context, url) => Center(child: CircularProgressIndicator()),
-                errorWidget: (context, url, error) => Icon(Icons.image_not_supported),
-              ),
-            ),
+            Center(child: CachedNetworkImage(imageUrl: product.imageUrl.replaceAll('-300x300', ''), height: 200, fit: BoxFit.contain, placeholder: (context, url) => Center(child: CircularProgressIndicator()), errorWidget: (context, url, error) => Icon(Icons.image_not_supported))),
             const SizedBox(height: 20),
-            const Text(
-              'وصف المنتج:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+            const Text('وصف المنتج:', style: TextStyle(fontWeight: FontWeight.bold)),
             Text(product.description.replaceAll(RegExp(r'<[^>]*>'), '')),
             const SizedBox(height: 20),
-            const Text(
-              'السعر:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            Text(
-              product.formattedPrice,
-              style: const TextStyle(
-                fontSize: 18,
-                color: Colors.green,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            const Text('السعر:', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(product.formattedPrice, style: const TextStyle(fontSize: 18, color: Colors.green, fontWeight: FontWeight.bold)),
             const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  addToCart(product);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[800],
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                ),
-                child: const Text('أضف إلى السلة الآن'),
-              ),
-            ),
+            SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () { Navigator.pop(context); addToCart(product); }, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(vertical: 15)), child: const Text('أضف إلى السلة الآن'))),
             const SizedBox(height: 10),
           ],
         ),
@@ -2507,6 +2609,7 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
     );
   }
 
+  // ... (نفس دالة _buildBannerSlider السابقة)
   Widget _buildBannerSlider() {
     return Container(
       height: 140,
@@ -2519,38 +2622,14 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 4),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                image: DecorationImage(
-                  image: CachedNetworkImageProvider(imageUrl),
-                  fit: BoxFit.cover,
-                ),
+                image: DecorationImage(image: CachedNetworkImageProvider(imageUrl), fit: BoxFit.cover),
               ),
             )).toList(),
-            options: CarouselOptions(
-              height: 140,
-              autoPlay: true,
-              enlargeCenterPage: true,
-              viewportFraction: 0.92,
-              onPageChanged: (index, _) => setState(() => _currentBannerIndex = index),
-            ),
+            options: CarouselOptions(height: 140, autoPlay: true, enlargeCenterPage: true, viewportFraction: 0.92, onPageChanged: (index, _) => setState(() => _currentBannerIndex = index)),
           ),
           Positioned(
             bottom: 10,
-            child: Row(
-              children: bannerImages.map((url) {
-                int index = bannerImages.indexOf(url);
-                return Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _currentBannerIndex == index
-                        ? Colors.blue[300]
-                        : Colors.white.withOpacity(0.7),
-                  ),
-                );
-              }).toList(),
-            ),
+            child: Row(children: bannerImages.map((url) { int index = bannerImages.indexOf(url); return Container(width: 8, height: 8, margin: const EdgeInsets.symmetric(horizontal: 4), decoration: BoxDecoration(shape: BoxShape.circle, color: _currentBannerIndex == index ? Colors.blue[300] : Colors.white.withOpacity(0.7))); }).toList()),
           ),
         ],
       ),
@@ -2573,627 +2652,184 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
             return Padding(
               padding: const EdgeInsets.all(8.0),
               child: InkWell(
-                onTap: () {
-                  setState(() => _currentCategoryId = null);
-                  _fetchProducts();
-                },
-                child: Column(
-                  children: [
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        color: _currentCategoryId == null
-                            ? Colors.blue[100]
-                            : Colors.grey[200],
-                        borderRadius: BorderRadius.circular(40),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.grey.withOpacity(0.2),
-                            spreadRadius: 1,
-                            blurRadius: 5,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(Icons.all_inclusive, color: Colors.blue),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      'الكل',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: _currentCategoryId == null
-                            ? Colors.blue[800]
-                            : Colors.black,
-                      ),
-                    ),
-                  ],
-                ),
+                onTap: () { setState(() => _currentCategoryId = null); _fetchProducts(); },
+                child: Column(children: [
+                  Container(width: 80, height: 80, decoration: BoxDecoration(color: _currentCategoryId == null ? Colors.blue[100] : Colors.grey[200], borderRadius: BorderRadius.circular(40), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), spreadRadius: 1, blurRadius: 5, offset: const Offset(0, 2))]), child: const Icon(Icons.all_inclusive, color: Colors.blue)),
+                  const SizedBox(height: 5),
+                  Text('الكل', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _currentCategoryId == null ? Colors.blue[800] : Colors.black)),
+                ]),
               ),
             );
           }
-
           var category = mainCategories[index - 1];
           return Padding(
             padding: const EdgeInsets.all(8.0),
             child: InkWell(
-              onTap: () {
-                setState(() => _currentCategoryId = category['id']);
-                _fetchProducts(categoryId: category['id']);
-              },
-              child: Column(
-                children: [
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      color: _currentCategoryId == category['id']
-                          ? Colors.blue[100]
-                          : Colors.grey[200],
-                      borderRadius: BorderRadius.circular(40),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.grey.withOpacity(0.2),
-                          spreadRadius: 1,
-                          blurRadius: 5,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
+              onTap: () { setState(() => _currentCategoryId = category['id']); _fetchProducts(categoryId: category['id']); },
+              child: Column(children: [
+                Container(
+                    width: 80, height: 80,
+                    decoration: BoxDecoration(color: _currentCategoryId == category['id'] ? Colors.blue[100] : Colors.grey[200], borderRadius: BorderRadius.circular(40), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), spreadRadius: 1, blurRadius: 5, offset: const Offset(0, 2))]),
                     child: category['image'] != null
-                        ? ClipRRect(
-                      borderRadius: BorderRadius.circular(40),
-                      child: CachedNetworkImage(
-                        imageUrl: category['image']['src'],
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) => const Center(
-                            child: CircularProgressIndicator(strokeWidth: 1.5)),
-                        errorWidget: (context, url, error) => const Icon(
-                            Icons.category, color: Colors.blue),
-                      ),
-                    )
-                        : const Icon(Icons.category, color: Colors.blue),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    category['name'],
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: _currentCategoryId == category['id']
-                          ? Colors.blue[800]
-                          : Colors.black,
-                    ),
-                  ),
-                ],
-              ),
+                        ? ClipRRect(borderRadius: BorderRadius.circular(40), child: CachedNetworkImage(imageUrl: category['image']['src'], fit: BoxFit.cover, placeholder: (context, url) => const Center(child: CircularProgressIndicator(strokeWidth: 1.5)), errorWidget: (context, url, error) => const Icon(Icons.category, color: Colors.blue)))
+                        : const Icon(Icons.category, color: Colors.blue)
+                ),
+                const SizedBox(height: 5),
+                Text(category['name'], style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _currentCategoryId == category['id'] ? Colors.blue[800] : Colors.black)),
+              ]),
             ),
           );
         },
       ),
     );
   }
+
+  // ... (ProductCard, CartItem, CartSummary, CheckoutForm, Shimmer, EmptyState, CartFab - نفس الكود السابق)
+  // سأقوم باختصارهم هنا لتوفير المساحة، انسخهم كما هم من الكود السابق
+
   Widget _buildProductCard(Product product) {
     return Card(
-      elevation: 2,
-      margin: const EdgeInsets.all(5),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 2, margin: const EdgeInsets.all(5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
-        onTap: () => _showProductDetails(product),
-        borderRadius: BorderRadius.circular(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-              child: CachedNetworkImage(
-                imageUrl: product.imageUrl,
-                height: 120,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                placeholder: (context, url) => Container(
-                  color: Colors.grey[100],
-                  child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5)),
-                ),
-                errorWidget: (context, url, error) => Container(
-                  color: Colors.grey[200],
-                  child: const Icon(Icons.shopping_bag, size: 50, color: Colors.blue),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product.name,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    product.category,
-                    style: TextStyle(fontSize: 12, color: Colors.blue[800]),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    product.formattedPrice,
-                    style: const TextStyle(
-                      color: Colors.green,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: IconButton(
-                      icon: const Icon(Icons.add_shopping_cart, color: Colors.blue),
-                      onPressed: () => addToCart(product),
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.blue[50],
-                        padding: const EdgeInsets.all(8),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        onTap: () => _showProductDetails(product), borderRadius: BorderRadius.circular(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ClipRRect(borderRadius: const BorderRadius.vertical(top: Radius.circular(12)), child: CachedNetworkImage(imageUrl: product.imageUrl, height: 120, width: double.infinity, fit: BoxFit.cover, placeholder: (context, url) => Container(color: Colors.grey[100], child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5))), errorWidget: (context, url, error) => Container(color: Colors.grey[200], child: const Icon(Icons.shopping_bag, size: 50, color: Colors.blue)))),
+          Padding(padding: const EdgeInsets.all(10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 5),
+            Text(product.category, style: TextStyle(fontSize: 12, color: Colors.blue[800])),
+            const SizedBox(height: 5),
+            Text(product.formattedPrice, style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Align(alignment: Alignment.centerLeft, child: IconButton(icon: const Icon(Icons.add_shopping_cart, color: Colors.blue), onPressed: () => addToCart(product), style: IconButton.styleFrom(backgroundColor: Colors.blue[50], padding: const EdgeInsets.all(8)))),
+          ])),
+        ]),
       ),
     );
   }
 
   Widget _buildCartItem(Product product) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            spreadRadius: 1,
-            blurRadius: 5,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          InkWell(
-            onTap: () => _showProductDetails(product),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: CachedNetworkImage(
-                imageUrl: product.imageUrl,
-                width: 60,
-                height: 60,
-                fit: BoxFit.cover,
-                placeholder: (context, url) => Container(
-                  color: Colors.grey[100],
-                  child: const Center(child: CircularProgressIndicator(strokeWidth: 1.0)),
-                ),
-                errorWidget: (context, url, error) => Container(
-                  color: Colors.grey[200],
-                  child: const Icon(Icons.shopping_bag, size: 20, color: Colors.grey),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  product.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  product.formattedPrice,
-                  style: const TextStyle(color: Colors.grey),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.remove, size: 18),
-                onPressed: () => updateQuantity(product, product.quantity - 1),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[300]!),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(product.quantity.toString()),
-              ),
-              IconButton(
-                icon: const Icon(Icons.add, size: 18),
-                onPressed: () => updateQuantity(product, product.quantity + 1),
-              ),
-              const SizedBox(width: 5),
-              IconButton(
-                icon: const Icon(Icons.delete, color: Colors.red, size: 18),
-                onPressed: () => removeFromCart(product),
-              ),
-            ],
-          ),
-        ],
-      ),
+      margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), spreadRadius: 1, blurRadius: 5, offset: const Offset(0, 2))]),
+      child: Row(children: [
+        InkWell(onTap: () => _showProductDetails(product), child: ClipRRect(borderRadius: BorderRadius.circular(8), child: CachedNetworkImage(imageUrl: product.imageUrl, width: 60, height: 60, fit: BoxFit.cover))),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis), Text(product.formattedPrice, style: const TextStyle(color: Colors.grey))])),
+        const SizedBox(width: 10),
+        Row(children: [IconButton(icon: const Icon(Icons.remove, size: 18), onPressed: () => updateQuantity(product, product.quantity - 1)), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(border: Border.all(color: Colors.grey[300]!), borderRadius: BorderRadius.circular(4)), child: Text(product.quantity.toString())), IconButton(icon: const Icon(Icons.add, size: 18), onPressed: () => updateQuantity(product, product.quantity + 1)), const SizedBox(width: 5), IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => removeFromCart(product))]),
+      ]),
     );
   }
 
   Widget _buildCartSummary() {
     final formatter = NumberFormat('#,###');
-    final formattedTotal = formatter.format(totalPrice);
-
+    double productTotal = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
     return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.3),
-            spreadRadius: 2,
-            blurRadius: 10,
-            offset: const Offset(0, -3),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'سلة التسوق',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              Text(
-                '$formattedTotal د.ع', // (تم التعديل)
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 200),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: cartItems.length,
-              itemBuilder: (context, index) => _buildCartItem(cartItems[index]),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _showCheckoutForm,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[800],
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  child: const Text('إتمام الطلب', style: TextStyle(fontSize: 16)),
-                ),
-              ),
-              const SizedBox(width: 10),
-              IconButton(
-                onPressed: () => setState(() => showCart = false),
-                icon: const Icon(Icons.close, color: Colors.red),
-              ),
-            ],
-          ),
-        ],
-      ),
+      padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(20)), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.3), spreadRadius: 2, blurRadius: 10, offset: const Offset(0, -3))]),
+      child: Column(children: [
+        const Text('ملخص السلة', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        ConstrainedBox(constraints: const BoxConstraints(maxHeight: 150), child: ListView.builder(shrinkWrap: true, itemCount: cartItems.length, itemBuilder: (context, index) => _buildCartItem(cartItems[index]))),
+        const Divider(),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('مجموع المنتجات:'), Text('${formatter.format(productTotal)} د.ع')]),
+        const SizedBox(height: 5),
+        const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('أجرة التوصيل:'), Text('1,000 د.ع', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))]),
+        const Divider(),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('الإجمالي الكلي:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), Text('${formatter.format(totalPrice)} د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green))]),
+        const SizedBox(height: 15),
+        Row(children: [Expanded(child: ElevatedButton(onPressed: _showCheckoutForm, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: const Text('إتمام الطلب', style: TextStyle(fontSize: 16)))), const SizedBox(width: 10), IconButton(onPressed: () => setState(() => showCart = false), icon: const Icon(Icons.close, color: Colors.red))]),
+      ]),
     );
   }
 
   Widget _buildCheckoutForm() {
     final formatter = NumberFormat('#,###');
-    final formattedTotal = formatter.format(totalPrice);
-
+    double productTotal = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
     return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.3),
-            spreadRadius: 3,
-            blurRadius: 10,
-          ),
-        ],
-      ),
+      width: MediaQuery.of(context).size.width * 0.9, padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.3), spreadRadius: 3, blurRadius: 10)]),
       child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'إتمام الطلب',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
-                IconButton(
-                  onPressed: _isSubmitting ? null : _hideCheckoutForm,
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-            const Divider(),
-            const SizedBox(height: 15),
-            const Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                'ملخص الطلب',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 10),
-            ...cartItems.map((product) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(
-                children: [
-                  Expanded(child: Text('${product.name} (${product.quantity})')),
-                  Text(
-                    '${formatter.format(product.price * product.quantity)} د.ع', // (تم التعديل)
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            )).toList(),
-            const Divider(),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(
-                children: [
-                  const Text('الإجمالي:', style: TextStyle(fontWeight: FontWeight.bold)),
-                  const Spacer(),
-                  Text(
-                    '$formattedTotal د.ع', // (تم التعديل)
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                'معلومات العميل',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 15),
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: 'الاسم الكامل',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.person),
-              ),
-              enabled: !_isSubmitting,
-            ),
-            const SizedBox(height: 15),
-            TextField(
-              controller: _phoneController,
-              decoration: const InputDecoration(
-                labelText: 'رقم الهاتف',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.phone),
-              ),
-              keyboardType: TextInputType.phone,
-              enabled: !_isSubmitting,
-            ),
-            const SizedBox(height: 15),
-            TextField(
-              controller: _addressController,
-              decoration: const InputDecoration(
-                labelText: 'عنوان التوصيل',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.location_on),
-              ),
-              maxLines: 2,
-              enabled: !_isSubmitting,
-            ),
-            const SizedBox(height: 25),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: _isSubmitting ? null : _submitOrder,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[800],
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: _isSubmitting
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text('تأكيد الطلب', style: TextStyle(fontSize: 18)),
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('إتمام الطلب', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), IconButton(onPressed: _isSubmitting ? null : _hideCheckoutForm, icon: const Icon(Icons.close))]),
+          const Divider(), const SizedBox(height: 15),
+          const Align(alignment: Alignment.centerRight, child: Text('ملخص الطلب', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))), const SizedBox(height: 10),
+          ...cartItems.map((product) => Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [Expanded(child: Text('${product.name} (${product.quantity})')), Text('${formatter.format(product.price * product.quantity)} د.ع', style: const TextStyle(fontWeight: FontWeight.bold))]))).toList(),
+          const Divider(),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('المنتجات:', style: TextStyle(color: Colors.grey)), Text('${formatter.format(productTotal)} د.ع')]), const SizedBox(height: 5),
+          const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('التوصيل:', style: TextStyle(color: Colors.grey)), Text('1,000 د.ع')]),
+          const Divider(),
+          Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [const Text('الإجمالي:', style: TextStyle(fontWeight: FontWeight.bold)), const Spacer(), Text('${formatter.format(totalPrice)} د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green))])),
+          const SizedBox(height: 20),
+          const Align(alignment: Alignment.centerRight, child: Text('معلومات العميل', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))), const SizedBox(height: 15),
+          TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)), enabled: !_isSubmitting), const SizedBox(height: 15),
+          TextField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.phone, enabled: !_isSubmitting), const SizedBox(height: 15),
+          TextField(controller: _addressController, decoration: const InputDecoration(labelText: 'عنوان التوصيل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.location_on)), maxLines: 2, enabled: !_isSubmitting), const SizedBox(height: 25),
+          SizedBox(width: double.infinity, height: 50, child: ElevatedButton(onPressed: _isSubmitting ? null : _submitOrder, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: _isSubmitting ? const CircularProgressIndicator(color: Colors.white) : const Text('تأكيد الطلب', style: TextStyle(fontSize: 18)))), const SizedBox(height: 10),
+        ]),
       ),
     );
   }
 
   Widget _buildShimmerLoading() {
     return GridView.builder(
-      padding: const EdgeInsets.all(10),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        childAspectRatio: 0.75,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-      ),
-      itemCount: 6,
-      itemBuilder: (context, index) {
-        return Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-                  ),
-                  child: const Center(
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      height: 16,
-                      width: double.infinity,
-                      color: Colors.grey[200],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      height: 12,
-                      width: 100,
-                      color: Colors.grey[200],
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      height: 20,
-                      width: 80,
-                      color: Colors.grey[200],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+        padding: const EdgeInsets.all(10), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 10, mainAxisSpacing: 10), itemCount: 6,
+        itemBuilder: (context, index) {
+          return Card(elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: Container(decoration: BoxDecoration(color: Colors.grey[200], borderRadius: const BorderRadius.vertical(top: Radius.circular(15))), child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5, valueColor: AlwaysStoppedAnimation<Color>(Colors.blue))))), Padding(padding: const EdgeInsets.all(10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 16, width: double.infinity, color: Colors.grey[200]), const SizedBox(height: 8), Container(height: 12, width: 100, color: Colors.grey[200]), const SizedBox(height: 12), Container(height: 20, width: 80, color: Colors.grey[200])]))]));
+        }
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            _isConnected ? Icons.search_off : Icons.wifi_off,
-            size: 80,
-            color: Colors.blue[200],
-          ),
-          const SizedBox(height: 20),
-          Text(
-            _isConnected ? 'لم يتم العثور على منتجات' : 'لا يوجد اتصال بالإنترنت',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _isConnected
-                ? 'حاول البحث باستخدام مصطلحات أخرى'
-                : 'يرجى التحقق من اتصالك بالإنترنت',
-            style: const TextStyle(color: Colors.grey),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 20),
-          if (!_isConnected)
-            ElevatedButton(
-              onPressed: _checkConnection,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[800],
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
-              ),
-              child: const Text('إعادة المحاولة'),
-            ),
-        ],
-      ),
-    );
+    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(_isConnected ? Icons.search_off : Icons.wifi_off, size: 80, color: Colors.blue[200]), const SizedBox(height: 20), Text(_isConnected ? 'لم يتم العثور على منتجات' : 'لا يوجد اتصال بالإنترنت', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 10), Text(_isConnected ? 'حاول البحث باستخدام مصطلحات أخرى' : 'يرجى التحقق من اتصالك بالإنترنت', style: const TextStyle(color: Colors.grey), textAlign: TextAlign.center), const SizedBox(height: 20), if (!_isConnected) ElevatedButton(onPressed: _checkConnection, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12)), child: const Text('إعادة المحاولة'))]));
   }
 
   Widget _buildCartFab() {
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        FloatingActionButton(
-          onPressed: () => setState(() => showCart = true),
-          backgroundColor: Colors.blue[800],
-          child: const Icon(Icons.shopping_cart),
-          elevation: 6,
-        ),
-        if (cartItems.isNotEmpty)
-          Positioned(
-            top: -5,
-            right: -5,
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(
-                color: Colors.red,
-                shape: BoxShape.circle,
-              ),
-              child: Text(
-                cartItems.length.toString(),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
+    return Stack(clipBehavior: Clip.none, children: [FloatingActionButton(onPressed: () => setState(() => showCart = true), backgroundColor: Colors.blue[800], elevation: 6, child: const Icon(Icons.shopping_cart)), if (cartItems.isNotEmpty) Positioned(top: -5, right: -5, child: Container(padding: const EdgeInsets.all(6), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text(cartItems.length.toString(), style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold))))]);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('مسواك بيتي', style: TextStyle(color: Colors.white)),
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.blue[800]!, Colors.blue[600]!],
-            ),
+        // ✨ التعديل 3: تحويل العنوان إلى زر لتغيير المنطقة
+        title: InkWell(
+          onTap: () async {
+            // الانتقال لشاشة تغيير المنطقة (يجب التأكد من وجود SelectLocationScreen في المشروع)
+            final result = await Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SelectLocationScreen(isCancellable: true)),
+            );
+
+            // تحديث البيانات إذا تم تغيير المنطقة
+            if (result == true) {
+              final prefs = await SharedPreferences.getInstance();
+              setState(() {
+                _selectedAreaId = prefs.getInt('selectedAreaId');
+                _selectedAreaName = prefs.getString('selectedAreaName');
+                products.clear();
+                _page = 1;
+                isLoading = true;
+              });
+              _fetchProducts();
+            }
+          },
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('مسواك بيتي', style: TextStyle(color: Colors.white)),
+              Row(
+                children: [
+                  const Icon(Icons.location_on, size: 12, color: Colors.white70),
+                  const SizedBox(width: 4),
+                  // عرض اسم المنطقة المختارة
+                  Text(_selectedAreaName ?? "اختر المنطقة", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  const Icon(Icons.keyboard_arrow_down, size: 12, color: Colors.white70),
+                ],
+              )
+            ],
           ),
+        ),
+
+        flexibleSpace: Container(
+          decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.blue[800]!, Colors.blue[600]!])),
         ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(60),
@@ -3207,65 +2843,21 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                 hintText: 'شنو محتاج اليوم ؟...',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () {
-                    _searchController.clear();
-                    _fetchProducts();
-                  },
-                )
+                    ? IconButton(icon: const Icon(Icons.close), onPressed: () { _searchController.clear(); _fetchProducts(); })
                     : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(30),
-                  borderSide: BorderSide.none,
-                ),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
                 contentPadding: const EdgeInsets.symmetric(vertical: 0),
               ),
               onChanged: (query) {
                 if (_searchDebounce?.isActive ?? false) _searchDebounce?.cancel();
-                _searchDebounce = Timer(const Duration(milliseconds: 500), () {
-                  _fetchProducts(
-                    searchQuery: query,
-                    categoryId: _currentCategoryId,
-                  );
-                });
+                _searchDebounce = Timer(const Duration(milliseconds: 500), () { _fetchProducts(searchQuery: query, categoryId: _currentCategoryId); });
               },
             ),
           ),
         ),
         actions: [
-          // (جديد) زر تسجيل دخول المدير - تم نقله هنا
-          IconButton(
-            icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.white),
-            tooltip: "دخول مدير المسواق",
-            onPressed: () {
-              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StoreLoginScreen()));
-            },
-          ),
-          Stack(
-            children: [
-              IconButton(
-                onPressed: () => setState(() => showCart = !showCart),
-                icon: const Icon(Icons.shopping_cart, color: Colors.white),
-              ),
-              if (cartItems.isNotEmpty)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text(
-                      cartItems.length.toString(),
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+          IconButton(icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.white), tooltip: "دخول مدير المسواق", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StoreLoginScreen()))),
+          Stack(children: [IconButton(onPressed: () => setState(() => showCart = !showCart), icon: const Icon(Icons.shopping_cart, color: Colors.white)), if (cartItems.isNotEmpty) Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text(cartItems.length.toString(), style: const TextStyle(color: Colors.white, fontSize: 12))))]),
         ],
       ),
       body: Stack(
@@ -3273,18 +2865,10 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
           Column(
             children: [
               _buildBannerSlider(),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: _buildMainCategories(),
-              ),
+              AnimatedSwitcher(duration: const Duration(milliseconds: 300), child: _buildMainCategories()),
               Expanded(
                 child: RefreshIndicator(
-                  onRefresh: () async {
-                    await _fetchProducts(
-                      searchQuery: _searchController.text,
-                      categoryId: _currentCategoryId,
-                    );
-                  },
+                  onRefresh: () async { await _fetchProducts(searchQuery: _searchController.text, categoryId: _currentCategoryId); },
                   child: isLoading
                       ? _buildShimmerLoading()
                       : products.isEmpty
@@ -3292,23 +2876,11 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
                       : GridView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.all(8),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      childAspectRatio: 0.75, // (تم تعديل النسبة)
-                      crossAxisSpacing: 8,
-                      mainAxisSpacing: 8,
-                    ),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 8, mainAxisSpacing: 8),
                     physics: const BouncingScrollPhysics(),
                     itemCount: products.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
-                      if (index == products.length) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: CircularProgressIndicator(),
-                          ),
-                        );
-                      }
+                      if (index == products.length) return const Center(child: Padding(padding: EdgeInsets.all(8.0), child: CircularProgressIndicator()));
                       return _buildProductCard(products[index]);
                     },
                   ),
@@ -3316,22 +2888,8 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
               ),
             ],
           ),
-          if (showCart && cartItems.isNotEmpty && !showCheckout)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: _buildCartSummary(),
-            ),
-          if (showCheckout)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black54,
-                child: Center(
-                  child: _buildCheckoutForm(),
-                ),
-              ),
-            ),
+          if (showCart && cartItems.isNotEmpty && !showCheckout) Positioned(bottom: 0, left: 0, right: 0, child: _buildCartSummary()),
+          if (showCheckout) Positioned.fill(child: Container(color: Colors.black54, child: Center(child: _buildCheckoutForm()))),
         ],
       ),
       floatingActionButton: cartItems.isNotEmpty && !showCart ? _buildCartFab() : null,
