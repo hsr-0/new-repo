@@ -1072,7 +1072,7 @@ class NotificationService {
         iOS: const DarwinNotificationDetails(
           presentSound: true,
           // ✨ 3. تحديد الصوت للآيفون
-          sound: 'woo.wav', // تأكد من الامتداد الصحيح
+          sound: 'woo_sound.caf', // تأكد من الامتداد الصحيح
         ),
       );
 

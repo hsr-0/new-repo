@@ -65,7 +65,7 @@ class AuthProvider with ChangeNotifier {
 
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('jwt_token_store_admin'); // (مفتاح جديد)
+    _token = prefs.getString('jwt_token_store_admin');
     _isLoading = false;
     notifyListeners();
   }
@@ -75,13 +75,14 @@ class AuthProvider with ChangeNotifier {
     _token = await authService.loginAdmin(username, password);
 
     if (_token != null) {
+      // تسجيل التوكن الخاص بالإشعارات
       await authService.registerDeviceToken();
 
       final prefs = await SharedPreferences.getInstance();
+      // حفظ الإحداثيات إذا تم تحديدها
       if (storeLat != null && storeLng != null) {
         await prefs.setDouble('store_lat', double.tryParse(storeLat) ?? 0.0);
         await prefs.setDouble('store_lng', double.tryParse(storeLng) ?? 0.0);
-        // (جديد) حفظ اسم المتجر (لطلبات الدليفري)
         await prefs.setString('saved_store_name', '');
       }
 
@@ -95,12 +96,9 @@ class AuthProvider with ChangeNotifier {
     final authService = AdminAuthService();
     await authService.logout();
     _token = null;
-    // (يجب إضافة clearData() للـ providers الجدد)
-    // Provider.of<DashboardProvider>(context, listen: false).clearData();
     notifyListeners();
   }
 }
-
 class DashboardProvider with ChangeNotifier {
   final AdminApiService _apiService = AdminApiService();
   Map<String, List<Order>> _orders = {};
@@ -389,39 +387,160 @@ class AdminNotificationService {
     await _localNotifications.show(id, title, body, platformChannelSpecifics, payload: message.data['order_id']);
   }
 }
-
 class AdminAuthService {
+
+  // --- 1. دالة تسجيل الدخول (تستخدم الملف المباشر لحل مشكلة الدوران) ---
   Future<String?> loginAdmin(String username, String password) async {
+    // ⚠️ نستخدم الملف المباشر هنا لتجاوز مشاكل الإضافات
+    final String apiUrl = '$STORE_BASE_URL/api-login.php';
+
+    print("🚀 [Login] جاري الاتصال بالملف المباشر: $apiUrl");
+
     try {
       final response = await http.post(
-          Uri.parse('$STORE_BASE_URL/wp-json/jwt-auth/v1/token'), // (نفس مسار التوكن)
+        Uri.parse(apiUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          // هيدر المتصفح لتجاوز الحماية
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        },
+        body: json.encode({
+          'username': username,
+          'password': password
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      print("📡 [Login] كود الحالة: ${response.statusCode}");
+
+      // فحص أخطاء HTML
+      if (response.body.trim().startsWith('<')) {
+        print("❌ [Login] السيرفر رد بملف HTML. تأكد من رفع api-login.php.");
+        return null;
+      }
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final token = data['token'];
+
+        if (token != null) {
+          print("✅ [Login] تم تسجيل الدخول بنجاح.");
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('jwt_token_store_admin', token);
+          return token;
+        }
+      }
+      return null;
+
+    } catch (e) {
+      print("❌ [Login] خطأ في الاتصال: $e");
+      return null;
+    }
+  }
+
+  // --- 2. دالة تسجيل جهاز الإشعارات (تستخدم STORE_APP_URL الجديد) ---
+  Future<void> registerDeviceToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token_store_admin');
+    if (token == null) return;
+
+    try {
+      String? fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken == null) return;
+
+      // ✅ استخدام STORE_APP_URL
+      await http.post(
+        Uri.parse('$STORE_APP_URL/register-device'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+          'User-Agent': 'BeyteiAdminApp/1.0',
+        },
+        body: json.encode({'token': fcmToken}),
+      ).timeout(API_TIMEOUT);
+
+    } catch (e) {
+      print("Error registering device token: $e");
+    }
+  }
+
+  // --- 3. دالة تسجيل الخروج (تستخدم STORE_APP_URL الجديد) ---
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jwtToken = prefs.getString('jwt_token_store_admin');
+
+    if (jwtToken != null) {
+      try {
+        // ✅ استخدام STORE_APP_URL
+        await http.post(
+          Uri.parse('$STORE_APP_URL/unregister-device'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $jwtToken'
+          },
+        ).timeout(const Duration(seconds: 5));
+      } catch (e) {
+        print("Failed to unregister device: $e");
+      }
+    }
+
+    await FirebaseMessaging.instance.deleteToken();
+    await prefs.remove('jwt_token_store_admin');
+    await prefs.remove('store_lat');
+    await prefs.remove('store_lng');
+    await prefs.remove('saved_store_name');
+  }
+}
+class AuthService {
+  // ✨ التعديل: إرجاع Map بدلاً من String فقط لنستفيد من البيانات القادمة من PHP
+  Future<Map<String, dynamic>> loginRestaurantOwner(String username, String password) async {
+    try {
+      final response = await http.post(
+          Uri.parse('$STORE_BASE_URL$STORE_APP_NAMESPACE/wp-json/jwt-auth/v1/token'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'username': username, 'password': password})
       ).timeout(API_TIMEOUT);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final token = data['token'];
-        if (token != null) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('jwt_token_store_admin', token); // (مفتاح مميز)
-          return token;
+        // التحقق من وجود التوكن
+        if (data['token'] != null) {
+          return {
+            'success': true,
+            'token': data['token'],
+            'user_email': data['user_email'],
+            'user_nicename': data['user_nicename'],
+            // ✨ هنا نستقبل البيانات التي أرسلها كود PHP (add_restaurant_info_to_jwt_response)
+            'restaurant_info': data['restaurant_info'],
+            // ✨ وهنا نستقبل بيانات التيم ليدر (add_team_leader_info)
+            'user_role_from_server': data['user_role'] // قد يكون 'team_leader'
+          };
         }
       }
-      return null;
-    } catch (e) { return null; }
+      // في حال الفشل
+      String errorMsg = "فشل تسجيل الدخول";
+      try {
+        final errorData = json.decode(response.body);
+        errorMsg = errorData['message'] ?? errorMsg;
+      } catch(_) {}
+      return {'success': false, 'message': errorMsg};
+
+    } catch (e) {
+      return {'success': false, 'message': 'خطأ في الاتصال: $e'};
+    }
   }
 
+  // ... (باقي الدوال registerDeviceToken و logout تبقى كما هي) ...
   Future<void> registerDeviceToken() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token_store_admin');
+    final token = prefs.getString('jwt_token');
     if (token == null) return;
     String? fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken == null) return;
 
     try {
       await http.post(
-        Uri.parse('$STORE_APP_URL/register-device'), // (مسار جديد)
+        Uri.parse('$STORE_BASE_URL$STORE_APP_NAMESPACE/wp-json/restaurant-app/v1/register-device'),
         headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
         body: json.encode({'token': fcmToken}),
       ).timeout(API_TIMEOUT);
@@ -430,24 +549,26 @@ class AdminAuthService {
 
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
-    final jwtToken = prefs.getString('jwt_token_store_admin');
+    final jwtToken = prefs.getString('jwt_token');
 
     if (jwtToken != null) {
       try {
         await http.post(
-          Uri.parse('$STORE_APP_URL/unregister-device'), // (مسار جديد)
+          Uri.parse('$STORE_BASE_URL$STORE_APP_NAMESPACE/wp-json/restaurant-app/v1/unregister-device'),
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $jwtToken'},
         ).timeout(API_TIMEOUT);
       } catch (e) { print("Failed to unregister device: $e"); }
     }
     await FirebaseMessaging.instance.deleteToken();
-    await prefs.remove('jwt_token_store_admin');
-    await prefs.remove('store_lat');
-    await prefs.remove('store_lng');
-    await prefs.remove('saved_store_name');
+    final cacheService = CacheService();
+    await cacheService.clearAllCache();
+    await prefs.remove('jwt_token');
+    await prefs.remove('user_role');
+    await prefs.remove('restaurant_lat'); // تنظيف الإحداثيات
+    await prefs.remove('restaurant_lng');
+    await prefs.remove('restaurant_name');
   }
 }
-
 class AdminApiService {
 
   Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
@@ -631,6 +752,27 @@ class AdminApiService {
       headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
     ));
     return response.statusCode == 200;
+  }
+}
+class CacheService {
+  Future<void> saveData(String key, String data) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, data);
+  }
+
+  Future<String?> getData(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(key);
+  }
+
+  Future<void> clearAllCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys();
+    for (String key in keys) {
+      if (key != 'jwt_token' && key != 'selectedAreaId' && key != 'selectedAreaName') {
+        await prefs.remove(key);
+      }
+    }
   }
 }
 
@@ -1144,71 +1286,108 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
   final _passwordController = TextEditingController();
   final _latController = TextEditingController();
   final _lngController = TextEditingController();
+
   bool _isLoading = false;
   String _locationStatus = 'لم يتم تحديد موقع المتجر';
   final AdminApiService _apiService = AdminApiService();
 
+  // --- دالة تحديد الموقع ---
   Future<void> _getCurrentLocation() async {
     setState(() => _locationStatus = 'جاري تحديد الموقع...');
     try {
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!hasPermission) {
-        throw Exception('صلاحية الوصول للموقع مرفوضة أو الخدمة معطلة.');
+        // الرسالة تظهر من داخل الكلاس PermissionService
+        setState(() => _locationStatus = 'تم رفض الصلاحية');
+        return;
       }
-      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+
+      // جلب الموقع بدقة عالية
+      Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high
+      );
+
       _latController.text = position.latitude.toString();
       _lngController.text = position.longitude.toString();
+
       setState(() {
-        _locationStatus = 'تم التحديد: (خط عرض: ${position.latitude.toStringAsFixed(4)}, خط طول: ${position.longitude.toStringAsFixed(4)})';
+        _locationStatus = 'تم التحديد: (${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)})';
       });
+
     } catch (e) {
       setState(() {
-        _locationStatus = 'خطأ في تحديد الموقع: ${e.toString().replaceAll("Exception: ", "")}';
+        _locationStatus = 'فشل تحديد الموقع. تأكد من تفعيل GPS.';
         _latController.clear();
         _lngController.clear();
       });
+      print("Location Error: $e");
     }
   }
 
+  // --- دالة تسجيل الدخول (المعدلة والمحمية) ---
   Future<void> _login() async {
+    // 1. التحقق من صحة الحقول
     if (!_formKey.currentState!.validate()) return;
+
+    // 2. التحقق من الإحداثيات
     if (_latController.text.isEmpty || _lngController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تحديد موقع المتجر أولاً.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('الرجاء تحديد موقع المتجر أولاً.'))
+      );
       return;
     }
-    setState(() => _isLoading = true);
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final success = await authProvider.login(
-      _usernameController.text,
-      _passwordController.text,
-      storeLat: _latController.text,
-      storeLng: _lngController.text,
-    );
 
-    if (!mounted) return;
-    if (success) {
-      try {
-        final token = authProvider.token!;
-        final lat = _latController.text;
-        final lng = _lngController.text;
-        await _apiService.updateMyLocation(token, lat, lng);
-        // (تم حذف الانتقال، AuthWrapper سيتولى الأمر)
-      } catch (e) {
-        if(mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('تم تسجيل الدخول، لكن فشل حفظ الموقع على الخادم: $e'),
-                backgroundColor: Colors.orange,
-              )
-          );
+    // 3. بدء التحميل
+    setState(() => _isLoading = true);
+
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+      // محاولة الاتصال (استخدام trim لإزالة المسافات الزائدة)
+      final success = await authProvider.login(
+        _usernameController.text.trim(),
+        _passwordController.text.trim(),
+        storeLat: _latController.text,
+        storeLng: _lngController.text,
+      );
+
+      if (!mounted) return;
+
+      if (success) {
+        // ✅ نجح الدخول
+        try {
+          final token = authProvider.token!;
+          // محاولة تحديث الموقع في السيرفر (اختياري، لن يوقف الدخول اذا فشل)
+          await _apiService.updateMyLocation(token, _latController.text, _lngController.text);
+        } catch (e) {
+          print("فشل تحديث الموقع في السيرفر (غير مؤثر): $e");
         }
-        // (سيتم الانتقال على أي حال)
+
+        // (AuthWrapper سيقوم بنقلك للداشبورد تلقائياً لأن الحالة تغيرت)
+
+      } else {
+        // ❌ فشل الدخول (اسم مستخدم خطأ أو كلمة مرور)
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('فشل تسجيل الدخول. تأكد من البيانات واتصال الإنترنت.'),
+              backgroundColor: Colors.red,
+            )
+        );
       }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تسجيل الدخول. الرجاء التأكد من البيانات.')));
-    }
-    if(mounted) {
-      setState(() => _isLoading = false);
+
+    } catch (e) {
+      // ⚠️ خطأ فني (انترنت مقطوع، سيرفر لا يستجيب)
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('حدث خطأ في الاتصال: $e'),
+            backgroundColor: Colors.orange,
+          )
+      );
+    } finally {
+      // 4. 🔥 إيقاف التحميل دائماً (الحل لمشكلة الدوران المستمر)
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -1221,42 +1400,71 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
           padding: const EdgeInsets.all(24.0),
           child: Form(
             key: _formKey,
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const Icon(Icons.storefront_outlined, size: 80, color: Colors.blue),
-              const SizedBox(height: 20),
-              TextFormField( controller: _usernameController, decoration: const InputDecoration( labelText: 'اسم المستخدم أو البريد الإلكتروني'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
-              const SizedBox(height: 20),
-              TextFormField( controller: _passwordController, decoration: const InputDecoration(labelText: 'كلمة المرور'), obscureText: true, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
-              const SizedBox(height: 40),
-              Text('تحديد موقع المتجر الحالي (لنقاط الانطلاق في التوصيل)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.location_on),
-                label: const Text('تحديد موقع المتجر الآن'),
-                onPressed: _getCurrentLocation,
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 50),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                _locationStatus,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _latController.text.isEmpty ? Colors.red : Colors.green,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 40),
-              _isLoading ? const CircularProgressIndicator() : ElevatedButton( onPressed: _login, style: ElevatedButton.styleFrom( minimumSize: const Size(double.infinity, 50), textStyle: const TextStyle(fontSize: 18)), child: const Text('تسجيل الدخول'))
-            ]),
+            child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.storefront_outlined, size: 80, color: Colors.blue),
+                  const SizedBox(height: 20),
+
+                  TextFormField(
+                      controller: _usernameController,
+                      decoration: const InputDecoration(labelText: 'اسم المستخدم أو البريد الإلكتروني'),
+                      validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  TextFormField(
+                      controller: _passwordController,
+                      decoration: const InputDecoration(labelText: 'كلمة المرور'),
+                      obscureText: true,
+                      validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null
+                  ),
+
+                  const SizedBox(height: 40),
+
+                  Text('تحديد موقع المتجر الحالي (لنقاط الانطلاق)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
+                  const SizedBox(height: 10),
+
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.location_on),
+                    label: const Text('تحديد موقع المتجر الآن'),
+                    onPressed: _getCurrentLocation,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 50),
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  Text(
+                    _locationStatus,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _latController.text.isEmpty ? Colors.red : Colors.green,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+
+                  const SizedBox(height: 40),
+
+                  _isLoading
+                      ? const CircularProgressIndicator()
+                      : ElevatedButton(
+                      onPressed: _login,
+                      style: ElevatedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 50),
+                          textStyle: const TextStyle(fontSize: 18)
+                      ),
+                      child: const Text('تسجيل الدخول')
+                  )
+                ]),
           ),
         ),
       ),
     );
   }
 }
-
 class StoreDashboardScreen extends StatefulWidget {
   const StoreDashboardScreen({super.key});
   @override
@@ -2520,58 +2728,137 @@ class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
   void _showCheckoutForm() => setState(() => showCheckout = true);
   void _hideCheckoutForm() => setState(() => showCheckout = false);
 
-  void _submitOrder() {
+  void _submitOrder() async {
     if (_isSubmitting) return;
+
+    // التحقق من الحقول النصية
     if (_nameController.text.isEmpty || _phoneController.text.isEmpty || _addressController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تعبئة جميع الحقول')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تعبئة جميع الحقول (الاسم، الهاتف، العنوان)')));
       return;
     }
+
     setState(() => _isSubmitting = true);
-    _sendOrderToWooCommerce();
+
+    // بدء عملية الإرسال
+    await _sendOrderToWooCommerce();
   }
 
+  // 2. دالة جلب الموقع وإرسال الطلب للسيرفر
   Future<void> _sendOrderToWooCommerce() async {
+    double? lat;
+    double? lng;
+
     try {
+      // --- خطوة 1: محاولة جلب إحداثيات GPS الحالية ---
+      // التحقق من تفعيل الخدمة
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (serviceEnabled) {
+        LocationPermission permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          permission = await Geolocator.requestPermission();
+        }
+
+        if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+          // إظهار رسالة صغيرة للمستخدم أننا نحدد الموقع
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('جاري تحديد موقعك بدقة لتسهيل التوصيل...', style: TextStyle(fontSize: 12)),
+              duration: Duration(seconds: 2),
+            ));
+          }
+
+          // جلب الموقع (Timeout بعد 5 ثواني لعدم تعطيل الطلب اذا كانت الاشارة ضعيفة)
+          Position position = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.high,
+              timeLimit: const Duration(seconds: 5)
+          );
+          lat = position.latitude;
+          lng = position.longitude;
+        }
+      }
+    } catch (e) {
+      print("Error getting location: $e");
+      // لن نوقف الطلب إذا فشل تحديد الموقع، سنعتمد على العنوان النصي
+    }
+
+    try {
+      // --- خطوة 2: تجهيز البيانات وإرسالها للسيرفر ---
+      final metaData = [
+        // إرسال المنطقة المختارة (فلترة)
+        if (_selectedAreaId != null) {"key": "_selected_area_id", "value": _selectedAreaId.toString()},
+
+        // 🔥 إرسال الإحداثيات (هذا ما يحتاجه المدير للخريطة) 🔥
+        if (lat != null) {"key": "_customer_destination_lat", "value": lat.toString()},
+        if (lng != null) {"key": "_customer_destination_lng", "value": lng.toString()},
+      ];
+
+      final orderData = {
+        "payment_method": "cod",
+        "payment_method_title": "الدفع عند الاستلام",
+        "customer_note": "طلب من تطبيق مسواك بيتي",
+        "billing": {
+          "first_name": _nameController.text,
+          "phone": _phoneController.text,
+          // تخزين الإحداثيات في العنوان أيضاً كاحتياط
+          "address_2": (lat != null) ? "$lat,$lng" : ""
+        },
+        "shipping": {
+          "address_1": _addressController.text, // العنوان النصي الذي كتبه الزبون
+        },
+        "line_items": cartItems.map((product) => {
+          "product_id": product.id,
+          "quantity": product.quantity
+        }).toList(),
+        "fee_lines": [{
+          "name": "أجرة التوصيل",
+          "total": "1000",
+          "tax_status": "none"
+        }],
+        "meta_data": metaData
+      };
+
       final response = await http.post(
         Uri.parse('https://beytei.com/wp-json/wc/v3/orders'),
         headers: {
           'Authorization': 'Basic ${base64Encode(utf8.encode('$CUSTOMER_CONSUMER_KEY:$CUSTOMER_CONSUMER_SECRET'))}',
           'Content-Type': 'application/json',
         },
-        body: json.encode({
-          "payment_method": "cod",
-          "payment_method_title": "الدفع عند الاستلام",
-          "customer_note": "طلب من تطبيق مسواك بيتي - المنطقة: ${_selectedAreaName ?? 'غير محدد'}",
-          "billing": { "first_name": _nameController.text, "phone": _phoneController.text },
-          "shipping": { "address_1": _addressController.text },
-          "line_items": cartItems.map((product) => { "product_id": product.id, "quantity": product.quantity }).toList(),
-          "fee_lines": [{ "name": "أجرة التوصيل", "total": "1000", "tax_status": "none" }],
-
-          // إرسال المنطقة المختارة في الميتا داتا (اختياري)
-          "meta_data": [
-            if (_selectedAreaId != null) {"key": "_selected_area_id", "value": _selectedAreaId.toString()}
-          ]
-        }),
+        body: json.encode(orderData),
       );
 
       if (response.statusCode == 201) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم تأكيد طلبك بنجاح انتظر اتصال المندوب !')));
         if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('تم تأكيد طلبك بنجاح! سيتم الاتصال بك قريباً.'),
+                backgroundColor: Colors.green,
+                duration: Duration(seconds: 3),
+              )
+          );
+
           setState(() {
-            cartItems.clear(); totalPrice = 0.0; showCart = false; showCheckout = false;
-            _nameController.clear(); _phoneController.clear(); _addressController.clear();
+            cartItems.clear();
+            totalPrice = 0.0;
+            showCart = false;
+            showCheckout = false;
+            _nameController.clear();
+            _phoneController.clear();
+            _addressController.clear();
           });
         }
       } else {
         throw Exception('فشل إرسال الطلب: ${response.body}');
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حدث خطأ في إرسال الطلب: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('حدث خطأ أثناء إرسال الطلب: $e'), backgroundColor: Colors.red)
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
   }
-
   // --- Widgets ---
 
   void _showProductDetails(Product product) {
