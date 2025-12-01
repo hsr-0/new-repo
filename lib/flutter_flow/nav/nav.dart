@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
 import '../../beytei_re/re.dart'as re;
 import '../../chat/chat.dart';
-import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
 import '../../ph/ph.dart' hide LocationCheckWrapper;
 import '../../taxi/tx.dart';
@@ -190,12 +189,11 @@ builder: (context, params) => HomeMainPageWidget(),
 ),
     FFRoute(
       name: 'MiswakStorePage',
-      // تم تصحيح الاسم ليكون متطابقاً مع زر الدخول
       path: '/miswak-store',
-      // ✅ التغيير هنا: نستدعي الغلاف (Wrapper) بدلاً من الشاشة مباشرة
-      builder: (context, params) => const LocationCheckWrapper(),
+      // ✅ التعديل هنا: نستدعي نقطة الدخول الجديدة (MiswakAppEntryPoint)
+      // بدلاً من (LocationCheckWrapper) مباشرة
+      builder: (context, params) => const MiswakAppEntryPoint(),
     ),
-
     FFRoute(
       name: 'medicalstorepage',
       path: '/medical-store',

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart'; // مطلوب للاهتزاز
@@ -21,7 +22,7 @@ import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
-
+import 'package:image_picker/image_picker.dart';
 import '../taxi/cash.dart';
 
 // =======================================================================
@@ -499,6 +500,10 @@ class RestaurantSettingsProvider with ChangeNotifier {
     }
   }
 
+
+
+
+
   Future<bool> updateOpenStatus(String? token, bool isOpen) async {
     if (token == null) return false;
     _isLoading = true;
@@ -544,6 +549,8 @@ class RestaurantSettingsProvider with ChangeNotifier {
   }
 }
 
+// استبدل كلاس RestaurantProductsProvider بهذا التحديث
+
 class RestaurantProductsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
   List<FoodItem> _allProducts = [];
@@ -571,18 +578,38 @@ class RestaurantProductsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> updateProduct(String token, int productId, String name, String price, String salePrice) async {
+  // تحديث المنتج (مع الصورة)
+  Future<bool> updateProduct(String token, int productId, String name, String price, String salePrice, File? newImage) async {
     _isLoading = true;
     notifyListeners();
     bool success = false;
     try {
-      success = await _apiService.updateMyProduct(token, productId, name, price, salePrice);
+      // تم تحديث الدالة لتقبل الصورة
+      success = await _apiService.updateMyProduct(token, productId, name, price, salePrice, newImage);
       if (success) {
-        // تحديث القائمة بعد النجاح
         await fetchProducts(token);
       }
     } catch (e) {
       _errorMessage = "فشل تحديث المنتج: ${e.toString()}";
+      success = false;
+    }
+    _isLoading = false;
+    notifyListeners();
+    return success;
+  }
+
+  // إضافة منتج جديد
+  Future<bool> addProduct(String token, String name, String price, String? salePrice, String description, File? image) async {
+    _isLoading = true;
+    notifyListeners();
+    bool success = false;
+    try {
+      success = await _apiService.createProduct(token, name, price, salePrice, description, image);
+      if (success) {
+        await fetchProducts(token);
+      }
+    } catch (e) {
+      _errorMessage = "فشل إضافة المنتج: ${e.toString()}";
       success = false;
     }
     _isLoading = false;
@@ -607,7 +634,6 @@ class RestaurantProductsProvider with ChangeNotifier {
     notifyListeners();
   }
 }
-
 // =======================================================================
 // --- MODELS ---
 // =======================================================================
@@ -1438,6 +1464,55 @@ class ApiService {
 
 
 
+// داخل كلاس ApiService
+
+  // دالة إضافة منتج جديد
+  Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
+    return _executeWithRetry(() async {
+      String? imageBase64;
+      if (imageFile != null) {
+        List<int> imageBytes = await imageFile.readAsBytes();
+        imageBase64 = base64Encode(imageBytes);
+      }
+
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'), // تأكد من وجود هذا المسار في PHP
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'name': name,
+          'regular_price': price,
+          'sale_price': salePrice,
+          'description': description,
+          'image_base64': imageBase64, // إرسال الصورة
+        }),
+      );
+      return response.statusCode == 201 || response.statusCode == 200;
+    });
+  }
+
+  // تحديث دالة تعديل المنتج لتقبل الصورة
+  Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile) async {
+    return _executeWithRetry(() async {
+      String? imageBase64;
+      if (newImageFile != null) {
+        List<int> imageBytes = await newImageFile.readAsBytes();
+        imageBase64 = base64Encode(imageBytes);
+      }
+
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-product'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'product_id': productId,
+          'name': name,
+          'regular_price': price,
+          'sale_price': salePrice,
+          'image_base64': imageBase64, // إرسال الصورة الجديدة إن وجدت
+        }),
+      );
+      return response.statusCode == 200;
+    });
+  }
 
 
   Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
@@ -1601,22 +1676,6 @@ class ApiService {
   }
 
   // ✨ دالة لتحديث بيانات المنتج (للمدير)
-  Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice) async {
-    return _executeWithRetry(() async {
-      // (يجب إنشاء هذا المسار في الواجهة الخلفية)
-      final response = await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-product'),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-        body: json.encode({
-          'product_id': productId,
-          'name': name,
-          'regular_price': price,
-          'sale_price': salePrice,
-        }),
-      );
-      return response.statusCode == 200;
-    });
-  }
   Future<Map<String, dynamic>> getDeliveryFee({
     required int restaurantId, // ✨ [تم التعديل] أصبح يستقبل رقم المطعم
     required double customerLat,
@@ -5200,6 +5259,8 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
 // =======================================================================
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================
+// استبدل كلاس ProductManagementTab بهذا الكود
+
 class ProductManagementTab extends StatefulWidget {
   const ProductManagementTab({super.key});
 
@@ -5217,7 +5278,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
   }
 
   void _navigateToEditScreen(FoodItem product) async {
-    // (context) هنا هو سياق شاشة الإدارة
     final productProvider = Provider.of<RestaurantProductsProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
@@ -5226,7 +5286,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
       MaterialPageRoute(
         builder: (_) => EditProductScreen(
           product: product,
-          // تمرير الـ Providers إلى الشاشة التالية
           productProvider: productProvider,
           authProvider: authProvider,
         ),
@@ -5237,7 +5296,28 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("تم تحديث المنتج بنجاح"), backgroundColor: Colors.green),
       );
-      // (لا نحتاج لعمل fetch هنا لأن الـ provider سيقوم بذلك)
+    }
+  }
+
+  // دالة الانتقال لشاشة الإضافة
+  void _navigateToAddScreen() async {
+    final productProvider = Provider.of<RestaurantProductsProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    final bool? result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddProductScreen( // شاشة جديدة سننشئها بالأسفل
+          productProvider: productProvider,
+          authProvider: authProvider,
+        ),
+      ),
+    );
+
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("تم إضافة المنتج بنجاح"), backgroundColor: Colors.green),
+      );
     }
   }
 
@@ -5248,15 +5328,21 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     return Consumer<RestaurantProductsProvider>(
       builder: (context, provider, child) {
         return Scaffold(
+          // زر الإضافة العائم (تم تفعيله)
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: _navigateToAddScreen,
+            label: const Text("إضافة منتج"),
+            icon: const Icon(Icons.add),
+            backgroundColor: Theme.of(context).primaryColor,
+            foregroundColor: Colors.white,
+          ),
           appBar: AppBar(
-            // شريط البحث
             title: TextField(
               controller: _searchController,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 hintText: 'ابحث عن منتج...',
-                prefixIcon: const Icon(Icons.search),
+                prefixIcon: Icon(Icons.search),
                 border: InputBorder.none,
-                filled: false,
               ),
               onChanged: (query) => provider.search(query),
             ),
@@ -5275,44 +5361,51 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
                 return NetworkErrorWidget(message: provider.errorMessage!, onRetry: () => provider.fetchProducts(auth.token));
               }
               if (provider.products.isEmpty) {
-                return const Center(child: Text("لم يتم العثور على منتجات لهذا المطعم."));
+                return const Center(child: Text("لم يتم العثور على منتجات. أضف منتجك الأول!"));
               }
 
               return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80), // مسافة للزر العائم
                 itemCount: provider.products.length,
                 itemBuilder: (context, index) {
                   final product = provider.products[index];
-                  return ListTile(
-                    leading: CachedNetworkImage(
-                      imageUrl: product.imageUrl,
-                      width: 50,
-                      height: 50,
-                      fit: BoxFit.cover,
-                      errorWidget: (c, u, e) => const Icon(Icons.fastfood),
+                  return Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    child: ListTile(
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: CachedNetworkImage(
+                          imageUrl: product.imageUrl,
+                          width: 50,
+                          height: 50,
+                          fit: BoxFit.cover,
+                          errorWidget: (c, u, e) => Container(color: Colors.grey, child: const Icon(Icons.fastfood)),
+                        ),
+                      ),
+                      title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text("السعر: ${product.formattedPrice}", style: TextStyle(color: product.salePrice != null ? Colors.red : Colors.black)),
+                      trailing: const Icon(Icons.edit_outlined, color: Colors.blue),
+                      onTap: () => _navigateToEditScreen(product),
                     ),
-                    title: Text(product.name),
-                    subtitle: Text("السعر: ${product.formattedPrice}", style: TextStyle(color: product.salePrice != null ? Colors.red : Colors.black)),
-                    trailing: const Icon(Icons.edit_outlined),
-                    onTap: () => _navigateToEditScreen(product),
                   );
                 },
               );
             }(),
           ),
-          // (يمكنك إضافة زر لإضافة منتج جديد هنا لاحقاً)
-          // floatingActionButton: FloatingActionButton(
-          //   onPressed: () { /* _navigateToAddScreen() */ },
-          //   child: Icon(Icons.add),
-          // ),
         );
       },
     );
   }
 }
 
+
+
+
 // =======================================================================
 // --- ✨ شاشة جديدة: تعديل المنتج ---
 // =======================================================================
+// استبدل كلاس EditProductScreen بهذا الكود
+
 class EditProductScreen extends StatefulWidget {
   final FoodItem product;
   final RestaurantProductsProvider productProvider;
@@ -5334,13 +5427,15 @@ class _EditProductScreenState extends State<EditProductScreen> {
   late TextEditingController _nameController;
   late TextEditingController _priceController;
   late TextEditingController _salePriceController;
+  File? _selectedImage; // لتخزين الصورة الجديدة
   bool _isLoading = false;
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.product.name);
-    _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0)); // السعر بدون كسور
+    _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0));
     _salePriceController = TextEditingController(text: widget.product.salePrice?.toStringAsFixed(0) ?? '');
   }
 
@@ -5352,23 +5447,35 @@ class _EditProductScreenState extends State<EditProductScreen> {
     super.dispose();
   }
 
+  // دالة اختيار الصورة
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImage = File(pickedFile.path);
+      });
+    }
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
+    // نمرر الصورة الجديدة (_selectedImage) للدالة
     final success = await widget.productProvider.updateProduct(
       widget.authProvider.token!,
       widget.product.id,
       _nameController.text,
       _priceController.text,
       _salePriceController.text,
+      _selectedImage,
     );
 
     if (mounted) {
       setState(() => _isLoading = false);
       if (success) {
-        Navigator.pop(context, true); // إرجاع "true" لإعلام الشاشة السابقة بالنجاح
+        Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(widget.productProvider.errorMessage ?? "فشل التحديث"), backgroundColor: Colors.red),
@@ -5380,9 +5487,7 @@ class _EditProductScreenState extends State<EditProductScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text("تعديل: ${widget.product.name}"),
-      ),
+      appBar: AppBar(title: Text("تعديل: ${widget.product.name}")),
       body: Stack(
         children: [
           Form(
@@ -5390,29 +5495,55 @@ class _EditProductScreenState extends State<EditProductScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16.0),
               children: [
-                CachedNetworkImage(
-                  imageUrl: widget.product.imageUrl,
-                  height: 200,
-                  fit: BoxFit.cover,
-                  errorWidget: (c, u, e) => const Icon(Icons.fastfood, size: 100),
+                // منطقة الصورة
+                GestureDetector(
+                  onTap: _pickImage,
+                  child: Center(
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(15),
+                          child: _selectedImage != null
+                              ? Image.file(_selectedImage!, height: 200, width: double.infinity, fit: BoxFit.cover)
+                              : CachedNetworkImage(
+                            imageUrl: widget.product.imageUrl,
+                            height: 200,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorWidget: (c, u, e) => Container(color: Colors.grey[300], child: const Icon(Icons.fastfood, size: 80)),
+                          ),
+                        ),
+                        Container(
+                          margin: const EdgeInsets.all(10),
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                          child: const Icon(Icons.camera_alt, color: Colors.blue),
+                        )
+                      ],
+                    ),
+                  ),
                 ),
+                const SizedBox(height: 10),
+                const Text("اضغط على الصورة لتغييرها", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
                 const SizedBox(height: 20),
+
                 TextFormField(
                   controller: _nameController,
-                  decoration: const InputDecoration(labelText: 'اسم المنتج'),
+                  decoration: const InputDecoration(labelText: 'اسم المنتج', border: OutlineInputBorder()),
                   validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _priceController,
-                  decoration: const InputDecoration(labelText: 'السعر العادي (د.ع)'),
+                  decoration: const InputDecoration(labelText: 'السعر العادي (د.ع)', border: OutlineInputBorder()),
                   keyboardType: TextInputType.number,
                   validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _salePriceController,
-                  decoration: const InputDecoration(labelText: 'سعر الخصم (د.ع) - (اتركه فارغاً لإلغاء الخصم)'),
+                  decoration: const InputDecoration(labelText: 'سعر الخصم (اختياري)', border: OutlineInputBorder()),
                   keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 30),
@@ -5420,7 +5551,9 @@ class _EditProductScreenState extends State<EditProductScreen> {
                   onPressed: _isLoading ? null : _submit,
                   style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      textStyle: const TextStyle(fontSize: 18, fontFamily: 'Tajawal', fontWeight: FontWeight.bold)
+                      backgroundColor: Theme.of(context).primaryColor,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
                   ),
                   child: const Text('حفظ التعديلات'),
                 ),
@@ -5428,15 +5561,185 @@ class _EditProductScreenState extends State<EditProductScreen> {
             ),
           ),
           if (_isLoading)
-            Container(
-              color: Colors.black.withOpacity(0.3),
-              child: const Center(child: CircularProgressIndicator()),
-            ),
+            Container(color: Colors.black.withOpacity(0.3), child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
-}class OrdersListScreen extends StatefulWidget {
+}
+// أضف هذا الكلاس الجديد في ملف re.dart
+
+class AddProductScreen extends StatefulWidget {
+  final RestaurantProductsProvider productProvider;
+  final AuthProvider authProvider;
+
+  const AddProductScreen({
+    super.key,
+    required this.productProvider,
+    required this.authProvider,
+  });
+
+  @override
+  State<AddProductScreen> createState() => _AddProductScreenState();
+}
+
+class _AddProductScreenState extends State<AddProductScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _salePriceController = TextEditingController();
+  final _descController = TextEditingController();
+  File? _selectedImage;
+  bool _isLoading = false;
+  final ImagePicker _picker = ImagePicker();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _priceController.dispose();
+    _salePriceController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImage = File(pickedFile.path);
+      });
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    // يفضل أن تكون الصورة إلزامية عند الإنشاء
+    if (_selectedImage == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء اختيار صورة للمنتج")));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    final success = await widget.productProvider.addProduct(
+      widget.authProvider.token!,
+      _nameController.text,
+      _priceController.text,
+      _salePriceController.text.isEmpty ? null : _salePriceController.text,
+      _descController.text,
+      _selectedImage,
+    );
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+      if (success) {
+        Navigator.pop(context, true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.productProvider.errorMessage ?? "فشل إضافة المنتج"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("إضافة منتج جديد")),
+      body: Stack(
+        children: [
+          Form(
+            key: _formKey,
+            child: ListView(
+              padding: const EdgeInsets.all(16.0),
+              children: [
+                // اختيار الصورة
+                GestureDetector(
+                  onTap: _pickImage,
+                  child: Container(
+                    height: 200,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(color: Colors.grey.shade400),
+                    ),
+                    child: _selectedImage != null
+                        ? ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: Image.file(_selectedImage!, fit: BoxFit.cover),
+                    )
+                        : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.add_a_photo, size: 50, color: Colors.grey),
+                        SizedBox(height: 10),
+                        Text("اضغط لإضافة صورة", style: TextStyle(color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'اسم المنتج', border: OutlineInputBorder()),
+                  validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+                ),
+                const SizedBox(height: 16),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _priceController,
+                        decoration: const InputDecoration(labelText: 'السعر (د.ع)', border: OutlineInputBorder()),
+                        keyboardType: TextInputType.number,
+                        validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _salePriceController,
+                        decoration: const InputDecoration(labelText: 'سعر الخصم (اختياري)', border: OutlineInputBorder()),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                TextFormField(
+                  controller: _descController,
+                  decoration: const InputDecoration(labelText: 'وصف المنتج', border: OutlineInputBorder()),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 30),
+
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                  ),
+                  child: const Text('إضافة المنتج'),
+                ),
+              ],
+            ),
+          ),
+          if (_isLoading)
+            Container(color: Colors.black.withOpacity(0.3), child: const Center(child: CircularProgressIndicator())),
+        ],
+      ),
+    );
+  }
+}
+
+class OrdersListScreen extends StatefulWidget {
   final String status;
   const OrdersListScreen({super.key, required this.status});
   @override

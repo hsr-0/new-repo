@@ -1,61 +1,84 @@
-
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
-import 'package:intl/intl.dart';
-import 'package:carousel_slider/carousel_slider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/services.dart'; // مطلوب للاهتزاز
+import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:carousel_slider/carousel_slider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:geolocator/geolocator.dart' as geolocator;
-import 'package:geolocator/geolocator.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import '../taxi/cash.dart';
 
 // =======================================================================
-// --- (جديد) إعدادات وثوابت عامة للـ Admin Dashboard ---
+// --- إعدادات وثوابت عامة للوحدة ---
 // =======================================================================
 // (تم تغيير الدومين إلى beytei.com ومسار API جديد)
-const String STORE_BASE_URL = 'https://beytei.com';
+const String BEYTEI_URL = 'https://beytei.com';
 const String STORE_APP_NAMESPACE = '/wp-json/store-app/v1'; // (هذا مسار مقترح للـ Backend)
-const String STORE_APP_URL = '$STORE_BASE_URL$STORE_APP_NAMESPACE';
+const String STORE_APP_URL = 'BEYTEI_URL$STORE_APP_NAMESPACE';
 
 // (هذه الثوابت خاصة بـ WooCommerce API للزبون - من الكود الخاص بك)
-const String CUSTOMER_CONSUMER_KEY = 'ck_86b62f6fe8a298a5f9d564d70d689db81b9255ed';
-const String CUSTOMER_CONSUMER_SECRET = 'cs_b2de9b284f6245c8297caaf37976d899d6789ab2';
+const String CONSUMER_KEY = 'ck_86b62f6fe8a298a5f9d564d70d689db81b9255ed';
+const String CONSUMER_SECRET = 'cs_b2de9b284f6245c8297caaf37976d899d6789ab2';
 
 const Duration API_TIMEOUT = Duration(seconds: 30);
 
-
 // =======================================================================
-// --- (جديد) معالج رسائل الخلفية (للـ Admin) ---
+// --- معالج رسائل الخلفية ---
 // =======================================================================
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  await AdminNotificationService.display(message);
+  await NotificationService.display(message);
 }
 
 // =======================================================================
-// --- (جديد) PROVIDERS (للـ Admin) ---
+// --- PROVIDERS ---
 // =======================================================================
+
+class NotificationProvider with ChangeNotifier {
+  void triggerRefresh() {
+    notifyListeners();
+  }
+}
+
+class NavigationProvider with ChangeNotifier {
+  int _currentIndex = 0;
+  int get currentIndex => _currentIndex;
+
+  void changeTab(int index) {
+    if (_currentIndex == index) return;
+    _currentIndex = index;
+    notifyListeners();
+  }
+}
+
+
+
+
 
 class AuthProvider with ChangeNotifier {
   String? _token;
+  String? _userRole; // 'owner' أو 'leader'
   bool _isLoading = true;
 
   String? get token => _token;
+  String? get userRole => _userRole;
   bool get isLoading => _isLoading;
   bool get isLoggedIn => _token != null;
 
@@ -65,25 +88,29 @@ class AuthProvider with ChangeNotifier {
 
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('jwt_token_store_admin');
+    _token = prefs.getString('jwt_token');
+    _userRole = prefs.getString('user_role'); // استرجاع الرتبة
     _isLoading = false;
     notifyListeners();
   }
 
-  Future<bool> login(String username, String password, {String? storeLat, String? storeLng}) async {
-    final authService = AdminAuthService();
-    _token = await authService.loginAdmin(username, password);
+  // دالة تسجيل دخول موحدة مع تحديد الرتبة
+  Future<bool> login(String username, String password, String role, {String? restaurantLat, String? restaurantLng}) async {
+    final authService = AuthService();
+    _token = await authService.loginRestaurantOwner(username, password);
 
     if (_token != null) {
-      // تسجيل التوكن الخاص بالإشعارات
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('jwt_token', _token!);
+      await prefs.setString('user_role', role); // حفظ الرتبة (owner/leader)
+      _userRole = role;
+
+      // تحديث FCM
       await authService.registerDeviceToken();
 
-      final prefs = await SharedPreferences.getInstance();
-      // حفظ الإحداثيات إذا تم تحديدها
-      if (storeLat != null && storeLng != null) {
-        await prefs.setDouble('store_lat', double.tryParse(storeLat) ?? 0.0);
-        await prefs.setDouble('store_lng', double.tryParse(storeLng) ?? 0.0);
-        await prefs.setString('saved_store_name', '');
+      if (restaurantLat != null && restaurantLng != null) {
+        await prefs.setDouble('restaurant_lat', double.tryParse(restaurantLat) ?? 0.0);
+        await prefs.setDouble('restaurant_lng', double.tryParse(restaurantLng) ?? 0.0);
       }
 
       notifyListeners();
@@ -92,91 +119,384 @@ class AuthProvider with ChangeNotifier {
     return false;
   }
 
-  Future<void> logout() async {
-    final authService = AdminAuthService();
+  Future<void> logout(BuildContext context) async {
+    final authService = AuthService();
     await authService.logout();
     _token = null;
+    _userRole = null;
+
+    // مسح البيانات من الذاكرة
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('jwt_token');
+    await prefs.remove('user_role');
+
+    if (context.mounted) {
+      Provider.of<CustomerProvider>(context, listen: false).clearData();
+      Provider.of<RestaurantSettingsProvider>(context, listen: false).clearData();
+    }
     notifyListeners();
   }
 }
-class DashboardProvider with ChangeNotifier {
-  final AdminApiService _apiService = AdminApiService();
-  Map<String, List<Order>> _orders = {};
-  Map<int, String> _pickupCodes = {}; // كود استلام السائق
+// (الصق هذا بدلاً من CustomerProvider القديم)
+class CustomerProvider with ChangeNotifier {
+  final ApiService _apiService = ApiService();
 
+  Map<String, List<dynamic>> _homeData = {}; // Stores fetched data for home screen sections
+  List<Restaurant> _allRestaurants = []; // Stores all restaurants for the "Restaurants" screen
+  Map<int, List<FoodItem>> _menuItems = {}; // Map<restaurantId, List<FoodItem>> for individual menus
+
+  int _lastLoadedAreaId = -1; // لتتبع آخر منطقة تم تحميلها
+
+  bool _isLoadingHome = false;
+  bool _isLoadingRestaurants = false;
+  bool _isLoadingMenu = false;
+  bool _hasError = false;
+
+  // --- Getters ---
+  Map<String, List<dynamic>> get homeData => _homeData;
+  List<Restaurant> get allRestaurants => _allRestaurants;
+  Map<int, List<FoodItem>> get menuItems => _menuItems;
+  bool get isLoadingHome => _isLoadingHome;
+  bool get isLoadingRestaurants => _isLoadingRestaurants;
+  bool get isLoadingMenu => _isLoadingMenu;
+  bool get hasError => _hasError;
+
+  // --- Clear Data ---
+  void clearData() {
+    _homeData = {};
+    _allRestaurants = [];
+    _menuItems = {};
+    _lastLoadedAreaId = -1;
+    _hasError = false;
+    notifyListeners();
+  }
+
+  // --- ✨ [ هذا هو الكود الجديد V3 - الطريقة الهجينة (المرنة والسريعة) ] ---
+  // (استبدل fetchHomeData بالكامل بهذا)
+  Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
+
+    // 1. [تحسين] (كما هو) لا تقم بإعادة التحميل إذا كانت البيانات موجودة
+    if (_homeData.isNotEmpty && !isRefresh && _lastLoadedAreaId == areaId) {
+      return;
+    }
+
+    // 2. [تحسين] (كما هو) أظهر الشيمر فقط إذا كانت البيانات فارغة
+    if (_homeData.isEmpty || _lastLoadedAreaId != areaId) {
+      _isLoadingHome = true;
+      _hasError = false;
+      _homeData = {};
+      notifyListeners();
+    }
+
+    _lastLoadedAreaId = areaId;
+
+    // --- ✨ [ هذا هو التغيير الجوهري: منطق الطلبات المنفردة ] ---
+
+    // 3. الخطوة 1: جلب البيانات الحرجة (المطاعم)
+    Set<int> deliverableRestaurantIds;
+    List<Restaurant> allRestaurantsList;
+    Map<int, bool> restaurantStatusMap;
+
+    try {
+      final criticalResults = await Future.wait([
+        _apiService.getDeliverableRestaurantIds(areaId),
+        _apiService.getAllRestaurants(areaId: areaId),
+      ]);
+
+      deliverableRestaurantIds = criticalResults[0] as Set<int>;
+      allRestaurantsList = criticalResults[1] as List<Restaurant>;
+
+      // بناء الخرائط التي سنحتاجها لاحقاً
+      final deliverableRestaurantsForDisplay = _filterRestaurantsByArea(deliverableRestaurantIds, allRestaurantsList);
+      restaurantStatusMap = {for (var r in allRestaurantsList) r.id: r.isOpen};
+
+      // [ العرض الأول ] - عرض المطاعم
+      _homeData['restaurants'] = deliverableRestaurantsForDisplay;
+      _hasError = false; // نجحنا في جلب الأساسيات
+      _isLoadingHome = false; // أوقف الشيمر
+      notifyListeners(); // 👈 تحديث الواجهة (ستظهر المطاعم)
+
+    } catch (e) {
+      // إذا فشلت الأساسيات، أوقف كل شيء
+      print("Error fetching CRITICAL home data: $e");
+      if (_homeData.isEmpty) { // أظهر الخطأ فقط إذا لا يوجد كاش
+        _hasError = true;
+      }
+      _isLoadingHome = false;
+      notifyListeners();
+      return; // 👈 إيقاف الدالة
+    }
+
+    // 4. الخطوة 2: جلب العروض (طلب منفرد ومرن)
+
+    // 5. الخطوة 3: جلب الفطور (طلب منفرد ومرن)
+
+
+    // 6. الخطوة 4: جلب الوجبات العائلية (طلب منفرد ومرن)
+    try {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      final onSaleItems = await _apiService.getOnSaleItems();
+      _homeData['onSale'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, onSaleItems);
+      notifyListeners(); // 👈 تحديث الواجهة (ستظهر العروض)
+    } catch (e) {
+      print("Error fetching (optional) onSale items: $e");
+      _homeData['onSale'] = []; // ضع قائمة فارغة في حال الفشل
+      notifyListeners();
+    }
+
+    // 5. الخطوة 3: جلب الفطور (طلب منفرد ومرن)
+    try {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      final breakfastItems = await _apiService.getProductsByTag(tagName: "فطور");
+      _homeData['breakfast'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, breakfastItems);
+      notifyListeners(); // 👈 تحديث الواجهة (سيظهر الفطور)
+    } catch (e) {
+      print("Error fetching (optional) breakfast items: $e");
+      _homeData['breakfast'] = [];
+      notifyListeners();
+    }
+
+    // 6. الخطوة 4: جلب الوجبات العائلية (طلب منفرد ومرن)
+    try {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      final familyItems = await _apiService.getProductsByTag(tagName: "عائلي");
+      _homeData['family'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, familyItems);
+      notifyListeners(); // 👈 تحديث الواجهة (ستظهر الوجبات العائلية)
+    } catch (e) {
+      print("Error fetching (optional) family items: $e");
+      _homeData['family'] = [];
+      notifyListeners();
+    }
+    // 7. التأكد من إيقاف التحميل في النهاية (حتى لو فشلت بعض الطلبات الاختيارية)
+    _isLoadingHome = false;
+    notifyListeners();
+  }
+  // --- نهاية الدالة المستبدلة ---
+
+
+  // --- Helper: Filter Restaurants by Delivery Area ---
+  List<Restaurant> _filterRestaurantsByArea(Set<int> deliverableIds, List<Restaurant> restaurants) {
+    return restaurants.map((r) {
+      r.isDeliverable = deliverableIds.contains(r.id);
+      return r; // Return the restaurant with the updated flag
+    }).toList();
+  }
+
+  List<FoodItem> _filterFoodItems(Set<int> deliverableRestaurantIds, Map<int, bool> restaurantStatusMap, List<FoodItem> items) {
+    return items.map((item) {
+      bool isInDeliverableArea = deliverableRestaurantIds.contains(item.categoryId);
+      bool isRestaurantOpen = restaurantStatusMap[item.categoryId] ?? false;
+      item.isDeliverable = isInDeliverableArea && isRestaurantOpen;
+      return item;
+    }).toList();
+  }
+
+
+  // --- بقية الدوال تبقى كما هي ---
+  Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
+    if (isRefresh) {
+      _allRestaurants = [];
+    }
+    if (_allRestaurants.isNotEmpty && !isRefresh) return;
+
+    _isLoadingRestaurants = true;
+    _hasError = false;
+    notifyListeners();
+    try {
+      final allRestaurantsList = await _apiService.getAllRestaurants(areaId: areaId);
+      final deliverableIds = await _apiService.getDeliverableRestaurantIds(areaId);
+
+      for (var r in allRestaurantsList) {
+        r.isDeliverable = deliverableIds.contains(r.id);
+      }
+      _allRestaurants = allRestaurantsList;
+      _hasError = false;
+    } catch (e) {
+      print("Error fetching all restaurants for area $areaId: $e");
+      _hasError = true;
+      _allRestaurants = [];
+    } finally {
+      _isLoadingRestaurants = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
+    if (isRefresh) {
+      _menuItems.remove(restaurantId);
+    }
+    if (_menuItems.containsKey(restaurantId) && !isRefresh) return;
+
+    _isLoadingMenu = true;
+    _hasError = false;
+    notifyListeners();
+    try {
+      final newItems = await _apiService.getMenuForRestaurant(restaurantId);
+
+      final restaurant = _allRestaurants.firstWhere(
+              (r) => r.id == restaurantId,
+          orElse: () {
+            final homeRestaurants = (_homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+            return homeRestaurants.firstWhere(
+                    (r) => r.id == restaurantId,
+                orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '00:00', autoCloseTime: '00:00', latitude: 0, longitude: 0)
+            );
+          }
+      );
+
+      final bool isRestaurantReady = restaurant.isDeliverable && restaurant.isOpen;
+
+      for (var item in newItems) {
+        item.isDeliverable = isRestaurantReady;
+      }
+
+      _menuItems[restaurantId] = newItems;
+      _hasError = false;
+    } catch (e) {
+      print("Error fetching menu for restaurant $restaurantId: $e");
+      _hasError = true;
+      _menuItems[restaurantId] = [];
+    } finally {
+      _isLoadingMenu = false;
+      notifyListeners();
+    }
+  }
+}
+class DashboardProvider with ChangeNotifier {
+  Map<String, List<Order>> _orders = {};
+  RestaurantRatingsDashboard? _ratingsDashboard;
+  Map<int, String> _pickupCodes = {};
   bool _isLoading = false;
-  bool _hasNetworkError = false;
-  String _errorMessage = '';
+  Timer? _timer;
 
   Map<String, List<Order>> get orders => _orders;
+  RestaurantRatingsDashboard? get ratingsDashboard => _ratingsDashboard;
   Map<int, String> get pickupCodes => _pickupCodes;
   bool get isLoading => _isLoading;
-  bool get hasNetworkError => _hasNetworkError;
-  String get errorMessage => _errorMessage;
+
+  // إلغاء العداد والاعتماد على الإشعار
+  void startAutoRefresh(String token) {
+    _timer?.cancel();
+    fetchDashboardData(token, silent: true);
+  }
+
+  void stopAutoRefresh() {
+    _timer?.cancel();
+  }
 
   void setPickupCode(int orderId, String code) {
     _pickupCodes[orderId] = code;
-    notifyListeners(); // (تم الإصلاح: يجب التحديث فوراً)
-  }
-
-  void clearData() {
-    _orders = {};
-    _pickupCodes = {};
     notifyListeners();
   }
 
-  Future<void> fetchDashboardData(String? token) async {
+  // إيقاف الأتمتة
+  Future<void> checkAndAutoRequestDelivery(String token) async {
+    // 🚫 Disabled
+  }
+
+  // 🔥 منطق الفرز الجديد: إظهار كل شيء ما عدا المنتهي
+  Future<void> fetchDashboardData(String? token, {bool silent = false}) async {
     if (token == null) return;
-
-    // (يمكن إضافة نظام الكاش لاحقاً)
-    _isLoading = true;
-    _hasNetworkError = false;
-    notifyListeners();
-
+    if (!silent) {
+      _isLoading = true;
+      notifyListeners();
+    }
     try {
-      // (يجب تعديل هذه الدوال في AdminApiService)
-      final activeOrders = await _apiService.getStoreOrders(status: 'active', token: token);
-      final completedOrders = await _apiService.getStoreOrders(status: 'completed', token: token);
+      final ApiService api = ApiService();
 
-      _orders['active'] = activeOrders;
-      _orders['completed'] = completedOrders;
-      _hasNetworkError = false;
+      // جلب الكل
+      final activeFromServer = await api.getRestaurantOrders(status: 'active', token: token);
+      final completedFromServer = await api.getRestaurantOrders(status: 'completed', token: token);
+
+      List<Order> allOrders = [...activeFromServer, ...completedFromServer];
+      final ids = <int>{};
+      allOrders.retainWhere((x) => ids.add(x.id));
+
+      List<Order> finalActive = [];
+      List<Order> finalCompleted = [];
+
+      // ⛔ القائمة السوداء (الحالات المنتهية فقط)
+      final List<String> archiveStatuses = [
+        'completed', 'cancelled', 'refunded', 'failed', 'trash'
+      ];
+
+      for (var order in allOrders) {
+        // ✅ إذا لم يكن منتهياً، اعرضه في النشط فوراً
+        if (!archiveStatuses.contains(order.status)) {
+          finalActive.add(order);
+        } else {
+          finalCompleted.add(order);
+        }
+      }
+
+      finalCompleted.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+      finalActive.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+
+      _orders['active'] = finalActive;
+      _orders['completed'] = finalCompleted;
+
+      final ratings = await api.getDashboardRatings(token);
+      _ratingsDashboard = ratings;
 
     } catch (e) {
-      if (_orders.isEmpty) {
-        _hasNetworkError = true;
-        _errorMessage = 'فشل في تحديث البيانات. يرجى التحقق من اتصالك بالإنترنت.';
-      }
+      print("Error fetching dashboard: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
-}
 
-class StoreSettingsProvider with ChangeNotifier {
-  final AdminApiService _apiService = AdminApiService();
-  bool _isStoreOpen = true;
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+}
+class RestaurantSettingsProvider with ChangeNotifier {
+  final ApiService _apiService = ApiService();
+  bool _isRestaurantOpen = true;
   String _openTime = '09:00';
   String _closeTime = '22:00';
   bool _isLoading = false;
 
-  bool get isStoreOpen => _isStoreOpen;
+  bool get isRestaurantOpen => _isRestaurantOpen;
   String get openTime => _openTime;
   String get closeTime => _closeTime;
   bool get isLoading => _isLoading;
 
+  // عند تسجيل دخول المدير، يجب جلب هذه البيانات وحفظ الإحداثيات للأتمتة
   Future<void> fetchSettings(String? token) async {
     if (token == null) return;
     _isLoading = true;
     notifyListeners();
     try {
-      final settings = await _apiService.getStoreSettings(token);
-      _isStoreOpen = settings['is_open'] ?? true;
+      // جلب الإعدادات من السيرفر
+      final settings = await _apiService.getRestaurantSettings(token);
+
+      _isRestaurantOpen = settings['is_open'] ?? true;
       _openTime = settings['auto_open_time'] ?? '09:00';
       _closeTime = settings['auto_close_time'] ?? '22:00';
+
+      // ✨✨✨ الإصلاح الحاسم للأتمتة ✨✨✨
+      // حفظ اسم المطعم وإحداثياته في الذاكرة لكي تستخدمها الأتمتة
+      if (settings['restaurant_info'] != null) {
+        final prefs = await SharedPreferences.getInstance();
+        final info = settings['restaurant_info'];
+
+        if (info['latitude'] != null && info['longitude'] != null) {
+          await prefs.setDouble('restaurant_lat', double.tryParse(info['latitude'].toString()) ?? 0.0);
+          await prefs.setDouble('restaurant_lng', double.tryParse(info['longitude'].toString()) ?? 0.0);
+          print("✅ تم تحديث موقع  في الذاكرة: ${info['latitude']}, ${info['longitude']}");
+        }
+
+        if (info['name'] != null) {
+          await prefs.setString('restaurant_name', info['name'].toString());
+        }
+      }
+      // ✨✨✨ نهاية الإصلاح ✨✨✨
+
     } catch (e) {
-      // Handle error
+      print("Error fetching settings: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -188,8 +508,10 @@ class StoreSettingsProvider with ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     try {
-      final success = await _apiService.updateStoreStatus(token, isOpen);
-      if (success) _isStoreOpen = isOpen;
+      final success = await _apiService.updateRestaurantStatus(token, isOpen);
+      if (success) {
+        _isRestaurantOpen = isOpen;
+      }
       return success;
     } catch (e) {
       return false;
@@ -204,7 +526,7 @@ class StoreSettingsProvider with ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     try {
-      final success = await _apiService.updateStoreAutoTimes(token, openTime, closeTime);
+      final success = await _apiService.updateRestaurantAutoTimes(token, openTime, closeTime);
       if (success) {
         _openTime = openTime;
         _closeTime = closeTime;
@@ -219,21 +541,21 @@ class StoreSettingsProvider with ChangeNotifier {
   }
 
   void clearData() {
-    _isStoreOpen = true;
+    _isRestaurantOpen = true;
     _openTime = '09:00';
     _closeTime = '22:00';
     notifyListeners();
   }
 }
 
-class StoreProductsProvider with ChangeNotifier {
-  final AdminApiService _apiService = AdminApiService();
-  List<Product> _allProducts = []; // (استخدام مودل المنتج من كود المسواك)
-  List<Product> _filteredProducts = [];
+class RestaurantProductsProvider with ChangeNotifier {
+  final ApiService _apiService = ApiService();
+  List<FoodItem> _allProducts = [];
+  List<FoodItem> _filteredProducts = [];
   bool _isLoading = false;
   String? _errorMessage;
 
-  List<Product> get products => _filteredProducts;
+  List<FoodItem> get products => _filteredProducts;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 
@@ -244,7 +566,7 @@ class StoreProductsProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      _allProducts = await _apiService.getMyStoreProducts(token);
+      _allProducts = await _apiService.getMyRestaurantProducts(token);
       _filteredProducts = _allProducts;
     } catch (e) {
       _errorMessage = "فشل جلب المنتجات: ${e.toString()}";
@@ -258,10 +580,10 @@ class StoreProductsProvider with ChangeNotifier {
     notifyListeners();
     bool success = false;
     try {
-      // (يجب تعديل هذه الدالة في AdminApiService)
-      success = await _apiService.updateMyStoreProduct(token, productId, name, price, salePrice);
+      success = await _apiService.updateMyProduct(token, productId, name, price, salePrice);
       if (success) {
-        await fetchProducts(token); // تحديث القائمة
+        // تحديث القائمة بعد النجاح
+        await fetchProducts(token);
       }
     } catch (e) {
       _errorMessage = "فشل تحديث المنتج: ${e.toString()}";
@@ -290,11 +612,250 @@ class StoreProductsProvider with ChangeNotifier {
   }
 }
 
+// =======================================================================
+// --- MODELS ---
+// =======================================================================
+class Area {
+  final int id;
+  final String name;
+  final int parentId;
+  Area({required this.id, required this.name, required this.parentId});
+  factory Area.fromJson(Map<String, dynamic> json) => Area(id: json['id'], name: json['name'], parentId: json['parent']);
+}
 
-// =======================================================================
-// --- (جديد) MODELS (للـ Admin) ---
-// (هذه منسوخة من تطبيق المطعم)
-// =======================================================================
+// في ملف re.dart (داخل قسم MODELS)
+// استبدل الكلاس Restaurant القديم بهذا:
+
+// (الصق هذا بدلاً من Restaurant القديم)
+class Restaurant {
+  final int id;
+  final String name;
+  final String imageUrl;
+  bool isDeliverable; // Flag indicating if it delivers to the selected area
+  final double averageRating;
+  final int ratingCount;
+  // ✨ الحقول الجديدة لحالة المطعم وأوقات العمل
+  final bool isOpen; // <<< الحالة النهائية المحسوبة من الخادم (يدوي + تلقائي)
+  final String autoOpenTime; // <<< وقت الفتح التلقائي (للعرض فقط)
+  final String autoCloseTime; // <<< وقت الإغلاق التلقائي (للعرض فقط)
+
+  // ✨ [إضافة جديدة] إحداثيات المطعم لحساب سعر التوصيل
+  final double latitude;
+  final double longitude;
+
+  Restaurant({
+    required this.id,
+    required this.name,
+    required this.imageUrl,
+    this.isDeliverable = false,
+    this.averageRating = 0.0,
+    this.ratingCount = 0,
+    required this.isOpen,
+    required this.autoOpenTime,
+    required this.autoCloseTime,
+    // ✨ إضافة الإحداثيات
+    required this.latitude,
+    required this.longitude,
+  });
+
+  // ✨ --- تم حذف الـ Getter `isCurrentlyOpen` بالكامل ---
+  // ✨ --- تم حذف الدالة المساعدة `_parseTime` بالكامل ---
+
+  // --- toJson() Method ---
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'image': {'src': imageUrl},
+    'count': ratingCount,
+    'meta_data': [
+      {'key': '_wc_average_rating', 'value': averageRating.toString()},
+      {'key': '_wc_rating_count', 'value': ratingCount.toString()},
+      {'key': '_restaurant_is_open_final_state_received', 'value': isOpen ? '1' : '0'},
+      {'key': '_restaurant_auto_open_time', 'value': autoOpenTime},
+      {'key': '_restaurant_auto_close_time', 'value': autoCloseTime},
+      // ✨ إضافة الإحداثيات
+      {'key': 'restaurant_latitude', 'value': latitude.toString()},
+      {'key': 'restaurant_longitude', 'value': longitude.toString()},
+    ],
+  };
+
+  // --- Factory fromJson (هذا هو الإصلاح الأهم) ---
+  factory Restaurant.fromJson(Map<String, dynamic> json) {
+    double avgRating = 0.0;
+    int rCount = 0;
+    String openTime = '00:00';
+    String closeTime = '23:59';
+    bool finalIsOpenStatus = true; // الافتراضي: مفتوح
+    double lat = 0.0;
+    double lng = 0.0;
+
+    if (json['meta_data'] != null && json['meta_data'] is List) {
+      final metaData = json['meta_data'] as List;
+
+      var ratingMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_wc_average_rating', orElse: () => null);
+      if (ratingMeta != null) avgRating = double.tryParse(ratingMeta['value'].toString()) ?? 0.0;
+
+      var countMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_wc_rating_count', orElse: () => null);
+      if (countMeta != null) rCount = int.tryParse(countMeta['value'].toString()) ?? 0;
+
+      // ✨ --- [ الإصلاح 1: قراءة الحالة من الخادم ] ---
+      // هذا يقرأ النتيجة التي أرسلها الخادم (CLOSED)
+      var isOpenMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_is_open', orElse: () => null);
+      if (isOpenMeta != null) {
+        finalIsOpenStatus = isOpenMeta['value'].toString() == '1';
+      }
+      // --- نهاية الإصلاح ---
+
+      var openMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_auto_open_time', orElse: () => null);
+      if (openMeta != null) openTime = openMeta['value'].toString();
+
+      var closeMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_auto_close_time', orElse: () => null);
+      if (closeMeta != null) closeTime = closeMeta['value'].toString();
+
+      // ✨ --- [ الإصلاح 2: قراءة الإحداثيات لسعر التوصيل ] ---
+      var latMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_latitude', orElse: () => null);
+      if (latMeta != null) lat = double.tryParse(latMeta['value'].toString()) ?? 0.0;
+
+      var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
+      if (lngMeta != null) lng = double.tryParse(lngMeta['value'].toString()) ?? 0.0;
+      // --- نهاية الإصلاح ---
+    }
+
+    return Restaurant(
+      id: json['id'],
+      name: json['name'] ?? 'اسم غير معروف',
+      imageUrl: json['image'] != null && json['image']['src'] != false
+          ? json['image']['src']
+          : 'https://via.placeholder.com/300',
+      averageRating: avgRating,
+      ratingCount: rCount,
+      isOpen: finalIsOpenStatus, // <-- استخدام الحالة القادمة من الخادم
+      autoOpenTime: openTime,
+      autoCloseTime: closeTime,
+      latitude: lat, // <-- إضافة الإحداثيات
+      longitude: lng, // <-- إضافة الإحداثيات
+    );
+  }
+}
+class FoodItem {
+  final int id;
+  final String name;
+  final String description;
+  final double price;
+  final double? salePrice;
+  final String imageUrl;
+  int quantity;
+  final int categoryId;
+  bool isDeliverable;
+  final double averageRating;
+  final int ratingCount;
+
+  // ✨ [جديد] حقول لاستقبال موقع المطعم مع المنتج
+  final double restaurantLat;
+  final double restaurantLng;
+
+  FoodItem({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.price,
+    this.salePrice,
+    required this.imageUrl,
+    this.quantity = 1,
+    required this.categoryId,
+    this.isDeliverable = false,
+    this.averageRating = 0.0,
+    this.ratingCount = 0,
+    // ✨ تهيئة القيم
+    this.restaurantLat = 0.0,
+    this.restaurantLng = 0.0,
+  });
+
+  factory FoodItem.fromJson(Map<String, dynamic> json) {
+    // دالة مساعدة لقراءة الأرقام بأمان
+    double safeParseDouble(dynamic value, [double defaultValue = 0.0]) {
+      if (value == null) return defaultValue;
+      if (value is double) return value;
+      if (value is int) return value.toDouble();
+      return double.tryParse(value.toString().trim()) ?? defaultValue;
+    }
+
+    int safeParseInt(dynamic value, [int defaultValue = 0]) {
+      if (value == null) return defaultValue;
+      return int.tryParse(value.toString()) ?? defaultValue;
+    }
+
+    String extractImageUrl(dynamic images) {
+      if (images is List && images.isNotEmpty && images[0] is Map && images[0]['src'] != null) {
+        return images[0]['src'];
+      }
+      return 'https://via.placeholder.com/150';
+    }
+
+    int extractRestaurantId(Map<String, dynamic> json) {
+      if (json['meta_data'] != null && json['meta_data'] is List) {
+        final metaData = json['meta_data'] as List;
+        var parentIdMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_parent_id', orElse: () => null);
+        if (parentIdMeta != null && parentIdMeta['value'] != null) {
+          return int.tryParse(parentIdMeta['value'].toString()) ?? 0;
+        }
+      }
+      dynamic categories = json['categories'];
+      if (categories is List && categories.isNotEmpty && categories[0] is Map) {
+        return categories[0]['id'];
+      }
+      return 0;
+    }
+
+    String cleanDescription(dynamic desc) {
+      if (desc is String) return desc.replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim();
+      return '';
+    }
+
+    // ✨ استخراج الإحداثيات بدقة من الميتا داتا
+    double rLat = 0.0;
+    double rLng = 0.0;
+    if (json['meta_data'] != null && json['meta_data'] is List) {
+      final metaData = json['meta_data'] as List;
+
+      var latMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_latitude', orElse: () => null);
+      if (latMeta != null) rLat = safeParseDouble(latMeta['value']);
+
+      var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
+      if (lngMeta != null) rLng = safeParseDouble(lngMeta['value']);
+    }
+
+    return FoodItem(
+      id: json['id'] ?? 0,
+      name: json['name'] ?? 'اسم غير متوفر',
+      description: cleanDescription(json['short_description']),
+      price: safeParseDouble(json['regular_price']),
+      salePrice: (json['sale_price'] != '' && json['sale_price'] != null) ? safeParseDouble(json['sale_price'], -1.0) : null,
+      imageUrl: extractImageUrl(json['images']),
+      categoryId: extractRestaurantId(json),
+      averageRating: safeParseDouble(json['average_rating']),
+      ratingCount: safeParseInt(json['rating_count']),
+      // ✨ تمرير الإحداثيات المستخرجة
+      restaurantLat: rLat,
+      restaurantLng: rLng,
+    );
+  }
+
+  double get displayPrice => salePrice != null && salePrice! >= 0 ? salePrice! : price;
+
+  String get formattedPrice {
+    final format = NumberFormat('#,###', 'ar_IQ');
+    return '${format.format(displayPrice)} د.ع';
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'quantity': quantity,
+    'categoryId': categoryId,
+    // يمكنك إضافة الإحداثيات هنا إذا كنت تريد حفظ السلة محلياً
+  };
+}
 class Order {
   final int id;
   final String status;
@@ -306,6 +867,7 @@ class Order {
   final List<LineItem> lineItems;
   final String? destinationLat;
   final String? destinationLng;
+  final String shippingTotal; // ✨ جديد: سعر التوصيل
 
   Order({
     required this.id,
@@ -318,7 +880,19 @@ class Order {
     required this.lineItems,
     this.destinationLat,
     this.destinationLng,
+    required this.shippingTotal, // ✨
   });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'status': status,
+    'date_created': dateCreated.toIso8601String(),
+    'total': total,
+    'customerName': customerName,
+    'address': address,
+    'phone': phone,
+    'line_items': lineItems.map((item) => item.toJson()).toList(),
+  };
 
   factory Order.fromJson(Map<String, dynamic> json) {
     final billing = json['billing'] as Map<String, dynamic>?;
@@ -334,424 +908,188 @@ class Order {
       lineItems: (json['line_items'] as List).map((i) => LineItem.fromJson(i)).toList(),
       destinationLat: json['destination_lat'],
       destinationLng: json['destination_lng'],
+      // ✨ قراءة سعر التوصيل التلقائي
+      shippingTotal: json['shipping_total'] ?? '0',
     );
   }
-}
 
+  Map<String, dynamic> get statusDisplay {
+    switch (status) {
+      case 'processing':
+        return {'text': 'جاري تحضير الطلب', 'icon': Icons.soup_kitchen_outlined, 'color': Colors.blue};
+      case 'out-for-delivery':
+      // ✨ تغيير النص
+        return {'text': 'المندوب قادم إليك 🛵', 'icon': Icons.delivery_dining, 'color': Colors.orange.shade700};
+      case 'completed':
+        return {'text': 'تم توصيل الطلب', 'icon': Icons.check_circle, 'color': Colors.green};
+      case 'cancelled':
+        return {'text': 'تم إلغاء الطلب', 'icon': Icons.cancel, 'color': Colors.red};
+      case 'pending':
+      default:
+        return {'text': 'تم استلام الطلب', 'icon': Icons.receipt_long, 'color': Colors.grey.shade700};
+    }
+  }
+}
 class LineItem {
   final String name;
   final int quantity;
   final String total;
   LineItem({required this.name, required this.quantity, required this.total});
+  Map<String, dynamic> toJson() => {'name': name, 'quantity': quantity, 'total': total};
   factory LineItem.fromJson(Map<String, dynamic> json) => LineItem(name: json['name'], quantity: json['quantity'], total: json['total'].toString());
 }
+class RestaurantRatingsDashboard {
+  final double averageRating;
+  final int totalReviews;
+  final List<Review> recentReviews;
+  RestaurantRatingsDashboard({required this.averageRating, required this.totalReviews, required this.recentReviews});
 
-// (مودل المنتج موجود في كود العميل بالأسفل)
-// (مودل التقييمات يمكن إضافته لاحقاً)
+  // --- Keep ONLY ONE toJson() Method ---
+  Map<String, dynamic> toJson() => {
+    'average_rating': averageRating,
+    'total_reviews': totalReviews,
+    'recent_reviews': recentReviews.map((r) => r.toJson()).toList(), // Requires toJson in Review
+  };
+  // --- End toJson() Method ---
 
 
+  factory RestaurantRatingsDashboard.fromJson(Map<String, dynamic> json) => RestaurantRatingsDashboard(
+    averageRating: (json['average_rating'] as num).toDouble(),
+    totalReviews: json['total_reviews'],
+    recentReviews: (json['recent_reviews'] as List).map((i) => Review.fromJson(i)).toList(),
+  );
+} // End of RestaurantRatingsDashboard class
+class Review {
+  final String productName;
+  final String author;
+  final int rating;
+  final String content;
+  final DateTime date;
+  Review({required this.productName, required this.author, required this.rating, required this.content, required this.date});
+
+  // --- Add this toJson() Method ONCE inside the class ---
+  Map<String, dynamic> toJson() => {
+    'product_name': productName,
+    'author': author,
+    'rating': rating,
+    'content': content,
+    'date': date.toIso8601String(), // Save date as text
+  };
+  // --- End toJson() Method ---
+
+
+  factory Review.fromJson(Map<String, dynamic> json) => Review(
+    productName: json['product_name'],
+    author: json['author'],
+    rating: json['rating'],
+    content: json['content'],
+    date: DateTime.parse(json['date']),
+  );
+} // End of Review class
 // =======================================================================
-// --- (جديد) SERVICES (للـ Admin) ---
+// --- SERVICES ---
 // =======================================================================
+class DeliveryConfig {
+  final double baseFee;
+  final double feePerKm;
+  final double maxDistanceKm;
 
-class AdminNotificationService {
+  DeliveryConfig({
+    required this.baseFee,
+    required this.feePerKm,
+    required this.maxDistanceKm,
+  });
+
+  factory DeliveryConfig.fromJson(Map<String, dynamic> json) {
+    return DeliveryConfig(
+      baseFee: (json['base_fee'] as num? ?? 1500).toDouble(),
+      feePerKm: (json['fee_per_km'] as num? ?? 500).toDouble(),
+      maxDistanceKm: (json['max_distance_km'] as num? ?? 25).toDouble(),
+    );
+  }
+}
+class DeliveryProvider with ChangeNotifier {
+  // ✨ إعدادات ثابتة (لتجنب أخطاء الخادم)
+  final DeliveryConfig _defaultConfig = DeliveryConfig(
+    baseFee: 1000.0,       // السعر الأساسي
+    feePerKm: 250.0,        // سعر الكيلومتر
+    maxDistanceKm: 25.0,    // أقصى مسافة
+  );
+
+  DeliveryConfig? _config;
+
+  bool get isLoading => false;
+  bool get hasError => false;
+  String? get errorMessage => null;
+
+  DeliveryConfig? get config => _config;
+
+  DeliveryProvider() {
+    _config = _defaultConfig;
+  }
+
+  Future<bool> fetchConfig() async {
+    _config = _defaultConfig;
+    return true;
+  }
+}
+class NotificationService {
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
-  static Future<void> initialize() async {
-    const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
-    const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
-    await _localNotifications.initialize(initializationSettings);
-    const AndroidNotificationChannel channel = AndroidNotificationChannel(
-      'new_store_orders_channel', // (قناة جديدة)
-      'طلبات أسواق جديدة',
-      description: 'إشعارات للطلبات الجديدة في الأسواق.',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-      sound: RawResourceAndroidNotificationSound('woo_sound'), // (يمكن استخدام نفس الصوت)
-    );
+  static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
+    'high_importance_channel',
+    'تنبيهات الطلبات العاجلة',
+    description: 'هذه القناة مخصصة لتنبيه السائقين والمطاعم.',
+    importance: Importance.max,
+    playSound: true,
+    // ✨ 1. تحديد الصوت للقناة (للأندرويد 8 وما فوق)
+    sound: RawResourceAndroidNotificationSound('woo_sound'),
+    enableVibration: true,
+  );
 
-    await _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(channel);
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
+  static Future<void> initialize() async {
+    // ... (نفس كود initialize السابق، لا تغيير فيه) ...
+    // لكن تأكد من هذا السطر لإنشاء القناة بالصوت الجديد:
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_channel);
   }
 
   static Future<void> display(RemoteMessage message) async {
-    final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث جديد!';
-    final String body = message.notification?.body ?? message.data['body'] ?? 'لديك تحديث جديد.';
-    final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final NotificationDetails platformChannelSpecifics = NotificationDetails(
-      android: AndroidNotificationDetails('new_store_orders_channel', 'طلبات أسواق جديدة', importance: Importance.max, priority: Priority.high),
-      iOS: DarwinNotificationDetails(sound: 'woo_sound.caf', presentSound: true, presentAlert: true, presentBadge: true),
-    );
-    await _localNotifications.show(id, title, body, platformChannelSpecifics, payload: message.data['order_id']);
-  }
-}
-class AdminAuthService {
-
-  // --- 1. دالة تسجيل الدخول (تستخدم الملف المباشر لحل مشكلة الدوران) ---
-  Future<String?> loginAdmin(String username, String password) async {
-    // ⚠️ نستخدم الملف المباشر هنا لتجاوز مشاكل الإضافات
-    final String apiUrl = '$STORE_BASE_URL/api-login.php';
-
-    print("🚀 [Login] جاري الاتصال بالملف المباشر: $apiUrl");
-
     try {
-      final response = await http.post(
-        Uri.parse(apiUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          // هيدر المتصفح لتجاوز الحماية
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        },
-        body: json.encode({
-          'username': username,
-          'password': password
-        }),
-      ).timeout(const Duration(seconds: 20));
+      final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-      print("📡 [Login] كود الحالة: ${response.statusCode}");
+      final NotificationDetails platformChannelSpecifics = NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channel.id,
+          _channel.name,
+          channelDescription: _channel.description,
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          // ✨ 2. تحديد الصوت للإشعار الفردي (للأندرويد القديم)
+          sound: const RawResourceAndroidNotificationSound('woo_sound'),
+          enableVibration: true,
+          fullScreenIntent: true,
+          styleInformation: const BigTextStyleInformation(''),
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentSound: true,
+          // ✨ 3. تحديد الصوت للآيفون
+          sound: 'woo_sound.caf', // تأكد من الامتداد الصحيح
+        ),
+      );
 
-      // فحص أخطاء HTML
-      if (response.body.trim().startsWith('<')) {
-        print("❌ [Login] السيرفر رد بملف HTML. تأكد من رفع api-login.php.");
-        return null;
-      }
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final token = data['token'];
-
-        if (token != null) {
-          print("✅ [Login] تم تسجيل الدخول بنجاح.");
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('jwt_token_store_admin', token);
-          return token;
-        }
-      }
-      return null;
-
+      await _localNotifications.show(
+        id,
+        message.notification?.title ?? message.data['title'] ?? 'تنبيه جديد',
+        message.notification?.body ?? message.data['body'] ?? '',
+        platformChannelSpecifics,
+        payload: message.data['order_id'],
+      );
     } catch (e) {
-      print("❌ [Login] خطأ في الاتصال: $e");
-      return null;
+      print("خطأ في عرض الإشعار: $e");
     }
-  }
-
-  // --- 2. دالة تسجيل جهاز الإشعارات (تستخدم STORE_APP_URL الجديد) ---
-  Future<void> registerDeviceToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token_store_admin');
-    if (token == null) return;
-
-    try {
-      String? fcmToken = await FirebaseMessaging.instance.getToken();
-      if (fcmToken == null) return;
-
-      // ✅ استخدام STORE_APP_URL
-      await http.post(
-        Uri.parse('$STORE_APP_URL/register-device'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-          'User-Agent': 'BeyteiAdminApp/1.0',
-        },
-        body: json.encode({'token': fcmToken}),
-      ).timeout(API_TIMEOUT);
-
-    } catch (e) {
-      print("Error registering device token: $e");
-    }
-  }
-
-  // --- 3. دالة تسجيل الخروج (تستخدم STORE_APP_URL الجديد) ---
-  Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jwtToken = prefs.getString('jwt_token_store_admin');
-
-    if (jwtToken != null) {
-      try {
-        // ✅ استخدام STORE_APP_URL
-        await http.post(
-          Uri.parse('$STORE_APP_URL/unregister-device'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $jwtToken'
-          },
-        ).timeout(const Duration(seconds: 5));
-      } catch (e) {
-        print("Failed to unregister device: $e");
-      }
-    }
-
-    await FirebaseMessaging.instance.deleteToken();
-    await prefs.remove('jwt_token_store_admin');
-    await prefs.remove('store_lat');
-    await prefs.remove('store_lng');
-    await prefs.remove('saved_store_name');
-  }
-}
-class AuthService {
-  // ✨ التعديل: إرجاع Map بدلاً من String فقط لنستفيد من البيانات القادمة من PHP
-  Future<Map<String, dynamic>> loginRestaurantOwner(String username, String password) async {
-    try {
-      final response = await http.post(
-          Uri.parse('$STORE_BASE_URL$STORE_APP_NAMESPACE/wp-json/jwt-auth/v1/token'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({'username': username, 'password': password})
-      ).timeout(API_TIMEOUT);
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        // التحقق من وجود التوكن
-        if (data['token'] != null) {
-          return {
-            'success': true,
-            'token': data['token'],
-            'user_email': data['user_email'],
-            'user_nicename': data['user_nicename'],
-            // ✨ هنا نستقبل البيانات التي أرسلها كود PHP (add_restaurant_info_to_jwt_response)
-            'restaurant_info': data['restaurant_info'],
-            // ✨ وهنا نستقبل بيانات التيم ليدر (add_team_leader_info)
-            'user_role_from_server': data['user_role'] // قد يكون 'team_leader'
-          };
-        }
-      }
-      // في حال الفشل
-      String errorMsg = "فشل تسجيل الدخول";
-      try {
-        final errorData = json.decode(response.body);
-        errorMsg = errorData['message'] ?? errorMsg;
-      } catch(_) {}
-      return {'success': false, 'message': errorMsg};
-
-    } catch (e) {
-      return {'success': false, 'message': 'خطأ في الاتصال: $e'};
-    }
-  }
-
-  // ... (باقي الدوال registerDeviceToken و logout تبقى كما هي) ...
-  Future<void> registerDeviceToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token == null) return;
-    String? fcmToken = await FirebaseMessaging.instance.getToken();
-    if (fcmToken == null) return;
-
-    try {
-      await http.post(
-        Uri.parse('$STORE_BASE_URL$STORE_APP_NAMESPACE/wp-json/restaurant-app/v1/register-device'),
-        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
-        body: json.encode({'token': fcmToken}),
-      ).timeout(API_TIMEOUT);
-    } catch (e) { print("Error registering device token: $e"); }
-  }
-
-  Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jwtToken = prefs.getString('jwt_token');
-
-    if (jwtToken != null) {
-      try {
-        await http.post(
-          Uri.parse('$STORE_BASE_URL$STORE_APP_NAMESPACE/wp-json/restaurant-app/v1/unregister-device'),
-          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $jwtToken'},
-        ).timeout(API_TIMEOUT);
-      } catch (e) { print("Failed to unregister device: $e"); }
-    }
-    await FirebaseMessaging.instance.deleteToken();
-    final cacheService = CacheService();
-    await cacheService.clearAllCache();
-    await prefs.remove('jwt_token');
-    await prefs.remove('user_role');
-    await prefs.remove('restaurant_lat'); // تنظيف الإحداثيات
-    await prefs.remove('restaurant_lng');
-    await prefs.remove('restaurant_name');
-  }
-}
-class AdminApiService {
-
-  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
-    int attempts = 0;
-    while (attempts < 3) {
-      try {
-        return await action().timeout(API_TIMEOUT);
-      } catch (e) {
-        attempts++;
-        if (attempts >= 3) rethrow;
-        await Future.delayed(Duration(seconds: attempts * 2));
-      }
-    }
-    throw Exception('Failed after multiple retries');
-  }
-
-  // (دالة تحديث موقع المدير)
-  Future<bool> updateMyLocation(String token, String lat, String lng) async {
-    return _executeWithRetry(() async {
-      final response = await http.post(
-        Uri.parse('$STORE_APP_URL/update-my-location'), // (مسار جديد)
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json'
-        },
-        body: json.encode({
-          'lat': lat,
-          'lng': lng,
-        }),
-      );
-      return response.statusCode == 200;
-    });
-  }
-
-  // (دالة جلب الطلبات للمدير)
-  Future<List<Order>> getStoreOrders({required String status, required String token}) async {
-    return _executeWithRetry(() async {
-      final uri = Uri.parse('$STORE_APP_URL/get-orders?status=$status'); // (مسار جديد)
-      final response = await http.get(uri, headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'});
-      if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
-      }
-      throw Exception('Failed to load orders: ${response.body}');
-    });
-  }
-
-  // (دالة تحديث حالة الطلب)
-  Future<bool> updateOrderStatus(int orderId, String status) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token_store_admin');
-    if (token == null) throw Exception('User not logged in');
-
-    final response = await _executeWithRetry(() => http.post(
-      Uri.parse('$STORE_APP_URL/update-order-status/$orderId'), // (مسار جديد)
-      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-      body: json.encode({'status': status}),
-    ));
-    return response.statusCode == 200;
-  }
-
-  // (دالة إرسال طلب التوصيل - تستخدم نفس نظام التكسي)
-  Future<Map<String, dynamic>> createUnifiedDeliveryRequest({
-    required String token,
-    required String sourceType, // 'store'
-    required String pickupName,
-    required double pickupLat,
-    required double pickupLng,
-    required String destinationAddress,
-    double? destinationLat,
-    double? destinationLng,
-    required String deliveryFee,
-    required String orderDescription,
-    required String endCustomerPhone,
-    String? sourceOrderId,
-  }) async {
-    return await _executeWithRetry(() async {
-      final response = await http.post(
-        // (نفس المسار - يفترض أن نظام التكسي موحد)
-        Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/create'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({
-          'source_type': sourceType,
-          'source_order_id': sourceOrderId,
-          'pickup_location_name': pickupName,
-          'pickup_lat': pickupLat.toString(),
-          'pickup_lng': pickupLng.toString(),
-          'destination_address': destinationAddress,
-          'destination_lat': destinationLat?.toString() ?? "0",
-          'destination_lng': destinationLng?.toString() ?? "0",
-          'delivery_fee': deliveryFee,
-          'order_description': orderDescription,
-          'end_customer_phone': endCustomerPhone,
-        }),
-      );
-      final responseBody = json.decode(response.body);
-      if (response.statusCode == 201 && responseBody['success'] == true) {
-        return responseBody;
-      } else {
-        final message = responseBody['message'] ?? 'فشل إرسال طلب التوصيل.';
-        throw Exception(message);
-      }
-    });
-  }
-
-  // (دوال الإعدادات)
-  Future<Map<String, dynamic>> getStoreSettings(String token) async {
-    return _executeWithRetry(() async {
-      final response = await http.get(
-        Uri.parse('$STORE_APP_URL/get-settings'), // (مسار جديد)
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
-      throw Exception('Failed to load settings');
-    });
-  }
-  Future<bool> updateStoreStatus(String token, bool isOpen) async {
-    return _executeWithRetry(() async {
-      final response = await http.post(
-        Uri.parse('$STORE_APP_URL/update-status'), // (مسار جديد)
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-        body: json.encode({'is_open': isOpen ? 1 : 0}),
-      );
-      return response.statusCode == 200;
-    });
-  }
-  Future<bool> updateStoreAutoTimes(String token, String openTime, String closeTime) async {
-    return _executeWithRetry(() async {
-      final response = await http.post(
-        Uri.parse('$STORE_APP_URL/update-auto-times'), // (مسار جديد)
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-        body: json.encode({'open_time': openTime, 'close_time': closeTime}),
-      );
-      return response.statusCode == 200;
-    });
-  }
-
-  // (دوال المنتجات)
-  Future<List<Product>> getMyStoreProducts(String token) async {
-    return _executeWithRetry(() async {
-      final response = await http.get(
-        Uri.parse('$STORE_APP_URL/my-products'), // (مسار جديد)
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body) as List;
-        // (استخدام المودل الخاص بالمسواك)
-        return data.map((json) => Product.fromJson(json)).toList();
-      }
-      throw Exception('Failed to load store products');
-    });
-  }
-  Future<bool> updateMyStoreProduct(String token, int productId, String name, String price, String salePrice) async {
-    return _executeWithRetry(() async {
-      final response = await http.post(
-        Uri.parse('$STORE_APP_URL/update-product'), // (مسار جديد)
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-        body: json.encode({
-          'product_id': productId,
-          'name': name,
-          'regular_price': price,
-          'sale_price': salePrice, // (يجب أن يعالج الباكاند السعر الفارغ)
-        }),
-      );
-      return response.statusCode == 200;
-    });
-  }
-
-  // (دالة اختبار الإشعارات)
-  Future<bool> testNotification() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token_store_admin');
-    if (token == null) throw Exception('User not logged in');
-
-    final response = await _executeWithRetry(() => http.post(
-      Uri.parse('$STORE_APP_URL/test-notification'), // (مسار جديد)
-      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-    ));
-    return response.statusCode == 200;
   }
 }
 class CacheService {
@@ -776,45 +1114,900 @@ class CacheService {
   }
 }
 
-// (خدمة الصلاحيات - منسوخة كما هي)
-class PermissionService {
-  static Future<bool> handleLocationPermission(BuildContext context) async {
-    bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('خدمات الموقع معطلة. الرجاء تفعيل خدمات الموقع.'))
-        );
-      }
-      return false;
+class OrderHistoryService {
+  static const _key = 'order_history';
+  Future<void> saveOrder(Order order) async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<Order> orders = await getOrders();
+    orders.removeWhere((o) => o.id == order.id);
+    orders.insert(0, order);
+    final String encodedData = json.encode(orders.map<Map<String, dynamic>>((o) => o.toJson()).toList());
+    await prefs.setString(_key, encodedData);
+  }
+
+  Future<List<Order>> getOrders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? ordersString = prefs.getString(_key);
+    if (ordersString != null) {
+      final List<dynamic> decodedData = json.decode(ordersString);
+      return decodedData.map<Order>((item) => Order.fromJson(item)).toList();
     }
-    geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-    if (permission == geolocator.LocationPermission.denied) {
-      permission = await geolocator.Geolocator.requestPermission();
-      if (permission == geolocator.LocationPermission.denied) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('تم رفض إذن الوصول للموقع.'))
-          );
-        }
-        return false;
-      }
-    }
-    if (permission == geolocator.LocationPermission.deniedForever) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('تم رفض إذن الموقع بشكل دائم، يرجى تفعيله من إعدادات التطبيق.'))
-        );
-      }
-      return false;
-    }
-    return true;
+    return [];
   }
 }
 
+// في ملف re.dart (تحت قسم WIDGETS)
+
+class LoyaltyChallengeWidget extends StatefulWidget {
+  const LoyaltyChallengeWidget({super.key});
+
+  @override
+  State<LoyaltyChallengeWidget> createState() => _LoyaltyChallengeWidgetState();
+}
+
+class _LoyaltyChallengeWidgetState extends State<LoyaltyChallengeWidget> {
+  // للتحكم في ظهور الإشعار لمرة واحدة في الجلسة
+  bool _isVisible = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final cartProvider = Provider.of<CartProvider>(context);
+    final status = cartProvider.getLoyaltyChallengeStatus;
+
+    if (!status['show'] || !_isVisible) {
+      return const SizedBox.shrink();
+    }
+
+    // ✨ تحديد لون الخلفية والأيقونة بناءً على حالة التقدم
+    Color backgroundColor = cartProvider.usageCount >= 3 ? Colors.amber.shade700 : Colors.teal.shade500;
+    IconData icon = cartProvider.usageCount >= 3 ? Icons.celebration : Icons.local_fire_department;
+    String title = cartProvider.usageCount >= 3 ? 'خصم الولاء متاح!' : 'تحدي جديد!';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 15, left: 15, right: 15),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: backgroundColor.withOpacity(0.4), blurRadius: 8)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: Colors.white, size: 24),
+                  const SizedBox(width: 8),
+                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+              GestureDetector(
+                onTap: () {
+                  setState(() => _isVisible = false); // إخفاء الإشعار بعد النقر
+                },
+                child: const Icon(Icons.close, color: Colors.white70, size: 20),
+              ),
+            ],
+          ),
+          const Divider(color: Colors.white54, height: 15),
+          Text(status['message']!, style: const TextStyle(color: Colors.white, fontSize: 14)),
+          if (cartProvider.promoterCode != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Text(
+                'رمزك: ${cartProvider.promoterCode}',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14, decoration: TextDecoration.underline),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+// (الصق هذا الكلاس بالكامل بدلاً من CartProvider القديم)
+
+class CartProvider with ChangeNotifier {
+  final List<FoodItem> _items = [];
+  List<FoodItem> get items => _items;
+  int get cartCount => _items.fold(0, (sum, item) => sum + item.quantity);
+  double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.displayPrice * item.quantity));
+  String? _appliedCoupon;
+  double _discountPercentage = 0.0;
+  double _discountAmount = 0.0;
+  String _discountType = '';
+
+// ✨ NEW: تتبع حالة المروج والخصم
+  String? _promoterCode;
+  int _usageCount = 0; // عدد مرات الاستخدام المكتملة
+  double _loyaltyDiscountPercentage = 0.0;
+
+  String? get appliedCoupon => _appliedCoupon; // الحفاظ على Getter القديم
+  String? get promoterCode => _promoterCode;
+  int get usageCount => _usageCount;
+
+// ✨ Getter معدل لحساب الخصم الكلي
+  double get totalDiscountAmount {
+    double couponDiscount = 0.0;
+    // حساب خصم الكوبون العادي
+    if (_discountType == 'fixed_cart') {
+      couponDiscount = _discountAmount;
+    } else if (_discountType == 'percent') {
+      couponDiscount = totalPrice * (_discountPercentage / 100);
+    }
+
+    double loyaltyDiscount = totalPrice * (_loyaltyDiscountPercentage / 100);
+
+    // نستخدم أكبر خصم متاح (إما خصم الكوبون أو خصم الولاء 50%)
+    return max(couponDiscount, loyaltyDiscount);
+  }
+
+  double get discountedTotal {
+    return (totalPrice - totalDiscountAmount).clamp(0, double.infinity);
+  }
+
+// ✨ وظيفة لقراءة عدد الاستخدامات من الذاكرة المحلية
+  Future<int> _loadUsageCount(String code) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('promoter_usage_$code') ?? 0;
+  }
+
+// ✨ وظيفة لتسجيل الاستخدام بعد إتمام الطلب بنجاح (يجب استدعاؤها بعد إنشاء الطلب)
+  Future<void> _recordSuccessfulOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_promoterCode != null) {
+      int currentCount = await _loadUsageCount(_promoterCode!);
+      if (currentCount < 3) {
+        // زيادة العدد بعد طلب ناجح
+        await prefs.setInt('promoter_usage_$_promoterCode', currentCount + 1);
+      } else {
+        // إعادة تعيين العداد إلى 0 بعد استخدام خصم 50%
+        await prefs.setInt('promoter_usage_$_promoterCode', 0);
+      }
+    }
+  }
+
+// ✨ دالة مساعدة لحساب رسالة التحدي الحالية (مطلوبة للـ Widget الجديد)
+  Map<String, dynamic> get getLoyaltyChallengeStatus {
+    if (_promoterCode == null) {
+      return {'show': false, 'message': 'لا يوجد رمز مروج مفعل.'};
+    }
+
+    if (_usageCount == 3) {
+      return {'show': true, 'message': '🎉 تهانينا! خصم الـ 50% متاح الآن على سلتك!'};
+    }
+
+    final remaining = 3 - _usageCount;
+    return {
+      'show': true,
+      'message': 'أنت في مرحلة الطلب رقم (${_usageCount + 1}). تبقى لك ${remaining} طلب للحصول على خصم ٥٠٪!',
+    };
+  }
+
+
+  Future<Map<String, dynamic>> applyCoupon(String code) async {
+    final result = await ApiService().validateCoupon(code);
+
+    if (result['is_promoter'] == true) {
+      _promoterCode = code.toUpperCase();
+
+      // جلب عدد الاستخدامات وحساب الخصم
+      _usageCount = await _loadUsageCount(_promoterCode!);
+
+      if (_usageCount == 3) {
+        _loyaltyDiscountPercentage = 50.0;
+        _discountType = 'loyalty_discount';
+        result['message'] = '🎉 تهانينا! خصم ٥٠٪ على هذا الطلب مفعل.';
+      } else {
+        _loyaltyDiscountPercentage = 0.0;
+        _discountType = '';
+        final remaining = 3 - _usageCount;
+        result['message'] = "تم تفعيل رمز المروج. تبقى ${remaining} طلب للحصول على خصم ٥٠٪!";
+      }
+
+      _appliedCoupon = null;
+      _discountAmount = 0.0;
+      _discountPercentage = 0.0;
+
+      notifyListeners();
+      return result;
+
+    } else if (result['valid'] == true) {
+      // منطق كوبون ووكومرس العادي
+      _appliedCoupon = code.toUpperCase();
+      _discountType = result['discount_type'];
+      _discountAmount = double.tryParse(result['amount'].toString()) ?? 0.0;
+      if (_discountType == 'percent') _discountPercentage = _discountAmount;
+
+      // تصفير حقول الولاء عند استخدام كوبون عادي
+      _promoterCode = null;
+      _loyaltyDiscountPercentage = 0.0;
+
+      notifyListeners();
+      return result;
+    }
+    return result;
+  }
+  void removeCoupon() {
+    _appliedCoupon = null;
+    _discountPercentage = 0.0;
+    _discountAmount = 0.0;
+    _discountType = '';
+
+    // تصفير حقول الولاء
+    _promoterCode = null;
+    _loyaltyDiscountPercentage = 0.0;
+
+    notifyListeners();
+  }
+
+  // ✨ --- [ هذا هو الإصلاح ] --- ✨
+  // (استبدل الدالة القديمة بهذه)
+  void addToCart(FoodItem foodItem, BuildContext context) {
+    // 1. التحقق من توفر المنتج
+    if (!foodItem.isDeliverable) {
+      _showItemUnavailableDialog(context, foodItem);
+      return;
+    }
+
+    final existingIndex = _items.indexWhere((item) => item.id == foodItem.id);
+    if (existingIndex != -1) {
+      _items[existingIndex].quantity++;
+    } else {
+      // 2. إضافة المنتج للسلة مع نسخ الإحداثيات
+      _items.add(FoodItem(
+        id: foodItem.id,
+        name: foodItem.name,
+        description: foodItem.description,
+        price: foodItem.price,
+        salePrice: foodItem.salePrice,
+        imageUrl: foodItem.imageUrl,
+        quantity: 1,
+        categoryId: foodItem.categoryId,
+        isDeliverable: foodItem.isDeliverable,
+        // ✅✅✅ هنا الإصلاح: نقل الإحداثيات من المنتج الأصلي إلى السلة ✅✅✅
+        restaurantLat: foodItem.restaurantLat,
+        restaurantLng: foodItem.restaurantLng,
+      ));
+    }
+    notifyListeners();
+    _showAddToCartDialog(context, foodItem);
+  }
+  // ✨ --- [ أضف هذه الدالة المساعدة الجديدة ] ---
+  void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("عذراً، المنتج غير متاح"),
+        content: Text("لا يمكن إضافة '${item.name}' إلى السلة لأن  الخاص به مغلق حالياً."),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً")),
+        ],
+      ),
+    );
+  }
+  // --- [ نهاية الإضافة ] ---
+
+  void incrementQuantity(FoodItem foodItem) {
+    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
+    if (itemIndex != -1) {
+      _items[itemIndex].quantity++;
+      notifyListeners();
+    }
+  }
+
+  void decrementQuantity(FoodItem foodItem) {
+    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
+    if (itemIndex != -1) {
+      if (_items[itemIndex].quantity > 1) {
+        _items[itemIndex].quantity--;
+      } else {
+        _items.removeAt(itemIndex);
+      }
+      notifyListeners();
+    }
+  }
+
+  void clearCart() {
+    _items.clear();
+    removeCoupon();
+    notifyListeners();
+  }
+
+  void _showAddToCartDialog(BuildContext context, FoodItem item) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("تمت الإضافة إلى السلة"),
+        content: Text("تمت إضافة '${item.name}' بنجاح."),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("مواصلة التسوق")),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
+            },
+            child: const Text("الذهاب للسلة"),
+          ),
+        ],
+      ),
+    );
+  }
+}
+class ApiService {
+  final String _authString = 'Basic ${base64Encode(utf8.encode('$CONSUMER_KEY:$CONSUMER_SECRET'))}';
+  final CacheService _cacheService = CacheService();
+
+
+
+
+
+  Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
+    final url = '$BEYTEI_URL/wp-json/taxi/v2/delivery/available';
+
+    print("🚀 [DEBUG] جاري طلب البيانات من: $url");
+
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      print("📡 [DEBUG] حالة الاتصال: ${response.statusCode}");
+      print("📦 [DEBUG] البيانات الواصلة: ${response.body}");
+
+      if (response.statusCode == 200) {
+        try {
+          final data = json.decode(response.body);
+
+          // احتمال 1: البيانات تأتي داخل حقل 'data'
+          var ordersList = data['orders'] ?? data['data'];
+
+          // احتمال 2: البيانات عبارة عن قائمة مباشرة []
+          if (data is List) {
+            ordersList = data;
+          }
+
+          if (ordersList != null && ordersList is List) {
+            return ordersList.map<UnifiedDeliveryOrder>((json) {
+              // طباعة كل عنصر للتأكد من سلامته قبل التحويل
+              // print("Testing Item: $json");
+              return UnifiedDeliveryOrder.fromJson(json);
+            }).toList();
+          }
+
+          print("⚠️ [DEBUG] لم يتم العثور على قائمة طلبات في الاستجابة.");
+          return [];
+
+        } catch (e) {
+          print("❌ [DEBUG] خطأ في تحويل البيانات (Parsing): $e");
+          throw Exception('خطأ في قراءة البيانات: $e');
+        }
+      } else {
+        print("❌ [DEBUG] السيرفر رفض الطلب. السبب: ${response.body}");
+        throw Exception('فشل الاتصال بالسيرفر (كود: ${response.statusCode})');
+      }
+    });
+  }
+
+
+  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
+    int attempts = 0;
+    while (attempts < 3) {
+      try {
+        return await action().timeout(API_TIMEOUT);
+      } catch (e) {
+        attempts++;
+        if (attempts >= 3) rethrow;
+        await Future.delayed(Duration(seconds: attempts * 2));
+      }
+    }
+    throw Exception('Failed after multiple retries');
+  }
+
+  Future<List<Area>> getAreas() async {
+    const cacheKey = 'all_areas';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
+      if (response.statusCode == 200) {
+        await _cacheService.saveData(cacheKey, response.body);
+        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
+      }
+      throw Exception('Server error ${response.statusCode}');
+    });
+  }
+
+
+
+  Future<bool> updateMyLocation(String token, String lat, String lng) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        // هذا هو المسار الجديد الذي أنشأناه في PHP
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-my-location'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json'
+        },
+        body: json.encode({
+          'lat': lat,
+          'lng': lng,
+        }),
+      );
+      // إذا نجح (200)، سيعود true
+      return response.statusCode == 200;
+    });
+  }
+// --- [ نهاية الإضافة ] ---
+
+
+
+
+
+  // ✨ --- [ تم تعديل هذه الدالة ] ---
+  Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
+    const fields = 'id,name,image,count,meta_data';
+    // ✨ [الإصلاح 1]: تغيير per_page=10 إلى 100 لجلب كل المطاعم وحالاتها
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&page=1&_fields=$fields&area_id=$areaId';
+    // ✨ تم تعديل مفتاح الكاش ليشمل المنطقة (page 1 ثابت)
+    final cacheKey = 'restaurants_area_${areaId}_page_1_limit_100';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) {
+        await _cacheService.saveData(cacheKey, response.body);
+        final data = json.decode(response.body) as List;
+        return data.map((json) => Restaurant.fromJson(json)).toList();
+      }
+      throw Exception('Server error ${response.statusCode}');
+    });
+  }
+  // ✨ --- [ نهاية التعديل ] ---
+  // ✨ --- [ دالة جديدة مضافة ] ---
+  Future<Restaurant> getRestaurantById(int restaurantId) async {
+    const fields = 'id,name,image,count,meta_data';
+    // هذا الرابط يجلب مطعم واحد فقط
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories/$restaurantId?_fields=$fields';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        // (نفترض أن المطعم الذي يُطلب عن طريق الرابط هو صالح للتوصيل)
+        final restaurant = Restaurant.fromJson(data);
+        restaurant.isDeliverable = true;
+        return restaurant;
+      }
+      throw Exception('Server error ${response.statusCode}');
+    });
+  }
+
+
+
+  Future<List<FoodItem>> getMyRestaurantProducts(String token) async {
+    return _executeWithRetry(() async {
+      // (يجب إنشاء هذا المسار في الواجهة الخلفية)
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/my-products'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as List;
+        // نستخدم نفس مودل FoodItem
+        return data.map((json) => FoodItem.fromJson(json)).toList();
+      }
+      throw Exception('Failed to load restaurant products');
+    });
+  }
+
+  // ✨ دالة لتحديث بيانات المنتج (للمدير)
+  Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice) async {
+    return _executeWithRetry(() async {
+      // (يجب إنشاء هذا المسار في الواجهة الخلفية)
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-product'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'product_id': productId,
+          'name': name,
+          'regular_price': price,
+          'sale_price': salePrice,
+        }),
+      );
+      return response.statusCode == 200;
+    });
+  }
+  Future<Map<String, dynamic>> getDeliveryFee({
+    required int restaurantId, // ✨ [تم التعديل] أصبح يستقبل رقم المطعم
+    required double customerLat,
+    required double customerLng,
+  }) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-fee'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'restaurant_id': restaurantId, // ✨ [تم التعديل] إرسال الرقم
+          'customer_lat': customerLat,
+          'customer_lng': customerLng,
+        }),
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+
+      // ✨ [تحسين] إظهار رسالة الخطأ القادمة من الخادم
+      try {
+        final errorBody = json.decode(response.body);
+        // هذا سيجلب الرسالة من الخادم (مثل: خطأ: الخادم لم يعثر على إحداثيات...)
+        throw Exception(errorBody['message'] ?? 'فشل حساب سعر التوصيل');
+      } catch (e) {
+        throw Exception('فشل حساب سعر التوصيل');
+      }
+    });
+  }
+// ✨ إضافة دالة جلب إعدادات المطعم للمدير
+  Future<Map<String, dynamic>> getRestaurantSettings(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        // يجب إنشاء هذا المسار في الواجهة الخلفية!
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-settings'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      throw Exception('Failed to load settings');
+    });
+  }
+
+// ✨ إضافة دالة تحديث حالة الفتح اليدوية للمدير
+  Future<bool> updateRestaurantStatus(String token, bool isOpen) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        // يجب إنشاء هذا المسار في الواجهة الخلفية!
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-status'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({'is_open': isOpen ? 1 : 0}),
+      );
+      return response.statusCode == 200;
+    });
+  }
+
+// ✨ إضافة دالة تحديث أوقات الفتح والإغلاق التلقائي للمدير
+  Future<bool> updateRestaurantAutoTimes(String token, String openTime, String closeTime) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        // يجب إنشاء هذا المسار في الواجهة الخلفية!
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-auto-times'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({'open_time': openTime, 'close_time': closeTime}),
+      );
+      return response.statusCode == 200;
+    });
+  }
+
+// ... بقية دوال ApiService
+// (الصق هذا بدلاً من دالة getDeliverableRestaurantIds القديمة)
+
+  Future<Set<int>> getDeliverableRestaurantIds(int areaId) async {
+    // ✨ تم التعديل: توجيه الطلب إلى نقطة النهاية المخصصة الجديدة
+    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
+
+    return _executeWithRetry(() async {
+      // ✨ تم التعديل: إزالة 'Authorization' لأن نقطة النهاية الجديدة عامة ومتاحة للجميع
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode == 200) {
+        // الاستجابة ستكون بالشكل التالي: [{id: 12}, {id: 15}]
+        // هذا الكود سيقوم بتحويلها إلى Set<int> بشكل صحيح
+        return (json.decode(response.body) as List).map<int>((item) => item['id']).toSet();
+      }
+      throw Exception('Failed to fetch deliverable restaurants (Custom Endpoint)');
+    });
+  }
+  Future<List<FoodItem>> _getProducts(String params, String cacheKey) async {
+    return _executeWithRetry(() async {
+      // ✨ [الإصلاح]: أضفنا meta_data هنا لنتمكن من قراءة ID المطعم الأب
+      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+
+      // ✨ [الإصلاح]: حذفنا areaParam من الرابط
+      final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields';
+
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) {
+        await _cacheService.saveData(cacheKey, response.body);
+        return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
+      }
+      throw Exception('Failed to fetch products');
+    });
+  }
+  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> getOnSaleItems() =>
+      _getProducts('on_sale=true&per_page=20', 'onsale_items');
+
+  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> searchProducts({required String query}) =>
+      _getProducts('search=$query&per_page=20', 'search_$query');
+  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> getProductsByTag({required String tagName}) async {
+    return _executeWithRetry(() async {
+      final tagsResponse = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wc/v3/products/tags?search=$tagName&_fields=id'), headers: {'Authorization': _authString});
+      if (tagsResponse.statusCode != 200) throw Exception('Failed to find tag');
+      final tags = json.decode(tagsResponse.body);
+      if (tags.isEmpty) return [];
+      final tagId = tags[0]['id'];
+
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      return _getProducts('tag=$tagId&per_page=10', 'tag_$tagId');
+    });
+  }
+  // ✨ --- [ تم تعديل هذه الدالة ] ---
+  // تم تغيير per_page=10 إلى per_page=100 لجلب كل منتجات المنيو
+// (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
+      _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
+  Future<Order?> submitOrder({
+    required String name, required String phone, required String address,
+    required List<FoodItem> cartItems, String? couponCode,
+    geolocator.Position? position,
+    double? deliveryFee, // <-- ✨ الإضافة الجديدة هنا
+  }) async {
+
+    List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
+// <-- ✨ الإضافة الجديدة هنا: تجهيز سطر الشحن
+    List<Map<String, dynamic>> shippingLines = deliveryFee != null
+        ? [{
+      "method_id": "flat_rate",
+      "method_title": "توصيل",
+      "total": deliveryFee.toString()
+    }]
+        : [];
+    // 1. جلب توكن FCM الحالي للزبون
+    String? fcmToken = await FirebaseMessaging.instance.getToken();
+
+    // 2. بناء الـ bodyPayload مع بيانات التوكن + الإحداثيات
+    Map<String, dynamic> bodyPayload = {
+      "payment_method": "cod", "payment_method_title": "الدفع عند الاستلام",
+      "billing": {"first_name": name, "last_name":".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001", "email": "customer@example.com"},
+      "shipping": {"first_name": name, "last_name":".", "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001"},
+      "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
+      "coupon_lines": couponLines,
+      "shipping_lines": shippingLines, // <-- ✨ الإضافة الجديدة هنا
+      // ✨ إرسال التوكن + الإحداثيات (هذا هو التعديل)
+      "meta_data": [
+        if (fcmToken != null)
+          {"key": "_customer_fcm_token", "value": fcmToken},
+        // --- ✨ الإضافة الجديدة هنا ---
+        // (يجب أن يكون الـ Backend معداً لقراءة هذه الحقول)
+        if (position != null)
+          {"key": "_customer_destination_lat", "value": position.latitude.toString()},
+        if (position != null)
+          {"key": "_customer_destination_lng", "value": position.longitude.toString()}
+        // --- نهاية الإضافة ---
+      ],
+    };
+
+    final body = json.encode(bodyPayload);
+
+    final response = await _executeWithRetry(() => http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
+        headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
+        body: body
+    ));
+
+    if (response.statusCode == 201) {
+      final createdOrder = Order.fromJson(json.decode(response.body));
+      await OrderHistoryService().saveOrder(createdOrder);
+      return createdOrder;
+    } else {
+      throw Exception('Failed to submit order: ${response.body}');
+    }
+  }
+  Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
+    return _executeWithRetry(() async {
+      final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
+      final response = await http.get(uri, headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'});
+      if (response.statusCode == 200) {
+        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
+      }
+      throw Exception('Failed to load orders: ${response.body}');
+    });
+  }
+
+  Future<bool> updateOrderStatus(int orderId, String status) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token');
+    if (token == null) throw Exception('User not logged in');
+
+    final response = await _executeWithRetry(() => http.post(
+      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-order-status/$orderId'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: json.encode({'status': status}),
+    ));
+    return response.statusCode == 200;
+  }
+
+  Future<bool> submitReview({required int productId, required double rating, required String review, required String author, required String email}) async {
+    final response = await _executeWithRetry(() => http.post(
+      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/submit-review'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'product_id': productId, 'rating': rating, 'review': review, 'author': author, 'email': email}),
+    ));
+    return response.statusCode == 201;
+  }
+
+  Future<Map<String, dynamic>> validateCoupon(String code) async {
+    try {
+      final response = await _executeWithRetry(() => http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/validate-coupon'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'code': code}),
+      ));
+      if (response.statusCode == 200) return json.decode(response.body);
+      return {'valid': false, 'message': 'كود غير صالح'};
+    } catch (e) {
+      return {'valid': false, 'message': 'خطأ في الاتصال بالخادم'};
+    }
+  }
+
+  Future<RestaurantRatingsDashboard> getDashboardRatings(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/dashboard-ratings'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) return RestaurantRatingsDashboard.fromJson(json.decode(response.body));
+      throw Exception('Failed to load dashboard ratings');
+    });
+  }
+
+
+// --- ✨ ألصق الكود هنا (المكان الصحيح) ✨ ---
+  Future<DeliveryConfig> getDeliveryConfig() async {
+    return _executeWithRetry(() async {
+      // (تأكد من أن هذا الرابط يطابق ما أنشأته في PHP)
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-config'),
+      );
+      if (response.statusCode == 200) {
+        return DeliveryConfig.fromJson(json.decode(response.body));
+      }
+      throw Exception('Failed to load delivery config');
+    });
+  }
+  // --- نهاية اللصق ---
+
+  Future<Map<String, dynamic>> createUnifiedDeliveryRequest({
+    required String token,
+    required String sourceType, // 'restaurant', 'pharmacy', 'store', 'customer'
+    required String pickupName,
+    required double pickupLat,
+    required double pickupLng,
+    required String destinationAddress,
+    // ملاحظة: إحداثيات الزبون قد لا تكون متوفرة دائماً من ووكومرس، لذا نجعلها اختيارية
+    double? destinationLat,
+    double? destinationLng,
+    required String deliveryFee,
+    required String orderDescription,
+    required String endCustomerPhone,
+    String? sourceOrderId, // اختياري: لربط الطلب برقم الطلب الأصلي
+  }) async {
+    return await _executeWithRetry(() async {
+      final response = await http.post(
+        // تأكد من أن هذا المسار يطابق الواجهة الخلفية تماماً
+        // المسار الصحيح هو taxi/v2 وليس taxi-app/v1
+        Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/create'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'source_type': sourceType,
+          'source_order_id': sourceOrderId,
+          'pickup_location_name': pickupName,
+          'pickup_lat': pickupLat.toString(),
+          'pickup_lng': pickupLng.toString(),
+          'destination_address': destinationAddress,
+          'destination_lat': destinationLat?.toString() ?? "0", // إرسال "0" إذا كانت غير متوفرة
+          'destination_lng': destinationLng?.toString() ?? "0", // إرسال "0" إذا كانت غير متوفرة
+          'delivery_fee': deliveryFee,
+          'order_description': orderDescription,
+          'end_customer_phone': endCustomerPhone,
+        }),
+      );
+
+      final responseBody = json.decode(response.body);
+
+      if (response.statusCode == 201 && responseBody['success'] == true) {
+        return responseBody;
+      } else {
+        final message = responseBody['message'] ?? 'فشل إرسال طلب التوصيل.';
+        throw Exception(message);
+      }
+    });
+  }
+
+  Future<bool> testNotification() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token');
+    if (token == null) throw Exception('User not logged in');
+
+    final response = await _executeWithRetry(() => http.post(
+      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/test-notification'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+    ));
+    return response.statusCode == 200;
+  }
+}
+
+class AuthService {
+  Future<String?> loginRestaurantOwner(String username, String password) async {
+    try {
+      final response = await http.post(
+          Uri.parse('$BEYTEI_URL/wp-json/jwt-auth/v1/token'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'username': username, 'password': password})
+      ).timeout(API_TIMEOUT);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final token = data['token'];
+        if (token != null) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('jwt_token', token);
+          return token;
+        }
+      }
+      return null;
+    } catch (e) { return null; }
+  }
+
+
+
+  Future<void> registerDeviceToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token');
+    if (token == null) return;
+    String? fcmToken = await FirebaseMessaging.instance.getToken();
+    if (fcmToken == null) return;
+
+    try {
+      await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/register-device'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+        body: json.encode({'token': fcmToken}),
+      ).timeout(API_TIMEOUT);
+    } catch (e) { print("Error registering device token: $e"); }
+  }
+
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jwtToken = prefs.getString('jwt_token');
+
+    if (jwtToken != null) {
+      try {
+        await http.post(
+          Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/unregister-device'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $jwtToken'},
+        ).timeout(API_TIMEOUT);
+      } catch (e) { print("Failed to unregister device: $e"); }
+    }
+    await FirebaseMessaging.instance.deleteToken();
+    final cacheService = CacheService();
+    await cacheService.clearAllCache();
+    await prefs.remove('jwt_token');
+    await prefs.remove('selectedAreaId');
+    await prefs.remove('selectedAreaName');
+  }
+}
 
 // =======================================================================
-// --- (جديد) WIDGETS (للـ Admin) ---
+// --- WIDGETS (Reusable UI Components) ---
 // =======================================================================
 
 class NetworkErrorWidget extends StatelessWidget {
@@ -851,13 +2044,339 @@ class NetworkErrorWidget extends StatelessWidget {
     );
   }
 }
+// (الصق هذا بدلاً من FoodCard القديم)
+// (الصق هذا بدلاً من FoodCard القديم)
 
-// (بطاقة الطلب - منسوخة بالكامل من تطبيق المطعم ومعدلة)
+// (الصق هذا بدلاً من FoodCard القديم)
+
+class FoodCard extends StatelessWidget {
+  final FoodItem food;
+  const FoodCard({super.key, required this.food});
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = Provider.of<CartProvider>(context, listen: false);
+
+    // هذا السطر صحيح (يعتمد على المنطقة + حالة الفتح)
+    final bool canOrder = food.isDeliverable;
+
+    return GestureDetector(
+      // ✨ --- [تم التعديل] ---
+      // الآن النقر على البطاقة سينقلك دائماً إلى شاشة التفاصيل
+      // حتى لو كان المنتج غير متاح
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailScreen(foodItem: food))),
+        // --- نهاية التعديل ---
+        child: Opacity(
+            opacity: canOrder ? 1.0 : 0.5,
+            child: Container(
+                width: 180,
+                margin: const EdgeInsets.only(left: 15),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Hero(
+                        tag: 'food_image_${food.id}',
+                        child: Stack(alignment: Alignment.center, children: [
+                          ClipRRect(
+                              borderRadius: BorderRadius.circular(20),
+                              child: CachedNetworkImage(imageUrl: food.imageUrl, height: 140, width: double.infinity, fit: BoxFit.cover, placeholder: (context, url) => Shimmer.fromColors(baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!, child: Container(color: Colors.white)))),
+
+                          // هذا الكود سيعرض "غير متوفر حالياً"
+                          if (!canOrder)
+                            Container(
+                                height: 140,
+                                width: double.infinity,
+                                decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), borderRadius: BorderRadius.circular(20)),
+                                child: const Center(
+                                  // ✨ تم تغيير النص ليطابق صورتك
+                                    child: Text('ليس متاح الآن', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14))
+                                )
+                            )
+                        ]),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(food.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
+                      const Spacer(),
+                      Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(food.formattedPrice, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                            SizedBox(
+                              width: 40,
+                              height: 40,
+                              child: IconButton(
+                                icon: Icon(Icons.add_shopping_cart, color: canOrder ? Theme.of(context).primaryColor : Colors.grey),
+                                // ✨ --- [تم التعديل] ---
+                                // النقر على زر الإضافة (وهو مغلق) سينقلك أيضاً لشاشة التفاصيل
+                                onPressed: canOrder
+                                    ? () => cart.addToCart(food, context)
+                                    : () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailScreen(foodItem: food))),
+                                // --- نهاية التعديل ---
+                              ),
+                            )
+                          ]),
+                      const SizedBox(height: 5),
+                    ]))));
+  }
+}
+class HorizontalRestaurantCard extends StatelessWidget {
+  final Restaurant restaurant;
+  const HorizontalRestaurantCard({super.key, required this.restaurant});
+
+  @override
+  Widget build(BuildContext context) {
+    // 1. Check if it's available (within region + open)
+    final bool isDeliverable = restaurant.isDeliverable;
+    final bool isOpen = restaurant.isOpen;
+    final bool canOrder = isDeliverable && isOpen;
+
+    return GestureDetector(
+      // 2. Update onTap
+        onTap: canOrder
+            ? () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => MenuScreen(restaurant: restaurant)))
+            : () => _showClosedDialog(context, restaurant), // <-- Show dialog
+        child: Opacity(
+            opacity: 1.0, // 3. Remove opacity dimming
+            child: Container(
+                width: 100,
+                margin: const EdgeInsets.only(left: 15),
+                child: Column(children: [
+                  Stack(alignment: Alignment.center, children: [
+                    CircleAvatar(
+                        radius: 40,
+                        backgroundImage:
+                        CachedNetworkImageProvider(restaurant.imageUrl),
+                        backgroundColor: Colors.grey[200]),
+                    // 4. Update Overlay
+                    if (!isDeliverable) // Out of region
+                      Container(
+                          width: 80,
+                          height: 80,
+                          decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.5),
+                              shape: BoxShape.circle),
+                          child: const Center(
+                              child: Text('خارج\nالتوصيل',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 12))))
+                    else if (!isOpen) // Closed
+                      Container(
+                          width: 80,
+                          height: 80,
+                          decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.5),
+                              shape: BoxShape.circle),
+                          child: const Center(
+                              child: Text('مغلق\nحالياً',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 12))))
+                  ]),
+                  const SizedBox(height: 8),
+                  Text(restaurant.name,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 12))
+                ]))));
+  }
+
+  // 5. Add helper function (copied from RestaurantCard)
+  void _showClosedDialog(BuildContext context, Restaurant restaurant) {
+    String title;
+    String message;
+    IconData icon;
+    Color iconColor;
+
+    if (!restaurant.isDeliverable) {
+      // 1. Out of delivery zone
+      title = "خارج منطقة التوصيل";
+      message = "عذراً، هذا  لا يوصل إلى منطقتك المحددة حالياً.";
+      icon = Icons.location_off_outlined;
+      iconColor = Colors.orange.shade700;
+    } else if (!restaurant.isOpen) {
+      // 2. In zone but closed
+      title = " مغلق حالياً";
+      message = "لا يستقبل  طلبات الآن.\n\n"
+          "يفتح تلقائياً في: ${restaurant.autoOpenTime}\n"
+          "يغلق تلقائياً في: ${restaurant.autoCloseTime}";
+      icon = Icons.store_mall_directory_outlined;
+      iconColor = Colors.red.shade600;
+    } else {
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 28),
+            const SizedBox(width: 10),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(message, style: const TextStyle(fontSize: 16, height: 1.5)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text("حسناً",
+                  style: TextStyle(fontWeight: FontWeight.bold))),
+        ],
+      ),
+    );
+  }
+}
+
+// في ملف re.dart (داخل قسم WIDGETS)
+// استبدل الكلاس RestaurantCard بالكامل (سطر 1301) بهذا:
+
+// في ملف re.dart (داخل قسم WIDGETS)
+// استبدل الكلاس RestaurantCard بالكامل (سطر 1301) بهذا:
+
+// (الصق هذا بدلاً من RestaurantCard القديم)
+class RestaurantCard extends StatelessWidget {
+  final Restaurant restaurant;
+  const RestaurantCard({super.key, required this.restaurant});
+
+  // ✨ NEW: Modern dialog
+  void _showClosedDialog(BuildContext context, Restaurant restaurant) {
+    String title;
+    String message;
+    IconData icon;
+    Color iconColor;
+
+    if (!restaurant.isDeliverable) {
+      // 1. خارج منطقة التوصيل
+      title = "خارج منطقة التوصيل";
+      message = "عذراً، هذا  لا يوصل إلى منطقتك المحددة حالياً.";
+      icon = Icons.location_off_outlined;
+      iconColor = Colors.orange.shade700;
+    } else if (!restaurant.isOpen) { // <-- ✨ تم التعديل هنا
+      // 2. داخل المنطقة ولكنه مغلق
+      title = " مغلق حالياً";
+      message = "لا يستقبل  طلبات الآن.\n\n"
+          "يفتح تلقائياً في: ${restaurant.autoOpenTime}\n"
+          "يغلق تلقائياً في: ${restaurant.autoCloseTime}";
+      icon = Icons.store_mall_directory_outlined;
+      iconColor = Colors.red.shade600;
+    } else {
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 28),
+            const SizedBox(width: 10),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(message, style: const TextStyle(fontSize: 16, height: 1.5)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً", style: TextStyle(fontWeight: FontWeight.bold))),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // ✨ التعديل: استخدام 'isOpen' بدلاً من 'isCurrentlyOpen'
+    final bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      elevation: 4,
+      shadowColor: Colors.black.withOpacity(0.1),
+      child: InkWell(
+        onTap: canOrder
+            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
+            : () => _showClosedDialog(context, restaurant),
+        child: Opacity(
+          opacity: 1.0, // لا نستخدم التعتيم هنا، بل على الصورة فقط
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 3,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    CachedNetworkImage(
+                      imageUrl: restaurant.imageUrl,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Shimmer.fromColors(baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!, child: Container(color: Colors.white)),
+                      errorWidget: (context, url, error) => const Icon(Icons.storefront, color: Colors.grey, size: 40),
+                    ),
+
+                    // --- ✨ تم التعديل هنا لاستخدام 'canOrder' ---
+                    !restaurant.isDeliverable
+                        ? Container( // خارج المنطقة
+                      color: Colors.black.withOpacity(0.6),
+                      child: const Center(child: Text('خارج\nمنطقتك', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
+                    )
+                        : !canOrder // (داخل المنطقة ولكنه مغلق)
+                        ? Container(
+                      color: Colors.black.withOpacity(0.6),
+                      child: const Center(child: Text('مغلق حالياً', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
+                    )
+                        : const SizedBox.shrink() // متاح
+                    // --- نهاية التعديل ---
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(restaurant.name, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      SizedBox(
+                        height: 30,
+                        child: ElevatedButton.icon(
+                          // ✨ التعديل: استخدام 'canOrder'
+                          onPressed: canOrder
+                              ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
+                              : () => _showClosedDialog(context, restaurant),
+                          icon: const Icon(Icons.menu_book, size: 14),
+                          label: const Text(' عرض المنيو', style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: canOrder ? Theme.of(context).primaryColor : Colors.grey, // تغيير اللون إذا كان مغلقاً
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 class OrderCard extends StatefulWidget {
   final Order order;
   final VoidCallback onStatusChanged;
   final bool isCompleted;
-  final String? pickupCode; // كود استلام السائق
+  final String? pickupCode;
 
   const OrderCard({
     super.key,
@@ -872,7 +2391,7 @@ class OrderCard extends StatefulWidget {
 }
 
 class _OrderCardState extends State<OrderCard> {
-  final AdminApiService _apiService = AdminApiService();
+  final ApiService _apiService = ApiService();
   bool _isUpdating = false;
 
   Future<void> _updateStatus(String status) async {
@@ -907,34 +2426,15 @@ class _OrderCardState extends State<OrderCard> {
 
   Future<void> _launchMaps(BuildContext context, String? lat, String? lng) async {
     if (lat == null || lng == null || lat.isEmpty || lng.isEmpty || lat == "0" || lng == "0") {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('الإحداثيات غير متوفرة لهذا الطلب')),
-        );
-      }
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الإحداثيات غير متوفرة')));
       return;
     }
     try {
       final double latitude = double.parse(lat);
       final double longitude = double.parse(lng);
-      if (context.mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => InAppMapScreen(
-              latitude: latitude,
-              longitude: longitude,
-              title: 'موقع الزبون',
-            ),
-          ),
-        );
-      }
+      if (context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => InAppMapScreen(latitude: latitude, longitude: longitude, title: 'موقع الزبون')));
     } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('خطأ في تنسيق الإحداثيات.')),
-        );
-      }
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خطأ في الإحداثيات')));
     }
   }
 
@@ -946,21 +2446,19 @@ class _OrderCardState extends State<OrderCard> {
     final destAddressController = TextEditingController(text: order.address);
 
     final orderDetails = order.lineItems.map((item) => '- ${item.quantity} x ${item.name}').join('\n');
-    notesController.text = 'توصيل طلب مسواك رقم #${order.id}\n' // (تم التعديل)
-        'المحتويات:\n$orderDetails';
+    notesController.text = 'توصيل طلب  رقم #${order.id}\nالمحتويات:\n$orderDetails';
 
     SharedPreferences.getInstance().then((prefs) {
-      // (تم التعديل: استخدام المفتاح الصحيح)
-      pickupNameController.text = prefs.getString('saved_store_name') ?? '';
+      pickupNameController.text = prefs.getString('restaurant_name') ?? '';
     });
 
     showDialog(
       context: cardContext,
       barrierDismissible: false,
       builder: (dialogContext) {
-        bool isSubmitting = false;
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            bool isSubmitting = false;
             return AlertDialog(
               title: const Text('طلب توصيل (تكسي بيتي)'),
               content: Form(
@@ -973,8 +2471,7 @@ class _OrderCardState extends State<OrderCard> {
                       const Text("1. تفاصيل نقطة الاستلام:", style: TextStyle(fontWeight: FontWeight.bold)),
                       TextFormField(
                         controller: pickupNameController,
-                        enabled: !isSubmitting,
-                        decoration: const InputDecoration(labelText: 'اسم المتجر/الفرع'), // (تم التعديل)
+                        decoration: const InputDecoration(labelText: 'اسم /الفرع'),
                         validator: (value) => value == null || value.isEmpty ? 'الحقل مطلوب' : null,
                       ),
                       const SizedBox(height: 16),
@@ -985,7 +2482,6 @@ class _OrderCardState extends State<OrderCard> {
                       ),
                       TextFormField(
                         controller: destAddressController,
-                        enabled: !isSubmitting,
                         maxLines: 2,
                         decoration: const InputDecoration(labelText: 'عنوان توصيل الزبون'),
                         validator: (value) => value == null || value.isEmpty ? 'الحقل مطلوب' : null,
@@ -999,19 +2495,13 @@ class _OrderCardState extends State<OrderCard> {
                       const SizedBox(height: 10),
                       TextFormField(
                         controller: feeController,
-                        enabled: !isSubmitting,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(labelText: 'أجرة التوصيل', hintText: 'مثال: 3000', suffixText: 'د.ع'),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) return 'الرجاء إدخال أجرة التوصيل';
-                          if (double.tryParse(value) == null) return 'الرجاء إدخال رقم صحيح';
-                          return null;
-                        },
+                        validator: (value) => (value == null || value.isEmpty) ? 'مطلوب' : null,
                       ),
                       const SizedBox(height: 16),
                       TextFormField(
                         controller: notesController,
-                        enabled: !isSubmitting,
                         maxLines: 4,
                         decoration: const InputDecoration(labelText: 'ملاحظات للسائق', border: OutlineInputBorder()),
                       ),
@@ -1021,33 +2511,31 @@ class _OrderCardState extends State<OrderCard> {
               ),
               actions: [
                 TextButton(
-                  onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(),
+                  onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text('إلغاء'),
                 ),
                 ElevatedButton(
-                  onPressed: isSubmitting ? null : () async {
+                  onPressed: () async {
                     if (formKey.currentState!.validate()) {
                       setDialogState(() => isSubmitting = true);
                       try {
                         final prefs = await SharedPreferences.getInstance();
-                        final storeToken = prefs.getString('jwt_token_store_admin'); // (تم التعديل)
-                        if (storeToken == null) throw Exception("لم يتم العثور على جلسة دخول مدير المتجر. أعد تسجيل الدخول.");
-                        final double? storeLat = prefs.getDouble('store_lat'); // (تم التعديل)
-                        final double? storeLng = prefs.getDouble('store_lng'); // (تم التعديل)
-                        if (storeLat == null || storeLng == null) throw Exception("إحداثيات المتجر غير محفوظة. أعد تسجيل الدخول.");
-                        final double? customerLat = double.tryParse(order.destinationLat ?? '');
-                        final double? customerLng = double.tryParse(order.destinationLng ?? '');
+                        final restaurantToken = prefs.getString('jwt_token');
+                        final double? restaurantLat = prefs.getDouble('restaurant_lat');
+                        final double? restaurantLng = prefs.getDouble('restaurant_lng');
+
+                        if (restaurantToken == null || restaurantLat == null || restaurantLng == null) throw Exception("بيانات  ناقصة");
 
                         final result = await _apiService.createUnifiedDeliveryRequest(
-                          token: storeToken,
-                          sourceType: 'store', // (تم التعديل: المصدر هو "متجر")
+                          token: restaurantToken,
+                          sourceType: 'restaurant',
                           sourceOrderId: order.id.toString(),
                           pickupName: pickupNameController.text,
-                          pickupLat: storeLat,
-                          pickupLng: storeLng,
+                          pickupLat: restaurantLat,
+                          pickupLng: restaurantLng,
                           destinationAddress: destAddressController.text,
-                          destinationLat: customerLat,
-                          destinationLng: customerLng,
+                          destinationLat: double.tryParse(order.destinationLat ?? ''),
+                          destinationLng: double.tryParse(order.destinationLng ?? ''),
                           deliveryFee: feeController.text,
                           orderDescription: notesController.text,
                           endCustomerPhone: order.phone,
@@ -1056,37 +2544,20 @@ class _OrderCardState extends State<OrderCard> {
                         if (mounted) {
                           final code = result['pickup_code']?.toString();
                           if (code != null) {
-                            Provider.of<DashboardProvider>(cardContext, listen: false)
-                                .setPickupCode(order.id, code);
+                            Provider.of<DashboardProvider>(cardContext, listen: false).setPickupCode(order.id, code);
                           }
                           await _updateStatus('out-for-delivery');
                           Navigator.of(dialogContext).pop();
-                          ScaffoldMessenger.of(cardContext).showSnackBar(
-                            SnackBar(
-                              content: Text(result['message'] ?? 'تم إرسال طلب التوصيل بنجاح!'),
-                              backgroundColor: Colors.green,
-                            ),
-                          );
+                          ScaffoldMessenger.of(cardContext).showSnackBar(SnackBar(content: Text(result['message'] ?? 'تم الطلب'), backgroundColor: Colors.green));
                         }
                       } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(cardContext).showSnackBar(
-                            SnackBar(
-                              content: Text('خطأ: ${e.toString().replaceAll("Exception: ", "")}'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
+                        if (mounted) ScaffoldMessenger.of(cardContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
                       } finally {
-                        if (mounted) {
-                          setDialogState(() => isSubmitting = false);
-                        }
+                        if(mounted) setDialogState(() => isSubmitting = false);
                       }
                     }
                   },
-                  child: isSubmitting
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('إرسال الطلب للسائق'),
+                  child: isSubmitting ? const CircularProgressIndicator(color: Colors.white) : const Text('إرسال'),
                 ),
               ],
             );
@@ -1096,27 +2567,42 @@ class _OrderCardState extends State<OrderCard> {
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
     final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
     final formattedDate = formatter.format(widget.order.dateCreated.toLocal());
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(double.tryParse(widget.order.total) ?? 0);
+    final bool isDeliveryRequested = widget.order.status == 'out-for-delivery';
 
     return Card(
-      clipBehavior: Clip.antiAlias, margin: const EdgeInsets.symmetric(vertical: 8), elevation: 4, shadowColor: Colors.black.withOpacity(0.1), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      clipBehavior: Clip.antiAlias,
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       child: Column(
         children: [
-          _buildCardHeader(context, formattedDate),
+          Container(
+            color: Colors.teal.withOpacity(0.05),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('طلب #${widget.order.id}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Theme.of(context).primaryColor)),
+              Text(formattedDate, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+            ]),
+          ),
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildInfoRow(Icons.person_outline, 'الزبون:', widget.order.customerName),
-                const SizedBox(height: 12),
-                _buildInfoRow(Icons.location_on_outlined, 'العنوان:', widget.order.address),
-                if (widget.order.destinationLat != null && widget.order.destinationLat!.isNotEmpty)
+                _buildInfoRow(Icons.person, 'الزبون:', widget.order.customerName),
+                const SizedBox(height: 8),
+                _buildInfoRow(Icons.location_on, 'العنوان:', widget.order.address),
+
+                // ✨ زر الخريطة (الإصلاح)
+                if (widget.order.destinationLat != null &&
+                    widget.order.destinationLat!.isNotEmpty &&
+                    widget.order.destinationLat != "0" &&
+                    widget.order.destinationLat != "0.0")
                   Padding(
                     padding: const EdgeInsets.only(top: 8.0),
                     child: Center(
@@ -1124,126 +2610,671 @@ class _OrderCardState extends State<OrderCard> {
                         icon: Icon(Icons.map_outlined, color: Theme.of(context).primaryColor),
                         label: Text(
                           'عرض موقع الزبون على الخريطة',
-                          style: TextStyle(color: Theme.of(context).primaryColor),
+                          style: TextStyle(color: Theme.of(context).primaryColor, decoration: TextDecoration.underline),
                         ),
                         onPressed: () => _launchMaps(context, widget.order.destinationLat, widget.order.destinationLng),
                       ),
                     ),
                   ),
-                const SizedBox(height: 12),
-                _buildInfoRow(Icons.phone_outlined, 'الهاتف:', widget.order.phone),
-                const Divider(height: 32),
-                if (widget.order.status == 'out-for-delivery' && widget.pickupCode != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16.0),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                          color: Colors.amber.shade100,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.amber.shade600, width: 1.5)
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.key_outlined, color: Colors.amber.shade800),
-                          const SizedBox(width: 10),
-                          Text(
-                              'رمز استلام السائق:',
-                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber.shade800)
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            widget.pickupCode!,
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.black, letterSpacing: 2),
-                          ),
-                        ],
-                      ),
+
+                const SizedBox(height: 8),
+                _buildInfoRow(Icons.phone, 'الهاتف:', widget.order.phone),
+                const Divider(height: 25),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87)),
+                    ElevatedButton.icon(
+                      onPressed: () => _makePhoneCall(widget.order.phone),
+                      icon: const Icon(Icons.call, size: 18),
+                      label: const Text('اتصال بالزبون'),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                    ),
+                  ],
+                ),
+
+                // ✨ الرسالة المطلوبة
+                if (isDeliveryRequested) ...[
+                  const SizedBox(height: 15),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.blue.shade200)
+                    ),
+                    child: Column(
+                      children: [
+                        const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.delivery_dining, color: Colors.blue),
+                            SizedBox(width: 8),
+                            Text("تم طلب المندوب وهو في الطريق إليك", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                          ],
+                        ),
+                        if(widget.pickupCode != null) ...[
+                          const SizedBox(height: 5),
+                          Text("رمز التسليم: ${widget.pickupCode}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 2)),
+                        ]
+                      ],
                     ),
                   ),
-                const Divider(height: 32),
-                const Text('تفاصيل الطلب:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                const SizedBox(height: 8),
-                ...widget.order.lineItems.map((item) => Padding(padding: const EdgeInsets.only(bottom: 6.0), child: Row(children: [Text('• ${item.quantity} ×', style: TextStyle(color: Colors.grey.shade700)), const SizedBox(width: 8), Expanded(child: Text(item.name))]))).toList(),
-                const Divider(height: 32),
-                _buildTotalAndCall(context, totalFormatted),
+                ],
+
+                if (!widget.isCompleted && !isDeliveryRequested) ...[
+                  const Divider(height: 25),
+                  Row(
+                    children: [
+                      Expanded(child: OutlinedButton(onPressed: () => _updateStatus('cancelled'), style: OutlinedButton.styleFrom(foregroundColor: Colors.red), child: const Text('رفض'))),
+                      const SizedBox(width: 10),
+                      Expanded(child: ElevatedButton(onPressed: () => _showDeliveryRequestDialog(context, widget.order), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade800, foregroundColor: Colors.white), child: const Text('طلب تكسي (يدوي)'))),
+                    ],
+                  )
+                ],
+                const SizedBox(height: 10),
+                const Text('التفاصيل:', style: TextStyle(fontWeight: FontWeight.bold)),
+                ...widget.order.lineItems.map((item) => Text('- ${item.quantity} x ${item.name}')).toList(),
               ],
             ),
           ),
-          if (_isUpdating) const Padding(padding: EdgeInsets.only(bottom: 16.0), child: Center(child: CircularProgressIndicator()))
-          else if (!widget.isCompleted) ...[
-            _buildActionButtons(context),
-          ],
         ],
       ),
-    );
-  }
-
-  Widget _buildCardHeader(BuildContext context, String formattedDate) {
-    return Container(
-      color: Colors.blue.withOpacity(0.05), // (تعديل اللون ليناسب المسواك)
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text('طلب #${widget.order.id}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Theme.of(context).primaryColor)),
-        Text(formattedDate, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-      ]),
     );
   }
 
   Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Icon(icon, size: 20, color: Colors.grey.shade600),
-      const SizedBox(width: 12),
-      Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-      const SizedBox(width: 5),
-      Expanded(child: Text(value, style: TextStyle(color: Colors.grey.shade800))),
-    ]);
+    return Row(children: [Icon(icon, size: 18, color: Colors.grey), const SizedBox(width: 5), Text(label, style: const TextStyle(fontWeight: FontWeight.bold)), const SizedBox(width: 5), Expanded(child: Text(value))]);
   }
+}
+class OrderHistoryCard extends StatelessWidget {
+  final Order order;
+  const OrderHistoryCard({super.key, required this.order});
 
-  Widget _buildTotalAndCall(BuildContext context, String totalFormatted) {
-    return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.center, children: [
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('الإجمالي', style: TextStyle(color: Colors.grey.shade600)),
-        Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-      ]),
-      ElevatedButton.icon(
-        onPressed: () => _makePhoneCall(widget.order.phone),
-        icon: const Icon(Icons.call, size: 20),
-        label: const Text('اتصال'),
-        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade600, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+  // ✨ --- [ الدالة المحدثة التي تفتح الخريطة داخلياً ] ---
+  Future<void> _launchMaps(BuildContext context, String? lat, String? lng) async {
+    // 1. التحقق من أن الإحداثيات موجودة
+    if (lat == null || lng == null || lat.isEmpty || lng.isEmpty || lat == "0" || lng == "0") {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('الإحداثيات غير متوفرة لهذا الطلب')),
+        );
+      }
+      return;
+    }
+
+    try {
+      // 2. تحويل النصوص إلى أرقام
+      final double latitude = double.parse(lat);
+      final double longitude = double.parse(lng);
+
+      // 3. ✨ الانتقال إلى شاشة الخريطة الداخلية
+      if (context.mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => InAppMapScreen(
+              latitude: latitude,
+              longitude: longitude,
+              title: 'موقعي على الخريطة', // عنوان مخصص للشاشة
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      // 4. في حال كانت الإحداثيات غير صالحة
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('خطأ في تنسيق الإحداثيات.')),
+        );
+      }
+    }
+  }
+  // --- [نهاية الدالة] ---
+
+
+  @override
+  Widget build(BuildContext context) {
+    final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
+    final formattedDate = formatter.format(order.dateCreated.toLocal());
+    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(double.tryParse(order.total) ?? 0);
+    final statusInfo = order.statusDisplay;
+
+    // التحقق من وجود إحداثيات
+    final bool hasCoordinates = (order.destinationLat != null && order.destinationLat!.isNotEmpty);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('طلب #${order.id}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Theme.of(context).primaryColor)),
+                Text(formattedDate, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+              ],
+            ),
+            const Divider(height: 24),
+            ...order.lineItems.map((item) => Padding(
+              padding: const EdgeInsets.only(bottom: 6.0),
+              child: Row(children: [
+                Text('• ${item.quantity} ×', style: TextStyle(color: Colors.grey.shade700)),
+                const SizedBox(width: 8),
+                Expanded(child: Text(item.name)),
+              ]),
+            )).toList(),
+
+            // ✨ --- [ هذا هو الجزء الذي تم تعديله ] ---
+            const Divider(height: 24),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.location_on_outlined, color: Colors.grey.shade600, size: 20),
+                const SizedBox(width: 8),
+                const Text('العنوان:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: hasCoordinates
+                  // 1. إذا وجدت إحداثيات: اعرض زر (يستخدم الدالة الداخلية)
+                      ? InkWell(
+                    onTap: () => _launchMaps(context, order.destinationLat, order.destinationLng),
+                    child: Text(
+                      "تم تحديد الموقع (اضغط للعرض)", // النص الذي سيظهر للزبون
+                      style: TextStyle(
+                        color: Theme.of(context).primaryColor,
+                        decoration: TextDecoration.underline,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  )
+                  // 2. إذا لم توجد إحداثيات: اعرض النص العادي
+                      : Text(order.address, style: TextStyle(color: Colors.grey.shade800)),
+                ),
+              ],
+            ),
+            // --- [نهاية التعديل] ---
+
+            const Divider(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('الإجمالي', style: TextStyle(color: Colors.grey.shade600, fontSize: 16)),
+                Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const Divider(height: 24),
+            Row(
+              children: [
+                Icon(statusInfo['icon'], color: statusInfo['color'], size: 20),
+                const SizedBox(width: 8),
+                Text('الحالة:', style: TextStyle(fontSize: 16, color: Colors.grey.shade700)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    statusInfo['text'],
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: statusInfo['color']),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
-    ]);
+    );
+  }
+}
+class RatingDialog extends StatefulWidget {
+  final int productId;
+  const RatingDialog({super.key, required this.productId});
+  @override
+  State<RatingDialog> createState() => _RatingDialogState();
+}
+
+class _RatingDialogState extends State<RatingDialog> {
+  final _apiService = ApiService();
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _reviewController = TextEditingController();
+  double _rating = 3.0;
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _reviewController.dispose();
+    super.dispose();
   }
 
-  Widget _buildActionButtons(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(child: OutlinedButton(onPressed: () => _updateStatus('cancelled'), style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700, side: BorderSide(color: Colors.red.shade200), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)), child: const Text('إلغاء الطلب'))),
-              const SizedBox(width: 12),
-              Expanded(child: ElevatedButton(onPressed: () => _updateStatus('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)), child: const Text('إكمال الطلب'))), // (تعديل اللون)
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.delivery_dining, color: Colors.white), label: const Text('إرسال للتوصيل', style: TextStyle(color: Colors.white, fontSize: 16)), onPressed: () => _updateStatus('out-for-delivery'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade600, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)))),
-              const SizedBox(width: 12),
-              Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.two_wheeler, color: Colors.white), label: const Text('طلب تكسي بيتي', style: TextStyle(color: Colors.white, fontSize: 16)), onPressed: () => _showDeliveryRequestDialog(context, widget.order), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.symmetric(vertical: 12)))),
-            ],
-          ),
-        ],
+  Future<void> _submitReview() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isLoading = true);
+    try {
+      final success = await _apiService.submitReview(productId: widget.productId, rating: _rating, review: _reviewController.text, author: _nameController.text, email: _emailController.text);
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(success ? "شكراً لك، تم إرسال تقييمك بنجاح!" : "فشل إرسال التقييم."), backgroundColor: success ? Colors.green : Colors.red));
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("حدث خطأ: ${e.toString()}"), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text("إضافة تقييم"),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            TextFormField(controller: _emailController, decoration: const InputDecoration(labelText: 'البريد الإلكتروني'), keyboardType: TextInputType.emailAddress, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+            TextFormField(controller: _reviewController, decoration: const InputDecoration(labelText: 'ملاحظاتك'), maxLines: 3),
+            const SizedBox(height: 20),
+            RatingBar.builder(initialRating: _rating, minRating: 1, direction: Axis.horizontal, allowHalfRating: false, itemCount: 5, itemPadding: const EdgeInsets.symmetric(horizontal: 4.0), itemBuilder: (context, _) => const Icon(Icons.star, color: Colors.amber), onRatingUpdate: (rating) => setState(() => _rating = rating)),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text("إلغاء")),
+        ElevatedButton(onPressed: _isLoading ? null : _submitReview, child: _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text("إرسال")),
+      ],
+    );
+  }
+}
+
+class ReviewCard extends StatelessWidget {
+  final Review review;
+  const ReviewCard({super.key, required this.review});
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Expanded(child: Text(review.productName, style: const TextStyle(fontWeight: FontWeight.bold))),
+            RatingBarIndicator(rating: review.rating.toDouble(), itemBuilder: (context, index) => const Icon(Icons.star, color: Colors.amber), itemCount: 5, itemSize: 16.0),
+          ]),
+          const Divider(),
+          Text(review.content.isEmpty ? "لا يوجد تعليق." : review.content, style: TextStyle(color: Colors.grey.shade700)),
+          const SizedBox(height: 8),
+          Align(alignment: Alignment.bottomLeft, child: Text("${review.author} - ${DateFormat('yyyy/MM/dd').format(review.date)}", style: const TextStyle(fontSize: 12, color: Colors.grey))),
+        ]),
       ),
     );
   }
 }
 
 
+// (الصق هذا بدلاً من ShimmerHomeScreen القديم)
+class ShimmerHorizontalRestaurantCard extends StatelessWidget {
+  const ShimmerHorizontalRestaurantCard({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 100, margin: const EdgeInsets.only(left: 15),
+      child: Column(children: [const CircleAvatar(radius: 40, backgroundColor: Colors.white), const SizedBox(height: 8), Container(height: 10, width: 70, color: Colors.white)]),
+    );
+  }
+}
+
+class ShimmerRestaurantCard extends StatelessWidget {
+  const ShimmerRestaurantCard({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!,
+      child: Card(
+        clipBehavior: Clip.antiAlias, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(flex: 3, child: Container(color: Colors.white)),
+          Expanded(flex: 2, child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Column(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Column(children: [Container(height: 12, width: 100, color: Colors.white), const SizedBox(height: 4), Container(height: 12, width: 70, color: Colors.white)]),
+              Container(height: 30, width: 100, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+            ]),
+          )),
+        ]),
+      ),
+    );
+  }
+}
+
+
+class ShimmerFoodCard extends StatelessWidget {
+  const ShimmerFoodCard({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!,
+      child: Container(
+        width: 180, margin: const EdgeInsets.only(left: 15),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(height: 140, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+          const SizedBox(height: 10),
+          Container(height: 15, width: 120, color: Colors.white),
+          const SizedBox(height: 10),
+          Container(height: 15, width: 60, color: Colors.white),
+          const Spacer(),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Container(height: 20, width: 70, color: Colors.white),
+            Container(height: 40, width: 40, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white)),
+          ]),
+          const SizedBox(height: 5),
+        ]),
+      ),
+    );
+  }
+}
+
 // =======================================================================
-// --- (جديد) SCREENS (للـ Admin) ---
+// --- MAIN APP ENTRY POINT & WRAPPERS ---
+// =======================================================================
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  runApp(const RestaurantModule());
+}
+
+class RestaurantModule extends StatefulWidget {
+  const RestaurantModule({super.key});
+  @override
+  State<RestaurantModule> createState() => _RestaurantModuleState();
+}
+class _RestaurantModuleState extends State<RestaurantModule> {
+  @override
+  void initState() {
+    super.initState();
+    _initializeServices();
+  }
+
+  Future<void> _initializeServices() async {
+    await NotificationService.initialize();
+
+    // 🔥 الاستماع للإشعارات القادمة والتطبيق مفتوح (Foreground) 🔥
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      // 1. عرض التنبيه (صوت + إشعار منبثق)
+      NotificationService.display(message);
+
+      // 2. تحديث البيانات فوراً (بدلاً من انتظار المؤقت)
+      if (mounted) {
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+        if (authProvider.isLoggedIn && authProvider.token != null) {
+          print("🔔 إشعار جديد وصل! جاري تحديث بيانات  فوراً...");
+
+          // أ) تحديث قائمة الطلبات (النشطة والمكتملة)
+          Provider.of<DashboardProvider>(context, listen: false)
+              .fetchDashboardData(authProvider.token, silent: true);
+
+          // ب) تحديث إعدادات المطعم (للاحتياط، في حال تغيرت الحالة)
+          Provider.of<RestaurantSettingsProvider>(context, listen: false)
+              .fetchSettings(authProvider.token);
+        }
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        // Providers الأساسية
+        ChangeNotifierProvider(create: (_) => CartProvider()),
+        ChangeNotifierProvider(create: (_) => NavigationProvider()),
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => CustomerProvider()),
+        ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => RestaurantSettingsProvider()),
+        ChangeNotifierProvider(create: (_) => DeliveryProvider()),
+
+        // Providers المعتمدة على AuthProvider (Proxy)
+
+        // 1. ربط DashboardProvider
+        ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
+          create: (_) => DashboardProvider(),
+          update: (_, auth, dashboard) {
+            if(auth.isLoggedIn && dashboard != null && auth.token != null) {
+              // عند بدء التطبيق، نجلب البيانات مرة واحدة (initial fetch)
+              // التحديثات اللاحقة ستتم عبر الإشعارات (الكود أعلاه)
+              dashboard.startAutoRefresh(auth.token!);
+            }
+            return dashboard!;
+          },
+        ),
+
+        // 2. ربط RestaurantSettingsProvider
+        ChangeNotifierProxyProvider<AuthProvider, RestaurantSettingsProvider>(
+          create: (_) => RestaurantSettingsProvider(),
+          update: (_, auth, settings) {
+            if(settings != null && auth.isLoggedIn && auth.token != null) {
+              settings.fetchSettings(auth.token);
+            } else if (settings != null && !auth.isLoggedIn) {
+              settings.clearData();
+            }
+            return settings!;
+          },
+        ),
+
+        // 3. ربط RestaurantProductsProvider
+        ChangeNotifierProxyProvider<AuthProvider, RestaurantProductsProvider>(
+          create: (_) => RestaurantProductsProvider(),
+          update: (_, auth, products) {
+            if (products != null && auth.isLoggedIn && auth.token != null) {
+              products.fetchProducts(auth.token);
+            } else if (products != null && !auth.isLoggedIn) {
+              products.clearData();
+            }
+            return products!;
+          },
+        ),
+      ],
+      child: MaterialApp(
+        title: 'Beytei Restaurants',
+        theme: ThemeData(
+            primarySwatch: Colors.teal,
+            scaffoldBackgroundColor: const Color(0xFFF5F5F5),
+            fontFamily: 'Tajawal',
+            appBarTheme: const AppBarTheme(
+                backgroundColor: Colors.white,
+                elevation: 0.5,
+                iconTheme: IconThemeData(color: Colors.black),
+                titleTextStyle: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'Tajawal')
+            )
+        ),
+        debugShowCheckedModeBanner: false,
+        home: const AuthWrapper(),
+      ),
+    );
+  }
+}
+// ✨ NEW: Restaurant Settings Screen
+class RestaurantSettingsScreen extends StatefulWidget {
+  const RestaurantSettingsScreen({super.key});
+
+  @override
+  State<RestaurantSettingsScreen> createState() => _RestaurantSettingsScreenState();
+}
+
+class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
+
+  Future<void> _updateStatus(RestaurantSettingsProvider provider, bool newValue) async {
+    final token = Provider.of<AuthProvider>(context, listen: false).token;
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final success = await provider.updateOpenStatus(token, newValue);
+    if(success) {
+      scaffoldMessenger.showSnackBar(SnackBar(content: Text(newValue ? 'تم فتح  بنجاح.' : 'تم إغلاق  بنجاح.'), backgroundColor: Colors.green));
+    } else {
+      scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الحالة.'), backgroundColor: Colors.red));
+    }
+  }
+
+  Future<void> _showTimePicker(BuildContext context, RestaurantSettingsProvider provider, bool isOpeningTime) async {
+    final initialTime = isOpeningTime
+        ? TimeOfDay(hour: int.parse(provider.openTime.split(':')[0]), minute: int.parse(provider.openTime.split(':')[1]))
+        : TimeOfDay(hour: int.parse(provider.closeTime.split(':')[0]), minute: int.parse(provider.closeTime.split(':')[1]));
+
+    final TimeOfDay? newTime = await showTimePicker(
+      context: context,
+      initialTime: initialTime,
+      // ✨ تم إزالة وسيط 'builder' الذي كان يسبب خطأ التعارض.
+    );
+
+    if (newTime != null) {
+      // ✨ --- هذا هو التعديل --- ✨
+      // فرض تحويل الوقت إلى صيغة 24 ساعة (HH:mm) قبل الإرسال
+      final hour24 = newTime.hour; // newTime.hour يعطي دائماً صيغة 24 ساعة
+      final minute = newTime.minute;
+      final formattedTime24 = '${hour24.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+      // --- نهاية التعديل ---
+
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+
+      // استخدام الوقت المحول formattedTime24
+      final String newOpenTime = isOpeningTime ? formattedTime24 : provider.openTime;
+      final String newCloseTime = isOpeningTime ? provider.closeTime : formattedTime24;
+
+      final success = await provider.updateAutoTimes(token, newOpenTime, newCloseTime);
+      if(mounted) {
+        final scaffoldMessenger = ScaffoldMessenger.of(context);
+        if(success) {
+          scaffoldMessenger.showSnackBar(const SnackBar(content: Text('تم تحديث أوقات العمل التلقائية بنجاح.'), backgroundColor: Colors.green));
+        } else {
+          scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الأوقات.'), backgroundColor: Colors.red));
+        }
+      }
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<RestaurantSettingsProvider>(
+      builder: (context, provider, child) {
+        if (provider.isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        return RefreshIndicator(
+          onRefresh: () async {
+            final token = Provider.of<AuthProvider>(context, listen: false).token;
+            await provider.fetchSettings(token);
+          },
+          child: ListView(
+            padding: const EdgeInsets.all(16.0),
+            children: [
+              Card(
+                elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("التحكم اليدوي باستقبال الطلبات", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const Divider(),
+                      SwitchListTile(
+                        title: Text(
+                          provider.isRestaurantOpen ? ' متاح لاستقبال الطلبات' : ' غير متاح حالياً',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: provider.isRestaurantOpen ? Colors.green : Colors.red),
+                        ),
+                        value: provider.isRestaurantOpen,
+                        onChanged: (newValue) => _updateStatus(provider, newValue),
+                        secondary: Icon(provider.isRestaurantOpen ? Icons.store_mall_directory : Icons.storefront_outlined),
+                        activeColor: Colors.green,
+                      ),
+                      const SizedBox(height: 10),
+                      Text('عند إغلاق هذا الخيار، سيظهر للزبون " غير متوفر حالياً" وستختفي المنتجات.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Card(
+                elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("تحديد وقت التفعيل التلقائي", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const Divider(),
+                      ListTile(
+                        title: const Text('وقت الفتح التلقائي'),
+                        trailing: Text(provider.openTime, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        leading: const Icon(Icons.access_time),
+                        onTap: () => _showTimePicker(context, provider, true),
+                      ),
+                      const Divider(),
+                      ListTile(
+                        title: const Text('وقت الإغلاق التلقائي'),
+                        trailing: Text(provider.closeTime, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        leading: const Icon(Icons.lock_clock),
+                        onTap: () => _showTimePicker(context, provider, false),
+                      ),
+                      const SizedBox(height: 10),
+                      Text('سيتم تفعيل استقبال الطلبات تلقائياً ضمن هذا النطاق الزمني بشرط أن يكون الزر اليدوي أعلاه مفعلاً.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
+  @override
+  Widget build(BuildContext context) {
+    // ✨ التغيير: دائماً نذهب للتحقق من الموقع ثم الصفحة الرئيسية
+    // لم نعد نجبر المستخدم على دخول الداشبورد هنا
+    return const LocationCheckWrapper();
+  }
+}
+class LocationCheckWrapper extends StatefulWidget {
+  const LocationCheckWrapper({super.key});
+  @override
+  State<LocationCheckWrapper> createState() => _LocationCheckWrapperState();
+}
+
+class _LocationCheckWrapperState extends State<LocationCheckWrapper> {
+  Future<int?> _checkLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('selectedAreaId');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<int?>(
+      future: _checkLocation(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) return const SplashScreen();
+        if (snapshot.hasData && snapshot.data != null) return const MainScreen();
+        return const WelcomeScreen();
+      },
+    );
+  }
+}
+
+// =======================================================================
+// --- SCREENS ---
 // =======================================================================
 
 class SplashScreen extends StatelessWidget {
@@ -1254,7 +3285,7 @@ class SplashScreen extends StatelessWidget {
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [ Theme.of(context).primaryColor, Colors.blue[800]! ],
+            colors: [ Theme.of(context).primaryColor, const Color(0xFF00897B) ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -1263,9 +3294,11 @@ class SplashScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.store_mall_directory_outlined, size: 120, color: Colors.white),
+              Icon(Icons.food_bank_rounded, size: 120, color: Colors.white),
               SizedBox(height: 20),
-              Text( "مدير أسواق بيتي", style: TextStyle( fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, ),),
+              Text( "مطاعم بيتي", style: TextStyle( fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, ),),
+              SizedBox(height: 10),
+              Text( "أشهى المأكولات تصلك أينما كنت", style: TextStyle( fontSize: 16, color: Colors.white70, ),),
             ],
           ),
         ),
@@ -1274,8 +3307,1376 @@ class SplashScreen extends StatelessWidget {
   }
 }
 
+class WelcomeScreen extends StatelessWidget {
+  const WelcomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [ Theme.of(context).primaryColor, const Color(0xFF00897B) ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.location_on_outlined, size: 120, color: Colors.white),
+                const SizedBox(height: 20),
+                const Text( "أهلاً بك في مطاعم بيتي", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white), textAlign: TextAlign.center, ),
+                const SizedBox(height: 10),
+                const Text( "لتصفح المطاعم، الرجاء تحديد منطقة التوصيل أولاً", style: TextStyle(fontSize: 16, color: Colors.white70), textAlign: TextAlign.center, ),
+                const SizedBox(height: 40),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.map_outlined),
+                  label: const Text("حدد منطقة التوصيل"),
+                  onPressed: () {
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const SelectLocationScreen(),
+                    ));
+                  },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: Theme.of(context).primaryColor, backgroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                    textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'Tajawal'),
+                    shape: RoundedRectangleBorder( borderRadius: BorderRadius.circular(30), ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  final List<GlobalKey<NavigatorState>> _navigatorKeys = [GlobalKey<NavigatorState>(), GlobalKey<NavigatorState>(), GlobalKey<NavigatorState>(), GlobalKey<NavigatorState>()];
+
+  @override
+  Widget build(BuildContext context) {
+    final navProvider = Provider.of<NavigationProvider>(context);
+    return WillPopScope(
+      onWillPop: () async {
+        final currentNavigator = _navigatorKeys[navProvider.currentIndex].currentState;
+        if (currentNavigator != null && currentNavigator.canPop()) {
+          currentNavigator.pop();
+          return false;
+        }
+        if (navProvider.currentIndex != 0) {
+          navProvider.changeTab(0);
+          return false;
+        }
+        return true;
+      },
+      child: Scaffold(
+        body: IndexedStack(
+          index: navProvider.currentIndex,
+          children: <Widget>[_buildOffstageNavigator(0), _buildOffstageNavigator(1), _buildOffstageNavigator(2), _buildOffstageNavigator(3)],
+        ),
+        bottomNavigationBar: _buildCustomBottomNav(navProvider),
+      ),
+    );
+  }
+
+  Widget _buildOffstageNavigator(int index) {
+    return Offstage(
+      offstage: Provider.of<NavigationProvider>(context).currentIndex != index,
+      child: Navigator(
+        key: _navigatorKeys[index],
+        onGenerateRoute: (settings) {
+          Widget pageBuilder;
+          switch (index) {
+            case 0: pageBuilder = const HomeScreen(); break;
+            case 1: pageBuilder = const RestaurantsScreen(); break;
+            case 2: pageBuilder = const OrdersHistoryScreen(); break;
+            case 3: pageBuilder = const CartScreen(); break;
+            default: pageBuilder = const HomeScreen();
+          }
+          return MaterialPageRoute(builder: (context) => pageBuilder, settings: settings);
+        },
+      ),
+    );
+  }
+
+  Widget _buildCustomBottomNav(NavigationProvider navProvider) {
+    return BottomNavigationBar(
+      type: BottomNavigationBarType.fixed,
+      items: <BottomNavigationBarItem>[
+        const BottomNavigationBarItem(icon: Icon(Icons.home_outlined), activeIcon: Icon(Icons.home), label: 'الرئيسية'),
+        const BottomNavigationBarItem(icon: Icon(Icons.store_outlined), activeIcon: Icon(Icons.store), label: 'المطاعم'),
+        const BottomNavigationBarItem(icon: Icon(Icons.history_outlined), activeIcon: Icon(Icons.history), label: 'طلباتي'),
+        BottomNavigationBarItem(
+          icon: Consumer<CartProvider>(builder: (context, cart, child) => Badge(isLabelVisible: cart.cartCount > 0, label: Text(cart.cartCount.toString()), child: const Icon(Icons.shopping_cart_outlined))),
+          activeIcon: Consumer<CartProvider>(builder: (context, cart, child) => Badge(isLabelVisible: cart.cartCount > 0, label: Text(cart.cartCount.toString()), child: const Icon(Icons.shopping_cart))),
+          label: 'السلة',
+        ),
+      ],
+      currentIndex: navProvider.currentIndex,
+      onTap: navProvider.changeTab,
+    );
+  }
+}
+// (في ملف re.dart)
+// (في ملف re.dart)
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => HomeScreenState();
+}
+
+class HomeScreenState extends State<HomeScreen> {
+  final TextEditingController _searchController = TextEditingController();
+
+  // صور البانر الإعلاني
+  final List<String> bannerImages = [
+    'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
+    'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
+    'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg'
+  ];
+
+  int _currentBannerIndex = 0;
+  int? _selectedAreaId;
+  String? _selectedAreaName;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
+  }
+
+  Future<void> _loadInitialData() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    _selectedAreaId = prefs.getInt('selectedAreaId');
+    _selectedAreaName = prefs.getString('selectedAreaName');
+
+    // جلب بيانات الصفحة الرئيسية بناءً على المنطقة
+    if (_selectedAreaId != null) {
+      Provider.of<CustomerProvider>(context, listen: false)
+          .fetchHomeData(_selectedAreaId!, isRefresh: false);
+    }
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onSearchSubmitted(String query) {
+    if (query.isNotEmpty && _selectedAreaId != null) {
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => SearchScreen(
+              searchQuery: query, selectedAreaId: _selectedAreaId!)));
+    }
+  }
+
+  // --- 🚀 بناء الواجهة ---
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: InkWell(
+          onTap: () async {
+            final result = await Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const SelectLocationScreen(isCancellable: true)));
+            if (result == true) {
+              final prefs = await SharedPreferences.getInstance();
+              _selectedAreaId = prefs.getInt('selectedAreaId');
+              _selectedAreaName = prefs.getString('selectedAreaName');
+              setState(() {});
+              if (_selectedAreaId != null) {
+                Provider.of<CustomerProvider>(context, listen: false)
+                    .fetchHomeData(_selectedAreaId!, isRefresh: true);
+              }
+            }
+          },
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(_selectedAreaName ?? "اختر منطقة",
+                style: const TextStyle(fontSize: 16)),
+            const Icon(Icons.keyboard_arrow_down, size: 20)
+          ]),
+        ),
+        centerTitle: true,
+
+        // ✨✨✨ المنطقة الذكية للأزرار (الحل الجذري) ✨✨✨
+        actions: [
+          Consumer<AuthProvider>(
+            builder: (context, auth, child) {
+              // الحالة 1: المستخدم غير مسجل دخول (زائر)
+              if (!auth.isLoggedIn) {
+                return Row(
+                  children: [
+
+                    // زر دخول مدير المطعم
+                    IconButton(
+                      icon: const Icon(Icons.store, color: Colors.teal),
+                      tooltip: "دخول مدير المسواك",
+                      onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const StoreLoginScreen())
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              // الحالة 2: مسجل دخول بصفة (Team Leader)
+              else if (auth.userRole == 'leader') {
+                return IconButton(
+                  icon: const Icon(Icons.dashboard_customize, color: Colors.amber, size: 28),
+                  tooltip: "لوحة المراقبة (Team Leader)",
+                  onPressed: () {
+                    // الانتقال لصفحة اختيار المنطقة للتيم ليدر
+                    if (auth.token != null) {
+                      Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => TeamLeaderRegionSelectScreen(token: auth.token!))
+                      );
+                    }
+                  },
+                );
+              }
+
+              // الحالة 3: مسجل دخول بصفة (Restaurant Owner)
+              else {
+                return IconButton(
+                  icon: const Icon(Icons.dashboard, color: Colors.teal, size: 28),
+                  tooltip: "لوحة تحكم المطعم",
+                  onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const RestaurantDashboardScreen())
+                  ),
+                );
+              }
+            },
+          ),
+        ],
+      ),
+
+      // --- جسم الصفحة (عرض المطاعم للجميع) ---
+      body: Consumer<CustomerProvider>(
+        builder: (context, provider, child) {
+          if (_selectedAreaId == null) {
+            return const Center(child: Text("يرجى تحديد منطقة لعرض المطاعم"));
+          }
+
+          if (provider.hasError && provider.homeData.isEmpty) {
+            return NetworkErrorWidget(
+                message: 'تحقق من اتصال الانترنيت .',
+                onRetry: () => provider.fetchHomeData(_selectedAreaId!,
+                    isRefresh: true));
+          }
+
+          // تجهيز البيانات
+          final restaurants =
+          (provider.homeData['restaurants'] as List<dynamic>? ?? [])
+              .cast<Restaurant>();
+
+          return RefreshIndicator(
+            onRefresh: () =>
+                provider.fetchHomeData(_selectedAreaId!, isRefresh: true),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const LoyaltyChallengeWidget(),
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                    child: _buildSearchBar()),
+                _buildBannerSlider(),
+
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 5),
+                  child: Text("المطاعم المتاحة",
+                      style:
+                      TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                ),
+
+                Expanded(
+                  child: () {
+                    // حالة التحميل الأولي
+                    if (provider.isLoadingHome && restaurants.isEmpty) {
+                      return _buildRestaurantGridShimmer();
+                    }
+                    // حالة لا توجد بيانات
+                    if (!provider.isLoadingHome && restaurants.isEmpty) {
+                      return const Center(
+                          child: Text("لا توجد مطاعم متاحة حالياً في هذه المنطقة"));
+                    }
+
+                    // عرض المطاعم
+                    return GridView.builder(
+                      padding: const EdgeInsets.all(8),
+                      gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 0.7,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                      ),
+                      physics: const BouncingScrollPhysics(),
+                      itemCount: restaurants.length,
+                      itemBuilder: (context, index) {
+                        return RestaurantCard(restaurant: restaurants[index]);
+                      },
+                    );
+                  }(),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // --- الدوال المساعدة (كما هي) ---
+
+  Widget _buildBannerSlider() {
+    return Container(
+      height: 150,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          CarouselSlider(
+            items: bannerImages
+                .map((imageUrl) => Builder(
+                builder: (ctx) => Container(
+                  width: MediaQuery.of(ctx).size.width,
+                  margin: const EdgeInsets.symmetric(horizontal: 5.0),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(15),
+                    image: DecorationImage(
+                      image: CachedNetworkImageProvider(imageUrl),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                )))
+                .toList(),
+            options: CarouselOptions(
+              height: 150.0,
+              autoPlay: true,
+              enlargeCenterPage: true,
+              aspectRatio: 16 / 9,
+              viewportFraction: 0.9,
+              onPageChanged: (index, _) =>
+                  setState(() => _currentBannerIndex = index),
+            ),
+          ),
+          Positioned(
+            bottom: 10,
+            child: Row(
+              children: bannerImages.map((url) {
+                int index = bannerImages.indexOf(url);
+                return Container(
+                  width: 8,
+                  height: 8,
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _currentBannerIndex == index
+                        ? Theme.of(context).primaryColor
+                        : Colors.white.withOpacity(0.7),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() => TextField(
+      controller: _searchController,
+      textInputAction: TextInputAction.search,
+      onSubmitted: _onSearchSubmitted,
+      decoration: InputDecoration(
+          hintText: 'ابحث عن وجبة أو مطعم...',
+          prefixIcon: const Icon(Icons.search, color: Colors.grey),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(30),
+              borderSide: BorderSide.none),
+          filled: true,
+          fillColor: Colors.grey.shade100,
+          contentPadding: EdgeInsets.zero));
+
+  Widget _buildRestaurantGridShimmer() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: GridView.builder(
+        padding: const EdgeInsets.all(10),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          childAspectRatio: 0.7,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+        ),
+        itemCount: 6,
+        itemBuilder: (context, index) {
+          return const ShimmerRestaurantCard();
+        },
+      ),
+    );
+  }
+}
+
+class SelectLocationScreen extends StatefulWidget {
+  final bool isCancellable;
+  const SelectLocationScreen({super.key, this.isCancellable = false});
+  @override
+  State<SelectLocationScreen> createState() => _SelectLocationScreenState();
+}
+
+class _SelectLocationScreenState extends State<SelectLocationScreen> {
+  final ApiService _apiService = ApiService();
+  final TextEditingController _searchController = TextEditingController();
+  List<Area> _allAreas = [];
+  List<Area> _filteredAreas = [];
+  bool _isLoading = true;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAreas();
+    _searchController.addListener(_filterAreas);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAreas() async {
+    setState(() { _isLoading = true; _hasError = false; });
+    try {
+      final areas = await _apiService.getAreas();
+      if (mounted) setState(() { _allAreas = areas; _filteredAreas = areas; });
+    } catch (e) {
+      if (mounted) setState(() => _hasError = true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _filterAreas() {
+    final query = _searchController.text.toLowerCase();
+    setState(() => _filteredAreas = _allAreas.where((area) => area.name.toLowerCase().contains(query)).toList());
+  }
+
+  Future<void> _saveSelection(int areaId, String areaName) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('selectedAreaId', areaId);
+    await prefs.setString('selectedAreaName', areaName);
+    if(mounted) {
+      if (widget.isCancellable) {
+        Navigator.of(context).pop(true);
+      } else {
+        Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LocationCheckWrapper()), (route) => false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final governorates = _filteredAreas.where((a) => a.parentId == 0).toList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('اختر منطقة التوصيل'), automaticallyImplyLeading: widget.isCancellable),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(controller: _searchController, decoration: InputDecoration(hintText: 'ابحث عن مدينتك...', prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade200)),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _hasError
+                ? NetworkErrorWidget(message: "فشل تحميل المناطق", onRetry: _loadAreas)
+                : ListView.builder(
+              itemCount: governorates.length,
+              itemBuilder: (context, index) {
+                final governorate = governorates[index];
+                final cities = _filteredAreas.where((a) => a.parentId == governorate.id).toList();
+                return ExpansionTile(
+                  title: Text(governorate.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  children: cities.map((city) => ListTile(title: Text(city.name), onTap: () => _saveSelection(city.id, city.name))).toList(),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class RestaurantsScreen extends StatefulWidget {
+  const RestaurantsScreen({super.key});
+  @override
+  State<RestaurantsScreen> createState() => _RestaurantsScreenState();
+}
+
+class _RestaurantsScreenState extends State<RestaurantsScreen> {
+  int? _selectedAreaId;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
+  }
+
+  Future<void> _loadInitialData({bool isRefresh = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    _selectedAreaId = prefs.getInt('selectedAreaId');
+    if (_selectedAreaId != null) {
+      Provider.of<CustomerProvider>(context, listen: false).fetchAllRestaurants(_selectedAreaId!, isRefresh: isRefresh);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('المطاعم')),
+      body: Consumer<CustomerProvider>(
+        builder: (context, provider, child) {
+          if (_selectedAreaId == null) return const Center(child: Text("يرجى تحديد منطقة أولاً."));
+
+          if (provider.isLoadingRestaurants && provider.allRestaurants.isEmpty) {
+            return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.7), itemCount: 6, itemBuilder: (context, index) => const ShimmerRestaurantCard());
+          }
+          if (provider.hasError && provider.allRestaurants.isEmpty) {
+            return NetworkErrorWidget(message: 'فشل في جلب المطاعم', onRetry: () => _loadInitialData(isRefresh: true));
+          }
+          if (provider.allRestaurants.isEmpty) {
+            return const Center(child: Text("لا توجد مطاعم متاحة حالياً"));
+          }
+
+          return RefreshIndicator(
+            onRefresh: () => _loadInitialData(isRefresh: true),
+            child: GridView.builder(
+              padding: const EdgeInsets.all(15),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.7),
+              itemCount: provider.allRestaurants.length,
+              itemBuilder: (context, index) {
+                return RestaurantCard(restaurant: provider.allRestaurants[index]);
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+// ✨ ألصق هذا الكود في ملف re.dart
+
+class PermissionService {
+  static Future<bool> handleLocationPermission(BuildContext context) async {
+    bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('خدمات الموقع معطلة. الرجاء تفعيل خدمات الموقع.'))
+        );
+      }
+      return false;
+    }
+
+    geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+    if (permission == geolocator.LocationPermission.denied) {
+      permission = await geolocator.Geolocator.requestPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('تم رفض إذن الوصول للموقع.'))
+          );
+        }
+        return false;
+      }
+    }
+
+    if (permission == geolocator.LocationPermission.deniedForever) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('تم رفض إذن الموقع بشكل دائم، يرجى تفعيله من إعدادات التطبيق.'))
+        );
+      }
+      return false;
+    }
+
+    return true;
+  }
+}
+class MenuScreen extends StatefulWidget {
+  final Restaurant restaurant;
+  const MenuScreen({super.key, required this.restaurant});
+  @override
+  State<MenuScreen> createState() => _MenuScreenState();
+}
+
+// (الصق هذا الكلاس بالكامل بدلاً من الكلاس القديم)
+class _MenuScreenState extends State<MenuScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // هذا الكود صحيح وسيجلب الحالة الصحيحة (مغلق)
+      Provider.of<CustomerProvider>(context, listen: false).fetchMenuForRestaurant(widget.restaurant.id);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.restaurant.name)),
+      body: Consumer<CustomerProvider>(
+        builder: (context, provider, child) {
+          final menu = provider.menuItems[widget.restaurant.id] ?? [];
+
+          if (provider.isLoadingMenu && menu.isEmpty) {
+            return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.75), itemCount: 8, itemBuilder: (context, index) => const ShimmerFoodCard());
+          }
+          if (provider.hasError && menu.isEmpty) {
+            return NetworkErrorWidget(message: 'فشل في جلب قائمة الطعام', onRetry: () => provider.fetchMenuForRestaurant(widget.restaurant.id, isRefresh: true));
+          }
+          if (menu.isEmpty) {
+            // ✨ تعديل بسيط: إظهار رسالة إذا كان المطعم مغلقاً ولا توجد منتجات
+            if (!widget.restaurant.isOpen) {
+              return Center(child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.door_sliding_outlined, size: 80, color: Colors.grey.shade400),
+                  const SizedBox(height: 16),
+                  const Text("المطعم مغلق حالياً", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text(
+                    "يفتح تلقائياً في: ${widget.restaurant.autoOpenTime}\nيغلق تلقائياً في: ${widget.restaurant.autoCloseTime}",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: Colors.grey.shade700),
+                  ),
+                ],
+              ));
+            }
+            return const Center(child: Text("لا توجد وجبات في هذا المطعم حالياً"));
+          }
+          return RefreshIndicator(
+            onRefresh: () => provider.fetchMenuForRestaurant(widget.restaurant.id, isRefresh: true),
+            child: GridView.builder(
+              padding: const EdgeInsets.all(15),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.75),
+              itemCount: menu.length,
+              itemBuilder: (context, index) {
+                final item = menu[index];
+
+                // ✨ --- [ هذا هو الإصلاح ] --- ✨
+                //
+                // تم حذف السطر الخاطئ: item.isDeliverable = true;
+                //
+                // الآن التطبيق سيستخدم الحالة التي جلبها من الخادم
+                // (isDeliverable: false)
+                // --- [ نهاية الإصلاح ] ---
+
+                return FoodCard(food: item);
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class SearchScreen extends StatefulWidget {
+  final String searchQuery;
+  final int selectedAreaId;
+  const SearchScreen({super.key, required this.searchQuery, required this.selectedAreaId});
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  late Future<List<FoodItem>> _searchFuture;
+  final ApiService _apiService = ApiService();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAndFilterSearch();
+  }
+
+  void _loadAndFilterSearch() {
+    setState(() {
+      // ✨ [الإصلاح]: حذفنا areaId من هنا
+      _searchFuture = _apiService.searchProducts(query: widget.searchQuery).then((allResults) async {
+
+        // (الكود التالي سليم ومهم للفلترة داخل التطبيق)
+        final deliverableIds = await _apiService.getDeliverableRestaurantIds(widget.selectedAreaId);
+
+        final provider = Provider.of<CustomerProvider>(context, listen: false);
+        final statusMap = { for (var r in provider.allRestaurants) r.id : r.isOpen };
+
+        // ✨ [الإصلاح الأهم]: الفلترة حسب المنطقة تتم هنا الآن
+        return allResults.where((item) {
+          final isDeliverable = deliverableIds.contains(item.categoryId);
+          if (!isDeliverable) return false; // فلترة المنطقة
+
+          item.isDeliverable = statusMap[item.categoryId] ?? false; // فلترة حالة الفتح
+          return true;
+        }).toList();
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('نتائج البحث عن: "${widget.searchQuery}"')),
+      body: FutureBuilder<List<FoodItem>>(
+        future: _searchFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.75), itemCount: 8, itemBuilder: (context, index) => const ShimmerFoodCard());
+          if (snapshot.hasError) return NetworkErrorWidget(message: "فشل البحث", onRetry: _loadAndFilterSearch);
+          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("لم يتم العثور على نتائج لبحثك"));
+
+          final results = snapshot.data!;
+          return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.75), itemCount: results.length, itemBuilder: (context, index) => FoodCard(food: results[index]));
+        },
+      ),
+    );
+  }
+}
+
+class DetailScreen extends StatelessWidget {
+  final FoodItem foodItem;
+  const DetailScreen({super.key, required this.foodItem});
+
+  @override
+  Widget build(BuildContext context) {
+
+    // ✨ --- [إضافة جديدة] ---
+    // 1. جلب حالة المنتج
+    final bool isDeliverable = foodItem.isDeliverable;
+
+    // 2. جلب بيانات المطعم الأب (للحصول على الأوقات)
+    final provider = Provider.of<CustomerProvider>(context, listen: false);
+    Restaurant? restaurant;
+
+    // محاولة إيجاد المطعم في القائمة الشاملة
+    try {
+      restaurant = provider.allRestaurants.firstWhere((r) => r.id == foodItem.categoryId);
+    } catch (e) {
+      // إذا لم نجده (ربما من شاشة البحث)، ابحث في بيانات الصفحة الرئيسية
+      try {
+        restaurant = (provider.homeData['restaurants'] as List<dynamic>? ?? [])
+            .cast<Restaurant>()
+            .firstWhere((r) => r.id == foodItem.categoryId);
+      } catch (e) {
+        restaurant = null; // لم يتم العثور عليه
+      }
+    }
+
+    // 3. تجهيز رسالة الأوقات
+    final String openTime = restaurant?.autoOpenTime ?? "N/A";
+    final String closeTime = restaurant?.autoCloseTime ?? "N/A";
+    // --- [نهاية الإضافة] ---
+
+    return Scaffold(
+      appBar: AppBar(title: Text(foodItem.name)),
+      body: SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Hero(
+            tag: 'food_image_${foodItem.id}',
+            child: CachedNetworkImage(imageUrl: foodItem.imageUrl, fit: BoxFit.cover, height: 300, placeholder: (c, u) => Container(height: 300, color: Colors.grey[200], child: const Center(child: CircularProgressIndicator())), errorWidget: (c, u, e) => Container(height: 300, color: Colors.grey[200], child: const Icon(Icons.error))),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(foodItem.name, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Text(foodItem.formattedPrice, style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 16),
+              Text(foodItem.description, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700, height: 1.5)),
+              const Divider(height: 30),
+              const Text("التقييمات", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Row(children: [
+                RatingBarIndicator(rating: foodItem.averageRating, itemBuilder: (context, index) => const Icon(Icons.star, color: Colors.amber), itemCount: 5, itemSize: 20.0, direction: Axis.horizontal),
+                const SizedBox(width: 10),
+                Text("(${foodItem.ratingCount} تقييم)", style: const TextStyle(color: Colors.grey)),
+              ]),
+              const SizedBox(height: 10),
+              Center(child: OutlinedButton(child: const Text("أضف تقييمك"), onPressed: () => showDialog(context: context, builder: (context) => RatingDialog(productId: foodItem.id)))),
+            ]),
+          ),
+        ]),
+      ),
+
+      // ✨ --- [تم تعديل هذا القسم بالكامل] ---
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: isDeliverable
+        // 1. في حال كان المنتج متاحاً (اعرض الزر)
+            ? ElevatedButton.icon(
+          icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
+          label: const Text("إضافة إلى السلة", style: TextStyle(color: Colors.white, fontSize: 18)),
+          onPressed: () => Provider.of<CartProvider>(context, listen: false).addToCart(foodItem, context),
+          style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), backgroundColor: Theme.of(context).primaryColor),
+        )
+        // 2. في حال كان مغلقاً (اعرض الرسالة كما في صورتك)
+            : Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "ليس متاح الآن",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.red.shade700,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              if (restaurant != null) // اعرض الأوقات فقط إذا وجدنا المطعم
+                Text(
+                  "سيكون متاحاً $openTime - $closeTime",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 14,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      // --- [نهاية التعديل] ---
+    );
+  }
+}
+class CartScreen extends StatefulWidget {
+  const CartScreen({super.key});
+  @override
+  State<CartScreen> createState() => _CartScreenState();
+}
+
+// (في ملف re.dart)
+// (استبدل الكلاس القديم بالكامل بهذا الكلاس المحدث V18)
+
+// --- ✨ [ الخطوة 2هـ: استبدال كلاس _CartScreenState بالكامل ] ---
+class _CartScreenState extends State<CartScreen> {
+  final _apiService = ApiService();
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _couponController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    _couponController.dispose();
+    super.dispose();
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+        appBar: AppBar(title: const Text('سلتي')),
+        body: Consumer<CartProvider>(
+            builder: (context, cart, child) {
+              if (cart.items.isEmpty) return const Center(child: Text('سلّتك فارغة!', style: TextStyle(fontSize: 18, color: Colors.grey)));
+              return Column(children: [
+                Expanded(child: ListView.builder(padding: const EdgeInsets.all(15), itemCount: cart.items.length, itemBuilder: (context, index) => _buildCartItemCard(context, cart, cart.items[index]))),
+                _buildCheckoutSection(context, cart)
+              ]);
+            }
+        )
+    );
+  }
+
+  // (دالة بناء ملخص السعر - تم تعديلها)
+  Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee, String feeMessage) {
+    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
+    final discountFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalDiscountAmount);
+
+    final double finalTotal = (cart.discountedTotal) + (deliveryFee ?? 0);
+    final finalTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(finalTotal);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('سعر الطلبات', style: TextStyle(fontSize: 14)),
+              Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          if (cart.totalDiscountAmount > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('الخصم', style: TextStyle(fontSize: 14, color: Theme.of(context).primaryColor)),
+                Text('- $discountFormatted د.ع', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.delivery_dining_outlined, size: 20, color: Colors.blue.shade700),
+                  const SizedBox(width: 5),
+                  const Text('خدمة التوصيل', style: TextStyle(fontSize: 14)),
+                ],
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
+                child: isCalculatingFee
+                    ? const SizedBox(key: ValueKey('calc'), width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : Text(
+                  deliveryFee != null ? '${NumberFormat('#,###', 'ar_IQ').format(deliveryFee)} د.ع' : '---',
+                  key: const ValueKey('fee'),
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: deliveryFee == null && !isCalculatingFee ? Colors.red : Colors.black
+                  ),
+                ),
+              ),
+            ],
+          ),
+          // [الإصلاح] إظهار رسالة الخطأ أو "الرجاء تحديد الموقع"
+          if (feeMessage.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Text(
+                feeMessage.replaceAll("Exception: ", ""),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Colors.red.shade700),
+              ),
+            ),
+          const Divider(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('الإجمالي المطلوب دفعه', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: isCalculatingFee || deliveryFee == null
+                    ? const SizedBox.shrink()
+                    : Text(
+                  '$finalTotalFormatted د.ع',
+                  key: ValueKey(finalTotalFormatted),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor),
+
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+  void _showCheckoutDialog(BuildContext context, CartProvider cart) {
+    // حفظ السياق لاستخدامه لاحقاً بأمان
+    final BuildContext cartScreenContext = context;
+
+    _nameController.clear();
+    _phoneController.clear();
+    _addressController.clear();
+    _couponController.text = cart.appliedCoupon ?? '';
+    bool isSubmitting = false;
+
+    geolocator.Position? _capturedPosition;
+
+    // الحالة الافتراضية: جاري الحساب
+    bool _isGettingLocation = true;
+    String _locationMessage = "جاري حساب تكلفة التوصيل...";
+
+    // السعر المبدئي (الحد الأدنى)
+    double _deliveryFee = 1000.0;
+
+    showDialog(
+      context: cartScreenContext,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(builder: (context, setDialogState) {
+
+          // --- الدالة الذكية لحساب السعر ---
+          Future<void> calculateSmartFee() async {
+            final customerProvider = Provider.of<CustomerProvider>(cartScreenContext, listen: false);
+
+            // ✅ إعدادات التسعير الثابتة (كما طلبت)
+            const double minFee = 1000.0;      // سعر التوصيل الأساسي
+            const double freeDistance = 3.0;   // المسافة المجانية بالكيلومتر
+            const double feePerKm = 250.0;     // سعر الكيلو الإضافي (ثابت)
+
+            try {
+              // 1. التحقق من السلة
+              if (cart.items.isEmpty) throw Exception("السلة فارغة");
+
+              // 2. محاولة جلب إحداثيات المطعم/المتجر
+              final firstItem = cart.items.first;
+              double restLat = firstItem.restaurantLat;
+              double restLng = firstItem.restaurantLng;
+
+              // إذا لم تكن الإحداثيات في السلة، نبحث في الكاش
+              if (restLat == 0.0 || restLng == 0.0) {
+                try {
+                  // محاولة العثور على المطعم في القائمة
+                  final restaurant = customerProvider.allRestaurants.firstWhere((r) => r.id == firstItem.categoryId,
+                      orElse: () {
+                        final homeList = (customerProvider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+                        return homeList.firstWhere((r) => r.id == firstItem.categoryId);
+                      });
+
+                  restLat = restaurant.latitude;
+                  restLng = restaurant.longitude;
+                } catch (_) {
+                  throw Exception("إحداثيات المطعم غير متوفرة");
+                }
+              }
+
+              // 3. محاولة جلب موقع الزبون
+              bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+              if (!serviceEnabled) throw Exception("GPS مغلق");
+
+              LocationPermission permission = await geolocator.Geolocator.checkPermission();
+              if (permission == LocationPermission.denied) {
+                permission = await geolocator.Geolocator.requestPermission();
+                if (permission == LocationPermission.denied) throw Exception("تم رفض الإذن");
+              }
+
+              // ✅ استخدام الدقة المتوسطة للسرعة
+              _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
+                  desiredAccuracy: geolocator.LocationAccuracy.medium,
+                  timeLimit: const Duration(seconds: 5)
+              );
+
+              // 4. المعادلة الرياضية
+              if (restLat != 0.0 && restLng != 0.0 && _capturedPosition != null) {
+                double distanceInMeters = geolocator.Geolocator.distanceBetween(
+                    _capturedPosition!.latitude, _capturedPosition!.longitude, restLat, restLng);
+                double distanceInKm = distanceInMeters / 1000;
+
+                if (distanceInKm <= freeDistance) {
+                  // ✅ الحالة 1: ضمن المسافة المجانية (3 كم)
+                  _deliveryFee = minFee;
+                  if (context.mounted) {
+                    setDialogState(() => _locationMessage = "نطاق قريب (${distanceInKm.toStringAsFixed(1)} كم)");
+                  }
+                } else {
+                  // ✅ الحالة 2: أبعد من 3 كم -> نحسب الزيادة
+                  double extraDistance = distanceInKm - freeDistance;
+                  _deliveryFee = minFee + (extraDistance * feePerKm);
+
+                  if (context.mounted) {
+                    setDialogState(() => _locationMessage = "مسافة إضافية (${distanceInKm.toStringAsFixed(1)} كم)");
+                  }
+                }
+
+                // تقريب السعر لأقرب 250 دينار لسهولة الدفع
+                _deliveryFee = (_deliveryFee / 250).ceil() * 250.0;
+
+                if (context.mounted) {
+                  setDialogState(() {
+                    _isGettingLocation = false;
+                  });
+                }
+              }
+            } catch (e) {
+              // 🔥 نظام الأمان: في حال أي خطأ، نطبق الحد الأدنى
+              if (context.mounted) {
+                setDialogState(() {
+                  _deliveryFee = minFee;
+                  _isGettingLocation = false;
+                  _locationMessage = "توصيل قياسي (تعذر تحديد المسافة)";
+                });
+              }
+            }
+          }
+
+          // تشغيل الحساب مرة واحدة عند الفتح
+          if (_isGettingLocation) {
+            WidgetsBinding.instance.addPostFrameCallback((_) => calculateSmartFee());
+          }
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            title: const Text('إتمام الطلب'),
+            content: Form(
+              key: _formKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'الرجاء إدخال الاسم' : null, enabled: !isSubmitting),
+                    const SizedBox(height: 15),
+                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الرجاء إدخال رقم الهاتف' : null, enabled: !isSubmitting),
+                    const SizedBox(height: 15),
+                    TextFormField(
+                        controller: _addressController,
+                        decoration: const InputDecoration(labelText: 'العنوان بالتفصيل (أقرب نقطة دالة)'),
+                        maxLines: 2,
+                        enabled: !isSubmitting,
+                        validator: (v) => v!.isEmpty ? 'الرجاء إدخال العنوان بالتفصيل' : null
+                    ),
+                    const SizedBox(height: 20),
+
+                    // عرض السعر والموقع بتصميم أنيق
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.teal.withOpacity(0.2)),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
+                              _isGettingLocation
+                                  ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+                                  : Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
+                            ],
+                          ),
+                          const SizedBox(height: 5),
+                          Row(
+                            children: [
+                              Icon(
+                                _isGettingLocation ? Icons.gps_fixed : Icons.info_outline,
+                                color: Colors.grey, size: 14,
+                              ),
+                              const SizedBox(width: 5),
+                              Expanded(child: Text(_locationMessage, style: const TextStyle(fontSize: 11, color: Colors.grey))),
+                            ],
+                          )
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 15),
+                    TextFormField(controller: _couponController, decoration: InputDecoration(labelText: 'كود الخصم (إن وجد)', suffixIcon: TextButton(child: const Text("تطبيق"), onPressed: () async {
+                      final result = await cart.applyCoupon(_couponController.text);
+                      if(cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text(result['message']), backgroundColor: result['valid'] ? Colors.green : Colors.red));
+                      setDialogState(() {});
+                    }))),
+                    const Divider(height: 30),
+                    _buildPriceSummary(cart, _deliveryFee, _isGettingLocation, ""),
+                  ],
+                ),
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
+                onPressed: isSubmitting || _isGettingLocation
+                    ? null
+                    : () async {
+                  if (!_formKey.currentState!.validate()) return;
+
+                  setDialogState(() => isSubmitting = true);
+                  try {
+                    final createdOrder = await _apiService.submitOrder(
+                        name: _nameController.text,
+                        phone: _phoneController.text,
+                        address: _addressController.text,
+                        cartItems: cart.items,
+                        couponCode: cart.appliedCoupon,
+                        position: _capturedPosition,
+                        deliveryFee: _deliveryFee
+                    );
+
+                    if (!cartScreenContext.mounted) return;
+                    if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
+
+                    await cart._recordSuccessfulOrder();
+                    Navigator.of(dialogContext).pop();
+                    cart.clearCart();
+                    HapticFeedback.heavyImpact();
+
+                    if (cartScreenContext.mounted) {
+                      showDialog(
+                        context: cartScreenContext,
+                        barrierDismissible: false,
+                        builder: (ctx) => AlertDialog(
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.check_circle, size: 70, color: Colors.teal),
+                              const SizedBox(height: 15),
+                              const Text("تم استلام طلبك!", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 10),
+                              const Text("جاري تحضير الطلب وإرسال المندوب.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                            ],
+                          ),
+                          actions: [
+                            ElevatedButton(
+                                onPressed: () {
+                                  Navigator.of(ctx).pop();
+                                  Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
+                                },
+                                child: const Text("متابعة الطلب")
+                            )
+                          ],
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (cartScreenContext.mounted) {
+                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red));
+                    }
+                  } finally {
+                    if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
+                  }
+                },
+                child: isSubmitting
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.0))
+                    : const Text('تأكيد الطلب والدفع'),
+              )
+            ],
+          );
+        });
+      },
+    );
+  }
+  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
+    return Card(margin: const EdgeInsets.only(bottom: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Padding(padding: const EdgeInsets.all(10.0), child: Row(children: [
+      ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: item.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
+      const SizedBox(width: 15),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(item.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 5),
+        Text(item.formattedPrice, style: TextStyle(fontSize: 16, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold))
+      ])),
+      Row(children: [IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => cart.decrementQuantity(item)), Text(item.quantity.toString(), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => cart.incrementQuantity(item))])
+    ])));
+  }
+
+  Widget _buildCheckoutSection(BuildContext context, CartProvider cart) {
+    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
+    final discountedTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.discountedTotal);
+    return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), blurRadius: 10, spreadRadius: 5)]),
+        child: Column(children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            const Text('المجموع', style: TextStyle(fontSize: 18, color: Colors.grey)),
+            Text('$totalFormatted د.ع', style: TextStyle(fontSize: 18, color: Colors.grey, decoration: cart.appliedCoupon != null ? TextDecoration.lineThrough : TextDecoration.none))
+          ]),
+          if (cart.appliedCoupon != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text('الإجمالي بعد الخصم', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+                Text('$discountedTotalFormatted د.ع', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor))
+              ]),
+            ),
+          const SizedBox(height: 20),
+          SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => _showCheckoutDialog(context, cart), style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white), child: const Text('إتمام الطلب', style: TextStyle(fontSize: 18))))
+        ])
+    );
+  }
+}
+class OrdersHistoryScreen extends StatefulWidget {
+  const OrdersHistoryScreen({super.key});
+  @override
+  State<OrdersHistoryScreen> createState() => _OrdersHistoryScreenState();
+}
+
+class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
+  late Future<List<Order>> _ordersFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOrders();
+    // Listen for notifications to refresh the list
+    Provider.of<NotificationProvider>(context, listen: false).addListener(_refreshOrders);
+  }
+
+  @override
+  void dispose() {
+    Provider.of<NotificationProvider>(context, listen: false).removeListener(_refreshOrders);
+    super.dispose();
+  }
+
+  void _refreshOrders() {
+    // This will trigger the FutureBuilder to re-fetch
+    setState(() {
+      _loadOrders();
+    });
+  }
+
+  void _loadOrders() => setState(() => _ordersFuture = OrderHistoryService().getOrders());
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('سجل طلباتي')),
+      body: RefreshIndicator(
+        onRefresh: () async => _loadOrders(),
+        child: FutureBuilder<List<Order>>(
+          future: _ordersFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+            if (snapshot.hasError) return Center(child: Text('حدث خطأ: ${snapshot.error}'));
+            if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.history_toggle_off, size: 80, color: Colors.grey), SizedBox(height: 20), Text('لا يوجد لديك طلبات سابقة', style: TextStyle(fontSize: 18, color: Colors.grey))]));
+
+            final orders = snapshot.data!;
+            return ListView.builder(padding: const EdgeInsets.all(8), itemCount: orders.length, itemBuilder: (context, index) => OrderHistoryCard(order: orders[index]));
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class StoreLoginScreen extends StatefulWidget {
   const StoreLoginScreen({super.key});
+
   @override
   State<StoreLoginScreen> createState() => _StoreLoginScreenState();
 }
@@ -1286,208 +4687,313 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
   final _passwordController = TextEditingController();
   final _latController = TextEditingController();
   final _lngController = TextEditingController();
-
   bool _isLoading = false;
-  String _locationStatus = 'لم يتم تحديد موقع المتجر';
-  final AdminApiService _apiService = AdminApiService();
-
-  // --- دالة تحديد الموقع ---
+  String _locationStatus = 'لم يتم تحديد موقع المطعم';
+  final ApiService _apiService = ApiService();
+  // دالة تحديد الموقع الحالي
   Future<void> _getCurrentLocation() async {
     setState(() => _locationStatus = 'جاري تحديد الموقع...');
-    try {
-      final hasPermission = await PermissionService.handleLocationPermission(context);
-      if (!hasPermission) {
-        // الرسالة تظهر من داخل الكلاس PermissionService
-        setState(() => _locationStatus = 'تم رفض الصلاحية');
-        return;
-      }
 
-      // جلب الموقع بدقة عالية
+    try {
+      // 1. استخدام خدمة الصلاحيات الشاملة (التي تتحقق من تفعيل GPS ومن الإذن)
+      // (تأكد من استيراد PermissionService إذا كان في ملف آخر)
+      final hasPermission = await PermissionService.handleLocationPermission(context);
+
+      if (!hasPermission) {
+        // الرسالة ستظهر للزبون من داخل handleLocationPermission
+        throw Exception('صلاحية الوصول للموقع مرفوضة أو الخدمة معطلة.');
+      }
+      // --- [ نهاية التصحيح ] ---
+
+      // 2. الحصول على الموقع (الآن نحن متأكدون أن الخدمة تعمل)
       Position position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high
       );
 
+      // 3. حفظ الإحداثيات في المتحكمات
       _latController.text = position.latitude.toString();
       _lngController.text = position.longitude.toString();
 
       setState(() {
-        _locationStatus = 'تم التحديد: (${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)})';
+        _locationStatus = 'تم التحديد: (خط عرض: ${position.latitude.toStringAsFixed(4)}, خط طول: ${position.longitude.toStringAsFixed(4)})';
       });
 
     } catch (e) {
       setState(() {
-        _locationStatus = 'فشل تحديد الموقع. تأكد من تفعيل GPS.';
+        _locationStatus = 'خطأ في تحديد الموقع: ${e.toString().replaceAll("Exception: ", "")}';
         _latController.clear();
         _lngController.clear();
       });
-      print("Location Error: $e");
+      // لا داعي لإظهار SnackBar هنا، لأن PermissionService تقوم بذلك بالفعل
     }
   }
+  // ------------------------------------------
 
-  // --- دالة تسجيل الدخول (المعدلة والمحمية) ---
   Future<void> _login() async {
-    // 1. التحقق من صحة الحقول
+    // تحقق من صحة الحقول العامة
     if (!_formKey.currentState!.validate()) return;
 
-    // 2. التحقق من الإحداثيات
+    // التحقق من تحديد الموقع
     if (_latController.text.isEmpty || _lngController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('الرجاء تحديد موقع المتجر أولاً.'))
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تحديد موقع المطعم أولاً.')));
       return;
     }
 
-    // 3. بدء التحميل
     setState(() => _isLoading = true);
 
-    try {
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-      // محاولة الاتصال (استخدام trim لإزالة المسافات الزائدة)
-      final success = await authProvider.login(
-        _usernameController.text.trim(),
-        _passwordController.text.trim(),
-        storeLat: _latController.text,
-        storeLng: _lngController.text,
-      );
+    // 1. محاولة تسجيل الدخول (كما كانت)
+    final success = await authProvider.login(
+      _usernameController.text,
+      _passwordController.text,
+      'owner', // 👈 [هام جداً] أضف هذا السطر هنا لتحديد الرتبة
+      restaurantLat: _latController.text,
+      restaurantLng: _lngController.text,
+    );
 
-      if (!mounted) return;
+    if (!mounted) return;
 
-      if (success) {
-        // ✅ نجح الدخول
-        try {
-          final token = authProvider.token!;
-          // محاولة تحديث الموقع في السيرفر (اختياري، لن يوقف الدخول اذا فشل)
-          await _apiService.updateMyLocation(token, _latController.text, _lngController.text);
-        } catch (e) {
-          print("فشل تحديث الموقع في السيرفر (غير مؤثر): $e");
+    // 2. إذا نجح تسجيل الدخول...
+    if (success) {
+
+      // ✨ --- [ هذا هو التعديل الأهم ] ---
+      // 3. ...حاول إرسال الموقع إلى الخادم
+      try {
+        final token = authProvider.token!; // التوكن موجود لأن success = true
+        final lat = _latController.text;
+        final lng = _lngController.text;
+
+        // استدعاء الدالة الجديدة التي أضفناها لـ ApiService
+        await _apiService.updateMyLocation(token, lat, lng);
+
+        // نجح كل شيء، انتقل للوحة التحكم
+        Navigator.of(context).pop();
+
+      } catch (e) {
+        // (في حال فشل إرسال الموقع، ولكن تسجيل الدخول نجح)
+        if(mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('تم تسجيل الدخول، لكن فشل حفظ الموقع على الخادم: $e'),
+                backgroundColor: Colors.orange,
+              )
+          );
         }
-
-        // (AuthWrapper سيقوم بنقلك للداشبورد تلقائياً لأن الحالة تغيرت)
-
-      } else {
-        // ❌ فشل الدخول (اسم مستخدم خطأ أو كلمة مرور)
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('فشل تسجيل الدخول. تأكد من البيانات واتصال الإنترنت.'),
-              backgroundColor: Colors.red,
-            )
-        );
+        // انتقل للوحة التحكم على أي حال (لأن الدخول نجح)
+        Navigator.of(context).pop();
       }
+      // --- [ نهاية التعديل ] ---
 
-    } catch (e) {
-      // ⚠️ خطأ فني (انترنت مقطوع، سيرفر لا يستجيب)
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('حدث خطأ في الاتصال: $e'),
-            backgroundColor: Colors.orange,
-          )
-      );
-    } finally {
-      // 4. 🔥 إيقاف التحميل دائماً (الحل لمشكلة الدوران المستمر)
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    } else {
+      // (إذا فشل تسجيل الدخول من الأساس)
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تسجيل الدخول. الرجاء التأكد من البيانات.')));
+    }
+
+    if(mounted) {
+      setState(() => _isLoading = false);
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('دخول مدير المسواق')),
+      appBar: AppBar(title: const Text('دخول مدير المطعم')),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Form(
             key: _formKey,
-            child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.storefront_outlined, size: 80, color: Colors.blue),
-                  const SizedBox(height: 20),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.store_mall_directory, size: 80, color: Colors.teal),
+              const SizedBox(height: 20),
+              TextFormField( controller: _usernameController, decoration: const InputDecoration( labelText: 'اسم المستخدم أو البريد الإلكتروني'), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
+              const SizedBox(height: 20),
+              TextFormField( controller: _passwordController, decoration: const InputDecoration(labelText: 'كلمة المرور'), obscureText: true, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
 
-                  TextFormField(
-                      controller: _usernameController,
-                      decoration: const InputDecoration(labelText: 'اسم المستخدم أو البريد الإلكتروني'),
-                      validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null
-                  ),
+              // -----------------------------------------
+              // واجهة تحديد الموقع
+              // -----------------------------------------
+              const SizedBox(height: 40),
+              Text('تحديد موقع المطعم الحالي (لنقاط الانطلاق في التوصيل)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
+              const SizedBox(height: 10),
 
-                  const SizedBox(height: 20),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.location_on),
+                label: const Text('تحديد موقع المطعم الآن'),
+                onPressed: _getCurrentLocation,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                ),
+              ),
+              const SizedBox(height: 10),
 
-                  TextFormField(
-                      controller: _passwordController,
-                      decoration: const InputDecoration(labelText: 'كلمة المرور'),
-                      obscureText: true,
-                      validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null
-                  ),
+              // عرض حالة الموقع (تم تحديده أم لا)
+              Text(
+                _locationStatus,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _latController.text.isEmpty ? Colors.red : Colors.green,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              // -----------------------------------------
 
-                  const SizedBox(height: 40),
-
-                  Text('تحديد موقع المتجر الحالي (لنقاط الانطلاق)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
-                  const SizedBox(height: 10),
-
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.location_on),
-                    label: const Text('تحديد موقع المتجر الآن'),
-                    onPressed: _getCurrentLocation,
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 50),
-                    ),
-                  ),
-
-                  const SizedBox(height: 10),
-
-                  Text(
-                    _locationStatus,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: _latController.text.isEmpty ? Colors.red : Colors.green,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-
-                  const SizedBox(height: 40),
-
-                  _isLoading
-                      ? const CircularProgressIndicator()
-                      : ElevatedButton(
-                      onPressed: _login,
-                      style: ElevatedButton.styleFrom(
-                          minimumSize: const Size(double.infinity, 50),
-                          textStyle: const TextStyle(fontSize: 18)
-                      ),
-                      child: const Text('تسجيل الدخول')
-                  )
-                ]),
+              const SizedBox(height: 40),
+              _isLoading ? const CircularProgressIndicator() : ElevatedButton( onPressed: _login, style: ElevatedButton.styleFrom( minimumSize: const Size(double.infinity, 50), textStyle: const TextStyle(fontSize: 18)), child: const Text('تسجيل الدخول'))
+            ]),
           ),
         ),
       ),
     );
   }
 }
-class StoreDashboardScreen extends StatefulWidget {
-  const StoreDashboardScreen({super.key});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class InAppMapScreen extends StatelessWidget {
+  final double latitude;
+  final double longitude;
+  final String title;
+
+  const InAppMapScreen({
+    super.key,
+    required this.latitude,
+    required this.longitude,
+    this.title = 'موقع على الخريطة'
+  });
+
   @override
-  State<StoreDashboardScreen> createState() => _StoreDashboardScreenState();
+  Widget build(BuildContext context) {
+    // تحويل الإحداثيات إلى النوع الذي يتطلبه flutter_map
+    final LatLng point = LatLng(latitude, longitude);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+      ),
+      body: FlutterMap(
+        options: MapOptions(
+          initialCenter: point,
+          initialZoom: 16.0,
+          // إعدادات توفير الرصيد (هام جداً)
+          maxZoom: 18.0,
+          minZoom: 10.0,
+          // لون الخلفية لتقليل الوميض الأبيض
+          backgroundColor: const Color(0xFFE5E5E5),
+        ),
+        children: [
+          // 1. طبقة خريطة Mapbox مع الكاش
+          TileLayer(
+            urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+
+            // 🔥 تفعيل الكاش (هام جداً لعدم إعادة تحميل الصور)
+            tileProvider: MapboxCachedTileProvider(),
+
+            additionalOptions: const {
+              'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+              'id': 'mapbox/streets-v12',
+            },
+            userAgentPackageName: 'com.beytei.restaurantmodule',
+
+            // إعدادات السلاسة
+            panBuffer: 2,
+            keepBuffer: 5,
+          ),
+          // 2. طبقة الماركر (كما هي)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: point,
+                width: 80,
+                height: 80,
+                child: Icon(
+                  Icons.location_pin,
+                  color: Colors.red.shade700,
+                  size: 50,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),    );
+  }
 }
 
-class _StoreDashboardScreenState extends State<StoreDashboardScreen> with SingleTickerProviderStateMixin {
+
+
+
+
+
+
+// =======================================================================
+// --- Restaurant Dashboard Screen (Complete) ---
+// =======================================================================
+
+class RestaurantDashboardScreen extends StatefulWidget {
+  const RestaurantDashboardScreen({super.key});
+
+  @override
+  State<RestaurantDashboardScreen> createState() => _RestaurantDashboardScreenState();
+}
+
+class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final AdminApiService _apiService = AdminApiService();
+  final ApiService _apiService = ApiService(); // لاستخدامه في نافذة الطلب الخاص
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this); // (تم التعديل إلى 4)
+    // 1. تهيئة التبويبات (5 تبويبات)
+    _tabController = TabController(length: 5, vsync: this);
+
+    // 2. المنطق التسلسلي الصحيح (جلب الموقع ثم تشغيل الأتمتة)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+      if (token != null) {
+
+        // أ) نطلب جلب الإعدادات أولاً (ليتم تخزين restaurant_lat في الهاتف)
+        Provider.of<RestaurantSettingsProvider>(context, listen: false)
+            .fetchSettings(token)
+            .then((_) {
+
+          // ب) بعد انتهاء جلب الإعدادات، نتأكد أننا ما زلنا في الشاشة
+          if (mounted) {
+            // ج) الآن نشغل الأتمتة (التي ستجد الموقع محفوظاً وتعمل بنجاح)
+            Provider.of<DashboardProvider>(context, listen: false).startAutoRefresh(token);
+          }
+
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
+    // إيقاف التحديث عند الخروج لتوفير الموارد
+    Provider.of<DashboardProvider>(context, listen: false).stopAutoRefresh();
     _tabController.dispose();
     super.dispose();
   }
 
-  // (دالة طلب التوصيل الخاص - منسوخة ومعدلة)
+  // --- نافذة طلب التوصيل الخاص (اليدوي) ---
   void _showPrivateDeliveryRequestDialog(BuildContext context) {
     final _formKey = GlobalKey<FormState>();
     final _pickupNameController = TextEditingController();
@@ -1499,8 +5005,9 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
     final _destLngController = TextEditingController();
     bool isSubmitting = false;
 
+    // تحميل الاسم المحفوظ مسبقاً لتسهيل الأمر على المدير
     SharedPreferences.getInstance().then((prefs) {
-      final savedName = prefs.getString('saved_store_name') ?? '';
+      final savedName = prefs.getString('saved_restaurant_name') ?? '';
       _pickupNameController.text = savedName;
     });
 
@@ -1519,11 +5026,11 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text("سيتم إرسال الطلب من موقع متجرك المسجل.", style: Theme.of(context).textTheme.bodySmall),
+                      Text("سيتم إرسال الطلب من موقع مطعمك المسجل.", style: Theme.of(context).textTheme.bodySmall),
                       const Divider(height: 20),
                       TextFormField(
                         controller: _pickupNameController,
-                        decoration: const InputDecoration(labelText: 'اسم المتجر/المصدر (الاستلام)'),
+                        decoration: const InputDecoration(labelText: 'اسم المطعم/المصدر (الاستلام)'),
                         validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
                       ),
                       const SizedBox(height: 12),
@@ -1576,20 +5083,24 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
                       setDialogState(() => isSubmitting = true);
                       try {
                         final prefs = await SharedPreferences.getInstance();
-                        final token = prefs.getString('jwt_token_store_admin');
-                        final pickupLat = prefs.getDouble('store_lat');
-                        final pickupLng = prefs.getDouble('store_lng');
+                        final token = prefs.getString('jwt_token');
+                        final pickupLat = prefs.getDouble('restaurant_lat');
+                        final pickupLng = prefs.getDouble('restaurant_lng');
+
                         if (token == null || pickupLat == null || pickupLng == null) {
-                          throw Exception("بيانات المتجر غير كاملة. يرجى تسجيل الخروج والدخول مرة أخرى.");
+                          throw Exception("بيانات المطعم غير كاملة. يرجى الانتظار قليلاً أو إعادة تسجيل الدخول.");
                         }
+
                         final pickupName = _pickupNameController.text;
-                        await prefs.setString('saved_store_name', pickupName);
+                        // حفظ الاسم للمرات القادمة
+                        await prefs.setString('saved_restaurant_name', pickupName);
+
                         final double? destLat = double.tryParse(_destLatController.text);
                         final double? destLng = double.tryParse(_destLngController.text);
 
                         final result = await _apiService.createUnifiedDeliveryRequest(
                           token: token,
-                          sourceType: 'store', // (تم التعديل)
+                          sourceType: 'restaurant',
                           pickupName: pickupName,
                           pickupLat: pickupLat,
                           pickupLng: pickupLng,
@@ -1627,13 +5138,12 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('لوحة تحكم المسواق'),
+        title: const Text('لوحة تحكم المطعم'),
         actions: [
           IconButton(icon: const Icon(Icons.notifications_active_outlined), onPressed: () async {
             final scaffoldMessenger = ScaffoldMessenger.of(context);
@@ -1644,29 +5154,32 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
               scaffoldMessenger.showSnackBar(SnackBar(content: Text("فشل إرسال الإشعار: ${e.toString()}"), backgroundColor: Colors.red));
             }
           }, tooltip: 'اختبار الإشعارات'),
-          IconButton(icon: const Icon(Icons.logout), onPressed: () => auth.logout(), tooltip: 'تسجيل الخروج')
+          IconButton(icon: const Icon(Icons.logout), onPressed: () => auth.logout(context), tooltip: 'تسجيل الخروج')
         ],
         bottom: TabBar(
             controller: _tabController,
-            isScrollable: true,
+            isScrollable: true, // للسماح بعرض 5 تبويبات
             tabs: const [
               Tab(icon: Icon(Icons.list_alt), text: 'الطلبات'),
               Tab(icon: Icon(Icons.history), text: 'المكتملة'),
               Tab(icon: Icon(Icons.fastfood_outlined), text: 'المنتجات'),
+              Tab(icon: Icon(Icons.star_rate), text: 'التقييمات'),
               Tab(icon: Icon(Icons.settings), text: 'الإعدادات'),
-              // (يمكن إضافة التقييمات لاحقاً)
             ]
         ),
       ),
+
       body: TabBarView(
         controller: _tabController,
-        children: const [
+        children: [
           OrdersListScreen(status: 'active'),
           OrdersListScreen(status: 'completed'),
-          StoreProductManagementTab(), // (شاشة جديدة)
-          StoreSettingsScreen(), // (شاشة جديدة)
+          const ProductManagementTab(),
+          const RatingsDashboardScreen(),
+          const RestaurantSettingsScreen(),
         ],
       ),
+
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showPrivateDeliveryRequestDialog(context),
         icon: const Icon(Icons.two_wheeler_outlined),
@@ -1678,184 +5191,18 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
   }
 }
 
-class OrdersListScreen extends StatefulWidget {
-  final String status;
-  const OrdersListScreen({super.key, required this.status});
+
+// =======================================================================
+// --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
+// =======================================================================
+class ProductManagementTab extends StatefulWidget {
+  const ProductManagementTab({super.key});
+
   @override
-  State<OrdersListScreen> createState() => _OrdersListScreenState();
+  State<ProductManagementTab> createState() => _ProductManagementTabState();
 }
 
-class _OrdersListScreenState extends State<OrdersListScreen> {
-  @override
-  Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-
-    return Consumer<DashboardProvider>(
-      builder: (context, dashboard, child) {
-        if (dashboard.isLoading && (dashboard.orders[widget.status] == null || dashboard.orders[widget.status]!.isEmpty)) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (dashboard.hasNetworkError && (dashboard.orders[widget.status] == null || dashboard.orders[widget.status]!.isEmpty)) {
-          return NetworkErrorWidget(message: dashboard.errorMessage, onRetry: () => dashboard.fetchDashboardData(authProvider.token));
-        }
-        final orders = dashboard.orders[widget.status] ?? [];
-        final pickupCodes = dashboard.pickupCodes;
-
-        return RefreshIndicator(
-          onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
-          child: orders.isEmpty
-              ? Center(child: ListView(physics: const AlwaysScrollableScrollPhysics(), children: [SizedBox(height: MediaQuery.of(context).size.height * 0.2), Text('لا توجد طلبات في هذا القسم حالياً', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: Colors.grey.shade600)), const SizedBox(height: 10), const Icon(Icons.inbox_outlined, size: 50, color: Colors.grey)]))
-              : ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: orders.length,
-            itemBuilder: (context, index) {
-              final order = orders[index];
-              final code = pickupCodes[order.id];
-              return OrderCard(
-                order: order,
-                onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
-                isCompleted: widget.status != 'active',
-                pickupCode: code,
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-}
-
-class StoreSettingsScreen extends StatefulWidget {
-  const StoreSettingsScreen({super.key});
-  @override
-  State<StoreSettingsScreen> createState() => _StoreSettingsScreenState();
-}
-
-class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
-
-  Future<void> _updateStatus(StoreSettingsProvider provider, bool newValue) async {
-    final token = Provider.of<AuthProvider>(context, listen: false).token;
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final success = await provider.updateOpenStatus(token, newValue);
-    if(success) {
-      scaffoldMessenger.showSnackBar(SnackBar(content: Text(newValue ? 'تم فتح المتجر بنجاح.' : 'تم إغلاق المتجر بنجاح.'), backgroundColor: Colors.green));
-    } else {
-      scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الحالة.'), backgroundColor: Colors.red));
-    }
-  }
-
-  Future<void> _showTimePicker(BuildContext context, StoreSettingsProvider provider, bool isOpeningTime) async {
-    final initialTime = isOpeningTime
-        ? TimeOfDay(hour: int.parse(provider.openTime.split(':')[0]), minute: int.parse(provider.openTime.split(':')[1]))
-        : TimeOfDay(hour: int.parse(provider.closeTime.split(':')[0]), minute: int.parse(provider.closeTime.split(':')[1]));
-
-    final TimeOfDay? newTime = await showTimePicker(
-      context: context,
-      initialTime: initialTime,
-    );
-
-    if (newTime != null) {
-      final hour24 = newTime.hour;
-      final minute = newTime.minute;
-      final formattedTime24 = '${hour24.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
-      final token = Provider.of<AuthProvider>(context, listen: false).token;
-      final String newOpenTime = isOpeningTime ? formattedTime24 : provider.openTime;
-      final String newCloseTime = isOpeningTime ? provider.closeTime : formattedTime24;
-      final success = await provider.updateAutoTimes(token, newOpenTime, newCloseTime);
-      if(mounted) {
-        final scaffoldMessenger = ScaffoldMessenger.of(context);
-        if(success) {
-          scaffoldMessenger.showSnackBar(const SnackBar(content: Text('تم تحديث أوقات العمل التلقائية بنجاح.'), backgroundColor: Colors.green));
-        } else {
-          scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الأوقات.'), backgroundColor: Colors.red));
-        }
-      }
-    }
-  }
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<StoreSettingsProvider>(
-      builder: (context, provider, child) {
-        if (provider.isLoading) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        return RefreshIndicator(
-          onRefresh: () async {
-            final token = Provider.of<AuthProvider>(context, listen: false).token;
-            await provider.fetchSettings(token);
-          },
-          child: ListView(
-            padding: const EdgeInsets.all(16.0),
-            children: [
-              Card(
-                elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("التحكم اليدوي باستقبال الطلبات", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      const Divider(),
-                      SwitchListTile(
-                        title: Text(
-                          provider.isStoreOpen ? 'المتجر متاح لاستقبال الطلبات' : 'المتجر غير متاح حالياً',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: provider.isStoreOpen ? Colors.green : Colors.red),
-                        ),
-                        value: provider.isStoreOpen,
-                        onChanged: (newValue) => _updateStatus(provider, newValue),
-                        secondary: Icon(provider.isStoreOpen ? Icons.store_mall_directory : Icons.storefront_outlined),
-                        activeColor: Colors.green,
-                      ),
-                      const SizedBox(height: 10),
-                      Text('عند إغلاق هذا الخيار، سيظهر للزبون "المتجر غير متوفر حالياً" وستختفي المنتجات.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Card(
-                elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("تحديد وقت التفعيل التلقائي", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      const Divider(),
-                      ListTile(
-                        title: const Text('وقت الفتح التلقائي'),
-                        trailing: Text(provider.openTime, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        leading: const Icon(Icons.access_time),
-                        onTap: () => _showTimePicker(context, provider, true),
-                      ),
-                      const Divider(),
-                      ListTile(
-                        title: const Text('وقت الإغلاق التلقائي'),
-                        trailing: Text(provider.closeTime, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        leading: const Icon(Icons.lock_clock),
-                        onTap: () => _showTimePicker(context, provider, false),
-                      ),
-                      const SizedBox(height: 10),
-                      Text('سيتم تفعيل استقبال الطلبات تلقائياً ضمن هذا النطاق الزمني بشرط أن يكون الزر اليدوي أعلاه مفعلاً.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class StoreProductManagementTab extends StatefulWidget {
-  const StoreProductManagementTab({super.key});
-  @override
-  State<StoreProductManagementTab> createState() => _StoreProductManagementTabState();
-}
-
-class _StoreProductManagementTabState extends State<StoreProductManagementTab> {
+class _ProductManagementTabState extends State<ProductManagementTab> {
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -1864,34 +5211,40 @@ class _StoreProductManagementTabState extends State<StoreProductManagementTab> {
     super.dispose();
   }
 
-  void _navigateToEditScreen(Product product) async {
-    final productProvider = Provider.of<StoreProductsProvider>(context, listen: false);
+  void _navigateToEditScreen(FoodItem product) async {
+    // (context) هنا هو سياق شاشة الإدارة
+    final productProvider = Provider.of<RestaurantProductsProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
     final bool? result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => EditStoreProductScreen(
+        builder: (_) => EditProductScreen(
           product: product,
+          // تمرير الـ Providers إلى الشاشة التالية
           productProvider: productProvider,
           authProvider: authProvider,
         ),
       ),
     );
+
     if (result == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("تم تحديث المنتج بنجاح"), backgroundColor: Colors.green),
       );
+      // (لا نحتاج لعمل fetch هنا لأن الـ provider سيقوم بذلك)
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
-    return Consumer<StoreProductsProvider>(
+
+    return Consumer<RestaurantProductsProvider>(
       builder: (context, provider, child) {
         return Scaffold(
           appBar: AppBar(
+            // شريط البحث
             title: TextField(
               controller: _searchController,
               decoration: InputDecoration(
@@ -1917,8 +5270,9 @@ class _StoreProductManagementTabState extends State<StoreProductManagementTab> {
                 return NetworkErrorWidget(message: provider.errorMessage!, onRetry: () => provider.fetchProducts(auth.token));
               }
               if (provider.products.isEmpty) {
-                return const Center(child: Text("لم يتم العثور على منتجات لهذا المتجر."));
+                return const Center(child: Text("لم يتم العثور على منتجات لهذا المطعم."));
               }
+
               return ListView.builder(
                 itemCount: provider.products.length,
                 itemBuilder: (context, index) {
@@ -1932,7 +5286,7 @@ class _StoreProductManagementTabState extends State<StoreProductManagementTab> {
                       errorWidget: (c, u, e) => const Icon(Icons.fastfood),
                     ),
                     title: Text(product.name),
-                    subtitle: Text("السعر: ${product.formattedPrice}", style: const TextStyle(color: Colors.black)), // (لا يوجد سعر خصم في مودل المسواك)
+                    subtitle: Text("السعر: ${product.formattedPrice}", style: TextStyle(color: product.salePrice != null ? Colors.red : Colors.black)),
                     trailing: const Icon(Icons.edit_outlined),
                     onTap: () => _navigateToEditScreen(product),
                   );
@@ -1940,18 +5294,26 @@ class _StoreProductManagementTabState extends State<StoreProductManagementTab> {
               );
             }(),
           ),
+          // (يمكنك إضافة زر لإضافة منتج جديد هنا لاحقاً)
+          // floatingActionButton: FloatingActionButton(
+          //   onPressed: () { /* _navigateToAddScreen() */ },
+          //   child: Icon(Icons.add),
+          // ),
         );
       },
     );
   }
 }
 
-class EditStoreProductScreen extends StatefulWidget {
-  final Product product;
-  final StoreProductsProvider productProvider;
+// =======================================================================
+// --- ✨ شاشة جديدة: تعديل المنتج ---
+// =======================================================================
+class EditProductScreen extends StatefulWidget {
+  final FoodItem product;
+  final RestaurantProductsProvider productProvider;
   final AuthProvider authProvider;
 
-  const EditStoreProductScreen({
+  const EditProductScreen({
     super.key,
     required this.product,
     required this.productProvider,
@@ -1959,10 +5321,10 @@ class EditStoreProductScreen extends StatefulWidget {
   });
 
   @override
-  State<EditStoreProductScreen> createState() => _EditStoreProductScreenState();
+  State<EditProductScreen> createState() => _EditProductScreenState();
 }
 
-class _EditStoreProductScreenState extends State<EditStoreProductScreen> {
+class _EditProductScreenState extends State<EditProductScreen> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _nameController;
   late TextEditingController _priceController;
@@ -1973,8 +5335,8 @@ class _EditStoreProductScreenState extends State<EditStoreProductScreen> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.product.name);
-    _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0));
-    _salePriceController = TextEditingController(text: ''); // (مودل المسواك لا يحتوي سعر خصم)
+    _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0)); // السعر بدون كسور
+    _salePriceController = TextEditingController(text: widget.product.salePrice?.toStringAsFixed(0) ?? '');
   }
 
   @override
@@ -1987,7 +5349,9 @@ class _EditStoreProductScreenState extends State<EditStoreProductScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+
     setState(() => _isLoading = true);
+
     final success = await widget.productProvider.updateProduct(
       widget.authProvider.token!,
       widget.product.id,
@@ -1995,10 +5359,11 @@ class _EditStoreProductScreenState extends State<EditStoreProductScreen> {
       _priceController.text,
       _salePriceController.text,
     );
+
     if (mounted) {
       setState(() => _isLoading = false);
       if (success) {
-        Navigator.pop(context, true);
+        Navigator.pop(context, true); // إرجاع "true" لإعلام الشاشة السابقة بالنجاح
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(widget.productProvider.errorMessage ?? "فشل التحديث"), backgroundColor: Colors.red),
@@ -2066,1120 +5431,575 @@ class _EditStoreProductScreenState extends State<EditStoreProductScreen> {
       ),
     );
   }
+}class OrdersListScreen extends StatefulWidget {
+  final String status;
+  const OrdersListScreen({super.key, required this.status});
+  @override
+  State<OrdersListScreen> createState() => _OrdersListScreenState();
 }
 
-class InAppMapScreen extends StatelessWidget {
-  final double latitude;
-  final double longitude;
-  final String title;
+// ملاحظة: تأكد من وجود الـ imports الضرورية في أعلى الملف
+// import 'package:flutter/material.dart';
+// import 'package:provider/provider.dart';
+// (بالإضافة إلى imports الموديلات والـ Widgets الأخرى)
 
-  const InAppMapScreen({
-    super.key,
-    required this.latitude,
-    required this.longitude,
-    this.title = 'موقع على الخريطة'
-  });
-
+class _OrdersListScreenState extends State<OrdersListScreen> {
   @override
   Widget build(BuildContext context) {
-    final LatLng point = LatLng(latitude, longitude);
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-      ),
-      body: FlutterMap(
-        options: MapOptions(
-          initialCenter: point,
-          initialZoom: 16.0,
-        ),
-        children: [
-          TileLayer(
-            urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-            subdomains: const ['a', 'b', 'c'],
-            userAgentPackageName: 'com.beytei.miswak', // (تم التعديل)
-          ),
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: point,
-                width: 80,
-                height: 80,
-                child: Icon(
-                  Icons.location_pin,
-                  color: Colors.red.shade700,
-                  size: 50,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
+    // جلب الـ Provider الخاص بالمصادقة (لم يتغير)
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-
-// =======================================================================
-// --- (جديد) MAIN APP ENTRY POINT & WRAPPERS ---
-// =======================================================================
-
-// (هذا هو كود الزبون الأصلي - أصبح الآن جزءاً من التطبيق)
-class CustomerApp extends StatelessWidget {
-  const CustomerApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'مسواك بيتي',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        fontFamily: 'Tajawal',
-        scaffoldBackgroundColor: Colors.grey[50],
-      ),
-      debugShowCheckedModeBanner: false,
-      home: const LocationCheckWrapper(), // (يبدأ بشاشة المسواك)
-    );
-  }
-}
-
-// (هذا هو مدخل التطبيق المدمج الجديد)
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  // (إعدادات Firebase للـ Admin)
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-  runApp(
-      MultiProvider(
-        providers: [
-          ChangeNotifierProvider(create: (_) => AuthProvider()),
-
-          ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
-            create: (_) => DashboardProvider(),
-            update: (_, auth, dashboard) {
-              if(auth.isLoggedIn && dashboard != null && auth.token != null) {
-                dashboard.fetchDashboardData(auth.token);
-              } else if (dashboard != null && !auth.isLoggedIn) {
-                dashboard.clearData();
-              }
-              return dashboard!;
-            },
-          ),
-
-          ChangeNotifierProxyProvider<AuthProvider, StoreSettingsProvider>(
-            create: (_) => StoreSettingsProvider(),
-            update: (_, auth, settings) {
-              if(settings != null && auth.isLoggedIn && auth.token != null) {
-                settings.fetchSettings(auth.token);
-              } else if (settings != null && !auth.isLoggedIn) {
-                settings.clearData();
-              }
-              return settings!;
-            },
-          ),
-
-          ChangeNotifierProxyProvider<AuthProvider, StoreProductsProvider>(
-            create: (_) => StoreProductsProvider(),
-            update: (_, auth, products) {
-              if (products != null && auth.isLoggedIn && auth.token != null) {
-                products.fetchProducts(auth.token);
-              } else if (products != null && !auth.isLoggedIn) {
-                products.clearData();
-              }
-              return products!;
-            },
-          ),
-        ],
-        child: const AuthWrapper(),
-      )
-  );
-}
-
-// (الـ Wrapper الذي يختار بين شاشة الزبون أو شاشة المدير)
-class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({super.key});
-
-  @override
-  State<AuthWrapper> createState() => _AuthWrapperState();
-}
-
-class _AuthWrapperState extends State<AuthWrapper> {
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeServices();
-  }
-
-  Future<void> _initializeServices() async {
-    // (تهيئة إشعارات المدير)
-    await AdminNotificationService.initialize();
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      AdminNotificationService.display(message);
-      if (!mounted) return;
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      if (authProvider.isLoggedIn) {
-        Provider.of<DashboardProvider>(context, listen: false).fetchDashboardData(authProvider.token);
-        Provider.of<StoreSettingsProvider>(context, listen: false).fetchSettings(authProvider.token);
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<AuthProvider>(
-      builder: (context, auth, child) {
-        if (auth.isLoading) {
-          return const MaterialApp(home: SplashScreen()); // (شاشة تحميل المدير)
+    // استخدام Consumer للاستماع لتغيرات DashboardProvider
+    return Consumer<DashboardProvider>(
+      builder: (context, dashboard, child) {
+        // --- قسم التحميل ومعالجة الأخطاء (لم يتغير) ---
+        if (dashboard.isLoading && (dashboard.orders[widget.status] == null || dashboard.orders[widget.status]!.isEmpty)) {
+          return const Center(child: CircularProgressIndicator());
         }
 
-        if (auth.isLoggedIn) {
-          // 1. إذا كان المدير مسجلاً، اذهب إلى لوحة التحكم
-          return MaterialApp(
-            title: 'مدير المسواق',
-            theme: ThemeData(
-              primarySwatch: Colors.blue,
-              fontFamily: 'Tajawal',
-              scaffoldBackgroundColor: const Color(0xFFF5F5F5),
-            ),
-            debugShowCheckedModeBanner: false,
-            home: const StoreDashboardScreen(),
-          );
-        }
+        // --- نهاية قسم التحميل ---
 
-        // 2. إذا لم يكن مسجلاً، اذهب إلى تطبيق الزبون (مسواك بيتي)
-        // (نحن لا نظهر شاشة تسجيل الدخول هنا، الزبون يدخل للتطبيق مباشرة)
-        // (للوصول لشاشة تسجيل دخول المدير، يجب إضافتها في مكان ما في تطبيق الزبون)
-        return const CustomerApp();
-      },
-    );
-  }
-}
-class LocationService {
-  static const String BEYTEI_URL = 'https://beytei.com';
+        // جلب قائمة الطلبات (لم يتغير)
+        final orders = dashboard.orders[widget.status] ?? [];
 
-  Future<List<Area>> getAreas() async {
-    try {
-      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
-      if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
-      }
-      throw Exception('Server error');
-    } catch (e) {
-      throw Exception('Failed to load areas');
-    }
-  }
-}
+        // ✨ --- الإضافة: جلب خريطة الرموز ---
+        final pickupCodes = dashboard.pickupCodes;
+        // --- نهاية الإضافة ---
 
+        // بناء الواجهة الرئيسية
+        return RefreshIndicator(
+          onRefresh: () => dashboard.fetchDashboardData(authProvider.token), // تحديث البيانات عند السحب
+          child: orders.isEmpty
+          // --- حالة عدم وجود طلبات (لم يتغير) ---
+              ? Center(child: ListView(physics: const AlwaysScrollableScrollPhysics(), children: [SizedBox(height: MediaQuery.of(context).size.height * 0.2), Text('لا توجد طلبات في هذا القسم حالياً', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: Colors.grey.shade600)), const SizedBox(height: 10), const Icon(Icons.inbox_outlined, size: 50, color: Colors.grey)]))
+          // --- نهاية حالة عدم وجود طلبات ---
 
+          // --- بناء قائمة الطلبات ---
+              : ListView.builder(
+            padding: const EdgeInsets.all(8),
+            itemCount: orders.length,
+            itemBuilder: (context, index) {
+              // ✨ --- التعديل: استخرج الطلب والرمز ---
+              final order = orders[index];
+              final code = pickupCodes[order.id]; // جلب الرمز الخاص بهذا الطلب
+              // --- نهاية التعديل ---
 
-
-// 3. شاشة اختيار الموقع
-class SelectLocationScreen extends StatefulWidget {
-  final bool isCancellable;
-  const SelectLocationScreen({super.key, this.isCancellable = false});
-  @override
-  State<SelectLocationScreen> createState() => _SelectLocationScreenState();
-}
-
-class _SelectLocationScreenState extends State<SelectLocationScreen> {
-  final LocationService _locationService = LocationService();
-  final TextEditingController _searchController = TextEditingController();
-  List<Area> _allAreas = [];
-  List<Area> _filteredAreas = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAreas();
-    _searchController.addListener(_filterAreas);
-  }
-
-  Future<void> _loadAreas() async {
-    try {
-      final areas = await _locationService.getAreas();
-      if (mounted) setState(() { _allAreas = areas; _filteredAreas = areas; _isLoading = false; });
-    } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _filterAreas() {
-    final query = _searchController.text.toLowerCase();
-    setState(() => _filteredAreas = _allAreas.where((area) => area.name.toLowerCase().contains(query)).toList());
-  }
-
-  Future<void> _saveSelection(int areaId, String areaName) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('selectedAreaId', areaId);
-    await prefs.setString('selectedAreaName', areaName); // حفظ الاسم للعرض
-
-    if(mounted) {
-      if (widget.isCancellable) {
-        Navigator.of(context).pop(true);
-      } else {
-        // الانتقال للشاشة الرئيسية للمسواك
-        Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const MiswakStoreScreen()),
-                (route) => false
+              // بناء بطاقة الطلب مع تمرير الرمز
+              return OrderCard(
+                order: order,
+                onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
+                isCompleted: widget.status != 'active',
+                pickupCode: code, // <-- ✨ الإضافة: تمرير الرمز المستخرج للبطاقة
+              );
+            },
+          ),
+          // --- نهاية بناء القائمة ---
         );
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final governorates = _filteredAreas.where((a) => a.parentId == 0).toList();
-    return Scaffold(
-      appBar: AppBar(title: const Text('اختر منطقة التوصيل'), automaticallyImplyLeading: widget.isCancellable),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(controller: _searchController, decoration: InputDecoration(hintText: 'ابحث عن مدينتك...', prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade200)),
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-              itemCount: governorates.length,
-              itemBuilder: (context, index) {
-                final governorate = governorates[index];
-                final cities = _filteredAreas.where((a) => a.parentId == governorate.id).toList();
-                return ExpansionTile(
-                  title: Text(governorate.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  children: cities.map((city) => ListTile(title: Text(city.name), onTap: () => _saveSelection(city.id, city.name))).toList(),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-// هذا الكلاس هو نقطة الدخول لقسم المسواك
-class LocationCheckWrapper extends StatefulWidget {
-  const LocationCheckWrapper({super.key});
-
-  @override
-  State<LocationCheckWrapper> createState() => _LocationCheckWrapperState();
-}
-
-class _LocationCheckWrapperState extends State<LocationCheckWrapper> {
-  Future<int?> _checkLocation() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('selectedAreaId');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<int?>(
-      future: _checkLocation(),
-      builder: (context, snapshot) {
-        // 1. أثناء التحميل (فحص الذاكرة)
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        // 2. إذا كانت المنطقة موجودة في الذاكرة -> اذهب للمتجر
-        if (snapshot.hasData && snapshot.data != null) {
-          return const MiswakStoreScreen();
-        }
-
-        // 3. إذا لم تكن موجودة -> اذهب لشاشة اختيار المنطقة
-        // (isCancellable: false) تعني أنه مجبر على الاختيار
-        return const SelectLocationScreen(isCancellable: false);
       },
     );
   }
 }
-
-
-
-
-
-
-
-
-
-// =======================================================================
-// --- (كود تطبيق الزبون - كما أرسلته) ---
-// =======================================================================
-class Area {
-  final int id;
-  final String name;
-  final int parentId;
-  Area({required this.id, required this.name, required this.parentId});
-  factory Area.fromJson(Map<String, dynamic> json) => Area(id: json['id'], name: json['name'], parentId: json['parent']);
+class RatingsDashboardScreen extends StatefulWidget {
+  const RatingsDashboardScreen({super.key});
+  @override
+  State<RatingsDashboardScreen> createState() => _RatingsDashboardScreenState();
 }
-class Product {
-  final int id;
-  final String name;
-  final String description;
-  final double price;
-  final String imageUrl;
-  final String category;
-  int quantity;
 
-  Product({
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class UnifiedDeliveryOrder {
+  final int id;
+  final String status;
+  final String description;
+  final double deliveryFee;
+  final String pickupName;
+  final String sourceType;
+  final String destinationAddress;
+  final String pickupLat;
+  final String pickupLng;
+  final String destLat;
+  final String destLng;
+
+  UnifiedDeliveryOrder({
     required this.id,
-    required this.name,
+    required this.status,
     required this.description,
-    required this.price,
-    required this.imageUrl,
-    required this.category,
-    this.quantity = 1,
+    required this.deliveryFee,
+    required this.pickupName,
+    required this.sourceType,
+    required this.destinationAddress,
+    required this.pickupLat,
+    required this.pickupLng,
+    required this.destLat,
+    required this.destLng,
   });
 
-  factory Product.fromJson(Map<String, dynamic> json) {
-    return Product(
-      id: json['id'],
-      name: json['name'],
-      description: json['description'] ?? '',
-      price: double.tryParse(json['price'] ?? '0.0') ?? 0.0,
-      imageUrl: json['images'] != null && json['images'].isNotEmpty
-          ? json['images'][0]['src'].replaceAll('.jpg', '-300x300.jpg')
-          : 'https://via.placeholder.com/150',
-      category: json['categories'] != null && json['categories'].isNotEmpty
-          ? json['categories'][0]['name']
-          : 'عام',
+  factory UnifiedDeliveryOrder.fromJson(Map<String, dynamic> json) {
+    // دالة مساعدة لتحويل أي قيمة رقمية/نصية إلى نص آمن
+    String safeString(dynamic val) => val?.toString() ?? '0';
+
+    // دالة مساعدة لتحويل أي قيمة إلى رقم عشري
+    double safeDouble(dynamic val) {
+      if (val == null) return 0.0;
+      if (val is double) return val;
+      if (val is int) return val.toDouble();
+      return double.tryParse(val.toString()) ?? 0.0;
+    }
+
+    return UnifiedDeliveryOrder(
+      id: json['id'] is int ? json['id'] : int.tryParse(json['id'].toString()) ?? 0,
+      status: json['order_status']?.toString() ?? 'pending',
+      description: json['order_description']?.toString() ?? '',
+      deliveryFee: safeDouble(json['delivery_fee']),
+      pickupName: json['pickup_location_name']?.toString() ?? 'غير محدد',
+      sourceType: json['source_type']?.toString() ?? 'general',
+      destinationAddress: json['destination_address']?.toString() ?? '',
+      pickupLat: safeString(json['pickup_lat']),
+      pickupLng: safeString(json['pickup_lng']),
+      destLat: safeString(json['destination_lat']),
+      destLng: safeString(json['destination_lng']),
     );
   }
-
-  String get formattedPrice {
-    final formatter = NumberFormat('#,###');
-    // (تم تعديل السعر ليناسب الأسواق - بالدينار وليس "الف")
-    return '${formatter.format(price)} د.ع';
-  }
 }
-
-class MiswakStoreScreen extends StatefulWidget {
-  const MiswakStoreScreen({Key? key}) : super(key: key);
+class TeamLeaderLoginScreen extends StatefulWidget {
+  const TeamLeaderLoginScreen({super.key});
 
   @override
-  State<MiswakStoreScreen> createState() => _MiswakStoreScreenState();
+  State<TeamLeaderLoginScreen> createState() => _TeamLeaderLoginScreenState();
 }
 
-class _MiswakStoreScreenState extends State<MiswakStoreScreen> {
-  // متغيرات البيانات
-  List<Product> products = [];
-  List<Product> cartItems = [];
-  List<dynamic> mainCategories = [];
-
-  // متغيرات الحالة
-  bool isLoading = true;
-  bool showCart = false;
-  bool showCheckout = false;
-  bool _isLoadingMore = false;
-  bool _hasMore = true;
-  int _page = 1;
-  double totalPrice = 0.0;
-  int? _currentCategoryId;
-  bool _isConnected = true;
-  bool _isCategoriesVisible = true;
-
-  // ✨ متغيرات المنطقة الجديدة
-  int? _selectedAreaId;
-  String? _selectedAreaName;
-
-  // المتحكمات
-  final ScrollController _scrollController = ScrollController();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _addressController = TextEditingController();
-  final TextEditingController _searchController = TextEditingController();
-  Timer? _searchDebounce;
-  bool _isSubmitting = false;
-
-  // صور البانر
-  List<String> bannerImages = [
-    'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
-    'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
-    'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg',
-  ];
-  int _currentBannerIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _scrollController.addListener(_scrollListener);
-
-    // ✨ التعديل 1: بدلاً من فحص الاتصال مباشرة، نقوم بتحميل المنطقة أولاً
-    _initializeWithLocation();
-  }
-
-  // ✨ دالة جديدة لتهيئة الموقع
-  Future<void> _initializeWithLocation() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _selectedAreaId = prefs.getInt('selectedAreaId');
-        _selectedAreaName = prefs.getString('selectedAreaName');
-      });
-    }
-    // بعد تحميل المنطقة، نقوم بفحص الاتصال وجلب المنتجات
-    _checkConnection();
-  }
+class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
 
   @override
   void dispose() {
-    _scrollController.dispose();
-    _searchDebounce?.cancel();
-    _nameController.dispose();
-    _phoneController.dispose();
-    _addressController.dispose();
-    _searchController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
-  Future<void> _checkConnection() async {
-    var connectivityResult = await Connectivity().checkConnectivity();
-    setState(() => _isConnected = connectivityResult != ConnectivityResult.none);
-
-    if (_isConnected) {
-      await Future.wait([
-        _fetchProducts(),
-        _fetchMainCategories(),
-      ]);
-    }
-  }
-
-  Future<void> _fetchProducts({String searchQuery = '', int? categoryId, bool loadMore = false}) async {
-    if (_isLoadingMore) return;
-
-    if (!loadMore) {
-      _page = 1;
-      _hasMore = true;
-      if(mounted) setState(() => isLoading = true);
-    } else {
-      if (!_hasMore) return;
-      _page++;
-      if(mounted) setState(() => _isLoadingMore = true);
-    }
-
-    try {
-      // ✨ التعديل 2: إضافة area_id للرابط
-      String apiUrl = 'https://beytei.com/wp-json/wc/v3/products?page=$_page&per_page=10';
-
-      // إرسال المنطقة للسيرفر إذا كانت محددة
-      if (_selectedAreaId != null) {
-        apiUrl += '&area_id=$_selectedAreaId';
-      }
-
-      if (searchQuery.isNotEmpty) apiUrl += '&search=$searchQuery';
-      if (categoryId != null && categoryId != 0) apiUrl += '&category=$categoryId';
-
-      final response = await http.get(
-        Uri.parse(apiUrl),
-        headers: {
-          'Authorization': 'Basic ${base64Encode(utf8.encode('$CUSTOMER_CONSUMER_KEY:$CUSTOMER_CONSUMER_SECRET'))}',
-        },
+  Future<void> _login() async {
+    if (_usernameController.text.isEmpty || _passwordController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("الرجاء ملء جميع الحقول")),
       );
-
-      if (response.statusCode == 200) {
-        List<dynamic> data = json.decode(response.body);
-        final fetchedProducts = data.map((json) => Product.fromJson(json)).toList();
-
-        if (mounted) {
-          setState(() {
-            if (loadMore) {
-              products.addAll(fetchedProducts);
-            } else {
-              products = fetchedProducts;
-            }
-            _hasMore = fetchedProducts.length == 10;
-            isLoading = false;
-            _isLoadingMore = false;
-            _currentCategoryId = categoryId;
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-          _isLoadingMore = false;
-          _isConnected = false;
-        });
-        if (!loadMore) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('الاتصال بالإنترنت ضعيف، يرجى التحقق من اتصالك')),
-          );
-        }
-      }
-    }
-  }
-
-  Future<void> _fetchMainCategories() async {
-    try {
-      final response = await http.get(
-        Uri.parse('https://beytei.com/wp-json/wc/v3/products/categories?parent=0&per_page=100'), // جلب كل التصنيفات
-        headers: {
-          'Authorization': 'Basic ${base64Encode(utf8.encode('$CUSTOMER_CONSUMER_KEY:$CUSTOMER_CONSUMER_SECRET'))}',
-        },
-      );
-
-      if (response.statusCode == 200 && mounted) {
-        setState(() => mainCategories = json.decode(response.body));
-      }
-    } catch (e) {
-      print('Error fetching categories: $e');
-    }
-  }
-
-  void _scrollListener() {
-    final direction = _scrollController.position.userScrollDirection;
-
-    if (direction == ScrollDirection.forward) {
-      if (!_isCategoriesVisible) setState(() => _isCategoriesVisible = true);
-    } else if (direction == ScrollDirection.reverse) {
-      if (_isCategoriesVisible) setState(() => _isCategoriesVisible = false);
-    }
-
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent * 0.9 && !_isLoadingMore) {
-      _fetchProducts(
-        searchQuery: _searchController.text,
-        categoryId: _currentCategoryId,
-        loadMore: true,
-      );
-    }
-  }
-
-  // --- دوال السلة والدفع (بقيت كما هي) ---
-  void addToCart(Product product) {
-    setState(() {
-      final existingIndex = cartItems.indexWhere((item) => item.id == product.id);
-      if (existingIndex >= 0) {
-        cartItems[existingIndex].quantity++;
-      } else {
-        cartItems.add(Product(
-          id: product.id,
-          name: product.name,
-          description: product.description,
-          price: product.price,
-          imageUrl: product.imageUrl,
-          category: product.category,
-          quantity: 1,
-        ));
-      }
-      _calculateTotal();
-      showCart = true;
-    });
-    _showAddToCartDialog(product);
-  }
-
-  void _showAddToCartDialog(Product product) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("تمت الإضافة إلى السلة"),
-        content: Text("${product.name} تمت إضافته إلى سلة التسوق"),
-        actions: [
-          TextButton(child: const Text("مواصلة التسوق"), onPressed: () => Navigator.of(context).pop()),
-          ElevatedButton(
-            child: const Text("إتمام الطلب"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[300]),
-            onPressed: () {
-              Navigator.of(context).pop();
-              setState(() { showCart = true; showCheckout = true; });
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  void removeFromCart(Product product) {
-    setState(() {
-      cartItems.removeWhere((item) => item.id == product.id);
-      _calculateTotal();
-      if (cartItems.isEmpty) showCart = false;
-    });
-  }
-
-  void updateQuantity(Product product, int newQuantity) {
-    setState(() {
-      final index = cartItems.indexWhere((item) => item.id == product.id);
-      if (index >= 0) {
-        if (newQuantity > 0) {
-          cartItems[index].quantity = newQuantity;
-        } else {
-          cartItems.removeAt(index);
-        }
-        _calculateTotal();
-      }
-      if (cartItems.isEmpty) showCart = false;
-    });
-  }
-
-  void _calculateTotal() {
-    double productTotal = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
-    if (cartItems.isEmpty) {
-      totalPrice = 0.0;
-    } else {
-      totalPrice = productTotal + 1000.0;
-    }
-  }
-
-  void _showCheckoutForm() => setState(() => showCheckout = true);
-  void _hideCheckoutForm() => setState(() => showCheckout = false);
-
-  void _submitOrder() async {
-    if (_isSubmitting) return;
-
-    // التحقق من الحقول النصية
-    if (_nameController.text.isEmpty || _phoneController.text.isEmpty || _addressController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء تعبئة جميع الحقول (الاسم، الهاتف، العنوان)')));
       return;
     }
 
-    setState(() => _isSubmitting = true);
+    setState(() => _isLoading = true);
 
-    // بدء عملية الإرسال
-    await _sendOrderToWooCommerce();
-  }
+    // استخدام البروفايدر لحفظ الجلسة والرتبة
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-  // 2. دالة جلب الموقع وإرسال الطلب للسيرفر
-  Future<void> _sendOrderToWooCommerce() async {
-    double? lat;
-    double? lng;
+    final success = await authProvider.login(
+        _usernameController.text,
+        _passwordController.text,
+        'leader' // 👈 تحديد الرتبة كتيم ليدر
+    );
 
-    try {
-      // --- خطوة 1: محاولة جلب إحداثيات GPS الحالية ---
-      // التحقق من تفعيل الخدمة
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (serviceEnabled) {
-        LocationPermission permission = await Geolocator.checkPermission();
-        if (permission == LocationPermission.denied) {
-          permission = await Geolocator.requestPermission();
-        }
+    setState(() => _isLoading = false);
 
-        if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
-          // إظهار رسالة صغيرة للمستخدم أننا نحدد الموقع
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('جاري تحديد موقعك بدقة لتسهيل التوصيل...', style: TextStyle(fontSize: 12)),
-              duration: Duration(seconds: 2),
-            ));
-          }
+    if (success && mounted) {
+      // ✅ نجاح الدخول: إغلاق الشاشة والعودة للصفحة الرئيسية
+      Navigator.pop(context);
 
-          // جلب الموقع (Timeout بعد 5 ثواني لعدم تعطيل الطلب اذا كانت الاشارة ضعيفة)
-          Position position = await Geolocator.getCurrentPosition(
-              desiredAccuracy: LocationAccuracy.high,
-              timeLimit: const Duration(seconds: 5)
-          );
-          lat = position.latitude;
-          lng = position.longitude;
-        }
-      }
-    } catch (e) {
-      print("Error getting location: $e");
-      // لن نوقف الطلب إذا فشل تحديد الموقع، سنعتمد على العنوان النصي
-    }
-
-    try {
-      // --- خطوة 2: تجهيز البيانات وإرسالها للسيرفر ---
-      final metaData = [
-        // إرسال المنطقة المختارة (فلترة)
-        if (_selectedAreaId != null) {"key": "_selected_area_id", "value": _selectedAreaId.toString()},
-
-        // 🔥 إرسال الإحداثيات (هذا ما يحتاجه المدير للخريطة) 🔥
-        if (lat != null) {"key": "_customer_destination_lat", "value": lat.toString()},
-        if (lng != null) {"key": "_customer_destination_lng", "value": lng.toString()},
-      ];
-
-      final orderData = {
-        "payment_method": "cod",
-        "payment_method_title": "الدفع عند الاستلام",
-        "customer_note": "طلب من تطبيق مسواك بيتي",
-        "billing": {
-          "first_name": _nameController.text,
-          "phone": _phoneController.text,
-          // تخزين الإحداثيات في العنوان أيضاً كاحتياط
-          "address_2": (lat != null) ? "$lat,$lng" : ""
-        },
-        "shipping": {
-          "address_1": _addressController.text, // العنوان النصي الذي كتبه الزبون
-        },
-        "line_items": cartItems.map((product) => {
-          "product_id": product.id,
-          "quantity": product.quantity
-        }).toList(),
-        "fee_lines": [{
-          "name": "أجرة التوصيل",
-          "total": "1000",
-          "tax_status": "none"
-        }],
-        "meta_data": metaData
-      };
-
-      final response = await http.post(
-        Uri.parse('https://beytei.com/wp-json/wc/v3/orders'),
-        headers: {
-          'Authorization': 'Basic ${base64Encode(utf8.encode('$CUSTOMER_CONSUMER_KEY:$CUSTOMER_CONSUMER_SECRET'))}',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode(orderData),
-      );
-
-      if (response.statusCode == 201) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('تم تأكيد طلبك بنجاح! سيتم الاتصال بك قريباً.'),
-                backgroundColor: Colors.green,
-                duration: Duration(seconds: 3),
-              )
-          );
-
-          setState(() {
-            cartItems.clear();
-            totalPrice = 0.0;
-            showCart = false;
-            showCheckout = false;
-            _nameController.clear();
-            _phoneController.clear();
-            _addressController.clear();
-          });
-        }
-      } else {
-        throw Exception('فشل إرسال الطلب: ${response.body}');
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('حدث خطأ أثناء إرسال الطلب: $e'), backgroundColor: Colors.red)
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSubmitting = false);
-    }
-  }
-  // --- Widgets ---
-
-  void _showProductDetails(Product product) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(child: Text(product.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
-                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text('الفئة: ${product.category}', style: TextStyle(color: Colors.blue[800])),
-            const SizedBox(height: 20),
-            Center(child: CachedNetworkImage(imageUrl: product.imageUrl.replaceAll('-300x300', ''), height: 200, fit: BoxFit.contain, placeholder: (context, url) => Center(child: CircularProgressIndicator()), errorWidget: (context, url, error) => Icon(Icons.image_not_supported))),
-            const SizedBox(height: 20),
-            const Text('وصف المنتج:', style: TextStyle(fontWeight: FontWeight.bold)),
-            Text(product.description.replaceAll(RegExp(r'<[^>]*>'), '')),
-            const SizedBox(height: 20),
-            const Text('السعر:', style: TextStyle(fontWeight: FontWeight.bold)),
-            Text(product.formattedPrice, style: const TextStyle(fontSize: 18, color: Colors.green, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 20),
-            SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () { Navigator.pop(context); addToCart(product); }, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(vertical: 15)), child: const Text('أضف إلى السلة الآن'))),
-            const SizedBox(height: 10),
-          ],
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("تم الدخول بنجاح! اضغط على أيقونة الداشبورد (البرتقالية) في الأعلى."),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 4),
         ),
-      ),
-    );
-  }
-
-  // ... (نفس دالة _buildBannerSlider السابقة)
-  Widget _buildBannerSlider() {
-    return Container(
-      height: 140,
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Stack(
-        alignment: Alignment.bottomCenter,
-        children: [
-          CarouselSlider(
-            items: bannerImages.map((imageUrl) => Container(
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                image: DecorationImage(image: CachedNetworkImageProvider(imageUrl), fit: BoxFit.cover),
-              ),
-            )).toList(),
-            options: CarouselOptions(height: 140, autoPlay: true, enlargeCenterPage: true, viewportFraction: 0.92, onPageChanged: (index, _) => setState(() => _currentBannerIndex = index)),
-          ),
-          Positioned(
-            bottom: 10,
-            child: Row(children: bannerImages.map((url) { int index = bannerImages.indexOf(url); return Container(width: 8, height: 8, margin: const EdgeInsets.symmetric(horizontal: 4), decoration: BoxDecoration(shape: BoxShape.circle, color: _currentBannerIndex == index ? Colors.blue[300] : Colors.white.withOpacity(0.7))); }).toList()),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMainCategories() {
-    if (mainCategories.isEmpty || !_isCategoriesVisible) return const SizedBox.shrink();
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      height: 120,
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: mainCategories.length + 1,
-        physics: const BouncingScrollPhysics(),
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: InkWell(
-                onTap: () { setState(() => _currentCategoryId = null); _fetchProducts(); },
-                child: Column(children: [
-                  Container(width: 80, height: 80, decoration: BoxDecoration(color: _currentCategoryId == null ? Colors.blue[100] : Colors.grey[200], borderRadius: BorderRadius.circular(40), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), spreadRadius: 1, blurRadius: 5, offset: const Offset(0, 2))]), child: const Icon(Icons.all_inclusive, color: Colors.blue)),
-                  const SizedBox(height: 5),
-                  Text('الكل', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _currentCategoryId == null ? Colors.blue[800] : Colors.black)),
-                ]),
-              ),
-            );
-          }
-          var category = mainCategories[index - 1];
-          return Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: InkWell(
-              onTap: () { setState(() => _currentCategoryId = category['id']); _fetchProducts(categoryId: category['id']); },
-              child: Column(children: [
-                Container(
-                    width: 80, height: 80,
-                    decoration: BoxDecoration(color: _currentCategoryId == category['id'] ? Colors.blue[100] : Colors.grey[200], borderRadius: BorderRadius.circular(40), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), spreadRadius: 1, blurRadius: 5, offset: const Offset(0, 2))]),
-                    child: category['image'] != null
-                        ? ClipRRect(borderRadius: BorderRadius.circular(40), child: CachedNetworkImage(imageUrl: category['image']['src'], fit: BoxFit.cover, placeholder: (context, url) => const Center(child: CircularProgressIndicator(strokeWidth: 1.5)), errorWidget: (context, url, error) => const Icon(Icons.category, color: Colors.blue)))
-                        : const Icon(Icons.category, color: Colors.blue)
-                ),
-                const SizedBox(height: 5),
-                Text(category['name'], style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _currentCategoryId == category['id'] ? Colors.blue[800] : Colors.black)),
-              ]),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  // ... (ProductCard, CartItem, CartSummary, CheckoutForm, Shimmer, EmptyState, CartFab - نفس الكود السابق)
-  // سأقوم باختصارهم هنا لتوفير المساحة، انسخهم كما هم من الكود السابق
-
-  Widget _buildProductCard(Product product) {
-    return Card(
-      elevation: 2, margin: const EdgeInsets.all(5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: () => _showProductDetails(product), borderRadius: BorderRadius.circular(12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          ClipRRect(borderRadius: const BorderRadius.vertical(top: Radius.circular(12)), child: CachedNetworkImage(imageUrl: product.imageUrl, height: 120, width: double.infinity, fit: BoxFit.cover, placeholder: (context, url) => Container(color: Colors.grey[100], child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5))), errorWidget: (context, url, error) => Container(color: Colors.grey[200], child: const Icon(Icons.shopping_bag, size: 50, color: Colors.blue)))),
-          Padding(padding: const EdgeInsets.all(10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 5),
-            Text(product.category, style: TextStyle(fontSize: 12, color: Colors.blue[800])),
-            const SizedBox(height: 5),
-            Text(product.formattedPrice, style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            Align(alignment: Alignment.centerLeft, child: IconButton(icon: const Icon(Icons.add_shopping_cart, color: Colors.blue), onPressed: () => addToCart(product), style: IconButton.styleFrom(backgroundColor: Colors.blue[50], padding: const EdgeInsets.all(8)))),
-          ])),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildCartItem(Product product) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), spreadRadius: 1, blurRadius: 5, offset: const Offset(0, 2))]),
-      child: Row(children: [
-        InkWell(onTap: () => _showProductDetails(product), child: ClipRRect(borderRadius: BorderRadius.circular(8), child: CachedNetworkImage(imageUrl: product.imageUrl, width: 60, height: 60, fit: BoxFit.cover))),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis), Text(product.formattedPrice, style: const TextStyle(color: Colors.grey))])),
-        const SizedBox(width: 10),
-        Row(children: [IconButton(icon: const Icon(Icons.remove, size: 18), onPressed: () => updateQuantity(product, product.quantity - 1)), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(border: Border.all(color: Colors.grey[300]!), borderRadius: BorderRadius.circular(4)), child: Text(product.quantity.toString())), IconButton(icon: const Icon(Icons.add, size: 18), onPressed: () => updateQuantity(product, product.quantity + 1)), const SizedBox(width: 5), IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => removeFromCart(product))]),
-      ]),
-    );
-  }
-
-  Widget _buildCartSummary() {
-    final formatter = NumberFormat('#,###');
-    double productTotal = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
-    return Container(
-      padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(20)), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.3), spreadRadius: 2, blurRadius: 10, offset: const Offset(0, -3))]),
-      child: Column(children: [
-        const Text('ملخص السلة', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 10),
-        ConstrainedBox(constraints: const BoxConstraints(maxHeight: 150), child: ListView.builder(shrinkWrap: true, itemCount: cartItems.length, itemBuilder: (context, index) => _buildCartItem(cartItems[index]))),
-        const Divider(),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('مجموع المنتجات:'), Text('${formatter.format(productTotal)} د.ع')]),
-        const SizedBox(height: 5),
-        const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('أجرة التوصيل:'), Text('1,000 د.ع', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))]),
-        const Divider(),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('الإجمالي الكلي:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), Text('${formatter.format(totalPrice)} د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green))]),
-        const SizedBox(height: 15),
-        Row(children: [Expanded(child: ElevatedButton(onPressed: _showCheckoutForm, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: const Text('إتمام الطلب', style: TextStyle(fontSize: 16)))), const SizedBox(width: 10), IconButton(onPressed: () => setState(() => showCart = false), icon: const Icon(Icons.close, color: Colors.red))]),
-      ]),
-    );
-  }
-
-  Widget _buildCheckoutForm() {
-    final formatter = NumberFormat('#,###');
-    double productTotal = cartItems.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.9, padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.3), spreadRadius: 3, blurRadius: 10)]),
-      child: SingleChildScrollView(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('إتمام الطلب', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), IconButton(onPressed: _isSubmitting ? null : _hideCheckoutForm, icon: const Icon(Icons.close))]),
-          const Divider(), const SizedBox(height: 15),
-          const Align(alignment: Alignment.centerRight, child: Text('ملخص الطلب', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))), const SizedBox(height: 10),
-          ...cartItems.map((product) => Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [Expanded(child: Text('${product.name} (${product.quantity})')), Text('${formatter.format(product.price * product.quantity)} د.ع', style: const TextStyle(fontWeight: FontWeight.bold))]))).toList(),
-          const Divider(),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('المنتجات:', style: TextStyle(color: Colors.grey)), Text('${formatter.format(productTotal)} د.ع')]), const SizedBox(height: 5),
-          const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('التوصيل:', style: TextStyle(color: Colors.grey)), Text('1,000 د.ع')]),
-          const Divider(),
-          Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [const Text('الإجمالي:', style: TextStyle(fontWeight: FontWeight.bold)), const Spacer(), Text('${formatter.format(totalPrice)} د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green))])),
-          const SizedBox(height: 20),
-          const Align(alignment: Alignment.centerRight, child: Text('معلومات العميل', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))), const SizedBox(height: 15),
-          TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)), enabled: !_isSubmitting), const SizedBox(height: 15),
-          TextField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.phone, enabled: !_isSubmitting), const SizedBox(height: 15),
-          TextField(controller: _addressController, decoration: const InputDecoration(labelText: 'عنوان التوصيل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.location_on)), maxLines: 2, enabled: !_isSubmitting), const SizedBox(height: 25),
-          SizedBox(width: double.infinity, height: 50, child: ElevatedButton(onPressed: _isSubmitting ? null : _submitOrder, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: _isSubmitting ? const CircularProgressIndicator(color: Colors.white) : const Text('تأكيد الطلب', style: TextStyle(fontSize: 18)))), const SizedBox(height: 10),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildShimmerLoading() {
-    return GridView.builder(
-        padding: const EdgeInsets.all(10), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 10, mainAxisSpacing: 10), itemCount: 6,
-        itemBuilder: (context, index) {
-          return Card(elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: Container(decoration: BoxDecoration(color: Colors.grey[200], borderRadius: const BorderRadius.vertical(top: Radius.circular(15))), child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5, valueColor: AlwaysStoppedAnimation<Color>(Colors.blue))))), Padding(padding: const EdgeInsets.all(10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 16, width: double.infinity, color: Colors.grey[200]), const SizedBox(height: 8), Container(height: 12, width: 100, color: Colors.grey[200]), const SizedBox(height: 12), Container(height: 20, width: 80, color: Colors.grey[200])]))]));
-        }
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(_isConnected ? Icons.search_off : Icons.wifi_off, size: 80, color: Colors.blue[200]), const SizedBox(height: 20), Text(_isConnected ? 'لم يتم العثور على منتجات' : 'لا يوجد اتصال بالإنترنت', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 10), Text(_isConnected ? 'حاول البحث باستخدام مصطلحات أخرى' : 'يرجى التحقق من اتصالك بالإنترنت', style: const TextStyle(color: Colors.grey), textAlign: TextAlign.center), const SizedBox(height: 20), if (!_isConnected) ElevatedButton(onPressed: _checkConnection, style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12)), child: const Text('إعادة المحاولة'))]));
-  }
-
-  Widget _buildCartFab() {
-    return Stack(clipBehavior: Clip.none, children: [FloatingActionButton(onPressed: () => setState(() => showCart = true), backgroundColor: Colors.blue[800], elevation: 6, child: const Icon(Icons.shopping_cart)), if (cartItems.isNotEmpty) Positioned(top: -5, right: -5, child: Container(padding: const EdgeInsets.all(6), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text(cartItems.length.toString(), style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold))))]);
+      );
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text("فشل الدخول: تأكد من اسم المستخدم وكلمة المرور وصلاحيات الحساب."),
+            backgroundColor: Colors.red
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF1E3C72), // لون خلفية مميز للتيم ليدر (أزرق داكن)
       appBar: AppBar(
-        // ✨ التعديل 3: تحويل العنوان إلى زر لتغيير المنطقة
-        title: InkWell(
-          onTap: () async {
-            // الانتقال لشاشة تغيير المنطقة (يجب التأكد من وجود SelectLocationScreen في المشروع)
-            final result = await Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SelectLocationScreen(isCancellable: true)),
-            );
-
-            // تحديث البيانات إذا تم تغيير المنطقة
-            if (result == true) {
-              final prefs = await SharedPreferences.getInstance();
-              setState(() {
-                _selectedAreaId = prefs.getInt('selectedAreaId');
-                _selectedAreaName = prefs.getString('selectedAreaName');
-                products.clear();
-                _page = 1;
-                isLoading = true;
-              });
-              _fetchProducts();
-            }
-          },
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('مسواك بيتي', style: TextStyle(color: Colors.white)),
-              Row(
-                children: [
-                  const Icon(Icons.location_on, size: 12, color: Colors.white70),
-                  const SizedBox(width: 4),
-                  // عرض اسم المنطقة المختارة
-                  Text(_selectedAreaName ?? "اختر المنطقة", style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                  const Icon(Icons.keyboard_arrow_down, size: 12, color: Colors.white70),
-                ],
-              )
-            ],
-          ),
-        ),
-
-        flexibleSpace: Container(
-          decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.blue[800]!, Colors.blue[600]!])),
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(60),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.white,
-                hintText: 'شنو محتاج اليوم ؟...',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(icon: const Icon(Icons.close), onPressed: () { _searchController.clear(); _fetchProducts(); })
-                    : null,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(vertical: 0),
-              ),
-              onChanged: (query) {
-                if (_searchDebounce?.isActive ?? false) _searchDebounce?.cancel();
-                _searchDebounce = Timer(const Duration(milliseconds: 500), () { _fetchProducts(searchQuery: query, categoryId: _currentCategoryId); });
-              },
-            ),
-          ),
-        ),
-        actions: [
-          IconButton(icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.white), tooltip: "دخول مدير المسواق", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StoreLoginScreen()))),
-          Stack(children: [IconButton(onPressed: () => setState(() => showCart = !showCart), icon: const Icon(Icons.shopping_cart, color: Colors.white)), if (cartItems.isNotEmpty) Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text(cartItems.length.toString(), style: const TextStyle(color: Colors.white, fontSize: 12))))]),
-        ],
+        backgroundColor: const Color(0xFF1E3C72),
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Stack(
-        children: [
-          Column(
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildBannerSlider(),
-              AnimatedSwitcher(duration: const Duration(milliseconds: 300), child: _buildMainCategories()),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () async { await _fetchProducts(searchQuery: _searchController.text, categoryId: _currentCategoryId); },
-                  child: isLoading
-                      ? _buildShimmerLoading()
-                      : products.isEmpty
-                      ? _buildEmptyState()
-                      : GridView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(8),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 8, mainAxisSpacing: 8),
-                    physics: const BouncingScrollPhysics(),
-                    itemCount: products.length + (_isLoadingMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == products.length) return const Center(child: Padding(padding: EdgeInsets.all(8.0), child: CircularProgressIndicator()));
-                      return _buildProductCard(products[index]);
-                    },
+              const Icon(Icons.admin_panel_settings, size: 80, color: Colors.white),
+              const SizedBox(height: 20),
+              const Text(
+                "دخول قائد الفريق (Team Leader)",
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    fontFamily: 'Tajawal'
+                ),
+              ),
+              const SizedBox(height: 40),
+
+              // حقل اسم المستخدم
+              TextField(
+                controller: _usernameController,
+                decoration: InputDecoration(
+                  hintText: "اسم المستخدم",
+                  prefixIcon: const Icon(Icons.person),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              const SizedBox(height: 15),
+
+              // حقل كلمة المرور
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  hintText: "كلمة المرور",
+                  prefixIcon: const Icon(Icons.lock),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              const SizedBox(height: 30),
+
+              // زر تسجيل الدخول
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _login,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber, // لون مميز للزر
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.black)
+                      : const Text(
+                      "تسجيل الدخول",
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)
                   ),
                 ),
               ),
             ],
           ),
-          if (showCart && cartItems.isNotEmpty && !showCheckout) Positioned(bottom: 0, left: 0, right: 0, child: _buildCartSummary()),
-          if (showCheckout) Positioned.fill(child: Container(color: Colors.black54, child: Center(child: _buildCheckoutForm()))),
-        ],
+        ),
       ),
-      floatingActionButton: cartItems.isNotEmpty && !showCart ? _buildCartFab() : null,
+    );
+  }
+}
+class TeamLeaderRegionSelectScreen extends StatelessWidget {
+  final String token;
+  const TeamLeaderRegionSelectScreen({super.key, required this.token});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("حدد منطقة المراقبة")),
+      body: FutureBuilder<List<Area>>(
+        future: ApiService().getAreas(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData) return const Center(child: Text("فشل تحميل المناطق"));
+
+          // فلترة المحافظات فقط أو عرض الكل حسب رغبتك
+          final areas = snapshot.data!;
+
+          return ListView.builder(
+            itemCount: areas.length,
+            itemBuilder: (context, index) {
+              return ListTile(
+                title: Text(areas[index].name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                onTap: () {
+                  // ✅ الانتقال للوحة التحكم مع المنطقة المختارة
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RegionDashboardScreen(
+                        token: token,
+                        areaId: areas[index].id,
+                        areaName: areas[index].name,
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+class RegionDashboardScreen extends StatefulWidget {
+  final String token;
+  final int areaId;
+  final String areaName;
+
+  const RegionDashboardScreen({
+    super.key,
+    required this.token,
+    required this.areaId,
+    required this.areaName
+  });
+
+  @override
+  State<RegionDashboardScreen> createState() => _RegionDashboardScreenState();
+}
+
+class _RegionDashboardScreenState extends State<RegionDashboardScreen> {
+  final ApiService _apiService = ApiService();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("لوحة المراقبة", style: TextStyle(fontSize: 16)),
+            Text(widget.areaName, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+      ),
+      body: FutureBuilder<List<UnifiedDeliveryOrder>>(
+        future: _apiService.getOrdersByRegion(widget.areaId, widget.token),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text("حدث خطأ: ${snapshot.error}"));
+          }
+
+          final orders = snapshot.data ?? [];
+          if (orders.isEmpty) {
+            return const Center(child: Text("لا توجد طلبات نشطة في هذه المنطقة حالياً"));
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: orders.length,
+            itemBuilder: (context, index) {
+              final order = orders[index];
+              final isMiswak = order.sourceType == 'store' || order.sourceType == 'pharmacy';
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Chip(
+                            avatar: Icon(isMiswak ? Icons.shopping_basket : Icons.restaurant, size: 16, color: Colors.white),
+                            label: Text(isMiswak ? "مسواك/صيدلية" : "مطعم"),
+                            backgroundColor: isMiswak ? Colors.purple : Colors.orange,
+                            labelStyle: const TextStyle(color: Colors.white, fontSize: 12),
+                          ),
+                          Text(
+                            "${NumberFormat('#,###').format(order.deliveryFee)} د.ع",
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text("من: ${order.pickupName}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      const SizedBox(height: 4),
+                      Text("إلى: ${order.destinationAddress}", style: TextStyle(color: Colors.grey.shade700)),
+                      const Divider(),
+                      Text(order.description, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 10),
+                      if (order.pickupLat != "0" && order.destLat != "0")
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.map),
+                            label: const Text("عرض المسار على الخريطة"),
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => InAppMapScreen(
+                                    latitude: double.parse(order.pickupLat),
+                                    longitude: double.parse(order.pickupLng),
+                                    title: "موقع الاستلام",
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// أضف هذا الكلاس في ملف المسواك/المطعم
+class MiswakAppEntryPoint extends StatelessWidget {
+  const MiswakAppEntryPoint({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        // Providers الأساسية
+        ChangeNotifierProvider(create: (_) => CartProvider()),
+        ChangeNotifierProvider(create: (_) => NavigationProvider()),
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => CustomerProvider()),
+        ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => RestaurantSettingsProvider()),
+        ChangeNotifierProvider(create: (_) => DeliveryProvider()),
+
+        // Providers المعتمدة على AuthProvider (Proxy)
+        ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
+          create: (_) => DashboardProvider(),
+          update: (_, auth, dashboard) {
+            if(auth.isLoggedIn && dashboard != null && auth.token != null) {
+              dashboard.startAutoRefresh(auth.token!);
+            }
+            return dashboard!;
+          },
+        ),
+        ChangeNotifierProxyProvider<AuthProvider, RestaurantSettingsProvider>(
+          create: (_) => RestaurantSettingsProvider(),
+          update: (_, auth, settings) {
+            if(settings != null && auth.isLoggedIn && auth.token != null) {
+              settings.fetchSettings(auth.token);
+            } else if (settings != null && !auth.isLoggedIn) {
+              settings.clearData();
+            }
+            return settings!;
+          },
+        ),
+        ChangeNotifierProxyProvider<AuthProvider, RestaurantProductsProvider>(
+          create: (_) => RestaurantProductsProvider(),
+          update: (_, auth, products) {
+            if (products != null && auth.isLoggedIn && auth.token != null) {
+              products.fetchProducts(auth.token);
+            } else if (products != null && !auth.isLoggedIn) {
+              products.clearData();
+            }
+            return products!;
+          },
+        ),
+      ],
+      // 👇 هنا نستدعي الغلاف مباشرة بدون MaterialApp لأن التطبيق الرئيسي لديه واحد
+      child: const AuthWrapper(),
+    );
+  }
+}
+
+class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    return Consumer<DashboardProvider>(
+        builder: (context, dashboard, child) {
+          if (dashboard.isLoading && dashboard.ratingsDashboard == null) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (dashboard.ratingsDashboard == null) {
+            return Center(
+              child: RefreshIndicator(
+                onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  children: [
+                    SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                    const Text("لا توجد بيانات تقييم.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          final data = dashboard.ratingsDashboard!;
+          return RefreshIndicator(
+            onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              children: [
+                _buildRatingsSummaryCard(data),
+                const SizedBox(height: 24),
+                const Text("آخر التقييمات", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                if (data.recentReviews.isEmpty) const Center(child: Padding(padding: const EdgeInsets.all(20.0), child: Text("لا توجد تقييمات حديثة.", style: TextStyle(color: Colors.grey))))
+                else ...data.recentReviews.map((review) => ReviewCard(review: review)),
+              ],
+            ),
+          );
+        }
+    );
+  }
+
+  Widget _buildRatingsSummaryCard(RestaurantRatingsDashboard data) {
+    return Card(
+      elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          Column(children: [
+            Text(data.averageRating.toStringAsFixed(1), style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.amber)),
+            RatingBarIndicator(rating: data.averageRating, itemBuilder: (context, index) => const Icon(Icons.star, color: Colors.amber), itemCount: 5, itemSize: 25.0),
+            const SizedBox(height: 5),
+            const Text("المعدل العام", style: TextStyle(color: Colors.grey)),
+          ]),
+          Column(children: [
+            Text(data.totalReviews.toString(), style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+            const SizedBox(height: 10),
+            const Text("إجمالي التقييمات", style: TextStyle(color: Colors.grey)),
+          ]),
+        ]),
+      ),
     );
   }
 }
