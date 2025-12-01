@@ -4378,7 +4378,6 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
   void _showCheckoutDialog(BuildContext context, CartProvider cart) {
-    // حفظ السياق لاستخدامه لاحقاً بأمان
     final BuildContext cartScreenContext = context;
 
     _nameController.clear();
@@ -4389,11 +4388,13 @@ class _CartScreenState extends State<CartScreen> {
 
     geolocator.Position? _capturedPosition;
 
-    // الحالة الافتراضية: جاري الحساب
-    bool _isGettingLocation = true;
-    String _locationMessage = "جاري حساب تكلفة التوصيل...";
+    // 🛑 التعديل 1: إلغاء حالة "جاري الحساب" لأن السعر ثابت
+    bool _isGettingLocation = false;
 
-    // السعر المبدئي (الحد الأدنى)
+    // 🛑 التعديل 2: رسالة توضيحية للسعر الثابت
+    String _locationMessage = "سعر توصيل ثابت لكل المناطق";
+
+    // 🛑 التعديل 3: تثبيت السعر عند 1000 دينار
     double _deliveryFee = 1000.0;
 
     showDialog(
@@ -4402,104 +4403,37 @@ class _CartScreenState extends State<CartScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
 
-          // --- الدالة الذكية لحساب السعر ---
-          Future<void> calculateSmartFee() async {
-            final customerProvider = Provider.of<CustomerProvider>(cartScreenContext, listen: false);
-
-            // ✅ إعدادات التسعير الثابتة (كما طلبت)
-            const double minFee = 1000.0;      // سعر التوصيل الأساسي
-            const double freeDistance = 3.0;   // المسافة المجانية بالكيلومتر
-            const double feePerKm = 250.0;     // سعر الكيلو الإضافي (ثابت)
-
+          // --- دالة جلب الموقع فقط (بدون تغيير السعر) ---
+          // سنحتفظ بجلب الموقع لأغراض توجيه السائق، لكن لن يؤثر على السعر
+          Future<void> fetchLocationForDriver() async {
             try {
-              // 1. التحقق من السلة
-              if (cart.items.isEmpty) throw Exception("السلة فارغة");
-
-              // 2. محاولة جلب إحداثيات المطعم/المتجر
-              final firstItem = cart.items.first;
-              double restLat = firstItem.restaurantLat;
-              double restLng = firstItem.restaurantLng;
-
-              // إذا لم تكن الإحداثيات في السلة، نبحث في الكاش
-              if (restLat == 0.0 || restLng == 0.0) {
-                try {
-                  // محاولة العثور على المطعم في القائمة
-                  final restaurant = customerProvider.allRestaurants.firstWhere((r) => r.id == firstItem.categoryId,
-                      orElse: () {
-                        final homeList = (customerProvider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
-                        return homeList.firstWhere((r) => r.id == firstItem.categoryId);
-                      });
-
-                  restLat = restaurant.latitude;
-                  restLng = restaurant.longitude;
-                } catch (_) {
-                  throw Exception("إحداثيات المطعم غير متوفرة");
-                }
-              }
-
-              // 3. محاولة جلب موقع الزبون
               bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-              if (!serviceEnabled) throw Exception("GPS مغلق");
+              if (!serviceEnabled) return;
 
-              LocationPermission permission = await geolocator.Geolocator.checkPermission();
-              if (permission == LocationPermission.denied) {
+              geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+              if (permission == geolocator.LocationPermission.denied) {
                 permission = await geolocator.Geolocator.requestPermission();
-                if (permission == LocationPermission.denied) throw Exception("تم رفض الإذن");
               }
 
-              // ✅ استخدام الدقة المتوسطة للسرعة
-              _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
-                  desiredAccuracy: geolocator.LocationAccuracy.medium,
-                  timeLimit: const Duration(seconds: 5)
-              );
-
-              // 4. المعادلة الرياضية
-              if (restLat != 0.0 && restLng != 0.0 && _capturedPosition != null) {
-                double distanceInMeters = geolocator.Geolocator.distanceBetween(
-                    _capturedPosition!.latitude, _capturedPosition!.longitude, restLat, restLng);
-                double distanceInKm = distanceInMeters / 1000;
-
-                if (distanceInKm <= freeDistance) {
-                  // ✅ الحالة 1: ضمن المسافة المجانية (3 كم)
-                  _deliveryFee = minFee;
-                  if (context.mounted) {
-                    setDialogState(() => _locationMessage = "نطاق قريب (${distanceInKm.toStringAsFixed(1)} كم)");
-                  }
-                } else {
-                  // ✅ الحالة 2: أبعد من 3 كم -> نحسب الزيادة
-                  double extraDistance = distanceInKm - freeDistance;
-                  _deliveryFee = minFee + (extraDistance * feePerKm);
-
-                  if (context.mounted) {
-                    setDialogState(() => _locationMessage = "مسافة إضافية (${distanceInKm.toStringAsFixed(1)} كم)");
-                  }
-                }
-
-                // تقريب السعر لأقرب 250 دينار لسهولة الدفع
-                _deliveryFee = (_deliveryFee / 250).ceil() * 250.0;
-
-                if (context.mounted) {
-                  setDialogState(() {
-                    _isGettingLocation = false;
-                  });
+              if (permission == geolocator.LocationPermission.whileInUse || permission == geolocator.LocationPermission.always) {
+                // نجلب الموقع بصمت لإرساله مع الطلب
+                _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
+                    desiredAccuracy: geolocator.LocationAccuracy.medium,
+                    timeLimit: const Duration(seconds: 5)
+                );
+                if(context.mounted) {
+                  setDialogState(() => _locationMessage = "تم تحديد موقعك للسائق ✅");
                 }
               }
             } catch (e) {
-              // 🔥 نظام الأمان: في حال أي خطأ، نطبق الحد الأدنى
-              if (context.mounted) {
-                setDialogState(() {
-                  _deliveryFee = minFee;
-                  _isGettingLocation = false;
-                  _locationMessage = "توصيل قياسي (تعذر تحديد المسافة)";
-                });
-              }
+              // تجاهل الأخطاء، السعر ثابت ولا يتأثر
             }
           }
 
-          // تشغيل الحساب مرة واحدة عند الفتح
-          if (_isGettingLocation) {
-            WidgetsBinding.instance.addPostFrameCallback((_) => calculateSmartFee());
-          }
+          // تشغيل جلب الموقع في الخلفية عند فتح النافذة
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if(_capturedPosition == null) fetchLocationForDriver();
+          });
 
           return AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -4537,18 +4471,14 @@ class _CartScreenState extends State<CartScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
-                              _isGettingLocation
-                                  ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
-                                  : Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
+                              // عرض السعر الثابت مباشرة
+                              Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
                             ],
                           ),
                           const SizedBox(height: 5),
                           Row(
                             children: [
-                              Icon(
-                                _isGettingLocation ? Icons.gps_fixed : Icons.info_outline,
-                                color: Colors.grey, size: 14,
-                              ),
+                              const Icon(Icons.info_outline, color: Colors.grey, size: 14),
                               const SizedBox(width: 5),
                               Expanded(child: Text(_locationMessage, style: const TextStyle(fontSize: 11, color: Colors.grey))),
                             ],
@@ -4564,7 +4494,8 @@ class _CartScreenState extends State<CartScreen> {
                       setDialogState(() {});
                     }))),
                     const Divider(height: 30),
-                    _buildPriceSummary(cart, _deliveryFee, _isGettingLocation, ""),
+                    // تمرير false دائماً لأننا لا نحسب السعر
+                    _buildPriceSummary(cart, _deliveryFee, false, ""),
                   ],
                 ),
               ),
@@ -4573,7 +4504,7 @@ class _CartScreenState extends State<CartScreen> {
               TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                onPressed: isSubmitting || _isGettingLocation
+                onPressed: isSubmitting
                     ? null
                     : () async {
                   if (!_formKey.currentState!.validate()) return;
@@ -4586,8 +4517,8 @@ class _CartScreenState extends State<CartScreen> {
                         address: _addressController.text,
                         cartItems: cart.items,
                         couponCode: cart.appliedCoupon,
-                        position: _capturedPosition,
-                        deliveryFee: _deliveryFee
+                        position: _capturedPosition, // نرسل الموقع إذا تم جلبه بنجاح
+                        deliveryFee: _deliveryFee // السعر الثابت (1000)
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -4643,8 +4574,7 @@ class _CartScreenState extends State<CartScreen> {
         });
       },
     );
-  }
-  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
+  }  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
     return Card(margin: const EdgeInsets.only(bottom: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Padding(padding: const EdgeInsets.all(10.0), child: Row(children: [
       ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: item.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
       const SizedBox(width: 15),
