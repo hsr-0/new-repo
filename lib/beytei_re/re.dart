@@ -5258,7 +5258,9 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     return Consumer<RestaurantProductsProvider>(
       builder: (context, provider, child) {
         return Scaffold(
-          // زر الإضافة العائم (تم تفعيله)
+          // ✅ تحديد موقع الزر العائم ليكون في اليسار
+          floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
+
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _navigateToAddScreen,
             label: const Text("إضافة منتج"),

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart'; // مطلوب للاهتزاز
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -31,7 +32,7 @@ import '../taxi/cash.dart';
 // (تم تغيير الدومين إلى beytei.com ومسار API جديد)
 const String BEYTEI_URL = 'https://beytei.com';
 const String STORE_APP_NAMESPACE = '/wp-json/store-app/v1'; // (هذا مسار مقترح للـ Backend)
-const String STORE_APP_URL = 'BEYTEI_URL$STORE_APP_NAMESPACE';
+const String STORE_APP_URL = BEYTEI_URL + STORE_APP_NAMESPACE;
 
 // (هذه الثوابت خاصة بـ WooCommerce API للزبون - من الكود الخاص بك)
 const String CONSUMER_KEY = 'ck_86b62f6fe8a298a5f9d564d70d689db81b9255ed';
@@ -238,21 +239,31 @@ class StoreAuthProvider with ChangeNotifier {
   }
 }
 class DashboardProvider with ChangeNotifier {
-  Map<String, List<Order>> _orders = {};
+  Map<String, List<Order>> _orders = {
+    'active': [],
+    'completed': []
+  };
   RestaurantRatingsDashboard? _ratingsDashboard;
   Map<int, String> _pickupCodes = {};
+
   bool _isLoading = false;
-  Timer? _timer;
+  String? _error; // لتخزين رسالة الخطأ وعرضها بدلاً من الشاشة البيضاء
 
   Map<String, List<Order>> get orders => _orders;
   RestaurantRatingsDashboard? get ratingsDashboard => _ratingsDashboard;
   Map<int, String> get pickupCodes => _pickupCodes;
   bool get isLoading => _isLoading;
+  String? get error => _error;
 
-  // إلغاء العداد والاعتماد على الإشعار
+  Timer? _timer;
+
   void startAutoRefresh(String token) {
     _timer?.cancel();
-    fetchDashboardData(token, silent: true);
+    fetchDashboardData(token, silent: false);
+    // تحديث كل 30 ثانية
+    _timer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      fetchDashboardData(token, silent: true);
+    });
   }
 
   void stopAutoRefresh() {
@@ -264,39 +275,37 @@ class DashboardProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // إيقاف الأتمتة
-  Future<void> checkAndAutoRequestDelivery(String token) async {
-    // 🚫 Disabled
-  }
-
-  // 🔥 منطق الفرز الجديد: إظهار كل شيء ما عدا المنتهي
   Future<void> fetchDashboardData(String? token, {bool silent = false}) async {
     if (token == null) return;
+
     if (!silent) {
       _isLoading = true;
+      _error = null;
       notifyListeners();
     }
+
     try {
       final ApiService api = ApiService();
 
-      // جلب الكل
+      // 1. جلب الطلبات النشطة والمكتملة
       final activeFromServer = await api.getRestaurantOrders(status: 'active', token: token);
       final completedFromServer = await api.getRestaurantOrders(status: 'completed', token: token);
 
       List<Order> allOrders = [...activeFromServer, ...completedFromServer];
+
+      // إزالة التكرار
       final ids = <int>{};
       allOrders.retainWhere((x) => ids.add(x.id));
 
       List<Order> finalActive = [];
       List<Order> finalCompleted = [];
 
-      // ⛔ القائمة السوداء (الحالات المنتهية فقط)
+      // القائمة السوداء للحالات المؤرشفة
       final List<String> archiveStatuses = [
         'completed', 'cancelled', 'refunded', 'failed', 'trash'
       ];
 
       for (var order in allOrders) {
-        // ✅ إذا لم يكن منتهياً، اعرضه في النشط فوراً
         if (!archiveStatuses.contains(order.status)) {
           finalActive.add(order);
         } else {
@@ -304,17 +313,26 @@ class DashboardProvider with ChangeNotifier {
         }
       }
 
-      finalCompleted.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+      // ترتيب الطلبات (الأحدث أولاً)
       finalActive.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+      finalCompleted.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
 
       _orders['active'] = finalActive;
       _orders['completed'] = finalCompleted;
 
-      final ratings = await api.getDashboardRatings(token);
-      _ratingsDashboard = ratings;
+      // 2. جلب التقييمات
+      try {
+        final ratings = await api.getDashboardRatings(token);
+        _ratingsDashboard = ratings;
+      } catch (e) {
+        print("Warning: Failed to fetch ratings, but orders loaded.");
+      }
 
+      _error = null; // نجاح
     } catch (e) {
       print("Error fetching dashboard: $e");
+      _error = "فشل تحميل البيانات. تأكد من اتصالك بالإنترنت.";
+      // لا نجعل القوائم فارغة إذا كان هناك بيانات قديمة، نحافظ عليها
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -326,8 +344,7 @@ class DashboardProvider with ChangeNotifier {
     _timer?.cancel();
     super.dispose();
   }
-}
-class RestaurantSettingsProvider with ChangeNotifier {
+}class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
   bool _isRestaurantOpen = true;
   String _openTime = '09:00';
@@ -450,13 +467,36 @@ class RestaurantProductsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // ✅ تم التعديل لقبول ملف الصورة (File? imageFile) وتمريره للـ API
+  // ✅ تم إضافة الدالة الصحيحة التي تقبل 6 متغيرات
+  Future<bool> addProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+    bool success = false;
+
+    try {
+      // استدعاء دالة API للإضافة
+      success = await _apiService.createProduct(token, name, price, salePrice, description, imageFile);
+
+      if (success) {
+        // تحديث القائمة فوراً بعد الإضافة الناجحة
+        await fetchProducts(token);
+      }
+    } catch (e) {
+      _errorMessage = "فشل إضافة المنتج: ${e.toString()}";
+      success = false;
+    }
+
+    _isLoading = false;
+    notifyListeners();
+    return success;
+  }
+
   Future<bool> updateProduct(String token, int productId, String name, String price, String salePrice, {File? imageFile}) async {
     _isLoading = true;
     notifyListeners();
     bool success = false;
     try {
-      // نستدعي دالة الـ API التي تقبل 6 وسائط
       success = await _apiService.updateMyProduct(token, productId, name, price, salePrice, imageFile);
       if (success) {
         await fetchProducts(token);
@@ -3035,7 +3075,7 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final success = await provider.updateOpenStatus(token, newValue);
     if(success) {
-      scaffoldMessenger.showSnackBar(SnackBar(content: Text(newValue ? 'تم فتح  بنجاح.' : 'تم إغلاق  بنجاح.'), backgroundColor: Colors.green));
+      scaffoldMessenger.showSnackBar(SnackBar(content: Text(newValue ? 'تم فتح المطعم بنجاح.' : 'تم إغلاق المطعم بنجاح.'), backgroundColor: Colors.green));
     } else {
       scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الحالة.'), backgroundColor: Colors.red));
     }
@@ -3104,7 +3144,7 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
                       const Divider(),
                       SwitchListTile(
                         title: Text(
-                          provider.isRestaurantOpen ? ' متاح لاستقبال الطلبات' : ' غير متاح حالياً',
+                          provider.isRestaurantOpen ? 'المطعم متاح لاستقبال الطلبات' : 'المطعم غير متاح حالياً',
                           style: TextStyle(fontWeight: FontWeight.bold, color: provider.isRestaurantOpen ? Colors.green : Colors.red),
                         ),
                         value: provider.isRestaurantOpen,
@@ -3113,7 +3153,7 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
                         activeColor: Colors.green,
                       ),
                       const SizedBox(height: 10),
-                      Text('عند إغلاق هذا الخيار، سيظهر للزبون " غير متوفر حالياً" وستختفي المنتجات.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                      Text('عند إغلاق هذا الخيار، سيظهر للزبون "المطعم غير متوفر حالياً" وستختفي المنتجات.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                     ],
                   ),
                 ),
@@ -3164,7 +3204,6 @@ class AuthWrapper extends StatelessWidget {
     return const StoreLocationCheckWrapper();
   }
 }
-
 
 class StoreLocationCheckWrapper extends StatelessWidget {
   const StoreLocationCheckWrapper({super.key});
@@ -3382,7 +3421,6 @@ class MiswakStoreHomeScreen extends StatefulWidget {
 class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
   final TextEditingController _searchController = TextEditingController();
 
-  // صور البانر الإعلاني
   final List<String> bannerImages = [
     'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
     'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
@@ -3399,20 +3437,29 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
   }
 
+  // ✅ الدالة المعدلة للتحديث التلقائي المزدوج
   Future<void> _loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
 
-    // ✅ قراءة المفاتيح الخاصة بالمسواك (التي حفظناها في SelectLocationScreen)
-    _selectedAreaId = prefs.getInt('miswak_area_id'); // <-- تعديل المفتاح
-    _selectedAreaName = prefs.getString('miswak_area_name'); // <-- تعديل المفتاح
+    _selectedAreaId = prefs.getInt('miswak_area_id');
+    _selectedAreaName = prefs.getString('miswak_area_name');
 
-    // جلب بيانات الصفحة الرئيسية بناءً على المنطقة باستخدام StoreCustomerProvider
+    setState(() {}); // تحديث لعرض الاسم
+
     if (_selectedAreaId != null) {
-      Provider.of<StoreCustomerProvider>(context, listen: false)
-          .fetchStoreHomeData(_selectedAreaId!, isRefresh: false);
+      final provider = Provider.of<StoreCustomerProvider>(context, listen: false);
+
+      // التحديث الأول
+      await provider.fetchStoreHomeData(_selectedAreaId!, isRefresh: false);
+
+      // انتظار نصف ثانية ثم التحديث مرة أخرى لضمان حساب المسافات
+      if (mounted) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        // فرض إعادة رسم الواجهة
+        setState(() {});
+      }
     }
-    setState(() {});
   }
 
   @override
@@ -3429,23 +3476,19 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
     }
   }
 
-  // --- 🚀 بناء الواجهة ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: InkWell(
           onTap: () async {
-            // فتح شاشة اختيار المنطقة (وإجبار الاختيار في حال الرغبة)
             final result = await Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const SelectLocationScreen(isCancellable: true)));
 
-            // عند العودة، نعيد قراءة البيانات إذا تم تغيير المنطقة
-            // (SelectLocationScreen ستقوم بحفظ البيانات في الذاكرة)
-            if (result == true || true) { // true لضمان التحديث دائماً عند العودة
+            if (result == true || true) {
               final prefs = await SharedPreferences.getInstance();
-              _selectedAreaId = prefs.getInt('miswak_area_id'); // ✅ مفتاح المسواك
-              _selectedAreaName = prefs.getString('miswak_area_name'); // ✅ مفتاح المسواك
+              _selectedAreaId = prefs.getInt('miswak_area_id');
+              _selectedAreaName = prefs.getString('miswak_area_name');
 
               setState(() {});
 
@@ -3462,12 +3505,9 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
           ]),
         ),
         centerTitle: true,
-
-        // ✨✨✨ المنطقة الذكية للأزرار ✨✨✨
         actions: [
           Consumer<StoreAuthProvider>(
             builder: (context, auth, child) {
-              // الحالة 1: المستخدم غير مسجل دخول (زائر)
               if (!auth.isLoggedIn) {
                 return IconButton(
                   icon: const Icon(Icons.store, color: Colors.teal),
@@ -3477,7 +3517,6 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
                   ),
                 );
               }
-              // الحالة 2: مسجل دخول بصفة مدير (عرض لوحة التحكم)
               else {
                 return IconButton(
                   icon: const Icon(Icons.dashboard, color: Colors.teal, size: 28),
@@ -3491,9 +3530,6 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
           ),
         ],
       ),
-
-      // --- جسم الصفحة (عرض المتاجر/المسواك للجميع) ---
-      // ✅ تم استخدام StoreCustomerProvider بدلاً من CustomerProvider
       body: Consumer<StoreCustomerProvider>(
         builder: (context, provider, child) {
           if (_selectedAreaId == null) {
@@ -3507,8 +3543,6 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
                     isRefresh: true));
           }
 
-          // تجهيز البيانات (من stores بدلاً من restaurants)
-          // استخدام المفتاح 'stores' الذي وضعناه في StoreCustomerProvider
           final stores = (provider.homeData['stores'] as List<dynamic>? ?? []).cast<Restaurant>();
 
           return RefreshIndicator(
@@ -3532,17 +3566,19 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
 
                 Expanded(
                   child: () {
-                    // حالة التحميل الأولي
                     if (provider.isLoading && stores.isEmpty) {
                       return _buildRestaurantGridShimmer();
                     }
-                    // حالة لا توجد بيانات
                     if (!provider.isLoading && stores.isEmpty) {
-                      return const Center(
-                          child: Text("لا توجد مسواك متاحة حالياً في هذه المنطقة"));
+                      // تم إضافة RefreshIndicator هنا أيضاً للسماح بالسحب حتى لو فارغة
+                      return Stack(
+                        children: [
+                          ListView(), // يسمح بعملية السحب
+                          const Center(child: Text("لا توجد مسواك متاحة حالياً في هذه المنطقة")),
+                        ],
+                      );
                     }
 
-                    // عرض المتاجر
                     return GridView.builder(
                       padding: const EdgeInsets.all(8),
                       gridDelegate:
@@ -3567,8 +3603,6 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
       ),
     );
   }
-
-  // --- الدوال المساعدة (كما هي) ---
 
   Widget _buildBannerSlider() {
     return Container(
@@ -4633,7 +4667,6 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
   void initState() {
     super.initState();
     _loadOrders();
-    // Listen for notifications to refresh the list
     Provider.of<NotificationProvider>(context, listen: false).addListener(_refreshOrders);
   }
 
@@ -4644,7 +4677,6 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
   }
 
   void _refreshOrders() {
-    // This will trigger the FutureBuilder to re-fetch
     setState(() {
       _loadOrders();
     });
@@ -4661,19 +4693,48 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
         child: FutureBuilder<List<Order>>(
           future: _ordersFuture,
           builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-            if (snapshot.hasError) return Center(child: Text('حدث خطأ: ${snapshot.error}'));
-            if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.history_toggle_off, size: 80, color: Colors.grey), SizedBox(height: 20), Text('لا يوجد لديك طلبات سابقة', style: TextStyle(fontSize: 18, color: Colors.grey))]));
+            // 1. حالة الانتظار
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
+            // 2. حالة الخطأ
+            if (snapshot.hasError) {
+              return Center(child: Text('حدث خطأ: ${snapshot.error}'));
+            }
+
+            // 3. حالة البيانات الفارغة (حل الشاشة البيضاء)
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              // استخدام ListView للسماح بالسحب للتحديث
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                  const Icon(Icons.history_toggle_off, size: 80, color: Colors.grey),
+                  const SizedBox(height: 20),
+                  const Center(
+                      child: Text(
+                          'لا يوجد لديك طلبات سابقة',
+                          style: TextStyle(fontSize: 18, color: Colors.grey)
+                      )
+                  )
+                ],
+              );
+            }
+
+            // 4. عرض القائمة
             final orders = snapshot.data!;
-            return ListView.builder(padding: const EdgeInsets.all(8), itemCount: orders.length, itemBuilder: (context, index) => OrderHistoryCard(order: orders[index]));
+            return ListView.builder(
+                padding: const EdgeInsets.all(8),
+                itemCount: orders.length,
+                itemBuilder: (context, index) => OrderHistoryCard(order: orders[index])
+            );
           },
         ),
       ),
     );
   }
 }
-
 class StoreLoginScreen extends StatefulWidget {
   const StoreLoginScreen({super.key});
 
@@ -4931,7 +4992,8 @@ class InAppMapScreen extends StatelessWidget {
             urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
 
             // 🔥 تفعيل الكاش (هام جداً لعدم إعادة تحميل الصور)
-            tileProvider: MapboxCachedTileProvider(),
+            // استبدل السطر المسبب للمشكلة بهذا:
+            tileProvider: NetworkTileProvider(),
 
             additionalOptions: const {
               'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
@@ -5223,9 +5285,12 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
   }
 }
 
+
 // =======================================================================
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================
+// استبدل كلاس ProductManagementTab بهذا الكود
+
 class ProductManagementTab extends StatefulWidget {
   const ProductManagementTab({super.key});
 
@@ -5243,7 +5308,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
   }
 
   void _navigateToEditScreen(FoodItem product) async {
-    // (context) هنا هو سياق شاشة الإدارة
     final productProvider = Provider.of<RestaurantProductsProvider>(context, listen: false);
     final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
 
@@ -5252,7 +5316,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
       MaterialPageRoute(
         builder: (_) => EditProductScreen(
           product: product,
-          // تمرير الـ Providers إلى الشاشة التالية
           productProvider: productProvider,
           authProvider: authProvider,
         ),
@@ -5263,7 +5326,28 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("تم تحديث المنتج بنجاح"), backgroundColor: Colors.green),
       );
-      // (لا نحتاج لعمل fetch هنا لأن الـ provider سيقوم بذلك)
+    }
+  }
+
+  // دالة الانتقال لشاشة الإضافة
+  void _navigateToAddScreen() async {
+    final productProvider = Provider.of<RestaurantProductsProvider>(context, listen: false);
+    final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
+
+    final bool? result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddProductScreen( // شاشة جديدة سننشئها بالأسفل
+          productProvider: productProvider,
+          authProvider: authProvider,
+        ),
+      ),
+    );
+
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("تم إضافة المنتج بنجاح"), backgroundColor: Colors.green),
+      );
     }
   }
 
@@ -5274,15 +5358,23 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     return Consumer<RestaurantProductsProvider>(
       builder: (context, provider, child) {
         return Scaffold(
+          // ✅ تحديد موقع الزر العائم ليكون في اليسار
+          floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
+
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: _navigateToAddScreen,
+            label: const Text("إضافة منتج"),
+            icon: const Icon(Icons.add),
+            backgroundColor: Theme.of(context).primaryColor,
+            foregroundColor: Colors.white,
+          ),
           appBar: AppBar(
-            // شريط البحث
             title: TextField(
               controller: _searchController,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 hintText: 'ابحث عن منتج...',
-                prefixIcon: const Icon(Icons.search),
+                prefixIcon: Icon(Icons.search),
                 border: InputBorder.none,
-                filled: false,
               ),
               onChanged: (query) => provider.search(query),
             ),
@@ -5301,44 +5393,51 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
                 return NetworkErrorWidget(message: provider.errorMessage!, onRetry: () => provider.fetchProducts(auth.token));
               }
               if (provider.products.isEmpty) {
-                return const Center(child: Text("لم يتم العثور على منتجات لهذا المطعم."));
+                return const Center(child: Text("لم يتم العثور على منتجات. أضف منتجك الأول!"));
               }
 
               return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80), // مسافة للزر العائم
                 itemCount: provider.products.length,
                 itemBuilder: (context, index) {
                   final product = provider.products[index];
-                  return ListTile(
-                    leading: CachedNetworkImage(
-                      imageUrl: product.imageUrl,
-                      width: 50,
-                      height: 50,
-                      fit: BoxFit.cover,
-                      errorWidget: (c, u, e) => const Icon(Icons.fastfood),
+                  return Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    child: ListTile(
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: CachedNetworkImage(
+                          imageUrl: product.imageUrl,
+                          width: 50,
+                          height: 50,
+                          fit: BoxFit.cover,
+                          errorWidget: (c, u, e) => Container(color: Colors.grey, child: const Icon(Icons.fastfood)),
+                        ),
+                      ),
+                      title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text("السعر: ${product.formattedPrice}", style: TextStyle(color: product.salePrice != null ? Colors.red : Colors.black)),
+                      trailing: const Icon(Icons.edit_outlined, color: Colors.blue),
+                      onTap: () => _navigateToEditScreen(product),
                     ),
-                    title: Text(product.name),
-                    subtitle: Text("السعر: ${product.formattedPrice}", style: TextStyle(color: product.salePrice != null ? Colors.red : Colors.black)),
-                    trailing: const Icon(Icons.edit_outlined),
-                    onTap: () => _navigateToEditScreen(product),
                   );
                 },
               );
             }(),
           ),
-          // (يمكنك إضافة زر لإضافة منتج جديد هنا لاحقاً)
-          // floatingActionButton: FloatingActionButton(
-          //   onPressed: () { /* _navigateToAddScreen() */ },
-          //   child: Icon(Icons.add),
-          // ),
         );
       },
     );
   }
 }
 
+
+
+
 // =======================================================================
 // --- ✨ شاشة جديدة: تعديل المنتج ---
 // =======================================================================
+// استبدل كلاس EditProductScreen بهذا الكود
+
 class EditProductScreen extends StatefulWidget {
   final FoodItem product;
   final RestaurantProductsProvider productProvider;
@@ -5360,13 +5459,15 @@ class _EditProductScreenState extends State<EditProductScreen> {
   late TextEditingController _nameController;
   late TextEditingController _priceController;
   late TextEditingController _salePriceController;
+  File? _selectedImage; // لتخزين الصورة الجديدة
   bool _isLoading = false;
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.product.name);
-    _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0)); // السعر بدون كسور
+    _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0));
     _salePriceController = TextEditingController(text: widget.product.salePrice?.toStringAsFixed(0) ?? '');
   }
 
@@ -5378,26 +5479,196 @@ class _EditProductScreenState extends State<EditProductScreen> {
     super.dispose();
   }
 
+  // دالة اختيار الصورة
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImage = File(pickedFile.path);
+      });
+    }
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
+    // نمرر الصورة الجديدة (_selectedImage) للدالة كمتغير مسمى
     final success = await widget.productProvider.updateProduct(
       widget.authProvider.token!,
       widget.product.id,
       _nameController.text,
       _priceController.text,
       _salePriceController.text,
+      imageFile: _selectedImage, // ✅✅✅ التصحيح هنا: أضفنا imageFile:
     );
 
     if (mounted) {
       setState(() => _isLoading = false);
       if (success) {
-        Navigator.pop(context, true); // إرجاع "true" لإعلام الشاشة السابقة بالنجاح
+        Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(widget.productProvider.errorMessage ?? "فشل التحديث"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("تعديل: ${widget.product.name}")),
+      body: Stack(
+        children: [
+          Form(
+            key: _formKey,
+            child: ListView(
+              padding: const EdgeInsets.all(16.0),
+              children: [
+                // منطقة الصورة
+                GestureDetector(
+                  onTap: _pickImage,
+                  child: Center(
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(15),
+                          child: _selectedImage != null
+                              ? Image.file(_selectedImage!, height: 200, width: double.infinity, fit: BoxFit.cover)
+                              : CachedNetworkImage(
+                            imageUrl: widget.product.imageUrl,
+                            height: 200,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorWidget: (c, u, e) => Container(color: Colors.grey[300], child: const Icon(Icons.fastfood, size: 80)),
+                          ),
+                        ),
+                        Container(
+                          margin: const EdgeInsets.all(10),
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                          child: const Icon(Icons.camera_alt, color: Colors.blue),
+                        )
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text("اضغط على الصورة لتغييرها", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                const SizedBox(height: 20),
+
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'اسم المنتج', border: OutlineInputBorder()),
+                  validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _priceController,
+                  decoration: const InputDecoration(labelText: 'السعر العادي (د.ع)', border: OutlineInputBorder()),
+                  keyboardType: TextInputType.number,
+                  validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _salePriceController,
+                  decoration: const InputDecoration(labelText: 'سعر الخصم (اختياري)', border: OutlineInputBorder()),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 30),
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: Theme.of(context).primaryColor,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                  ),
+                  child: const Text('حفظ التعديلات'),
+                ),
+              ],
+            ),
+          ),
+          if (_isLoading)
+            Container(color: Colors.black.withOpacity(0.3), child: const Center(child: CircularProgressIndicator())),
+        ],
+      ),
+    );
+  }
+}
+// أضف هذا الكلاس الجديد في ملف re.dart
+
+class AddProductScreen extends StatefulWidget {
+  final RestaurantProductsProvider productProvider;
+  final StoreAuthProvider authProvider;
+
+  const AddProductScreen({
+    super.key,
+    required this.productProvider,
+    required this.authProvider,
+  });
+
+  @override
+  State<AddProductScreen> createState() => _AddProductScreenState();
+}
+
+class _AddProductScreenState extends State<AddProductScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _salePriceController = TextEditingController();
+  final _descController = TextEditingController();
+  File? _selectedImage;
+  bool _isLoading = false;
+  final ImagePicker _picker = ImagePicker();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _priceController.dispose();
+    _salePriceController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImage = File(pickedFile.path);
+      });
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    // يفضل أن تكون الصورة إلزامية عند الإنشاء
+    if (_selectedImage == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء اختيار صورة للمنتج")));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    final success = await widget.productProvider.addProduct(
+      widget.authProvider.token!,
+      _nameController.text,
+      _priceController.text,
+      _salePriceController.text.isEmpty ? null : _salePriceController.text,
+      _descController.text,
+      _selectedImage,
+    );
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+      if (success) {
+        Navigator.pop(context, true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.productProvider.errorMessage ?? "فشل إضافة المنتج"), backgroundColor: Colors.red),
         );
       }
     }
@@ -5406,9 +5677,7 @@ class _EditProductScreenState extends State<EditProductScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text("تعديل: ${widget.product.name}"),
-      ),
+      appBar: AppBar(title: const Text("إضافة منتج جديد")),
       body: Stack(
         children: [
           Form(
@@ -5416,63 +5685,98 @@ class _EditProductScreenState extends State<EditProductScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16.0),
               children: [
-                CachedNetworkImage(
-                  imageUrl: widget.product.imageUrl,
-                  height: 200,
-                  fit: BoxFit.cover,
-                  errorWidget: (c, u, e) => const Icon(Icons.fastfood, size: 100),
+                // اختيار الصورة
+                GestureDetector(
+                  onTap: _pickImage,
+                  child: Container(
+                    height: 200,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(color: Colors.grey.shade400),
+                    ),
+                    child: _selectedImage != null
+                        ? ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: Image.file(_selectedImage!, fit: BoxFit.cover),
+                    )
+                        : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.add_a_photo, size: 50, color: Colors.grey),
+                        SizedBox(height: 10),
+                        Text("اضغط لإضافة صورة", style: TextStyle(color: Colors.grey)),
+                      ],
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 20),
+
                 TextFormField(
                   controller: _nameController,
-                  decoration: const InputDecoration(labelText: 'اسم المنتج'),
+                  decoration: const InputDecoration(labelText: 'اسم المنتج', border: OutlineInputBorder()),
                   validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
                 ),
                 const SizedBox(height: 16),
-                TextFormField(
-                  controller: _priceController,
-                  decoration: const InputDecoration(labelText: 'السعر العادي (د.ع)'),
-                  keyboardType: TextInputType.number,
-                  validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _priceController,
+                        decoration: const InputDecoration(labelText: 'السعر (د.ع)', border: OutlineInputBorder()),
+                        keyboardType: TextInputType.number,
+                        validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _salePriceController,
+                        decoration: const InputDecoration(labelText: 'سعر الخصم (اختياري)', border: OutlineInputBorder()),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
+
                 TextFormField(
-                  controller: _salePriceController,
-                  decoration: const InputDecoration(labelText: 'سعر الخصم (د.ع) - (اتركه فارغاً لإلغاء الخصم)'),
-                  keyboardType: TextInputType.number,
+                  controller: _descController,
+                  decoration: const InputDecoration(labelText: 'وصف المنتج', border: OutlineInputBorder()),
+                  maxLines: 3,
                 ),
                 const SizedBox(height: 30),
+
                 ElevatedButton(
                   onPressed: _isLoading ? null : _submit,
                   style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      textStyle: const TextStyle(fontSize: 18, fontFamily: 'Tajawal', fontWeight: FontWeight.bold)
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
                   ),
-                  child: const Text('حفظ التعديلات'),
+                  child: const Text('إضافة المنتج'),
                 ),
               ],
             ),
           ),
           if (_isLoading)
-            Container(
-              color: Colors.black.withOpacity(0.3),
-              child: const Center(child: CircularProgressIndicator()),
-            ),
+            Container(color: Colors.black.withOpacity(0.3), child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
-}class OrdersListScreen extends StatefulWidget {
+}
+
+class OrdersListScreen extends StatefulWidget {
   final String status;
   const OrdersListScreen({super.key, required this.status});
   @override
   State<OrdersListScreen> createState() => _OrdersListScreenState();
 }
 
-// ملاحظة: تأكد من وجود الـ imports الضرورية في أعلى الملف
-// import 'package:flutter/material.dart';
-// import 'package:provider/provider.dart';
-// (بالإضافة إلى imports الموديلات والـ Widgets الأخرى)
 
 class _OrdersListScreenState extends State<OrdersListScreen> {
   @override
@@ -5535,8 +5839,6 @@ class RatingsDashboardScreen extends StatefulWidget {
   @override
   State<RatingsDashboardScreen> createState() => _RatingsDashboardScreenState();
 }
-
-
 
 
 
@@ -5978,17 +6280,19 @@ class _StoreAuthWrapperState extends State<StoreAuthWrapper> {
   }
 }
 
-// غلاف فحص الموقع للمسواك
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
+
     return Consumer<DashboardProvider>(
         builder: (context, dashboard, child) {
+          // 1. التحميل
           if (dashboard.isLoading && dashboard.ratingsDashboard == null) {
             return const Center(child: CircularProgressIndicator());
           }
 
+          // 2. حالة البيانات فارغة (NULL) -> حل الشاشة البيضاء
           if (dashboard.ratingsDashboard == null) {
             return Center(
               child: RefreshIndicator(
@@ -5997,7 +6301,11 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
                   physics: const AlwaysScrollableScrollPhysics(),
                   children: [
                     SizedBox(height: MediaQuery.of(context).size.height * 0.3),
-                    const Text("لا توجد بيانات تقييم.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                    Icon(Icons.star_border, size: 80, color: Colors.grey.shade300),
+                    const SizedBox(height: 20),
+                    const Text("لا توجد بيانات تقييم حتى الآن.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, fontSize: 18)),
+                    const SizedBox(height: 20),
+                    Center(child: ElevatedButton(onPressed: () => dashboard.fetchDashboardData(authProvider.token), child: const Text("تحديث البيانات")))
                   ],
                 ),
               ),
@@ -6005,6 +6313,8 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
           }
 
           final data = dashboard.ratingsDashboard!;
+
+          // 3. عرض البيانات
           return RefreshIndicator(
             onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
             child: ListView(
@@ -6015,8 +6325,10 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
                 const SizedBox(height: 24),
                 const Text("آخر التقييمات", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 10),
-                if (data.recentReviews.isEmpty) const Center(child: Padding(padding: const EdgeInsets.all(20.0), child: Text("لا توجد تقييمات حديثة.", style: TextStyle(color: Colors.grey))))
-                else ...data.recentReviews.map((review) => ReviewCard(review: review)),
+                if (data.recentReviews.isEmpty)
+                  const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text("لا توجد تعليقات مكتوبة.", style: TextStyle(color: Colors.grey))))
+                else
+                  ...data.recentReviews.map((review) => ReviewCard(review: review)),
               ],
             ),
           );
@@ -6024,6 +6336,7 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
     );
   }
 
+  // (هذه الدالة تبقى كما هي، فقط تأكد أنها موجودة داخل الكلاس)
   Widget _buildRatingsSummaryCard(RestaurantRatingsDashboard data) {
     return Card(
       elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
