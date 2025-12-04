@@ -40,6 +40,17 @@ const String CONSUMER_SECRET = 'cs_b2de9b284f6245c8297caaf37976d899d6789ab2';
 
 const Duration API_TIMEOUT = Duration(seconds: 30);
 
+
+class AppConstants {
+
+  // ✨ مفاتيح الكاش الخاصة بالمسواك
+  static const String CACHE_KEY_MISWAK_HOME_PREFIX = 'cache_miswak_home_area_';
+  static const String CACHE_KEY_MISWAK_MENU_PREFIX = 'cache_miswak_products_store_';
+  static const String CACHE_TIMESTAMP_MISWAK_PREFIX = 'cache_time_miswak_';
+}
+
+
+
 // =======================================================================
 // --- معالج رسائل الخلفية ---
 // =======================================================================
@@ -149,93 +160,237 @@ class StoreAuthProvider with ChangeNotifier {
     }
     notifyListeners();
   }
-}class  StoreCustomerProvider with ChangeNotifier {
+}
+class StoreCustomerProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
+  // المتغيرات
   Map<String, List<dynamic>> _homeData = {};
   List<Restaurant> _allStores = [];
   Map<int, List<FoodItem>> _storeItems = {};
 
-  bool _isLoading = false;
-  bool _hasError = false;
   int _lastLoadedAreaId = -1;
+  bool _isLoadingHome = false;
+  bool _isLoadingMenu = false;
+  bool _hasError = false;
 
-  // Getters الأساسية
+  // 🔥 متغيرات الكاش
+  DateTime? _lastHomeFetchTime;
+  DateTime? _lastProductsFetchTime;
+
+  // --- Getters ---
   Map<String, List<dynamic>> get homeData => _homeData;
   List<Restaurant> get allStores => _allStores;
   Map<int, List<FoodItem>> get storeItems => _storeItems;
-  bool get isLoading => _isLoading;
+
+  bool get isLoading => _isLoadingHome;
+  bool get isLoadingRestaurants => _isLoadingHome;
+  bool get isLoadingMenu => _isLoadingMenu;
   bool get hasError => _hasError;
 
-  // ✅ Getters التوافقية (لحل الأخطاء)
   List<Restaurant> get allRestaurants => _allStores;
-  Map<int, List<FoodItem>> get menuItems => _storeItems; // ✅ هذا يحل مشكلة menuItems
-  bool get isLoadingRestaurants => _isLoading;
-  bool get isLoadingMenu => _isLoading;
+  Map<int, List<FoodItem>> get menuItems => _storeItems;
 
+  // --- مسح البيانات ---
   void clearData() {
     _homeData = {};
     _allStores = [];
     _storeItems = {};
     _lastLoadedAreaId = -1;
+    _lastHomeFetchTime = null;
+    _lastProductsFetchTime = null;
     _hasError = false;
     notifyListeners();
   }
 
+  // ============================================================
+  // 1. جلب الرئيسية (Home) - [حل مشكلة Watermark/Loading]
+  // ============================================================
   Future<void> fetchStoreHomeData(int areaId, {bool isRefresh = false}) async {
-    if (_homeData.isNotEmpty && !isRefresh && _lastLoadedAreaId == areaId) return;
-
-    _isLoading = true;
-    _hasError = false;
-    notifyListeners();
     _lastLoadedAreaId = areaId;
+    _hasError = false;
+
+    // 1. الفحص الفوري للذاكرة (يمنع دائرة التحميل عند العودة)
+    if (!isRefresh && _homeData.isEmpty) {
+      await _loadHomeFromCache(areaId);
+      // إذا وجدنا بيانات في الكاش، أظهرها فوراً
+      if (_homeData.isNotEmpty) notifyListeners();
+    }
+
+    // 2. الكاش الصارم (يمنع طلبات الشبكة المتكررة)
+    if (!isRefresh && _homeData.isNotEmpty && await _isCacheValid('home_$areaId', minutes: 5)) {
+      print("✅ استخدام الكاش للمسواك (البيانات حديثة).");
+      return;
+    }
+
+    // 3. التحميل من الشبكة
+    _isLoadingHome = true;
+    notifyListeners();
 
     try {
-      final deliverableIds = await _apiService.getDeliverableRestaurantIds(areaId);
-      final stores = await _apiService.getAllRestaurants(areaId: areaId);
+      final results = await Future.wait([
+        _apiService.getRawDeliverableIds(areaId),
+        _apiService.getRawRestaurants(areaId),
+      ]);
 
-      for (var s in stores) {
+      final deliverableJson = results[0];
+      final storesJson = results[1];
+
+      _processAndSetHomeData(deliverableJson, storesJson);
+      await _saveHomeToCache(areaId, deliverableJson, storesJson);
+      _lastHomeFetchTime = DateTime.now();
+
+    } catch (e) {
+      print("⚠️ فشل تحديث المسواك من الشبكة: $e");
+      if (_homeData.isEmpty) _hasError = true;
+    } finally {
+      _isLoadingHome = false;
+      notifyListeners();
+    }
+  }
+
+  // ✅ الدالة الحاسمة [حل مشكلة Watermark]
+  void _processAndSetHomeData(String deliverableJson, String storesJson) {
+    try {
+      final deliverableList = json.decode(deliverableJson) as List;
+      final Set<int> deliverableIds = deliverableList.map<int>((item) => item['id']).toSet();
+
+      final storesList = json.decode(storesJson) as List;
+      List<Restaurant> parsedStores = storesList.map((json) => Restaurant.fromJson(json)).toList();
+
+      // 3. تطبيق حالة التوصيل على كل متجر
+      for (var s in parsedStores) {
         s.isDeliverable = deliverableIds.contains(s.id);
       }
 
-      _homeData['stores'] = stores;
-      _allStores = stores;
-      _homeData['restaurants'] = stores; // للتوافق
+      _allStores = parsedStores;
+      _homeData['stores'] = parsedStores;
+      _homeData['restaurants'] = parsedStores;
+    } catch (e) {
+      print("Error parsing and setting home data: $e");
+      // لا نرمي الخطأ لكي لا ينهار التطبيق، بل نعتبره فشل في الكاش
+    }
+  }
+
+  // ============================================================
+  // 2. جلب منتجات المتجر - مع التخزين الدائم
+  // ============================================================
+  Future<void> fetchMenuForRestaurant(int storeId, {bool isRefresh = false}) async {
+    _hasError = false;
+
+    // أ) التحميل من الكاش
+    if (!isRefresh && !_storeItems.containsKey(storeId)) {
+      await _loadMenuFromCache(storeId);
+    }
+
+    if (!_storeItems.containsKey(storeId)) {
+      _isLoadingMenu = true;
+      notifyListeners();
+    }
+
+    // ب) التحقق من الوقت (10 دقائق للمنتجات)
+    if (!isRefresh && _storeItems.containsKey(storeId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_MISWAK_PREFIX}menu_$storeId', minutes: 10)) {
+      print("✅ استخدام الكاش لمنتجات المسواك (البيانات حديثة)");
+      _isLoadingMenu = false;
+      notifyListeners();
+      return;
+    }
+
+    // ج) جلب من الشبكة
+    try {
+      final jsonStr = await _apiService.getRawMenu(storeId);
+
+      _processAndSetMenu(storeId, jsonStr);
+      await _saveMenuToCache(storeId, jsonStr);
 
     } catch (e) {
-      print("Error: $e");
-      _hasError = true;
+      print("⚠️ فشل تحديث منتجات المسواك: $e");
+      if (!_storeItems.containsKey(storeId)) {
+        _hasError = true;
+        _storeItems[storeId] = [];
+      }
     } finally {
-      _isLoading = false;
+      _isLoadingMenu = false;
       notifyListeners();
     }
   }
 
-  // دوال التوافق
-  Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) =>
-      fetchStoreHomeData(areaId, isRefresh: isRefresh);
-
-  // ✅ دالة معدلة لتقبل isRefresh
-  Future<void> fetchMenuForRestaurant(int id, {bool isRefresh = false}) async {
-    if (isRefresh) _storeItems.remove(id);
-    if (_storeItems.containsKey(id) && !isRefresh) return;
-
-    _isLoading = true;
-    notifyListeners();
+  void _processAndSetMenu(int storeId, String jsonStr) {
     try {
-      final items = await _apiService.getMenuForRestaurant(id);
-      // منطق بسيط لتحديد حالة الفتح (يمكن تحسينه)
-      final isOpen = _allStores.any((s) => s.id == id && s.isOpen);
-      for(var i in items) i.isDeliverable = isOpen;
+      final List<dynamic> decoded = json.decode(jsonStr);
+      List<FoodItem> items = decoded.map((json) => FoodItem.fromJson(json)).toList();
 
-      _storeItems[id] = items;
+      Restaurant? store = _allStores.firstWhere(
+              (s) => s.id == storeId,
+          orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '', autoCloseTime: '', latitude: 0, longitude: 0)
+      );
+
+      bool isAvailable = store.isDeliverable && store.isOpen;
+      for (var item in items) {
+        item.isDeliverable = isAvailable;
+      }
+
+      _storeItems[storeId] = items;
     } catch (e) {
-      print("Menu Error: $e");
-      _storeItems[id] = [];
-    } finally {
-      _isLoading = false;
-      notifyListeners();
+      print("Error parsing store items: $e");
+      throw Exception('Store Items parsing error');
     }
+  }
+
+  // ============================================================
+  // 3. دوال إدارة الكاش (Helper Methods)
+  // ============================================================
+  // 🔥🔥🔥 الحل لمشكلة Watermark (تطبيق الفلترة على الكاش المحمل) 🔥🔥🔥
+  Future<void> _loadHomeFromCache(int areaId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final idsJson = prefs.getString('${AppConstants.CACHE_KEY_MISWAK_HOME_PREFIX}${areaId}_ids');
+    final storesJson = prefs.getString('${AppConstants.CACHE_KEY_MISWAK_HOME_PREFIX}${areaId}_list');
+
+    if (idsJson != null && storesJson != null) {
+      try {
+        // ✅ استخدام دالة التنسيق لتطبيق فلترة المنطقة المتاحة
+        _processAndSetHomeData(idsJson, storesJson);
+        print("📂 تم تحميل المسواك من الذاكرة.");
+      } catch (e) {
+        print("Cache data corrupted: $e");
+      }
+    }
+  }
+
+  Future<void> _saveHomeToCache(int areaId, String idsJson, String storesJson) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${AppConstants.CACHE_KEY_MISWAK_HOME_PREFIX}${areaId}_ids', idsJson);
+    await prefs.setString('${AppConstants.CACHE_KEY_MISWAK_HOME_PREFIX}${areaId}_list', storesJson);
+    await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_MISWAK_PREFIX}home_$areaId', DateTime.now().millisecondsSinceEpoch);
+  }
+
+  Future<void> _loadMenuFromCache(int storeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString('${AppConstants.CACHE_KEY_MISWAK_MENU_PREFIX}$storeId');
+    if (jsonStr != null) {
+      try {
+        _processAndSetMenu(storeId, jsonStr);
+        notifyListeners();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _saveMenuToCache(int storeId, String jsonStr) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${AppConstants.CACHE_KEY_MISWAK_MENU_PREFIX}$storeId', jsonStr);
+    await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_MISWAK_PREFIX}menu_$storeId', DateTime.now().millisecondsSinceEpoch);
+  }
+
+  Future<bool> _isCacheValid(String key, {required int minutes}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastTime = prefs.getInt(key);
+    if (lastTime == null) return false;
+    final diff = DateTime.now().millisecondsSinceEpoch - lastTime;
+    return (diff / 1000 / 60) < minutes;
+  }
+
+  Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
+    await fetchStoreHomeData(areaId, isRefresh: isRefresh);
   }
 }
 class DashboardProvider with ChangeNotifier {
@@ -1358,11 +1513,129 @@ class ApiService {
   final String _authString = 'Basic ${base64Encode(utf8.encode('$CONSUMER_KEY:$CONSUMER_SECRET'))}';
   final CacheService _cacheService = CacheService();
 
+  // =================================================================
+  // 1. Helper Methods (المساعدات)
+  // =================================================================
 
+  // 🔥 دالة التنفيذ الذكي (Exponential Backoff)
+  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
+    int attempts = 0;
+    while (attempts < 3) {
+      try {
+        return await action().timeout(API_TIMEOUT);
+      } catch (e) {
+        attempts++;
+        String errorString = e.toString();
 
-// داخل كلاس ApiService
+        // 🛑 توقف فوراً في حالة الحظر
+        if (errorString.contains('403') || errorString.contains('429')) {
+          print("⛔ تم إيقاف المحاولات لتجنب الحظر: $errorString");
+          rethrow;
+        }
 
-  // دالة إضافة منتج جديد
+        if (attempts >= 3) rethrow;
+
+        // ⏳ انتظار تصاعدي
+        int delaySeconds = pow(2, attempts).toInt();
+        print("⚠️ فشل الطلب (محاولة $attempts)، انتظار $delaySeconds ثواني...");
+        await Future.delayed(Duration(seconds: delaySeconds));
+      }
+    }
+    throw Exception('Failed after multiple retries');
+  }
+
+  // =================================================================
+  // 2. Customer & Store Caching Methods (للتخزين الدائم)
+  // =================================================================
+  // هذه الدوال تعيد النص الخام (String) ليتم حفظه في الهاتف
+
+  // أ) جلب القائمة (مطاعم أو مسواك)
+  Future<String> getRawRestaurants(int areaId) async {
+    const fields = 'id,name,image,count,meta_data';
+    // per_page=100 لضمان جلب الكل وحفظه
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields&area_id=$areaId';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load raw restaurants');
+    });
+  }
+
+  // ب) جلب IDs المتاحة للتوصيل
+  Future<String> getRawDeliverableIds(int areaId) async {
+    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load raw deliverable IDs');
+    });
+  }
+
+  // ج) جلب المنيو/المنتجات
+  Future<String> getRawMenu(int parentId) async {
+    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products?category=$parentId&per_page=100&_fields=$fields';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load raw menu');
+    });
+  }
+
+  // =================================================================
+  // 3. General Getters (للاستخدام المباشر بدون كاش معقد)
+  // =================================================================
+
+  Future<List<Area>> getAreas() async {
+    const cacheKey = 'all_areas';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
+      if (response.statusCode == 200) {
+        await _cacheService.saveData(cacheKey, response.body);
+        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
+      }
+      throw Exception('Server error ${response.statusCode}');
+    });
+  }
+
+  Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
+    // نستخدم النسخة الخام ونحولها هنا للتوافق مع الأكواد القديمة
+    final jsonStr = await getRawRestaurants(areaId);
+    final data = json.decode(jsonStr) as List;
+    return data.map((json) => Restaurant.fromJson(json)).toList();
+  }
+
+  Future<Set<int>> getDeliverableRestaurantIds(int areaId) async {
+    final jsonStr = await getRawDeliverableIds(areaId);
+    final List<dynamic> data = json.decode(jsonStr);
+    return data.map<int>((item) => item['id'] as int).toSet();
+  }
+
+  Future<List<FoodItem>> getMenuForRestaurant(int categoryId) async {
+    final jsonStr = await getRawMenu(categoryId);
+    final data = json.decode(jsonStr) as List;
+    return data.map((json) => FoodItem.fromJson(json)).toList();
+  }
+
+  // البحث (لا يحتاج كاش دائم)
+  Future<List<FoodItem>> searchProducts({required String query}) async {
+    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products?search=$query&per_page=20&_fields=$fields';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) {
+        return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
+      }
+      throw Exception('Failed search');
+    });
+  }
+
+  // =================================================================
+  // 4. Manager / Owner Methods (دوال المدير)
+  // =================================================================
+
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -1372,21 +1645,20 @@ class ApiService {
       }
 
       final response = await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'), // تأكد من وجود هذا المسار في PHP
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({
           'name': name,
           'regular_price': price,
           'sale_price': salePrice,
           'description': description,
-          'image_base64': imageBase64, // إرسال الصورة
+          'image_base64': imageBase64,
         }),
       );
       return response.statusCode == 201 || response.statusCode == 200;
     });
   }
 
-  // تحديث دالة تعديل المنتج لتقبل الصورة
   Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -1403,209 +1675,66 @@ class ApiService {
           'name': name,
           'regular_price': price,
           'sale_price': salePrice,
-          'image_base64': imageBase64, // إرسال الصورة الجديدة إن وجدت
+          'image_base64': imageBase64,
         }),
       );
       return response.statusCode == 200;
     });
   }
-
-
-  Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
-    final url = '$BEYTEI_URL/wp-json/taxi/v2/delivery/available';
-
-    print("🚀 [DEBUG] جاري طلب البيانات من: $url");
-
-    return _executeWithRetry(() async {
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-      );
-
-      print("📡 [DEBUG] حالة الاتصال: ${response.statusCode}");
-      print("📦 [DEBUG] البيانات الواصلة: ${response.body}");
-
-      if (response.statusCode == 200) {
-        try {
-          final data = json.decode(response.body);
-
-          // احتمال 1: البيانات تأتي داخل حقل 'data'
-          var ordersList = data['orders'] ?? data['data'];
-
-          // احتمال 2: البيانات عبارة عن قائمة مباشرة []
-          if (data is List) {
-            ordersList = data;
-          }
-
-          if (ordersList != null && ordersList is List) {
-            return ordersList.map<UnifiedDeliveryOrder>((json) {
-              // طباعة كل عنصر للتأكد من سلامته قبل التحويل
-              // print("Testing Item: $json");
-              return UnifiedDeliveryOrder.fromJson(json);
-            }).toList();
-          }
-
-          print("⚠️ [DEBUG] لم يتم العثور على قائمة طلبات في الاستجابة.");
-          return [];
-
-        } catch (e) {
-          print("❌ [DEBUG] خطأ في تحويل البيانات (Parsing): $e");
-          throw Exception('خطأ في قراءة البيانات: $e');
-        }
-      } else {
-        print("❌ [DEBUG] السيرفر رفض الطلب. السبب: ${response.body}");
-        throw Exception('فشل الاتصال بالسيرفر (كود: ${response.statusCode})');
-      }
-    });
-  }
-
-
-  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
-    int attempts = 0;
-    while (attempts < 3) {
-      try {
-        return await action().timeout(API_TIMEOUT);
-      } catch (e) {
-        attempts++;
-        if (attempts >= 3) rethrow;
-        await Future.delayed(Duration(seconds: attempts * 2));
-      }
-    }
-    throw Exception('Failed after multiple retries');
-  }
-
-  Future<List<Area>> getAreas() async {
-    const cacheKey = 'all_areas';
-    return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
-      if (response.statusCode == 200) {
-        await _cacheService.saveData(cacheKey, response.body);
-        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
-      }
-      throw Exception('Server error ${response.statusCode}');
-    });
-  }
-
-
-
-  Future<bool> updateMyLocation(String token, String lat, String lng) async {
-    return _executeWithRetry(() async {
-      final response = await http.post(
-        // هذا هو المسار الجديد الذي أنشأناه في PHP
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-my-location'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json'
-        },
-        body: json.encode({
-          'lat': lat,
-          'lng': lng,
-        }),
-      );
-      // إذا نجح (200)، سيعود true
-      return response.statusCode == 200;
-    });
-  }
-// --- [ نهاية الإضافة ] ---
-
-
-
-
-
-  // ✨ --- [ تم تعديل هذه الدالة ] ---
-  Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
-    const fields = 'id,name,image,count,meta_data';
-    // ✨ [الإصلاح 1]: تغيير per_page=10 إلى 100 لجلب كل المطاعم وحالاتها
-    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&page=1&_fields=$fields&area_id=$areaId';
-    // ✨ تم تعديل مفتاح الكاش ليشمل المنطقة (page 1 ثابت)
-    final cacheKey = 'restaurants_area_${areaId}_page_1_limit_100';
-
-    return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
-      if (response.statusCode == 200) {
-        await _cacheService.saveData(cacheKey, response.body);
-        final data = json.decode(response.body) as List;
-        return data.map((json) => Restaurant.fromJson(json)).toList();
-      }
-      throw Exception('Server error ${response.statusCode}');
-    });
-  }
-  // ✨ --- [ نهاية التعديل ] ---
-  // ✨ --- [ دالة جديدة مضافة ] ---
-  Future<Restaurant> getRestaurantById(int restaurantId) async {
-    const fields = 'id,name,image,count,meta_data';
-    // هذا الرابط يجلب مطعم واحد فقط
-    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories/$restaurantId?_fields=$fields';
-
-    return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        // (نفترض أن المطعم الذي يُطلب عن طريق الرابط هو صالح للتوصيل)
-        final restaurant = Restaurant.fromJson(data);
-        restaurant.isDeliverable = true;
-        return restaurant;
-      }
-      throw Exception('Server error ${response.statusCode}');
-    });
-  }
-
-
 
   Future<List<FoodItem>> getMyRestaurantProducts(String token) async {
     return _executeWithRetry(() async {
-      // (يجب إنشاء هذا المسار في الواجهة الخلفية)
       final response = await http.get(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/my-products'),
         headers: {'Authorization': 'Bearer $token'},
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as List;
-        // نستخدم نفس مودل FoodItem
         return data.map((json) => FoodItem.fromJson(json)).toList();
       }
       throw Exception('Failed to load restaurant products');
     });
   }
 
-  // ✨ دالة لتحديث بيانات المنتج (للمدير)
-  Future<Map<String, dynamic>> getDeliveryFee({
-    required int restaurantId, // ✨ [تم التعديل] أصبح يستقبل رقم المطعم
-    required double customerLat,
-    required double customerLng,
-  }) async {
+  Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
     return _executeWithRetry(() async {
-      final response = await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-fee'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'restaurant_id': restaurantId, // ✨ [تم التعديل] إرسال الرقم
-          'customer_lat': customerLat,
-          'customer_lng': customerLng,
-        }),
-      );
+      final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
+      final response = await http.get(uri, headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'});
       if (response.statusCode == 200) {
-        return json.decode(response.body);
+        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
       }
-
-      // ✨ [تحسين] إظهار رسالة الخطأ القادمة من الخادم
-      try {
-        final errorBody = json.decode(response.body);
-        // هذا سيجلب الرسالة من الخادم (مثل: خطأ: الخادم لم يعثر على إحداثيات...)
-        throw Exception(errorBody['message'] ?? 'فشل حساب سعر التوصيل');
-      } catch (e) {
-        throw Exception('فشل حساب سعر التوصيل');
-      }
+      throw Exception('Failed to load orders');
     });
   }
-// ✨ إضافة دالة جلب إعدادات المطعم للمدير
+
+  Future<bool> updateOrderStatus(int orderId, String status) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token') ?? prefs.getString('store_jwt_token');
+    if (token == null) throw Exception('User not logged in');
+
+    final response = await _executeWithRetry(() => http.post(
+      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-order-status/$orderId'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: json.encode({'status': status}),
+    ));
+    return response.statusCode == 200;
+  }
+
+  Future<RestaurantRatingsDashboard> getDashboardRatings(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/dashboard-ratings'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) return RestaurantRatingsDashboard.fromJson(json.decode(response.body));
+      throw Exception('Failed to load dashboard ratings');
+    });
+  }
+
+  // إعدادات المطعم/المتجر
   Future<Map<String, dynamic>> getRestaurantSettings(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
-        // يجب إنشاء هذا المسار في الواجهة الخلفية!
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-settings'),
         headers: {'Authorization': 'Bearer $token'},
       );
@@ -1616,11 +1745,9 @@ class ApiService {
     });
   }
 
-// ✨ إضافة دالة تحديث حالة الفتح اليدوية للمدير
   Future<bool> updateRestaurantStatus(String token, bool isOpen) async {
     return _executeWithRetry(() async {
       final response = await http.post(
-        // يجب إنشاء هذا المسار في الواجهة الخلفية!
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-status'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({'is_open': isOpen ? 1 : 0}),
@@ -1629,11 +1756,9 @@ class ApiService {
     });
   }
 
-// ✨ إضافة دالة تحديث أوقات الفتح والإغلاق التلقائي للمدير
   Future<bool> updateRestaurantAutoTimes(String token, String openTime, String closeTime) async {
     return _executeWithRetry(() async {
       final response = await http.post(
-        // يجب إنشاء هذا المسار في الواجهة الخلفية!
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-auto-times'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({'open_time': openTime, 'close_time': closeTime}),
@@ -1642,118 +1767,164 @@ class ApiService {
     });
   }
 
-// ... بقية دوال ApiService
-// (الصق هذا بدلاً من دالة getDeliverableRestaurantIds القديمة)
-
-  Future<Set<int>> getDeliverableRestaurantIds(int areaId) async {
-    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
-
+  Future<bool> updateMyLocation(String token, String lat, String lng) async {
     return _executeWithRetry(() async {
-      // طباعة الرابط للتأكد منه
-      print("Testing URL: $url");
-
-      final response = await http.get(Uri.parse(url));
-
-      if (response.statusCode == 200) {
-        // طباعة الاستجابة للتحقق
-        print("Success Response: ${response.body}");
-        final List<dynamic> data = json.decode(response.body);
-        return data.map<int>((item) => item['id'] as int).toSet();
-      }
-
-      // 🔥 هذا السطر سيخبرنا بالسبب الحقيقي في التيرمينال
-      print("❌ Server Error: ${response.statusCode} - ${response.body}");
-
-      throw Exception('Failed to fetch restaurants. Status: ${response.statusCode}');
-    });
-  }  Future<List<FoodItem>> _getProducts(String params, String cacheKey) async {
-    return _executeWithRetry(() async {
-      // ✨ [الإصلاح]: أضفنا meta_data هنا لنتمكن من قراءة ID المطعم الأب
-      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
-
-      // ✨ [الإصلاح]: حذفنا areaParam من الرابط
-      final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields';
-
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
-      if (response.statusCode == 200) {
-        await _cacheService.saveData(cacheKey, response.body);
-        return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
-      }
-      throw Exception('Failed to fetch products');
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-my-location'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({'lat': lat, 'lng': lng}),
+      );
+      return response.statusCode == 200;
     });
   }
-  // (استبدل الدالة القديمة بهذه)
-  Future<List<FoodItem>> getOnSaleItems() =>
-      _getProducts('on_sale=true&per_page=20', 'onsale_items');
 
-  // (استبدل الدالة القديمة بهذه)
-  Future<List<FoodItem>> searchProducts({required String query}) =>
-      _getProducts('search=$query&per_page=20', 'search_$query');
-  // (استبدل الدالة القديمة بهذه)
-  Future<List<FoodItem>> getProductsByTag({required String tagName}) async {
+  Future<bool> testNotification() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token') ?? prefs.getString('store_jwt_token');
+    if (token == null) throw Exception('User not logged in');
+
+    final response = await _executeWithRetry(() => http.post(
+      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/test-notification'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+    ));
+    return response.statusCode == 200;
+  }
+
+  // =================================================================
+  // 5. Delivery & Order Submission (التوصيل والطلبات)
+  // =================================================================
+
+  Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
+    final url = '$BEYTEI_URL/wp-json/taxi/v2/delivery/available';
     return _executeWithRetry(() async {
-      final tagsResponse = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wc/v3/products/tags?search=$tagName&_fields=id'), headers: {'Authorization': _authString});
-      if (tagsResponse.statusCode != 200) throw Exception('Failed to find tag');
-      final tags = json.decode(tagsResponse.body);
-      if (tags.isEmpty) return [];
-      final tagId = tags[0]['id'];
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      );
 
-      // ✨ [الإصلاح]: حذفنا areaId من هنا
-      return _getProducts('tag=$tagId&per_page=10', 'tag_$tagId');
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        var ordersList = data['orders'] ?? data['data'];
+        if (data is List) ordersList = data;
+
+        if (ordersList != null && ordersList is List) {
+          return ordersList.map<UnifiedDeliveryOrder>((json) => UnifiedDeliveryOrder.fromJson(json)).toList();
+        }
+        return [];
+      }
+      throw Exception('Failed to load delivery orders');
     });
   }
-  // ✨ --- [ تم تعديل هذه الدالة ] ---
-  // تم تغيير per_page=10 إلى per_page=100 لجلب كل منتجات المنيو
-// (استبدل الدالة القديمة بهذه)
-  Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
-      _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
+
+  Future<DeliveryConfig> getDeliveryConfig() async {
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-config'));
+      if (response.statusCode == 200) {
+        return DeliveryConfig.fromJson(json.decode(response.body));
+      }
+      throw Exception('Failed to load delivery config');
+    });
+  }
+
+  Future<Map<String, dynamic>> getDeliveryFee({
+    required int restaurantId,
+    required double customerLat,
+    required double customerLng,
+  }) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-fee'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'restaurant_id': restaurantId,
+          'customer_lat': customerLat,
+          'customer_lng': customerLng,
+        }),
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      try {
+        final errorBody = json.decode(response.body);
+        throw Exception(errorBody['message'] ?? 'فشل حساب سعر التوصيل');
+      } catch (e) {
+        throw Exception('فشل حساب سعر التوصيل');
+      }
+    });
+  }
+
+  Future<Map<String, dynamic>> createUnifiedDeliveryRequest({
+    required String token,
+    required String sourceType,
+    required String pickupName,
+    required double pickupLat,
+    required double pickupLng,
+    required String destinationAddress,
+    double? destinationLat,
+    double? destinationLng,
+    required String deliveryFee,
+    required String orderDescription,
+    required String endCustomerPhone,
+    String? sourceOrderId,
+  }) async {
+    return await _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/create'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'source_type': sourceType,
+          'source_order_id': sourceOrderId,
+          'pickup_location_name': pickupName,
+          'pickup_lat': pickupLat.toString(),
+          'pickup_lng': pickupLng.toString(),
+          'destination_address': destinationAddress,
+          'destination_lat': destinationLat?.toString() ?? "0",
+          'destination_lng': destinationLng?.toString() ?? "0",
+          'delivery_fee': deliveryFee,
+          'order_description': orderDescription,
+          'end_customer_phone': endCustomerPhone,
+        }),
+      );
+
+      final responseBody = json.decode(response.body);
+      if (response.statusCode == 201 && responseBody['success'] == true) {
+        return responseBody;
+      }
+      throw Exception(responseBody['message'] ?? 'فشل إرسال طلب التوصيل.');
+    });
+  }
+
   Future<Order?> submitOrder({
     required String name, required String phone, required String address,
     required List<FoodItem> cartItems, String? couponCode,
     geolocator.Position? position,
-    double? deliveryFee, // <-- ✨ الإضافة الجديدة هنا
+    double? deliveryFee,
   }) async {
-
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
-// <-- ✨ الإضافة الجديدة هنا: تجهيز سطر الشحن
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
-        ? [{
-      "method_id": "flat_rate",
-      "method_title": "توصيل",
-      "total": deliveryFee.toString()
-    }]
+        ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
-    // 1. جلب توكن FCM الحالي للزبون
+
     String? fcmToken = await FirebaseMessaging.instance.getToken();
 
-    // 2. بناء الـ bodyPayload مع بيانات التوكن + الإحداثيات
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod", "payment_method_title": "الدفع عند الاستلام",
       "billing": {"first_name": name, "last_name":".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001", "email": "customer@example.com"},
       "shipping": {"first_name": name, "last_name":".", "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001"},
       "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
       "coupon_lines": couponLines,
-      "shipping_lines": shippingLines, // <-- ✨ الإضافة الجديدة هنا
-      // ✨ إرسال التوكن + الإحداثيات (هذا هو التعديل)
+      "shipping_lines": shippingLines,
       "meta_data": [
-        if (fcmToken != null)
-          {"key": "_customer_fcm_token", "value": fcmToken},
-        // --- ✨ الإضافة الجديدة هنا ---
-        // (يجب أن يكون الـ Backend معداً لقراءة هذه الحقول)
-        if (position != null)
-          {"key": "_customer_destination_lat", "value": position.latitude.toString()},
-        if (position != null)
-          {"key": "_customer_destination_lng", "value": position.longitude.toString()}
-        // --- نهاية الإضافة ---
+        if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
+        if (position != null) {"key": "_customer_destination_lat", "value": position.latitude.toString()},
+        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()}
       ],
     };
-
-    final body = json.encode(bodyPayload);
 
     final response = await _executeWithRetry(() => http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
         headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
-        body: body
+        body: json.encode(bodyPayload)
     ));
 
     if (response.statusCode == 201) {
@@ -1763,29 +1934,6 @@ class ApiService {
     } else {
       throw Exception('Failed to submit order: ${response.body}');
     }
-  }
-  Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
-    return _executeWithRetry(() async {
-      final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
-      final response = await http.get(uri, headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'});
-      if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
-      }
-      throw Exception('Failed to load orders: ${response.body}');
-    });
-  }
-
-  Future<bool> updateOrderStatus(int orderId, String status) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token == null) throw Exception('User not logged in');
-
-    final response = await _executeWithRetry(() => http.post(
-      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-order-status/$orderId'),
-      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-      body: json.encode({'status': status}),
-    ));
-    return response.statusCode == 200;
   }
 
   Future<bool> submitReview({required int productId, required double rating, required String review, required String author, required String email}) async {
@@ -1810,97 +1958,7 @@ class ApiService {
       return {'valid': false, 'message': 'خطأ في الاتصال بالخادم'};
     }
   }
-
-  Future<RestaurantRatingsDashboard> getDashboardRatings(String token) async {
-    return _executeWithRetry(() async {
-      final response = await http.get(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/dashboard-ratings'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (response.statusCode == 200) return RestaurantRatingsDashboard.fromJson(json.decode(response.body));
-      throw Exception('Failed to load dashboard ratings');
-    });
-  }
-
-
-// --- ✨ ألصق الكود هنا (المكان الصحيح) ✨ ---
-  Future<DeliveryConfig> getDeliveryConfig() async {
-    return _executeWithRetry(() async {
-      // (تأكد من أن هذا الرابط يطابق ما أنشأته في PHP)
-      final response = await http.get(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-config'),
-      );
-      if (response.statusCode == 200) {
-        return DeliveryConfig.fromJson(json.decode(response.body));
-      }
-      throw Exception('Failed to load delivery config');
-    });
-  }
-  // --- نهاية اللصق ---
-
-  Future<Map<String, dynamic>> createUnifiedDeliveryRequest({
-    required String token,
-    required String sourceType, // 'restaurant', 'pharmacy', 'store', 'customer'
-    required String pickupName,
-    required double pickupLat,
-    required double pickupLng,
-    required String destinationAddress,
-    // ملاحظة: إحداثيات الزبون قد لا تكون متوفرة دائماً من ووكومرس، لذا نجعلها اختيارية
-    double? destinationLat,
-    double? destinationLng,
-    required String deliveryFee,
-    required String orderDescription,
-    required String endCustomerPhone,
-    String? sourceOrderId, // اختياري: لربط الطلب برقم الطلب الأصلي
-  }) async {
-    return await _executeWithRetry(() async {
-      final response = await http.post(
-        // تأكد من أن هذا المسار يطابق الواجهة الخلفية تماماً
-        // المسار الصحيح هو taxi/v2 وليس taxi-app/v1
-        Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/create'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({
-          'source_type': sourceType,
-          'source_order_id': sourceOrderId,
-          'pickup_location_name': pickupName,
-          'pickup_lat': pickupLat.toString(),
-          'pickup_lng': pickupLng.toString(),
-          'destination_address': destinationAddress,
-          'destination_lat': destinationLat?.toString() ?? "0", // إرسال "0" إذا كانت غير متوفرة
-          'destination_lng': destinationLng?.toString() ?? "0", // إرسال "0" إذا كانت غير متوفرة
-          'delivery_fee': deliveryFee,
-          'order_description': orderDescription,
-          'end_customer_phone': endCustomerPhone,
-        }),
-      );
-
-      final responseBody = json.decode(response.body);
-
-      if (response.statusCode == 201 && responseBody['success'] == true) {
-        return responseBody;
-      } else {
-        final message = responseBody['message'] ?? 'فشل إرسال طلب التوصيل.';
-        throw Exception(message);
-      }
-    });
-  }
-
-  Future<bool> testNotification() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token == null) throw Exception('User not logged in');
-
-    final response = await _executeWithRetry(() => http.post(
-      Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/test-notification'),
-      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-    ));
-    return response.statusCode == 200;
-  }
 }
-
 class AuthService {
   Future<String?> loginRestaurantOwner(String username, String password) async {
     try {
@@ -3215,6 +3273,15 @@ class StoreLocationCheckWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 🚀 Fix: التحقق من حالة المدير أولاً
+    final authProvider = Provider.of<StoreAuthProvider>(context);
+
+    if (authProvider.isLoggedIn) {
+      // إذا كان مسجل دخول (مدير)، انتقل للداشبورد مباشرة
+      return const StoreDashboardScreen();
+    }
+
+    // إذا كان زبون عادي، تحقق من المنطقة
     return FutureBuilder<int?>(
       future: _checkLocation(),
       builder: (context, snapshot) {
@@ -3223,10 +3290,11 @@ class StoreLocationCheckWrapper extends StatelessWidget {
         }
 
         if (snapshot.hasData && snapshot.data != null) {
-          // ✅ التصحيح: التوجيه إلى MainScreen التي تحتوي على شريط التنقل السفلي
+          // المنطقة محددة، اذهب للرئيسية
           return const MainScreen();
         }
 
+        // المنطقة غير محددة، اطلب التحديد
         return const SelectLocationScreen(isCancellable: false);
       },
     );
@@ -3438,30 +3506,24 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
   }
 
   // ✅ الدالة المعدلة للتحديث التلقائي المزدوج
+// داخل MiswakStoreHomeScreenState
+
   Future<void> _loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
 
+    // ✅ قراءة المنطقة الخاصة بالمسواك
     _selectedAreaId = prefs.getInt('miswak_area_id');
     _selectedAreaName = prefs.getString('miswak_area_name');
 
-    setState(() {}); // تحديث لعرض الاسم
+    setState(() {}); // تحديث الواجهة لعرض الاسم
 
     if (_selectedAreaId != null) {
-      final provider = Provider.of<StoreCustomerProvider>(context, listen: false);
-
-      // التحديث الأول
-      await provider.fetchStoreHomeData(_selectedAreaId!, isRefresh: false);
-
-      // انتظار نصف ثانية ثم التحديث مرة أخرى لضمان حساب المسافات
-      if (mounted) {
-        await Future.delayed(const Duration(milliseconds: 500));
-        // فرض إعادة رسم الواجهة
-        setState(() {});
-      }
+      // ✅ استدعاء الكاش أولاً (سيظهر البيانات فوراً بفضل الكود الجديد)
+      Provider.of<StoreCustomerProvider>(context, listen: false)
+          .fetchStoreHomeData(_selectedAreaId!, isRefresh: false);
     }
   }
-
   @override
   void dispose() {
     _searchController.dispose();
@@ -3846,12 +3908,17 @@ class _RestaurantsScreenState extends State<RestaurantsScreen> {
   Future<void> _loadInitialData({bool isRefresh = false}) async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
-    _selectedAreaId = prefs.getInt('selectedAreaId');
+
+    // ✅ Fix: القراءة من المفتاح الصحيح المعتمد في المسواك
+    _selectedAreaId = prefs.getInt('miswak_area_id');
+
     if (_selectedAreaId != null) {
       Provider.of<StoreCustomerProvider>(context, listen: false).fetchAllRestaurants(_selectedAreaId!, isRefresh: isRefresh);
+    } else {
+      // إذا لم يكن هناك منطقة محددة (أول دخول)، نترك الشاشة تعرض رسالة تحديد المنطقة.
+      setState(() {});
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -4666,20 +4733,16 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
   @override
   void initState() {
     super.initState();
+    // ✅ Fix: تم حذف Listener لـ NotificationProvider الذي كان يسبب الخطأ
     _loadOrders();
-    Provider.of<NotificationProvider>(context, listen: false).addListener(_refreshOrders);
+    // يجب أن تكون OrdersHistoryScreen لا تستمع لـ NotificationProvider
+    // لأنها شاشة العميل (سجل محلي)، وليست شاشة المدير (تحديثات فورية).
   }
 
   @override
   void dispose() {
-    Provider.of<NotificationProvider>(context, listen: false).removeListener(_refreshOrders);
+    // 🛑 Fix: تأكد من حذف أي محاولة لإزالة Listener مفقود
     super.dispose();
-  }
-
-  void _refreshOrders() {
-    setState(() {
-      _loadOrders();
-    });
   }
 
   void _loadOrders() => setState(() => _ordersFuture = OrderHistoryService().getOrders());
@@ -4693,19 +4756,17 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
         child: FutureBuilder<List<Order>>(
           future: _ordersFuture,
           builder: (context, snapshot) {
-            // 1. حالة الانتظار
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
-
-            // 2. حالة الخطأ
             if (snapshot.hasError) {
               return Center(child: Text('حدث خطأ: ${snapshot.error}'));
             }
 
-            // 3. حالة البيانات الفارغة (حل الشاشة البيضاء)
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              // استخدام ListView للسماح بالسحب للتحديث
+            final orders = snapshot.data;
+
+            // ✅ Fix: معالجة حالة القائمة الفارغة لعرض رسالة بدلاً من الشاشة البيضاء
+            if (orders == null || orders.isEmpty) {
               return ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
@@ -4722,8 +4783,7 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
               );
             }
 
-            // 4. عرض القائمة
-            final orders = snapshot.data!;
+            // عرض القائمة
             return ListView.builder(
                 padding: const EdgeInsets.all(8),
                 itemCount: orders.length,
@@ -4814,10 +4874,8 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // ✅ التعديل 1: استخدام StoreAuthProvider بدلاً من AuthProvider
       final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
 
-      // ✅ التعديل 2: استخدام lat و lng بدلاً من restaurantLat
       final success = await authProvider.login(
         _usernameController.text.trim(),
         _passwordController.text.trim(),
@@ -4829,8 +4887,11 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
       if (!mounted) return;
 
       if (success) {
-        // ✅ نجاح: نغلق الشاشة، والـ AuthWrapper سيقوم بتحويلك للوحة التحكم
-        Navigator.pop(context);
+        // 🚀 Fix: التوجيه المباشر إلى لوحة التحكم وحذف جميع الصفحات السابقة
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const StoreDashboardScreen()),
+              (Route<dynamic> route) => false, // يزيل كل الصفحات تحتها
+        );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('اسم المستخدم أو كلمة المرور غير صحيحة'), backgroundColor: Colors.red)
@@ -5770,6 +5831,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 }
 
+
+
 class OrdersListScreen extends StatefulWidget {
   final String status;
   const OrdersListScreen({super.key, required this.status});
@@ -5777,63 +5840,67 @@ class OrdersListScreen extends StatefulWidget {
   State<OrdersListScreen> createState() => _OrdersListScreenState();
 }
 
-
 class _OrdersListScreenState extends State<OrdersListScreen> {
   @override
   Widget build(BuildContext context) {
-    // جلب الـ Provider الخاص بالمصادقة (لم يتغير)
     final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
 
-    // استخدام Consumer للاستماع لتغيرات DashboardProvider
     return Consumer<DashboardProvider>(
       builder: (context, dashboard, child) {
-        // --- قسم التحميل ومعالجة الأخطاء (لم يتغير) ---
-        if (dashboard.isLoading && (dashboard.orders[widget.status] == null || dashboard.orders[widget.status]!.isEmpty)) {
+        final orders = dashboard.orders[widget.status] ?? [];
+        final pickupCodes = dashboard.pickupCodes;
+
+        // 1. حالة التحميل (نظهر مؤشر التحميل في الوسط)
+        if (dashboard.isLoading && orders.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // --- نهاية قسم التحميل ---
-
-        // جلب قائمة الطلبات (لم يتغير)
-        final orders = dashboard.orders[widget.status] ?? [];
-
-        // ✨ --- الإضافة: جلب خريطة الرموز ---
-        final pickupCodes = dashboard.pickupCodes;
-        // --- نهاية الإضافة ---
-
-        // بناء الواجهة الرئيسية
+        // 2. بناء القائمة مع معالجة حالة الفراغ
         return RefreshIndicator(
-          onRefresh: () => dashboard.fetchDashboardData(authProvider.token), // تحديث البيانات عند السحب
-          child: orders.isEmpty
-          // --- حالة عدم وجود طلبات (لم يتغير) ---
-              ? Center(child: ListView(physics: const AlwaysScrollableScrollPhysics(), children: [SizedBox(height: MediaQuery.of(context).size.height * 0.2), Text('لا توجد طلبات في هذا القسم حالياً', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: Colors.grey.shade600)), const SizedBox(height: 10), const Icon(Icons.inbox_outlined, size: 50, color: Colors.grey)]))
-          // --- نهاية حالة عدم وجود طلبات ---
+          onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+          child: Stack( // نستخدم Stack لتغطية ListView برسالة الفراغ
+            children: [
+              // القائمة الأساسية (دائماً موجودة لتمكين السحب)
+              ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(), // لتمكين السحب دائمًا
+                padding: const EdgeInsets.all(8),
+                itemCount: orders.length,
+                itemBuilder: (context, index) {
+                  final order = orders[index];
+                  final code = pickupCodes[order.id];
+                  return OrderCard(
+                    order: order,
+                    onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
+                    isCompleted: widget.status != 'active',
+                    pickupCode: code,
+                  );
+                },
+              ),
 
-          // --- بناء قائمة الطلبات ---
-              : ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: orders.length,
-            itemBuilder: (context, index) {
-              // ✨ --- التعديل: استخرج الطلب والرمز ---
-              final order = orders[index];
-              final code = pickupCodes[order.id]; // جلب الرمز الخاص بهذا الطلب
-              // --- نهاية التعديل ---
-
-              // بناء بطاقة الطلب مع تمرير الرمز
-              return OrderCard(
-                order: order,
-                onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
-                isCompleted: widget.status != 'active',
-                pickupCode: code, // <-- ✨ الإضافة: تمرير الرمز المستخرج للبطاقة
-              );
-            },
+              // رسالة المحتوى الفارغ (فقط إذا كانت القائمة فارغة)
+              if (orders.isEmpty)
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.inbox_outlined, size: 60, color: Colors.grey),
+                      const SizedBox(height: 10),
+                      Text(
+                          dashboard.error ?? 'لا توجد طلبات في هذا القسم حالياً', // ✅ عرض رسالة الخطأ أو رسالة الفراغ
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 16, color: Colors.grey.shade600)
+                      )
+                    ],
+                  ),
+                ),
+            ],
           ),
-          // --- نهاية بناء القائمة ---
         );
       },
     );
   }
 }
+
 class RatingsDashboardScreen extends StatefulWidget {
   const RatingsDashboardScreen({super.key});
   @override
@@ -6279,7 +6346,6 @@ class _StoreAuthWrapperState extends State<StoreAuthWrapper> {
     );
   }
 }
-
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
   @override
   Widget build(BuildContext context) {
@@ -6287,34 +6353,36 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
 
     return Consumer<DashboardProvider>(
         builder: (context, dashboard, child) {
-          // 1. التحميل
-          if (dashboard.isLoading && dashboard.ratingsDashboard == null) {
+          final data = dashboard.ratingsDashboard;
+
+          // 1. منطق التحميل
+          if (dashboard.isLoading && data == null) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          // 2. حالة البيانات فارغة (NULL) -> حل الشاشة البيضاء
-          if (dashboard.ratingsDashboard == null) {
-            return Center(
-              child: RefreshIndicator(
-                onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
-                child: ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  children: [
-                    SizedBox(height: MediaQuery.of(context).size.height * 0.3),
-                    Icon(Icons.star_border, size: 80, color: Colors.grey.shade300),
-                    const SizedBox(height: 20),
-                    const Text("لا توجد بيانات تقييم حتى الآن.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, fontSize: 18)),
-                    const SizedBox(height: 20),
-                    Center(child: ElevatedButton(onPressed: () => dashboard.fetchDashboardData(authProvider.token), child: const Text("تحديث البيانات")))
-                  ],
-                ),
+          // 2. منطق عرض الرسالة الفارغة أو الخطأ
+          if (data == null) {
+            return RefreshIndicator(
+              onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                  Icon(Icons.star_border, size: 80, color: Colors.grey.shade300),
+                  const SizedBox(height: 20),
+                  Text(
+                      dashboard.error ?? "لا توجد بيانات تقييم حتى الآن.", // ✅ عرض رسالة الخطأ إذا وجدت
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey, fontSize: 18)
+                  ),
+                  const SizedBox(height: 20),
+                  Center(child: ElevatedButton(onPressed: () => dashboard.fetchDashboardData(authProvider.token), child: const Text("تحديث البيانات")))
+                ],
               ),
             );
           }
 
-          final data = dashboard.ratingsDashboard!;
-
-          // 3. عرض البيانات
+          // 3. عرض البيانات الرئيسية
           return RefreshIndicator(
             onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
             child: ListView(
@@ -6336,7 +6404,6 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
     );
   }
 
-  // (هذه الدالة تبقى كما هي، فقط تأكد أنها موجودة داخل الكلاس)
   Widget _buildRatingsSummaryCard(RestaurantRatingsDashboard data) {
     return Card(
       elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),

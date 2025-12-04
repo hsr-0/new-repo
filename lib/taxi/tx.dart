@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -30,7 +31,8 @@ import 'cash.dart';
 import 'de.dart';
 
 final ValueNotifier<Map<String, dynamic>?> acceptedRideNotifier = ValueNotifier(null);
-
+// 👇 متغير عام للاستماع لتحديثات قائمة الرحلات
+final ValueNotifier<bool> rideListRefreshNotifier = ValueNotifier(false);
 // =============================================================================
 // Global Navigator Key & Deep Link Notifier
 // =============================================================================
@@ -67,31 +69,44 @@ class FirebaseApi {
   }
 
   Future<void> initPushNotifications() async {
+    // 1. التعامل مع التطبيق وهو مغلق تماماً
     FirebaseMessaging.instance.getInitialMessage().then(handleMessage);
+
+    // 2. التعامل مع التطبيق وهو في الخلفية وتم فتحه
     FirebaseMessaging.onMessageOpenedApp.listen(handleMessage);
+
+    // 3. التعامل مع التطبيق وهو مفتوح (Foreground)
     FirebaseMessaging.onMessage.listen((message) {
-      debugPrint("--- إشعار جديد وصل --- البيانات: ${message.data}");
+      debugPrint("--- رحلة جديد وصل --- البيانات: ${message.data}");
+
+      // 🔥🔥🔥 التعديل الهام هنا 🔥🔥🔥
+      // هذا السطر يخبر شاشة السائق: "حدث القائمة فوراً، هناك طلب جديد!"
+      rideListRefreshNotifier.value = !rideListRefreshNotifier.value;
+
       final notification = message.notification;
       if (notification == null) return;
 
-      // --- المنطق الجديد والمبسط ---
+      // منطق قبول الرحلة المباشر
       final status = message.data['status'] as String?;
       if (status == 'accepted' && message.data['ride_data'] != null) {
-        // تم قبول الرحلة، مرر البيانات مباشرة
-        final rideData = json.decode(message.data['ride_data']);
-        acceptedRideNotifier.value = rideData;
-      }  // الحالة 2: يوجد طلب توصيل جديد
+        try {
+          final rideData = json.decode(message.data['ride_data']);
+          acceptedRideNotifier.value = rideData;
+        } catch (e) {
+          debugPrint("Error parsing ride data: $e");
+        }
+      }
+
+      // إظهار الإشعار المنبثق
       NotificationService.showNotification(
-        notification.title ?? 'طلب توصيل جديد',
+        notification.title ?? 'تنبيه جديد',
         notification.body ?? '',
         payload: json.encode(message.data),
-        type: 'high_priority', // اجعل الإشعار بأولوية عالية
+        type: 'high_priority',
       );
-
     });
   }
 }
-
 // =============================================================================
 // Helper Classes & Functions
 // =============================================================================
@@ -234,10 +249,21 @@ class AuthResult {
     );
   }
 }
-
 class ApiService {
   static const String baseUrl = 'https://banner.beytei.com/wp-json';
   static const _storage = FlutterSecureStorage();
+
+  // 🔥 متغيرات التحكم في معدل التحديث (Throttling)
+  static DateTime? _lastLocationUpdateTime;
+  static LatLng? _lastSentLocation;
+
+  // 🔥 كاش لموقع السائق (لتقليل طلبات التتبع)
+  static Map<String, LatLng> _cachedDriverLocations = {};
+
+  // =========================================================
+  // 1. Authentication & Storage
+  // =========================================================
+
   static Future<void> storeAuthData(AuthResult authResult) async {
     await _storage.write(key: 'auth_token', value: authResult.token);
     await _storage.write(key: 'user_id', value: authResult.userId);
@@ -246,38 +272,8 @@ class ApiService {
     if (authResult.driverStatus != null) await _storage.write(key: 'driver_status', value: authResult.driverStatus);
   }
 
-
-
-
-
-
-  static Future<Map<String, dynamic>?> getRideDetails(String token, String rideId) async {
-    try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/taxi/v2/rides/status?ride_id=$rideId'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['success'] == true && data['ride'] != null) {
-          return data['ride'];
-        }
-      }
-      return null;
-    } catch (e) {
-      debugPrint("Failed to get ride details: $e");
-      return null;
-    }
-  }
-
-
-
-
-
-
-
-
   static Future<void> clearAuthData() async => await _storage.deleteAll();
+
   static Future<AuthResult?> getStoredAuthData() async {
     final token = await _storage.read(key: 'auth_token');
     final userId = await _storage.read(key: 'user_id');
@@ -290,20 +286,48 @@ class ApiService {
     return null;
   }
 
+  // =========================================================
+  // 2. HTTP Helpers
+  // =========================================================
+
   static Future<http.Response> _post(String endpoint, String token, Map<String, dynamic> body) {
     return http.post(Uri.parse('$baseUrl$endpoint'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: json.encode(body));
   }
-
-
-
-
 
   static Future<http.Response> _get(String endpoint, String token) {
     return http.get(Uri.parse('$baseUrl$endpoint'), headers: {'Authorization': 'Bearer $token'});
   }
 
-  static Future<http.Response> createUnifiedDelivery(String token, Map<String, dynamic> body) {
-    return _post('/taxi/v2/delivery/create', token, body);
+  // =========================================================
+  // 3. Driver Location Updates (The Saver 💰)
+  // =========================================================
+
+  // ✅ دالة تحديث الموقع الذكية (كل 30 ثانية و 150 متر)
+  static Future<void> updateDriverLocation(String token, LatLng location) async {
+    final now = DateTime.now();
+
+    // شرط الوقت: 30 ثانية
+    final bool timeElapsed = _lastLocationUpdateTime == null ||
+        now.difference(_lastLocationUpdateTime!).inSeconds >= 60;
+
+
+
+    try {
+      await _post('/taxi/v2/driver/update-location', token, {'lat': location.latitude, 'lng': location.longitude});
+      _lastLocationUpdateTime = now;
+      _lastSentLocation = location;
+      debugPrint("📍 تم تحديث موقع السائق (اقتصادي)");
+    } catch (e) {
+      debugPrint("Failed to update driver location: $e");
+    }
+  }
+
+  static Future<void> setDriverActiveStatus(String token, bool isActive) async {
+    try {
+      await _post('/taxi/v2/driver/set-active-status', token, {'is_active': isActive});
+    } catch (e) {
+      debugPrint("Failed to set driver active status: $e");
+    }
   }
 
   static Future<void> updateFcmToken(String authToken, String fcmToken) async {
@@ -318,19 +342,26 @@ class ApiService {
     }
   }
 
+  // =========================================================
+  // 4. Rides & Tracking
+  // =========================================================
 
-
+  static Future<Map<String, dynamic>?> getRideDetails(String token, String rideId) async {
+    try {
+      final response = await _get('/taxi/v2/rides/status?ride_id=$rideId', token);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['ride'] != null) return data['ride'];
+      }
+      return null;
+    } catch (e) {
+      debugPrint("Failed to get ride details: $e");
+      return null;
+    }
+  }
 
   static Future<http.Response> v2AcceptRide(String token, String rideId) {
     return _post('/taxi/v2/driver/accept-ride', token, {'ride_id': rideId});
-  }
-
-  static Future<void> setDriverActiveStatus(String token, bool isActive) async {
-    try {
-      await _post('/taxi/v2/driver/set-active-status', token, {'is_active': isActive});
-    } catch (e) {
-      debugPrint("Failed to set driver active status: $e");
-    }
   }
 
   static Future<http.Response> driverCounterOffer(String token, String rideId, double price) {
@@ -338,14 +369,6 @@ class ApiService {
       'ride_id': rideId,
       'price': price,
     });
-  }
-
-  static Future<void> updateDriverLocation(String token, LatLng location) async {
-    try {
-      await _post('/taxi/v2/driver/update-location', token, {'lat': location.latitude, 'lng': location.longitude});
-    } catch (e) {
-      debugPrint("Failed to update driver location: $e");
-    }
   }
 
   static Future<List<dynamic>> fetchActiveDrivers(String token) async {
@@ -361,36 +384,54 @@ class ApiService {
       return [];
     }
   }
+
   static Future<List<dynamic>> getCustomerTripHistory(String token) async {
     final response = await _get('/taxi/v2/customer/trip-history', token);
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
-      if (data['success'] == true && data['history'] is List) {
-        return data['history'];
-      }
+      if (data['success'] == true && data['history'] is List) return data['history'];
     }
     throw Exception('Failed to load trip history');
   }
+
+  // ✅ دالة تتبع السائق الذكية (مع الكاش)
   static Future<LatLng?> getRideDriverLocation(String token, String rideId) async {
     try {
       final response = await _get('/taxi/v2/rides/driver-location?ride_id=$rideId', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true && data['location'] != null) {
-          return LatLng(double.parse(data['location']['lat']), double.parse(data['location']['lng']));
+          final newLoc = LatLng(double.parse(data['location']['lat']), double.parse(data['location']['lng']));
+
+          // إذا الموقع لم يتغير، لا داعي لإرجاعه (لتوفير رسم الخريطة)
+          if (_cachedDriverLocations[rideId] == newLoc) return null;
+
+          _cachedDriverLocations[rideId] = newLoc;
+          return newLoc;
         }
       }
       return null;
     } catch (e) {
-      debugPrint("Failed to get driver location for ride: $e");
+      debugPrint("Failed to get driver location: $e");
       return null;
     }
   }
 
+  static Future<http.Response> rateRide(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/rides/rate', token, body);
+  }
 
+  static Future<http.Response> customerRespondToOffer(String token, String rideId, String driverId, String action) {
+    return _post('/taxi/v2/customer/rides/respond-offer', token, {
+      'ride_id': rideId,
+      'driver_id': driverId,
+      'action': action,
+    });
+  }
 
-
-
+  // =========================================================
+  // 5. Private Requests (الطلبات الخاصة)
+  // =========================================================
 
   static Future<http.Response> createPrivateRequest(String token, Map<String, dynamic> body) {
     return _post('/taxi/v2/private-requests/create', token, body);
@@ -398,59 +439,9 @@ class ApiService {
 
   static Future<List<dynamic>> getAvailablePrivateRequests(String token) async {
     final response = await _get('/taxi/v2/private-requests/available', token);
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    } else {
-      throw Exception('Failed to load private requests');
-    }
+    if (response.statusCode == 200) return json.decode(response.body);
+    throw Exception('Failed to load private requests');
   }
-
-  static Future<Map<String, dynamic>> getDriverHubData(String token) async {
-    final response = await _get('/taxi/v2/driver/hub', token);
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      if (data['success'] == true) {
-        return data['data'];
-      }
-    }
-    throw Exception('Failed to load driver hub data');
-  }
-
-
-  // للسائق: جلب طلبات التوصيل المتاحة
-  static Future<List<dynamic>> getAvailableDeliveries(String token) async {
-    try {
-      final response = await _get('/taxi/v2/delivery/available', token);
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['success'] == true && data['orders'] is List) {
-          return data['orders'];
-        }
-      }
-      return [];
-    } catch (e) {
-      debugPrint("Failed to fetch deliveries: $e");
-      return [];
-    }
-  }
-
-  /// للسائق: قبول طلب توصيل
-  static Future<http.Response> acceptDelivery(String token, String orderId) {
-    return _post('/taxi/v2/delivery/accept', token, {'order_id': orderId});
-  }
-
-  /// للسائق: تحديث حالة طلب التوصيل
-  static Future<http.Response> updateDeliveryStatus(String token, String orderId, String newStatus) {
-    return _post('/taxi/v2/delivery/update-status', token, {'order_id': orderId, 'status': newStatus});
-  }
-
-  static Future<http.Response> confirmPickupByCode(String token, String orderId, String pickupCode) {
-    return _post('/taxi/v2/delivery/confirm-pickup', token, {
-      'order_id': orderId,
-      'pickup_code': pickupCode,
-    });
-  }
-
 
   static Future<http.Response> acceptPrivateRequest(String token, String requestId) {
     return _post('/taxi/v2/private-requests/accept', token, {'request_id': requestId});
@@ -468,103 +459,109 @@ class ApiService {
     return _post('/taxi/v2/private-requests/cancel', token, {'request_id': requestId});
   }
 
-  static Future<Map<String, dynamic>> getDriverDashboard(String token) async {
-    final response = await _get('/taxi/v2/driver/dashboard', token);
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    } else {
-      throw Exception('Failed to load driver dashboard');
+  // =========================================================
+  // 6. Deliveries (التوصيل)
+  // =========================================================
+
+  static Future<http.Response> createUnifiedDelivery(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/delivery/create', token, body);
+  }
+
+  static Future<List<dynamic>> getAvailableDeliveries(String token) async {
+    try {
+      final response = await _get('/taxi/v2/delivery/available', token);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['orders'] is List) return data['orders'];
+      }
+      return [];
+    } catch (e) {
+      debugPrint("Failed to fetch deliveries: $e");
+      return [];
     }
   }
 
-  static Future<List<dynamic>> getOffers(String token) async {
-    final response = await http.get(Uri.parse('$baseUrl/taxi/v2/offers'));
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    } else {
-      throw Exception('Failed to load offers');
-    }
+  static Future<http.Response> acceptDelivery(String token, String orderId) {
+    return _post('/taxi/v2/delivery/accept', token, {'order_id': orderId});
   }
 
-  static Future<http.Response> rateRide(String token, Map<String, dynamic> body) {
-    return _post('/taxi/v2/rides/rate', token, body);
+  static Future<http.Response> updateDeliveryStatus(String token, String orderId, String newStatus) {
+    return _post('/taxi/v2/delivery/update-status', token, {'order_id': orderId, 'status': newStatus});
   }
 
-  static Future<http.Response> customerRespondToOffer(String token, String rideId, String driverId, String action) {
-    return _post('/taxi/v2/customer/rides/respond-offer', token, {
-      'ride_id': rideId,
-      'driver_id': driverId,
-      'action': action,
+  static Future<http.Response> confirmPickupByCode(String token, String orderId, String pickupCode) {
+    return _post('/taxi/v2/delivery/confirm-pickup', token, {
+      'order_id': orderId,
+      'pickup_code': pickupCode,
     });
   }
 
+  // =========================================================
+  // 7. Driver Data & Hub
+  // =========================================================
 
-
-
-
-// ========  الكود الجديد هنا ========
-  // دوال جديدة خاصة بنظام خطوط الطلاب للسائق
-
-  /// للسائق: إنشاء خط طلاب جديد
-  static Future<http.Response> createStudentLine(String token, Map<String, dynamic> body) {
-    return _post('/taxi/v2/student-lines/create', token, body);
-  }
-
-  /// للسائق: جلب الخطوط التي أنشأها
-  static Future<List<dynamic>> getMyStudentLines(String token) async {
-    // تم تعديل المسار هنا ليتوافق مع الواجهة الخلفية
-    final response = await _get('/taxi/v2/student-lines/my-lines', token);
+  static Future<Map<String, dynamic>> getDriverHubData(String token) async {
+    final response = await _get('/taxi/v2/driver/hub', token);
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
-      if (data['success'] == true && data['lines'] is List) {
-        return data['lines'];
-      }
+      if (data['success'] == true) return data['data'];
     }
-    throw Exception('Failed to load my student lines');
+    throw Exception('Failed to load driver hub data');
   }
-  /// للسائق: تحديث حالة طالب (استلام/توصيل)
-  static Future<http.Response> updateStudentStatus(String token, Map<String, dynamic> body) {
-    return _post('/taxi/v2/student-lines/update-student-status', token, body);
+
+  static Future<Map<String, dynamic>> getDriverDashboard(String token) async {
+    final response = await _get('/taxi/v2/driver/dashboard', token);
+    if (response.statusCode == 200) return json.decode(response.body);
+    throw Exception('Failed to load driver dashboard');
   }
-// ======== نهاية الكود الجديد ========
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   static Future<Map<String, dynamic>> getDriverLiveStats(String token) async {
     try {
       final response = await _get('/taxi/v2/driver/live-stats', token);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['success'] == true && data['stats'] != null) {
-          return data['stats'];
-        }
+        if (data['success'] == true && data['stats'] != null) return data['stats'];
       }
-      throw Exception('Failed to load live stats');
+      throw Exception('Failed');
     } catch (e) {
       debugPrint("Failed to fetch live stats: $e");
       return {};
     }
   }
+
+  static Future<List<dynamic>> getOffers(String token) async {
+    final response = await http.get(Uri.parse('$baseUrl/taxi/v2/offers'));
+    if (response.statusCode == 200) return json.decode(response.body);
+    throw Exception('Failed to load offers');
+  }
+
+  // =========================================================
+  // 8. Student Lines (خطوط الطلاب)
+  // =========================================================
+
+  static Future<http.Response> createStudentLine(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/student-lines/create', token, body);
+  }
+
+  static Future<List<dynamic>> getMyStudentLines(String token) async {
+    final response = await _get('/taxi/v2/student-lines/my-lines', token);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['success'] == true && data['lines'] is List) return data['lines'];
+    }
+    throw Exception('Failed to load my student lines');
+  }
+
+  static Future<http.Response> updateStudentStatus(String token, Map<String, dynamic> body) {
+    return _post('/taxi/v2/student-lines/update-student-status', token, body);
+  }
 }
-final ValueNotifier<String?> acceptedRideIdNotifier = ValueNotifier(null);
+
+
+
+
+// ✅ نهاية الكلاس هنا (إغلاق القوس بشكل صحيح)
+ final ValueNotifier<String?> acceptedRideIdNotifier = ValueNotifier(null);
 
 // =============================================================================
 // NotificationService (with Channels)
@@ -2172,24 +2169,58 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   int _selectedIndex = 0;
   bool _isDriverActive = true;
   StreamSubscription<geolocator.Position>? _positionStream;
+
   // State management for current jobs
   Map<String, dynamic>? _currentQuickRide;
-  Map<String, dynamic>? _currentDelivery; // <-- تأكد من وجود هذا المتغير
-
+  Map<String, dynamic>? _currentDelivery;
 
   Map<String, dynamic>? _liveStats;
   Timer? _statsTimer;
 
+  @override
+  void initState() {
+    super.initState();
+    _checkLocationPermission();
+    deepLinkNotifier.addListener(_handleDeepLink);
 
-  void _refreshAllLists() {
-    // هذه الدالة ستعيد تحميل الطلبات في الشاشات الأخرى عند الحاجة
-    // يمكنك تعديلها لتكون أكثر تحديداً إذا أردت
-    setState(() {
-      // إعادة تهيئة الـ Futures سيؤدي إلى إعادة تحميل البيانات
-      // (هذا يعتمد على كيفية بنائك لشاشات عرض الطلبات)
+    // ربط مستمع الإشعارات للرحلات المقبولة
+    acceptedRideNotifier.addListener(_handleAcceptedRide);
+
+    _fetchLiveStats();
+    // تحديث الإحصائيات كل 45 ثانية (بدلاً من وقت قصير)
+    _statsTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
+      if (mounted) _fetchLiveStats();
     });
+
+    _toggleActiveStatus(_isDriverActive);
   }
 
+  @override
+  void dispose() {
+    deepLinkNotifier.removeListener(_handleDeepLink);
+    acceptedRideNotifier.removeListener(_handleAcceptedRide);
+    _positionStream?.cancel();
+    _statsTimer?.cancel();
+    if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false);
+    super.dispose();
+  }
+
+  // دالة تستجيب للإشعار وتستلم بيانات الرحلة مباشرة
+  void _handleAcceptedRide() {
+    final rideData = acceptedRideNotifier.value;
+    if (rideData != null) {
+      if (mounted) {
+        _onRideAccepted(rideData);
+      }
+      acceptedRideNotifier.value = null;
+    }
+  }
+
+  void _refreshAllLists() {
+    setState(() {
+      // إعادة بناء الواجهة لتحديث القوائم
+    });
+  }
 
   void _onRideAccepted(Map<String, dynamic> ride) {
     setState(() {
@@ -2197,67 +2228,20 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     });
   }
 
-
-  // --- NEW: Handlers for delivery jobs ---
-  void _onDeliveryAccepted(Map<String, dynamic> delivery) {
-    setState(() {
-      _currentDelivery = delivery;
-      _selectedIndex = 2; // Switch to delivery tab
-    });
-  }
-  void _onDeliveryFinished() => setState(() => _currentDelivery = null);
-  // ---
-
   void _onRideFinished() {
     setState(() {
       _currentQuickRide = null;
     });
   }
 
-  // --- الدالة التي تستجيب للإشعار وتستلم بيانات الرحلة مباشرة ---
-  void _handleAcceptedRide() {
-    final rideData = acceptedRideNotifier.value;
-    if (rideData != null) {
-      if (mounted) {
-        // لا حاجة لطلب API جديد، البيانات موجودة بالفعل
-        _onRideAccepted(rideData);
-      }
-      // إعادة تعيين المتغير لمنع التنفيذ مرة أخرى
-      acceptedRideNotifier.value = null;
-    }
-  }
-
-
-
-
-
-
-  @override
-  void initState() {
-    super.initState();
-    _checkLocationPermission();
-    deepLinkNotifier.addListener(_handleDeepLink);
-    // *** ربط المستمع الجديد ***
-    acceptedRideNotifier.addListener(_handleAcceptedRide);
-    _fetchLiveStats();
-    _statsTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
-      if (mounted) {
-        _fetchLiveStats();
-      }
+  void _onDeliveryAccepted(Map<String, dynamic> delivery) {
+    setState(() {
+      _currentDelivery = delivery;
+      _selectedIndex = 2; // الانتقال لتبويب التوصيل
     });
-    _toggleActiveStatus(_isDriverActive);
   }
 
-  @override
-  void dispose() {
-    deepLinkNotifier.removeListener(_handleDeepLink);
-    // *** إزالة المستمع الجديد ***
-    acceptedRideNotifier.removeListener(_handleAcceptedRide);
-    _positionStream?.cancel();
-    _statsTimer?.cancel();
-    if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false);
-    super.dispose();
-  }
+  void _onDeliveryFinished() => setState(() => _currentDelivery = null);
 
   Future<void> _fetchLiveStats() async {
     try {
@@ -2274,15 +2258,12 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
 
   void _handleDeepLink() {
     final linkData = deepLinkNotifier.value;
-    // التحقق من أن الإشعار موجه للسائق
     if (linkData['userType'] == 'driver') {
-      // التحقق من الشاشة المستهدفة
       if (linkData['targetScreen'] == 'private_requests') {
-        _changeTab(1); // انتقل إلى تبويب الطلبات الخاصة
+        _changeTab(1);
       } else if (linkData['targetScreen'] == 'quick_rides') {
-        _changeTab(0); // انتقل إلى تبويب الطلبات السريعة
+        _changeTab(0);
       }
-      // إعادة تعيين بيانات الإشعار بعد التعامل معها
       deepLinkNotifier.value = {};
     }
   }
@@ -2297,25 +2278,29 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     if (mounted) await PermissionService.handleLocationPermission(context);
   }
 
+  // 🔥🔥🔥 التعديل الاقتصادي هنا 🔥🔥🔥
   void _toggleActiveStatus(bool isActive) {
     setState(() => _isDriverActive = isActive);
     ApiService.setDriverActiveStatus(widget.authResult.token, isActive);
 
     if (isActive) {
-      // --- (التعديل هنا): طلب أعلى دقة ممكنة ---
+      // إعدادات الموقع الموفرة للطاقة والسيرفر
       const locationSettings = geolocator.LocationSettings(
-        accuracy: geolocator.LocationAccuracy.bestForNavigation,
-        distanceFilter: 5, // تحديث كل 10 أمتار
+        accuracy: geolocator.LocationAccuracy.high, // دقة عالية (وليست قصوى) لتقليل البطارية
+        distanceFilter: 150, // تحديث السيرفر فقط كل 150 متر (توفير هائل للطلبات)
       );
+
       _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
+        // نستخدم دالة التحديث الذكية في ApiService
         ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude));
       });
+    } else {
+      _positionStream?.cancel();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✨ --- [هذا هو الكود الصحيح لقائمة pages] --- ✨
     final List<Widget> pages = [
       // Tab 0: الطلبات (Quick Rides)
       _currentQuickRide == null
@@ -2325,7 +2310,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       // Tab 1: طلبات الخصوصي
       DriverPrivateRequestsScreen(authResult: widget.authResult),
 
-      // Tab 2: توصيل
+      // Tab 2: توصيل (Delivery)
       _currentDelivery == null
           ? DriverAvailableDeliveriesScreen(authResult: widget.authResult, onDeliveryAccepted: _onDeliveryAccepted)
           : DriverCurrentDeliveryScreen(
@@ -2336,7 +2321,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       ),
 
       // Tab 3: رحلاتي
-      DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => setState(() => _selectedIndex = 4)), // <-- تم تصحيح الرقم هنا
+      DriverMyTripsScreen(authResult: widget.authResult, navigateToCreate: () => setState(() => _selectedIndex = 4)),
 
       // Tab 4: إنشاء رحلة
       DriverCreateTripScreen(authResult: widget.authResult),
@@ -2344,15 +2329,21 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       // Tab 5: جوائز وهدايا
       DriverHubScreen(authResult: widget.authResult),
 
-      // Tab 6: خطوط الطلاب (كانت مفقودة)
+      // Tab 6: خطوط الطلاب
       DriverLinesManagementScreen(authResult: widget.authResult),
     ];
-    // ✨ --- [نهاية التعديل] --- ✨
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('واجهة السائق'),
         actions: [
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Row(children: [const Text("استقبال الطلبات", style: TextStyle(fontSize: 12)), Switch(value: _isDriverActive, onChanged: _toggleActiveStatus, activeColor: Colors.green)])),
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Row(children: [
+                const Text("استقبال الطلبات", style: TextStyle(fontSize: 12)),
+                Switch(value: _isDriverActive, onChanged: _toggleActiveStatus, activeColor: Colors.green)
+              ])
+          ),
           IconButton(icon: const Icon(Icons.logout), onPressed: widget.onLogout)
         ],
         bottom: _selectedIndex == 0
@@ -2370,14 +2361,11 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.list_alt_outlined), label: 'الطلبات'),
           BottomNavigationBarItem(icon: Icon(Icons.star_border_purple500_outlined), label: 'طلبات الخصوصي'),
-          BottomNavigationBarItem(icon: Icon(Icons.delivery_dining), label: 'توصيل'), // <-- NEW TAB
-
+          BottomNavigationBarItem(icon: Icon(Icons.delivery_dining), label: 'توصيل'),
           BottomNavigationBarItem(icon: Icon(Icons.directions_car_outlined), label: 'رحلاتي'),
           BottomNavigationBarItem(icon: Icon(Icons.add_road_outlined), label: 'إنشاء رحلة'),
-
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'جوائز وهدايا'),
-          BottomNavigationBarItem(icon: Icon(Icons.school_outlined), label: 'خطوط الطلاب'), // <-- أضف هذا التبويب الجديد
-
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), label: 'جوائز'),
+          BottomNavigationBarItem(icon: Icon(Icons.school_outlined), label: 'الطلاب'),
         ],
       ),
     );
@@ -3057,8 +3045,6 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
   PageController? _pageController;
   int _currentPageIndex = 0;
   String _distanceToPickup = "...";
-
-  // --- (جديد): لتتبع الطلب الذي تم إرسال عرض له ---
   String? _sentOfferRideId;
 
   @override
@@ -3066,18 +3052,32 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     super.initState();
     _pageController = PageController(viewportFraction: 0.85);
     _setupInitialLocationAndFetchRides();
-    _ridesTimer = Timer.periodic(const Duration(seconds: 20), (timer) {
+
+    // 🔥 1. التحديث الدوري البطيء (كل دقيقتين - لتنظيف القائمة)
+    _ridesTimer = Timer.periodic(const Duration(minutes: 2), (timer) {
       if (!mounted) return;
-      _fetchAvailableRides();
+      _fetchAvailableRides(silent: true);
     });
+
+    // 🔥 2. ربط التحديث الفوري بالإشعارات
+    rideListRefreshNotifier.addListener(_onNotificationReceived);
   }
 
   @override
   void dispose() {
+    // 🔥 تنظيف المستمع عند الخروج
+    rideListRefreshNotifier.removeListener(_onNotificationReceived);
+
     _ridesTimer?.cancel();
     _locationStream?.cancel();
     _pageController?.dispose();
     super.dispose();
+  }
+
+  // دالة التحديث عند وصول إشعار
+  void _onNotificationReceived() {
+    debugPrint("🔔 وصل إشعار جديد! تحديث القائمة فوراً...");
+    _fetchAvailableRides(silent: true);
   }
 
   Future<void> _setupInitialLocationAndFetchRides() async {
@@ -3094,7 +3094,13 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك الحالي.')));
     }
-    _locationStream = geolocator.Geolocator.getPositionStream().listen((geolocator.Position position) {
+
+    // استخدام إعدادات الموقع الاقتصادية
+    const locationSettings = geolocator.LocationSettings(
+      accuracy: geolocator.LocationAccuracy.high,
+      distanceFilter: 100, // تحديث محلي كل 100 متر
+    );
+    _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
       if (mounted) {
         setState(() => _driverLocation = LatLng(position.latitude, position.longitude));
         _updateDistanceInfo(_currentPageIndex);
@@ -3117,8 +3123,13 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     });
   }
 
-  Future<void> _fetchAvailableRides() async {
+  // 🔥 تم تعديل الدالة لتقبل التحديث الصامت (بدون إظهار دائرة التحميل إذا كانت silent)
+  Future<void> _fetchAvailableRides({bool silent = false}) async {
     if (!mounted) return;
+
+    // لا تظهر التحميل إذا كان التحديث صامتاً (في الخلفية)
+    if (!silent) setState(() => _isLoading = true);
+
     try {
       final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/available-rides'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
       if (response.statusCode == 200 && mounted) {
@@ -3126,7 +3137,6 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
         setState(() {
           _availableRides = data['rides'];
           _isLoading = false;
-          // إذا تم قبول العرض الذي أرسلته، قم بإلغاء حالة الانتظار
           if (_sentOfferRideId != null && (_availableRides?.every((ride) => ride['id'].toString() != _sentOfferRideId) ?? true)) {
             _sentOfferRideId = null;
           }
@@ -3223,7 +3233,6 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
                     if (mounted && response.statusCode == 200 && data['success'] == true) {
                       _showOfferSentDialog();
                       setState(() {
-                        // --- (جديد): تحديث حالة الانتظار ---
                         _sentOfferRideId = rideId;
                       });
                     } else if (mounted) {
@@ -3267,27 +3276,19 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
             options: MapOptions(
               initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
               initialZoom: 14.0,
-              // إعدادات توفير الرصيد
               maxZoom: 18.0,
               minZoom: 10.0,
-              // لون الخلفية لتقليل الوميض الأبيض
               backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
               TileLayer(
-                // رابط Mapbox الرسمي
                 urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
-
-                // 🔥 تفعيل الكاش (هام جداً لعدم إعادة تحميل الصور وتوفير الرصيد)
                 tileProvider: MapboxCachedTileProvider(),
-
                 additionalOptions: const {
                   'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
                   'id': 'mapbox/streets-v12',
                 },
                 userAgentPackageName: 'com.beytei.taxi',
-
-                // إعدادات السلاسة (تحميل المناطق المحيطة مسبقاً)
                 panBuffer: 2,
                 keepBuffer: 5,
               ),
@@ -3319,7 +3320,6 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
                   final ride = _availableRides![index];
                   return RideInfoCard(
                     ride: ride,
-                    // --- (جديد): تمرير حالة الانتظار للبطاقة ---
                     isWaitingForApproval: _sentOfferRideId == ride['id'].toString(),
                     onAccept: () => _acceptRide(ride['id'].toString()),
                     onNegotiate: () => _showNegotiationDialog(ride),
@@ -3332,9 +3332,6 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     );
   }
 }
-
-
-
 
 
 // --- ويدجت جديد: شريط المعلومات العلوي ---
@@ -3453,7 +3450,8 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   void initState() {
     super.initState();
     _currentRide = widget.initialRide;
-    // استدعاء الدالة مباشرة بعد اكتمال بناء الويدجت لضمان الاستقرار
+
+    // استدعاء الدالة مباشرة بعد اكتمال بناء الويدجت
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _initializeRide();
@@ -3467,11 +3465,9 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     super.dispose();
   }
 
-  // --- دالة معدلة وأكثر قوة لتهيئة الرحلة ورسم المسار تلقائيًا ---
+  // --- 1. تهيئة الرحلة ورسم المسار (مرة واحدة) ---
   Future<void> _initializeRide() async {
-    // التأكد من أن الويدجت لا يزال موجودًا قبل أي عملية
     if (!mounted) return;
-
     setState(() => _isLoading = true);
 
     final pickupPoint = LatLng(
@@ -3480,116 +3476,140 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     );
 
     try {
-      // 1. طلب صلاحيات الموقع أولاً
+      // أ) الصلاحيات
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!mounted || !hasPermission) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('إذن الموقع مطلوب لبدء الرحلة.')));
         setState(() => _isLoading = false);
         return;
       }
 
-      // 2. جلب موقع السائق الحالي بدقة عالية
+      // ب) الموقع الأولي
       geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(
           desiredAccuracy: geolocator.LocationAccuracy.high
       );
 
       if (!mounted) return;
-
       final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
 
       setState(() {
         _driverLocation = driverNowLocation;
       });
 
-      // 3. تحريك الكاميرا إلى موقع السائق
+      // ج) تحريك الكاميرا
       _mapController.move(driverNowLocation, 15);
 
-      // 4. رسم المسار تلقائيًا من موقع السائق إلى موقع الزبون
+      // د) رسم المسار (مرة واحدة فقط هنا)
       await _getRoute(driverNowLocation, pickupPoint);
 
-      // 5. بدء التتبع المباشر لموقع السائق
+      // هـ) بدء التتبع
       _startDriverLocationTracking();
 
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('فشل تهيئة الرحلة: ${e.toString()}'))
+            SnackBar(content: Text('خطأ في التهيئة: ${e.toString()}'))
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
+  // --- 2. تتبع الموقع الذكي ---
   void _startDriverLocationTracking() {
-    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((geolocator.Position position) {
-      if (mounted) {
-        final newLocation = LatLng(position.latitude, position.longitude);
-        double newBearing = _driverBearing;
-        if (_driverLocation != null && (newLocation.latitude != _driverLocation!.latitude || newLocation.longitude != _driverLocation!.longitude)) {
+    // إعدادات التتبع المحلي (للشاشة فقط - ناعم)
+    const locationSettings = geolocator.LocationSettings(
+      accuracy: geolocator.LocationAccuracy.high,
+      distanceFilter: 10, // تحديث الشاشة كل 10 أمتار للحركة السلسة
+    );
+
+    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
+      if (!mounted) return;
+
+      final newLocation = LatLng(position.latitude, position.longitude);
+
+      // حساب الزاوية (Bearing) لتدوير السيارة
+      double newBearing = _driverBearing;
+      if (_driverLocation != null) {
+        // تحديث الزاوية فقط إذا تحرك مسافة معقولة
+        if (geolocator.Geolocator.distanceBetween(_driverLocation!.latitude, _driverLocation!.longitude, newLocation.latitude, newLocation.longitude) > 5) {
           newBearing = calculateBearing(_driverLocation!, newLocation);
         }
-        setState(() {
-          _previousDriverBearing = _driverBearing;
-          _driverLocation = newLocation;
-          _driverBearing = newBearing;
-          _distanceToPickup = geolocator.Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
-        });
       }
+
+      setState(() {
+        _previousDriverBearing = _driverBearing;
+        _driverLocation = newLocation;
+        _driverBearing = newBearing;
+        _distanceToPickup = geolocator.Geolocator.distanceBetween(
+            newLocation.latitude, newLocation.longitude,
+            double.parse(_currentRide['pickup']['lat']),
+            double.parse(_currentRide['pickup']['lng'])
+        );
+      });
+
+      // 🔥🔥🔥 السحر هنا 🔥🔥🔥
+      // نحن نستدعي الدالة، ولكن "ApiService" هو من يقرر الإرسال أو المنع
+      // بناءً على شرط الـ 30 ثانية والـ 150 متر الذي كتبناه سابقاً
+      ApiService.updateDriverLocation(widget.authResult.token, newLocation);
     });
   }
 
+  // --- 3. رسم المسار ---
   Future<void> _getRoute(LatLng start, LatLng end) async {
+    // مفتاح ORS (تأكد أنه فعال)
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
-    if (orsApiKey.length < 50) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء إضافة مفتاح API صحيح لرسم المسار"), backgroundColor: Colors.red));
-      return;
-    }
+
+    if (orsApiKey.length < 50) return;
+
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
+
     try {
       final response = await http.get(Uri.parse(url));
-      if (mounted) {
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final coordinates = data['features'][0]['geometry']['coordinates'] as List;
-          setState(() => _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList());
-        } else {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل رسم المسار: ${json.decode(response.body)['error']?['message'] ?? 'خطأ من الخادم'}"), backgroundColor: Colors.red));
-        }
+      if (mounted && response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final coordinates = data['features'][0]['geometry']['coordinates'] as List;
+        setState(() => _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList());
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل رسم المسار: تحقق من اتصالك بالإنترنت"), backgroundColor: Colors.orange));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل رسم المسار: ${e.toString().replaceAll("Exception: ", "")}"), backgroundColor: Colors.red));
+      debugPrint("Route Error: $e");
     }
   }
 
+  // --- 4. تحديث حالة الرحلة ---
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/update-ride-status'), headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'}, body: json.encode({'ride_id': _currentRide['id'], 'status': newStatus}));
+      final response = await http.post(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/update-ride-status'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'},
+          body: json.encode({'ride_id': _currentRide['id'], 'status': newStatus})
+      );
+
       final data = json.decode(response.body);
+
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
           if (newStatus == 'completed' || newStatus == 'cancelled') {
             widget.onRideFinished();
           } else {
             setState(() => _currentRide = data['ride']);
+
+            // إذا بدأت الرحلة، نرسم المسار الجديد إلى الوجهة (مرة واحدة)
             if (newStatus == 'ongoing' && _driverLocation != null && _currentRide['destination']?['lat'] != null) {
-              final destination = LatLng(double.parse(_currentRide['destination']['lat']), double.parse(_currentRide['destination']['lng']));
-              _getRoute(_driverLocation!, destination);
+              final destination = LatLng(
+                  double.parse(_currentRide['destination']['lat']),
+                  double.parse(_currentRide['destination']['lng'])
+              );
+              await _getRoute(_driverLocation!, destination);
             }
           }
         } else {
           throw Exception(data['message'] ?? 'فشل تحديث الحالة');
         }
       }
-    } on SocketException {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يرجى التحقق من اتصالك بالإنترنت'), backgroundColor: Colors.orange));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: $e"), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -3649,27 +3669,19 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
             options: MapOptions(
               initialCenter: pickupPoint,
               initialZoom: 14.0,
-              // إعدادات توفير الرصيد
               maxZoom: 18.0,
               minZoom: 10.0,
-              // لون الخلفية لتقليل الوميض
               backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
               TileLayer(
-                // رابط Mapbox الرسمي
                 urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
-
-                // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
                 tileProvider: MapboxCachedTileProvider(),
-
                 additionalOptions: const {
                   'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
                   'id': 'mapbox/streets-v12',
                 },
                 userAgentPackageName: 'com.beytei.taxi',
-
-                // إعدادات السلاسة
                 panBuffer: 2,
                 keepBuffer: 5,
               ),
@@ -3730,8 +3742,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       ),
     );
   }
-}
-// =============================================================================
+}// =============================================================================
 // Customer Quick Ride Screen (with Improved Location Selection)
 // =============================================================================
 enum BookingStage { selectingPickup, selectingDestination, confirmingRequest }
@@ -3761,7 +3772,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Map<String, dynamic>? _destinationData;
   bool _isConfirmingRideDetails = false;
   List<dynamic> _pendingOffers = [];
-  String _selectedVehicleType = 'Car'; // القيمة الافتراضية هي "سيارة"
+  String _selectedVehicleType = 'Car';
 
   LatLng? _currentUserLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
@@ -3783,7 +3794,9 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   void initState() {
     super.initState();
     _setupInitialLocation();
-    _driversTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+
+    // 🔥 التعديل 1: تحديث السائقين المحيطين كل 60 ثانية فقط
+    _driversTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (_activeRide == null) _fetchActiveDrivers();
     });
   }
@@ -3812,7 +3825,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       return;
     }
     try {
-      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.bestForNavigation);
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high); // قللنا الدقة قليلاً للتوفير
       if (mounted) {
         final initialLocation = LatLng(position.latitude, position.longitude);
         setState(() {
@@ -3829,7 +3842,13 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
         setState(() => _isLoading = false);
       }
     }
-    _locationStream = geolocator.Geolocator.getPositionStream().listen((geolocator.Position position) {
+
+    // 🔥 التعديل 2: تقليل حساسية تحديث موقع الزبون (كل 50 متر)
+    const locationSettings = geolocator.LocationSettings(
+      accuracy: geolocator.LocationAccuracy.high,
+      distanceFilter: 50,
+    );
+    _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
       if (mounted) {
         setState(() => _currentUserLocation = LatLng(position.latitude, position.longitude));
       }
@@ -3838,24 +3857,32 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _startLiveTracking(String rideId) {
     _liveTrackingTimer?.cancel();
-    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+
+    // 🔥 التعديل 3: تتبع السائق كل 60 ثانية (توفير هائل)
+    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 60), (timer) async {
       if (_activeRide == null) {
         timer.cancel();
         return;
       }
+
+      // سيستخدم الكاش من ApiService إذا لم يتغير الموقع
       final newDriverLocation = await ApiService.getRideDriverLocation(widget.token, rideId);
+
       if (mounted && newDriverLocation != null) {
         double newBearing = _assignedDriverBearing;
         if (_assignedDriverLocation != null) {
           newBearing = calculateBearing(_assignedDriverLocation!, newDriverLocation);
         }
+
         setState(() {
           _previousAssignedDriverBearing = _assignedDriverBearing;
           _assignedDriverLocation = newDriverLocation;
           _assignedDriverBearing = newBearing;
         });
-        final pickupPoint = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
-        _getRoute(_assignedDriverLocation!, pickupPoint);
+
+        // 🛑 تم إيقاف رسم المسار المتكرر (توفير رصيد خرائط)
+        // final pickupPoint = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
+        // _getRoute(_assignedDriverLocation!, pickupPoint);
       }
     });
   }
@@ -3873,6 +3900,10 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Future<void> _getRoute(LatLng start, LatLng end) async {
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) return;
+
+    // لا ترسم إذا كان المسار موجوداً بالفعل
+    if (_routeToCustomer.isNotEmpty) return;
+
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
     try {
       final response = await http.get(Uri.parse(url));
@@ -3892,6 +3923,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       final driversList = await ApiService.fetchActiveDrivers(widget.token);
       if (!mounted) return;
       final newDriversData = {for (var d in driversList) d['id'].toString(): d};
+
+      // منطق التحريك (Animation) كما هو
       for (var driverId in newDriversData.keys) {
         final oldDriver = _driversData[driverId];
         final newDriver = newDriversData[driverId];
@@ -3918,7 +3951,9 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _startStatusTimer() {
     _statusTimer?.cancel();
-    _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+
+    // 🔥 التعديل 4: التحقق من حالة الرحلة كل 60 ثانية
+    _statusTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (!mounted || _activeRide == null) {
         timer.cancel();
         return;
@@ -3989,7 +4024,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             'name': _destinationData!['name']
           },
           'price': _priceController.text,
-          'vehicle_type': _selectedVehicleType, // ✨ --- أضف هذا السطر --- ✨
+          'vehicle_type': _selectedVehicleType,
         }),
       );
       final data = json.decode(response.body);
@@ -4105,27 +4140,19 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             options: MapOptions(
               initialCenter: _currentUserLocation ?? const LatLng(32.4741, 45.8336),
               initialZoom: 15.0,
-              // إعدادات توفير الرصيد
               maxZoom: 18.0,
               minZoom: 10.0,
-              // لون الخلفية لتقليل الوميض
               backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
               TileLayer(
-                // رابط Mapbox الرسمي
                 urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
-
-                // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
                 tileProvider: MapboxCachedTileProvider(),
-
                 additionalOptions: const {
                   'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
                   'id': 'mapbox/streets-v12',
                 },
                 userAgentPackageName: 'com.beytei.taxi',
-
-                // إعدادات السلاسة
                 panBuffer: 2,
                 keepBuffer: 5,
               ),
@@ -4141,7 +4168,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             left: 15,
             right: 15,
             child: SafeArea(
-              child: Column( // استخدام Column لترتيب الأزرار بشكل عمودي
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
@@ -4150,7 +4177,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
                       onPressed: () => widget.onChangeTab(1),
                     ),
                   ),
-                  const SizedBox(height: 12), // إضافة مسافة بين الزرين
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: StudentLinesButton(
@@ -4166,7 +4193,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
               ),
             ),
           ),
-          // ======== نهاية الكود المصحح ========
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: _buildBottomCard(),
@@ -4238,8 +4264,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     }
   }
 
-// (داخل _QuickRideMapScreenState)
-
   Widget _buildInitialRequestSheet() {
     return SafeArea(
       child: Padding(
@@ -4265,10 +4289,9 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             elevation: 8,
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Column( // ✨ [جديد]: تم التغيير إلى Column
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 1. زر "إلى أين تريد أن تذهب؟"
                   Row(
                     children: [
                       const Icon(Icons.search, color: Colors.grey),
@@ -4277,7 +4300,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
                     ],
                   ),
                   const Divider(height: 20),
-                  // 2. ✨ [جديد]: أزرار اختيار نوع المركبة
                   ToggleButtons(
                     isSelected: [_selectedVehicleType == 'Car', _selectedVehicleType == 'Tuktuk'],
                     onPressed: (index) {

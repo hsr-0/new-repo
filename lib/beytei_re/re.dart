@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'dart:math'; // 👈 تأكد من وجود هذا السطر ضروري جداً
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart'; // مطلوب للاهتزاز
 import 'package:latlong2/latlong.dart';
@@ -34,6 +35,16 @@ const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
+
+
+class AppConstants {
+
+  // مفاتيح الكاش (للزبون فقط)
+  static const String CACHE_KEY_RESTAURANTS_PREFIX = 'cache_restaurants_area_';
+  static const String CACHE_KEY_MENU_PREFIX = 'cache_menu_restaurant_';
+  static const String CACHE_TIMESTAMP_PREFIX = 'cache_time_';
+}
+
 
 // =======================================================================
 // --- معالج رسائل الخلفية ---
@@ -134,18 +145,16 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
   }
 }
-// (الصق هذا بدلاً من CustomerProvider القديم)
+
 class CustomerProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
-  Map<String, List<dynamic>> _homeData = {}; // Stores fetched data for home screen sections
-  List<Restaurant> _allRestaurants = []; // Stores all restaurants for the "Restaurants" screen
-  Map<int, List<FoodItem>> _menuItems = {}; // Map<restaurantId, List<FoodItem>> for individual menus
+  Map<String, List<dynamic>> _homeData = {};
+  List<Restaurant> _allRestaurants = [];
+  Map<int, List<FoodItem>> _menuItems = {};
 
-  int _lastLoadedAreaId = -1; // لتتبع آخر منطقة تم تحميلها
-
+  int _lastLoadedAreaId = -1;
   bool _isLoadingHome = false;
-  bool _isLoadingRestaurants = false;
   bool _isLoadingMenu = false;
   bool _hasError = false;
 
@@ -153,8 +162,11 @@ class CustomerProvider with ChangeNotifier {
   Map<String, List<dynamic>> get homeData => _homeData;
   List<Restaurant> get allRestaurants => _allRestaurants;
   Map<int, List<FoodItem>> get menuItems => _menuItems;
+
   bool get isLoadingHome => _isLoadingHome;
-  bool get isLoadingRestaurants => _isLoadingRestaurants;
+  // ✅ (إصلاح): إضافة Getter ليتوافق مع واجهة المطاعم
+  bool get isLoadingRestaurants => _isLoadingHome;
+
   bool get isLoadingMenu => _isLoadingMenu;
   bool get hasError => _hasError;
 
@@ -168,195 +180,226 @@ class CustomerProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // --- ✨ [ هذا هو الكود الجديد V3 - الطريقة الهجينة (المرنة والسريعة) ] ---
-  // (استبدل fetchHomeData بالكامل بهذا)
+  // ============================================================
+  // 1. جلب بيانات الصفحة الرئيسية (المطاعم) - نظام الكاش الذكي
+  // ============================================================
   Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
+    _lastLoadedAreaId = areaId;
+    _hasError = false;
 
-    // 1. [تحسين] (كما هو) لا تقم بإعادة التحميل إذا كانت البيانات موجودة
-    if (_homeData.isNotEmpty && !isRefresh && _lastLoadedAreaId == areaId) {
+    // أ) محاولة التحميل من الكاش أولاً (للعرض الفوري)
+    if (!isRefresh && _homeData.isEmpty) {
+      await _loadHomeFromCache(areaId);
+    }
+
+    // إذا كانت البيانات فارغة حتى بعد محاولة الكاش، نُظهر التحميل
+    if (_homeData.isEmpty) {
+      _isLoadingHome = true;
+      notifyListeners();
+    }
+
+    // ب) التحقق من صلاحية الكاش (Time-based Caching)
+    // إذا كانت البيانات موجودة ومر أقل من 5 دقائق، نكتفي بالكاش
+    if (!isRefresh && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 5)) {
+      print("✅ استخدام الكاش للمطاعم (البيانات حديثة)");
+      _isLoadingHome = false;
+      notifyListeners();
       return;
     }
 
-    // 2. [تحسين] (كما هو) أظهر الشيمر فقط إذا كانت البيانات فارغة
-    if (_homeData.isEmpty || _lastLoadedAreaId != areaId) {
-      _isLoadingHome = true;
-      _hasError = false;
-      _homeData = {};
-      notifyListeners();
-    }
-
-    _lastLoadedAreaId = areaId;
-
-    // --- ✨ [ هذا هو التغيير الجوهري: منطق الطلبات المنفردة ] ---
-
-    // 3. الخطوة 1: جلب البيانات الحرجة (المطاعم)
-    Set<int> deliverableRestaurantIds;
-    List<Restaurant> allRestaurantsList;
-    Map<int, bool> restaurantStatusMap;
-
+    // ج) طلب البيانات الحديثة من السيرفر (في الخلفية)
     try {
-      final criticalResults = await Future.wait([
-        _apiService.getDeliverableRestaurantIds(areaId),
-        _apiService.getAllRestaurants(areaId: areaId),
+      final results = await Future.wait([
+        _apiService.getRawDeliverableIds(areaId), // String JSON
+        _apiService.getRawRestaurants(areaId),    // String JSON
       ]);
 
-      deliverableRestaurantIds = criticalResults[0] as Set<int>;
-      allRestaurantsList = criticalResults[1] as List<Restaurant>;
+      final deliverableJson = results[0];
+      final restaurantsJson = results[1];
 
-      // بناء الخرائط التي سنحتاجها لاحقاً
-      final deliverableRestaurantsForDisplay = _filterRestaurantsByArea(deliverableRestaurantIds, allRestaurantsList);
-      restaurantStatusMap = {for (var r in allRestaurantsList) r.id: r.isOpen};
+      // 1. معالجة البيانات وتحديث الواجهة
+      _processAndSetHomeData(deliverableJson, restaurantsJson);
 
-      // [ العرض الأول ] - عرض المطاعم
-      _homeData['restaurants'] = deliverableRestaurantsForDisplay;
-      _hasError = false; // نجحنا في جلب الأساسيات
-      _isLoadingHome = false; // أوقف الشيمر
-      notifyListeners(); // 👈 تحديث الواجهة (ستظهر المطاعم)
+      // 2. حفظ النسخة الجديدة في الكاش
+      await _saveHomeToCache(areaId, deliverableJson, restaurantsJson);
 
     } catch (e) {
-      // إذا فشلت الأساسيات، أوقف كل شيء
-      print("Error fetching CRITICAL home data: $e");
-      if (_homeData.isEmpty) { // أظهر الخطأ فقط إذا لا يوجد كاش
-        _hasError = true;
-      }
+      print("⚠️ فشل تحديث المطاعم من الشبكة: $e");
+      // إذا لم يكن لدينا بيانات قديمة (من الكاش)، نظهر رسالة خطأ
+      if (_homeData.isEmpty) _hasError = true;
+    } finally {
       _isLoadingHome = false;
       notifyListeners();
-      return; // 👈 إيقاف الدالة
     }
-
-    // 4. الخطوة 2: جلب العروض (طلب منفرد ومرن)
-
-    // 5. الخطوة 3: جلب الفطور (طلب منفرد ومرن)
-
-
-    // 6. الخطوة 4: جلب الوجبات العائلية (طلب منفرد ومرن)
-    try {
-      // ✨ [الإصلاح]: حذفنا areaId من هنا
-      final onSaleItems = await _apiService.getOnSaleItems();
-      _homeData['onSale'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, onSaleItems);
-      notifyListeners(); // 👈 تحديث الواجهة (ستظهر العروض)
-    } catch (e) {
-      print("Error fetching (optional) onSale items: $e");
-      _homeData['onSale'] = []; // ضع قائمة فارغة في حال الفشل
-      notifyListeners();
-    }
-
-    // 5. الخطوة 3: جلب الفطور (طلب منفرد ومرن)
-    try {
-      // ✨ [الإصلاح]: حذفنا areaId من هنا
-      final breakfastItems = await _apiService.getProductsByTag(tagName: "فطور");
-      _homeData['breakfast'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, breakfastItems);
-      notifyListeners(); // 👈 تحديث الواجهة (سيظهر الفطور)
-    } catch (e) {
-      print("Error fetching (optional) breakfast items: $e");
-      _homeData['breakfast'] = [];
-      notifyListeners();
-    }
-
-    // 6. الخطوة 4: جلب الوجبات العائلية (طلب منفرد ومرن)
-    try {
-      // ✨ [الإصلاح]: حذفنا areaId من هنا
-      final familyItems = await _apiService.getProductsByTag(tagName: "عائلي");
-      _homeData['family'] = _filterFoodItems(deliverableRestaurantIds, restaurantStatusMap, familyItems);
-      notifyListeners(); // 👈 تحديث الواجهة (ستظهر الوجبات العائلية)
-    } catch (e) {
-      print("Error fetching (optional) family items: $e");
-      _homeData['family'] = [];
-      notifyListeners();
-    }
-    // 7. التأكد من إيقاف التحميل في النهاية (حتى لو فشلت بعض الطلبات الاختيارية)
-    _isLoadingHome = false;
-    notifyListeners();
-  }
-  // --- نهاية الدالة المستبدلة ---
-
-
-  // --- Helper: Filter Restaurants by Delivery Area ---
-  List<Restaurant> _filterRestaurantsByArea(Set<int> deliverableIds, List<Restaurant> restaurants) {
-    return restaurants.map((r) {
-      r.isDeliverable = deliverableIds.contains(r.id);
-      return r; // Return the restaurant with the updated flag
-    }).toList();
   }
 
-  List<FoodItem> _filterFoodItems(Set<int> deliverableRestaurantIds, Map<int, bool> restaurantStatusMap, List<FoodItem> items) {
-    return items.map((item) {
-      bool isInDeliverableArea = deliverableRestaurantIds.contains(item.categoryId);
-      bool isRestaurantOpen = restaurantStatusMap[item.categoryId] ?? false;
-      item.isDeliverable = isInDeliverableArea && isRestaurantOpen;
-      return item;
-    }).toList();
-  }
-
-
-  // --- بقية الدوال تبقى كما هي ---
+  // --- دالة لجلب كل المطاعم (تستخدم نفس منطق الرئيسية) ---
   Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
-    if (isRefresh) {
-      _allRestaurants = [];
-    }
-    if (_allRestaurants.isNotEmpty && !isRefresh) return;
+    await fetchHomeData(areaId, isRefresh: isRefresh);
+  }
 
-    _isLoadingRestaurants = true;
-    _hasError = false;
-    notifyListeners();
+  // --- دالة مساعدة: معالجة JSON المطاعم ---
+  void _processAndSetHomeData(String deliverableJson, String restaurantsJson) {
     try {
-      final allRestaurantsList = await _apiService.getAllRestaurants(areaId: areaId);
-      final deliverableIds = await _apiService.getDeliverableRestaurantIds(areaId);
+      // 1. تحليل IDs المطاعم التي توصل للمنطقة
+      final deliverableList = json.decode(deliverableJson) as List;
+      final Set<int> deliverableIds = deliverableList.map<int>((item) => item['id']).toSet();
 
-      for (var r in allRestaurantsList) {
+      // 2. تحليل قائمة المطاعم الكاملة
+      final restaurantsList = json.decode(restaurantsJson) as List;
+      List<Restaurant> parsedRestaurants = restaurantsList.map((json) => Restaurant.fromJson(json)).toList();
+
+      // 3. ضبط حالة التوصيل (isDeliverable)
+      for (var r in parsedRestaurants) {
         r.isDeliverable = deliverableIds.contains(r.id);
       }
-      _allRestaurants = allRestaurantsList;
-      _hasError = false;
+
+      // 4. الحفظ في المتغيرات
+      _allRestaurants = parsedRestaurants;
+      _homeData['restaurants'] = parsedRestaurants;
+
     } catch (e) {
-      print("Error fetching all restaurants for area $areaId: $e");
-      _hasError = true;
-      _allRestaurants = [];
-    } finally {
-      _isLoadingRestaurants = false;
-      notifyListeners();
+      print("Error parsing home data: $e");
+      throw Exception('Data parsing error');
     }
   }
 
-  Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
-    if (isRefresh) {
-      _menuItems.remove(restaurantId);
-    }
-    if (_menuItems.containsKey(restaurantId) && !isRefresh) return;
+  // --- دالة مساعدة: تحميل المطاعم من الكاش ---
+  Future<void> _loadHomeFromCache(int areaId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final deliverableJson = prefs.getString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_ids');
+    final restaurantsJson = prefs.getString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_list');
 
-    _isLoadingMenu = true;
-    _hasError = false;
-    notifyListeners();
-    try {
-      final newItems = await _apiService.getMenuForRestaurant(restaurantId);
-
-      final restaurant = _allRestaurants.firstWhere(
-              (r) => r.id == restaurantId,
-          orElse: () {
-            final homeRestaurants = (_homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
-            return homeRestaurants.firstWhere(
-                    (r) => r.id == restaurantId,
-                orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '00:00', autoCloseTime: '00:00', latitude: 0, longitude: 0)
-            );
-          }
-      );
-
-      final bool isRestaurantReady = restaurant.isDeliverable && restaurant.isOpen;
-
-      for (var item in newItems) {
-        item.isDeliverable = isRestaurantReady;
+    if (deliverableJson != null && restaurantsJson != null) {
+      try {
+        _processAndSetHomeData(deliverableJson, restaurantsJson);
+        notifyListeners(); // تحديث الواجهة فوراً بالبيانات القديمة
+        print("📂 تم تحميل المطاعم من الذاكرة المحلية.");
+      } catch (e) {
+        print("خطأ في قراءة كاش المطاعم: $e");
       }
+    }
+  }
 
-      _menuItems[restaurantId] = newItems;
-      _hasError = false;
+  // --- دالة مساعدة: حفظ المطاعم في الكاش ---
+  Future<void> _saveHomeToCache(int areaId, String deliverableJson, String restaurantsJson) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_ids', deliverableJson);
+    await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_list', restaurantsJson);
+    // حفظ وقت التحديث الحالي
+    await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', DateTime.now().millisecondsSinceEpoch);
+  }
+
+
+  // ============================================================
+  // 2. جلب قائمة الطعام (المنيو) - نظام الكاش الذكي
+  // ============================================================
+  Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
+    _hasError = false;
+
+    // أ) التحميل من الكاش أولاً
+    if (!isRefresh && !_menuItems.containsKey(restaurantId)) {
+      await _loadMenuFromCache(restaurantId);
+    }
+
+    if (!_menuItems.containsKey(restaurantId)) {
+      _isLoadingMenu = true;
+      notifyListeners();
+    }
+
+    // ب) التحقق من صلاحية الكاش (مثلاً 10 دقائق للمنيو)
+    if (!isRefresh && _menuItems.containsKey(restaurantId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', minutes: 10)) {
+      print("✅ استخدام الكاش للمنيو (البيانات حديثة)");
+      _isLoadingMenu = false;
+      notifyListeners();
+      return;
+    }
+
+    // ج) طلب الشبكة
+    try {
+      final jsonStr = await _apiService.getRawMenu(restaurantId);
+
+      // 1. معالجة وتحديث
+      _processAndSetMenu(restaurantId, jsonStr);
+
+      // 2. حفظ في الكاش
+      await _saveMenuToCache(restaurantId, jsonStr);
+
     } catch (e) {
-      print("Error fetching menu for restaurant $restaurantId: $e");
-      _hasError = true;
-      _menuItems[restaurantId] = [];
+      print("⚠️ فشل تحديث المنيو من الشبكة: $e");
+      // إذا لم تكن هناك بيانات، نظهر الخطأ
+      if (!_menuItems.containsKey(restaurantId)) {
+        _hasError = true;
+        _menuItems[restaurantId] = [];
+      }
     } finally {
       _isLoadingMenu = false;
       notifyListeners();
     }
+  }
+
+  // --- دالة مساعدة: معالجة JSON المنيو ---
+  void _processAndSetMenu(int restaurantId, String jsonStr) {
+    try {
+      final List<dynamic> decoded = json.decode(jsonStr);
+      List<FoodItem> items = decoded.map((json) => FoodItem.fromJson(json)).toList();
+
+      // البحث عن المطعم الأب لتحديد حالته (مفتوح/مغلق) وتمريرها للمنتجات
+      Restaurant? restaurant = _allRestaurants.firstWhere(
+              (r) => r.id == restaurantId,
+          orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '', autoCloseTime: '', latitude: 0, longitude: 0)
+      );
+
+      // المنتج متاح فقط إذا كان المطعم يوصل للمنطقة + المطعم مفتوح
+      bool isAvailable = restaurant.isDeliverable && restaurant.isOpen;
+
+      for (var item in items) {
+        item.isDeliverable = isAvailable;
+      }
+
+      _menuItems[restaurantId] = items;
+    } catch (e) {
+      print("Error parsing menu: $e");
+      throw Exception('Menu parsing error');
+    }
+  }
+
+  // --- دالة مساعدة: تحميل المنيو من الكاش ---
+  Future<void> _loadMenuFromCache(int restaurantId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString('${AppConstants.CACHE_KEY_MENU_PREFIX}$restaurantId');
+    if (jsonStr != null) {
+      try {
+        _processAndSetMenu(restaurantId, jsonStr);
+        notifyListeners();
+      } catch (e) {
+        print("خطأ في كاش المنيو: $e");
+      }
+    }
+  }
+
+  // --- دالة مساعدة: حفظ المنيو في الكاش ---
+  Future<void> _saveMenuToCache(int restaurantId, String jsonStr) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${AppConstants.CACHE_KEY_MENU_PREFIX}$restaurantId', jsonStr);
+    await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', DateTime.now().millisecondsSinceEpoch);
+  }
+
+
+  // ============================================================
+  // 3. دوال مساعدة عامة
+  // ============================================================
+
+  // التحقق من صلاحية الكاش بناءً على الوقت (بديلة لـ _lastFetchTime)
+  Future<bool> _isCacheValid(String key, {required int minutes}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastTime = prefs.getInt(key);
+    if (lastTime == null) return false;
+
+    final diff = DateTime.now().millisecondsSinceEpoch - lastTime;
+    final minutesDiff = diff / 1000 / 60;
+
+    return minutesDiff < minutes;
   }
 }
 class DashboardProvider with ChangeNotifier {
@@ -366,19 +409,37 @@ class DashboardProvider with ChangeNotifier {
   bool _isLoading = false;
   Timer? _timer;
 
+  // ➕ 1. متغير جديد للتحكم في التحديث الذكي
+  Timer? _debounceTimer;
+
   Map<String, List<Order>> get orders => _orders;
   RestaurantRatingsDashboard? get ratingsDashboard => _ratingsDashboard;
   Map<int, String> get pickupCodes => _pickupCodes;
   bool get isLoading => _isLoading;
 
-  // إلغاء العداد والاعتماد على الإشعار
+  // ➕ 2. دالة التحديث الذكي (استخدم هذه عند وصول الإشعارات)
+  void triggerSmartRefresh(String token) {
+    // إذا وصل إشعار جديد وكان هناك مؤقت يعمل، قم بإلغائه (تصفير العداد)
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+
+    print("⏳ وصل إشعار.. انتظار 3 ثواني قبل التحديث لتجميع الطلبات...");
+
+    // انتظر 3 ثواني، ثم نفذ التحديث مرة واحدة فقط
+    _debounceTimer = Timer(const Duration(seconds: 3), () {
+      print("🚀 تنفيذ التحديث المجمع الآن!");
+      fetchDashboardData(token, silent: true);
+    });
+  }
+
   void startAutoRefresh(String token) {
     _timer?.cancel();
+    // نكتفي بطلب أولي، ثم نعتمد على الإشعارات والتحديث اليدوي لتخفيف الحمل
     fetchDashboardData(token, silent: true);
   }
 
   void stopAutoRefresh() {
     _timer?.cancel();
+    _debounceTimer?.cancel(); // إيقاف المؤقت الذكي أيضاً
   }
 
   void setPickupCode(int orderId, String code) {
@@ -386,12 +447,11 @@ class DashboardProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // إيقاف الأتمتة
+  // إيقاف الأتمتة القديمة
   Future<void> checkAndAutoRequestDelivery(String token) async {
     // 🚫 Disabled
   }
 
-  // 🔥 منطق الفرز الجديد: إظهار كل شيء ما عدا المنتهي
   Future<void> fetchDashboardData(String? token, {bool silent = false}) async {
     if (token == null) return;
     if (!silent) {
@@ -446,6 +506,7 @@ class DashboardProvider with ChangeNotifier {
   @override
   void dispose() {
     _timer?.cancel();
+    _debounceTimer?.cancel(); // تنظيف الذاكرة
     super.dispose();
   }
 }
@@ -1462,9 +1523,77 @@ class ApiService {
   final String _authString = 'Basic ${base64Encode(utf8.encode('$CONSUMER_KEY:$CONSUMER_SECRET'))}';
   final CacheService _cacheService = CacheService();
 
+  // =================================================================
+  // 🔥🔥🔥 دالة التنفيذ الذكي المعدلة (Exponential Backoff) 🔥🔥🔥
+  // =================================================================
+  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
+    int attempts = 0;
+    while (attempts < 3) {
+      try {
+        return await action().timeout(API_TIMEOUT);
+      } catch (e) {
+        attempts++;
+        String errorString = e.toString();
 
+        // 🛑 1. فحص الحظر: إذا كان الخطأ 403 (Forbidden) أو 429 (Too Many Requests)
+        if (errorString.contains('403') || errorString.contains('429')) {
+          print("⛔ تم إيقاف المحاولات فوراً لتجنب الحظر: $errorString");
+          rethrow;
+        }
 
-// داخل كلاس ApiService
+        // إذا وصلنا للحد الأقصى، ارمِ الخطأ
+        if (attempts >= 3) rethrow;
+
+        // ⏳ 2. الانتظار التصاعدي
+        int delaySeconds = pow(2, attempts).toInt();
+        print("⚠️ فشل الطلب (محاولة $attempts)، انتظار $delaySeconds ثواني لتهدئة السيرفر...");
+
+        await Future.delayed(Duration(seconds: delaySeconds));
+      }
+    }
+    throw Exception('Failed after multiple retries');
+  }
+  // =================================================================
+
+  // ✨✨✨ دوال جديدة للتخزين المؤقت (للزبون فقط) ✨✨✨
+  // ترجع String (JSON) ليتم حفظها في SharedPreferences
+
+  // 1. جلب قائمة المطاعم كنص خام
+  Future<String> getRawRestaurants(int areaId) async {
+    const fields = 'id,name,image,count,meta_data';
+    // نطلب عدد كبير لضمان تخزين القائمة كاملة
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields&area_id=$areaId';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load restaurants raw');
+    });
+  }
+
+  // 2. جلب أرقام المطاعم التي توصل للمنطقة (للفلترة) كنص خام
+  Future<String> getRawDeliverableIds(int areaId) async {
+    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load deliverable IDs raw');
+    });
+  }
+
+  // 3. جلب المنيو كنص خام
+  Future<String> getRawMenu(int restaurantId) async {
+    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products?category=$restaurantId&per_page=100&_fields=$fields';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load menu raw');
+    });
+  }
+  // ✨✨✨ نهاية الدوال الجديدة ✨✨✨
+
 
   // دالة إضافة منتج جديد
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
@@ -1476,14 +1605,14 @@ class ApiService {
       }
 
       final response = await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'), // تأكد من وجود هذا المسار في PHP
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({
           'name': name,
           'regular_price': price,
           'sale_price': salePrice,
           'description': description,
-          'image_base64': imageBase64, // إرسال الصورة
+          'image_base64': imageBase64,
         }),
       );
       return response.statusCode == 201 || response.statusCode == 200;
@@ -1507,17 +1636,15 @@ class ApiService {
           'name': name,
           'regular_price': price,
           'sale_price': salePrice,
-          'image_base64': imageBase64, // إرسال الصورة الجديدة إن وجدت
+          'image_base64': imageBase64,
         }),
       );
       return response.statusCode == 200;
     });
   }
 
-
   Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
     final url = '$BEYTEI_URL/wp-json/taxi/v2/delivery/available';
-
     print("🚀 [DEBUG] جاري طلب البيانات من: $url");
 
     return _executeWithRetry(() async {
@@ -1529,56 +1656,27 @@ class ApiService {
         },
       );
 
-      print("📡 [DEBUG] حالة الاتصال: ${response.statusCode}");
-      print("📦 [DEBUG] البيانات الواصلة: ${response.body}");
-
       if (response.statusCode == 200) {
         try {
           final data = json.decode(response.body);
-
-          // احتمال 1: البيانات تأتي داخل حقل 'data'
           var ordersList = data['orders'] ?? data['data'];
-
-          // احتمال 2: البيانات عبارة عن قائمة مباشرة []
           if (data is List) {
             ordersList = data;
           }
 
           if (ordersList != null && ordersList is List) {
             return ordersList.map<UnifiedDeliveryOrder>((json) {
-              // طباعة كل عنصر للتأكد من سلامته قبل التحويل
-              // print("Testing Item: $json");
               return UnifiedDeliveryOrder.fromJson(json);
             }).toList();
           }
-
-          print("⚠️ [DEBUG] لم يتم العثور على قائمة طلبات في الاستجابة.");
           return [];
-
         } catch (e) {
-          print("❌ [DEBUG] خطأ في تحويل البيانات (Parsing): $e");
           throw Exception('خطأ في قراءة البيانات: $e');
         }
       } else {
-        print("❌ [DEBUG] السيرفر رفض الطلب. السبب: ${response.body}");
         throw Exception('فشل الاتصال بالسيرفر (كود: ${response.statusCode})');
       }
     });
-  }
-
-
-  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
-    int attempts = 0;
-    while (attempts < 3) {
-      try {
-        return await action().timeout(API_TIMEOUT);
-      } catch (e) {
-        attempts++;
-        if (attempts >= 3) rethrow;
-        await Future.delayed(Duration(seconds: attempts * 2));
-      }
-    }
-    throw Exception('Failed after multiple retries');
   }
 
   Future<List<Area>> getAreas() async {
@@ -1593,12 +1691,9 @@ class ApiService {
     });
   }
 
-
-
   Future<bool> updateMyLocation(String token, String lat, String lng) async {
     return _executeWithRetry(() async {
       final response = await http.post(
-        // هذا هو المسار الجديد الذي أنشأناه في PHP
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-my-location'),
         headers: {
           'Authorization': 'Bearer $token',
@@ -1609,22 +1704,13 @@ class ApiService {
           'lng': lng,
         }),
       );
-      // إذا نجح (200)، سيعود true
       return response.statusCode == 200;
     });
   }
-// --- [ نهاية الإضافة ] ---
 
-
-
-
-
-  // ✨ --- [ تم تعديل هذه الدالة ] ---
   Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
     const fields = 'id,name,image,count,meta_data';
-    // ✨ [الإصلاح 1]: تغيير per_page=10 إلى 100 لجلب كل المطاعم وحالاتها
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&page=1&_fields=$fields&area_id=$areaId';
-    // ✨ تم تعديل مفتاح الكاش ليشمل المنطقة (page 1 ثابت)
     final cacheKey = 'restaurants_area_${areaId}_page_1_limit_100';
 
     return _executeWithRetry(() async {
@@ -1637,18 +1723,15 @@ class ApiService {
       throw Exception('Server error ${response.statusCode}');
     });
   }
-  // ✨ --- [ نهاية التعديل ] ---
-  // ✨ --- [ دالة جديدة مضافة ] ---
+
   Future<Restaurant> getRestaurantById(int restaurantId) async {
     const fields = 'id,name,image,count,meta_data';
-    // هذا الرابط يجلب مطعم واحد فقط
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories/$restaurantId?_fields=$fields';
 
     return _executeWithRetry(() async {
       final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        // (نفترض أن المطعم الذي يُطلب عن طريق الرابط هو صالح للتوصيل)
         final restaurant = Restaurant.fromJson(data);
         restaurant.isDeliverable = true;
         return restaurant;
@@ -1657,27 +1740,22 @@ class ApiService {
     });
   }
 
-
-
   Future<List<FoodItem>> getMyRestaurantProducts(String token) async {
     return _executeWithRetry(() async {
-      // (يجب إنشاء هذا المسار في الواجهة الخلفية)
       final response = await http.get(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/my-products'),
         headers: {'Authorization': 'Bearer $token'},
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as List;
-        // نستخدم نفس مودل FoodItem
         return data.map((json) => FoodItem.fromJson(json)).toList();
       }
       throw Exception('Failed to load restaurant products');
     });
   }
 
-  // ✨ دالة لتحديث بيانات المنتج (للمدير)
   Future<Map<String, dynamic>> getDeliveryFee({
-    required int restaurantId, // ✨ [تم التعديل] أصبح يستقبل رقم المطعم
+    required int restaurantId,
     required double customerLat,
     required double customerLng,
   }) async {
@@ -1686,7 +1764,7 @@ class ApiService {
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-fee'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'restaurant_id': restaurantId, // ✨ [تم التعديل] إرسال الرقم
+          'restaurant_id': restaurantId,
           'customer_lat': customerLat,
           'customer_lng': customerLng,
         }),
@@ -1694,22 +1772,18 @@ class ApiService {
       if (response.statusCode == 200) {
         return json.decode(response.body);
       }
-
-      // ✨ [تحسين] إظهار رسالة الخطأ القادمة من الخادم
       try {
         final errorBody = json.decode(response.body);
-        // هذا سيجلب الرسالة من الخادم (مثل: خطأ: الخادم لم يعثر على إحداثيات...)
         throw Exception(errorBody['message'] ?? 'فشل حساب سعر التوصيل');
       } catch (e) {
         throw Exception('فشل حساب سعر التوصيل');
       }
     });
   }
-// ✨ إضافة دالة جلب إعدادات المطعم للمدير
+
   Future<Map<String, dynamic>> getRestaurantSettings(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
-        // يجب إنشاء هذا المسار في الواجهة الخلفية!
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-settings'),
         headers: {'Authorization': 'Bearer $token'},
       );
@@ -1720,11 +1794,9 @@ class ApiService {
     });
   }
 
-// ✨ إضافة دالة تحديث حالة الفتح اليدوية للمدير
   Future<bool> updateRestaurantStatus(String token, bool isOpen) async {
     return _executeWithRetry(() async {
       final response = await http.post(
-        // يجب إنشاء هذا المسار في الواجهة الخلفية!
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-status'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({'is_open': isOpen ? 1 : 0}),
@@ -1733,11 +1805,9 @@ class ApiService {
     });
   }
 
-// ✨ إضافة دالة تحديث أوقات الفتح والإغلاق التلقائي للمدير
   Future<bool> updateRestaurantAutoTimes(String token, String openTime, String closeTime) async {
     return _executeWithRetry(() async {
       final response = await http.post(
-        // يجب إنشاء هذا المسار في الواجهة الخلفية!
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-auto-times'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({'open_time': openTime, 'close_time': closeTime}),
@@ -1746,31 +1816,20 @@ class ApiService {
     });
   }
 
-// ... بقية دوال ApiService
-// (الصق هذا بدلاً من دالة getDeliverableRestaurantIds القديمة)
-
   Future<Set<int>> getDeliverableRestaurantIds(int areaId) async {
-    // ✨ تم التعديل: توجيه الطلب إلى نقطة النهاية المخصصة الجديدة
     final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
-
     return _executeWithRetry(() async {
-      // ✨ تم التعديل: إزالة 'Authorization' لأن نقطة النهاية الجديدة عامة ومتاحة للجميع
       final response = await http.get(Uri.parse(url));
-
       if (response.statusCode == 200) {
-        // الاستجابة ستكون بالشكل التالي: [{id: 12}, {id: 15}]
-        // هذا الكود سيقوم بتحويلها إلى Set<int> بشكل صحيح
         return (json.decode(response.body) as List).map<int>((item) => item['id']).toSet();
       }
-      throw Exception('Failed to fetch deliverable restaurants (Custom Endpoint)');
+      throw Exception('Failed to fetch deliverable restaurants');
     });
   }
+
   Future<List<FoodItem>> _getProducts(String params, String cacheKey) async {
     return _executeWithRetry(() async {
-      // ✨ [الإصلاح]: أضفنا meta_data هنا لنتمكن من قراءة ID المطعم الأب
       const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
-
-      // ✨ [الإصلاح]: حذفنا areaParam من الرابط
       final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields';
 
       final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
@@ -1781,14 +1840,11 @@ class ApiService {
       throw Exception('Failed to fetch products');
     });
   }
-  // (استبدل الدالة القديمة بهذه)
-  Future<List<FoodItem>> getOnSaleItems() =>
-      _getProducts('on_sale=true&per_page=20', 'onsale_items');
 
-  // (استبدل الدالة القديمة بهذه)
-  Future<List<FoodItem>> searchProducts({required String query}) =>
-      _getProducts('search=$query&per_page=20', 'search_$query');
-  // (استبدل الدالة القديمة بهذه)
+  Future<List<FoodItem>> getOnSaleItems() => _getProducts('on_sale=true&per_page=20', 'onsale_items');
+
+  Future<List<FoodItem>> searchProducts({required String query}) => _getProducts('search=$query&per_page=20', 'search_$query');
+
   Future<List<FoodItem>> getProductsByTag({required String tagName}) async {
     return _executeWithRetry(() async {
       final tagsResponse = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wc/v3/products/tags?search=$tagName&_fields=id'), headers: {'Authorization': _authString});
@@ -1796,54 +1852,37 @@ class ApiService {
       final tags = json.decode(tagsResponse.body);
       if (tags.isEmpty) return [];
       final tagId = tags[0]['id'];
-
-      // ✨ [الإصلاح]: حذفنا areaId من هنا
       return _getProducts('tag=$tagId&per_page=10', 'tag_$tagId');
     });
   }
-  // ✨ --- [ تم تعديل هذه الدالة ] ---
-  // تم تغيير per_page=10 إلى per_page=100 لجلب كل منتجات المنيو
-// (استبدل الدالة القديمة بهذه)
+
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
       _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
+
   Future<Order?> submitOrder({
     required String name, required String phone, required String address,
     required List<FoodItem> cartItems, String? couponCode,
     geolocator.Position? position,
-    double? deliveryFee, // <-- ✨ الإضافة الجديدة هنا
+    double? deliveryFee,
   }) async {
-
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
-// <-- ✨ الإضافة الجديدة هنا: تجهيز سطر الشحن
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
-        ? [{
-      "method_id": "flat_rate",
-      "method_title": "توصيل",
-      "total": deliveryFee.toString()
-    }]
+        ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
-    // 1. جلب توكن FCM الحالي للزبون
+
     String? fcmToken = await FirebaseMessaging.instance.getToken();
 
-    // 2. بناء الـ bodyPayload مع بيانات التوكن + الإحداثيات
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod", "payment_method_title": "الدفع عند الاستلام",
       "billing": {"first_name": name, "last_name":".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001", "email": "customer@example.com"},
       "shipping": {"first_name": name, "last_name":".", "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001"},
       "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
       "coupon_lines": couponLines,
-      "shipping_lines": shippingLines, // <-- ✨ الإضافة الجديدة هنا
-      // ✨ إرسال التوكن + الإحداثيات (هذا هو التعديل)
+      "shipping_lines": shippingLines,
       "meta_data": [
-        if (fcmToken != null)
-          {"key": "_customer_fcm_token", "value": fcmToken},
-        // --- ✨ الإضافة الجديدة هنا ---
-        // (يجب أن يكون الـ Backend معداً لقراءة هذه الحقول)
-        if (position != null)
-          {"key": "_customer_destination_lat", "value": position.latitude.toString()},
-        if (position != null)
-          {"key": "_customer_destination_lng", "value": position.longitude.toString()}
-        // --- نهاية الإضافة ---
+        if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
+        if (position != null) {"key": "_customer_destination_lat", "value": position.latitude.toString()},
+        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()}
       ],
     };
 
@@ -1863,6 +1902,7 @@ class ApiService {
       throw Exception('Failed to submit order: ${response.body}');
     }
   }
+
   Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
     return _executeWithRetry(() async {
       final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
@@ -1921,11 +1961,8 @@ class ApiService {
     });
   }
 
-
-// --- ✨ ألصق الكود هنا (المكان الصحيح) ✨ ---
   Future<DeliveryConfig> getDeliveryConfig() async {
     return _executeWithRetry(() async {
-      // (تأكد من أن هذا الرابط يطابق ما أنشأته في PHP)
       final response = await http.get(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-delivery-config'),
       );
@@ -1935,27 +1972,23 @@ class ApiService {
       throw Exception('Failed to load delivery config');
     });
   }
-  // --- نهاية اللصق ---
 
   Future<Map<String, dynamic>> createUnifiedDeliveryRequest({
     required String token,
-    required String sourceType, // 'restaurant', 'pharmacy', 'store', 'customer'
+    required String sourceType,
     required String pickupName,
     required double pickupLat,
     required double pickupLng,
     required String destinationAddress,
-    // ملاحظة: إحداثيات الزبون قد لا تكون متوفرة دائماً من ووكومرس، لذا نجعلها اختيارية
     double? destinationLat,
     double? destinationLng,
     required String deliveryFee,
     required String orderDescription,
     required String endCustomerPhone,
-    String? sourceOrderId, // اختياري: لربط الطلب برقم الطلب الأصلي
+    String? sourceOrderId,
   }) async {
     return await _executeWithRetry(() async {
       final response = await http.post(
-        // تأكد من أن هذا المسار يطابق الواجهة الخلفية تماماً
-        // المسار الصحيح هو taxi/v2 وليس taxi-app/v1
         Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/create'),
         headers: {
           'Authorization': 'Bearer $token',
@@ -1968,8 +2001,8 @@ class ApiService {
           'pickup_lat': pickupLat.toString(),
           'pickup_lng': pickupLng.toString(),
           'destination_address': destinationAddress,
-          'destination_lat': destinationLat?.toString() ?? "0", // إرسال "0" إذا كانت غير متوفرة
-          'destination_lng': destinationLng?.toString() ?? "0", // إرسال "0" إذا كانت غير متوفرة
+          'destination_lat': destinationLat?.toString() ?? "0",
+          'destination_lng': destinationLng?.toString() ?? "0",
           'delivery_fee': deliveryFee,
           'order_description': orderDescription,
           'end_customer_phone': endCustomerPhone,
@@ -3067,20 +3100,20 @@ class _RestaurantModuleState extends State<RestaurantModule> {
       // 1. عرض التنبيه (صوت + إشعار منبثق)
       NotificationService.display(message);
 
-      // 2. تحديث البيانات فوراً (بدلاً من انتظار المؤقت)
+      // 2. تحديث البيانات باستخدام "التحديث الذكي"
       if (mounted) {
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
         if (authProvider.isLoggedIn && authProvider.token != null) {
-          print("🔔 إشعار جديد وصل! جاري تحديث بيانات المطعم فوراً...");
+          print("🔔 إشعار جديد وصل! تفعيل التحديث الذكي (Smart Refresh)...");
 
-          // أ) تحديث قائمة الطلبات (النشطة والمكتملة)
+          // ✨✨✨ التعديل الجوهري هنا ✨✨✨
+          // استخدام triggerSmartRefresh لتجميع الطلبات المتتالية في طلب واحد للسيرفر
           Provider.of<DashboardProvider>(context, listen: false)
-              .fetchDashboardData(authProvider.token, silent: true);
+              .triggerSmartRefresh(authProvider.token!);
 
-          // ب) تحديث إعدادات المطعم (للاحتياط، في حال تغيرت الحالة)
-          Provider.of<RestaurantSettingsProvider>(context, listen: false)
-              .fetchSettings(authProvider.token);
+          // 💡 ملاحظة: تم إيقاف تحديث الإعدادات (Settings) مع كل إشعار لتخفيف الضغط،
+          // لأن الإعدادات لا تتغير عادةً عند وصول طلب جديد.
         }
       }
     });
@@ -3106,9 +3139,9 @@ class _RestaurantModuleState extends State<RestaurantModule> {
           create: (_) => DashboardProvider(),
           update: (_, auth, dashboard) {
             if(auth.isLoggedIn && dashboard != null && auth.token != null) {
-              // عند بدء التطبيق، نجلب البيانات مرة واحدة (initial fetch)
-              // التحديثات اللاحقة ستتم عبر الإشعارات (الكود أعلاه)
-              dashboard.startAutoRefresh(auth.token!);
+              // عند بدء التطبيق، نعتمد على التحديث الذكي أو اليدوي
+              // تم إيقاف startAutoRefresh الدورية لتخفيف الحمل
+              dashboard.fetchDashboardData(auth.token!, silent: true);
             }
             return dashboard!;
           },
@@ -3158,8 +3191,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
       ),
     );
   }
-}
-// ✨ NEW: Restaurant Settings Screen
+}// ✨ NEW: Restaurant Settings Screen
 class RestaurantSettingsScreen extends StatefulWidget {
   const RestaurantSettingsScreen({super.key});
 

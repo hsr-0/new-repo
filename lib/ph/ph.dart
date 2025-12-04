@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -22,7 +23,7 @@ import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mime/mime.dart';
-import 'package:qr_flutter/qr_flutter.dart'; // For QR Code generation
+import 'package:qr_flutter/qr_flutter.dart';
 
 // =======================================================================
 // --- GLOBAL NAVIGATOR KEY ---
@@ -33,19 +34,86 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 // --- API & APP CONSTANTS ---
 // =======================================================================
 class ApiConstants {
-  static const String YOUR_DOMAIN = 'https://ph.beytei.com'; // Replace with your domain
+  static const String YOUR_DOMAIN = 'https://ph.beytei.com';
   static const String BASE_URL = '$YOUR_DOMAIN/wp-json';
   static const String PHARMACY_API_URL = '$BASE_URL/beytei-pharmacy/v1';
   static const String JWT_URL = '$BASE_URL/jwt-auth/v1/token';
-  static const String BANNERS_URL = 'https://banner.beytei.com/images/banners.json'; // Example URL
+  static const String BANNERS_URL = 'https://banner.beytei.com/images/banners.json';
 }
 
 class AppConstants {
   static const String prefsKeyToken = 'pharmacyToken';
   static const String prefsKeyAreaId = 'pharmacy_selectedAreaId';
   static const String prefsKeyAreaName = 'pharmacy_selectedAreaName';
+
+  // Cache Keys
+  static const String cacheKeyHome = 'cache_home_data_';
+  static const String cacheKeyProducts = 'cache_products_list';
+  static const String cacheKeyPharmacies = 'cache_all_pharmacies';
+  static const String cacheKeyDashboard = 'cache_pharmacy_dashboard';
 }
 
+// =======================================================================
+// --- API SERVICE (Retry Logic) ---
+// =======================================================================
+class ApiService {
+  static const Duration API_TIMEOUT = Duration(seconds: 20);
+
+  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
+    int attempts = 0;
+    while (attempts < 3) {
+      try {
+        return await action().timeout(API_TIMEOUT);
+      } catch (e) {
+        attempts++;
+        String error = e.toString();
+        // Don't retry on auth errors or client errors
+        if (error.contains('401') || error.contains('403')) rethrow;
+
+        if (attempts >= 3) rethrow;
+        int delay = pow(2, attempts).toInt();
+        print("⚠️ فشل الاتصال، إعادة المحاولة بعد $delay ثواني...");
+        await Future.delayed(Duration(seconds: delay));
+      }
+    }
+    throw Exception('Failed after retries');
+  }
+
+  Future<String> getPharmaciesRaw(int areaId) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies?area_id=$areaId'));
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Server Error: ${response.statusCode}');
+    });
+  }
+
+  Future<String> getAllPharmaciesRaw() async {
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies'));
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Server Error: ${response.statusCode}');
+    });
+  }
+
+  Future<String> getProductsRaw() async {
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/products'));
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Server Error');
+    });
+  }
+
+  Future<String> getDashboardRaw(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/dashboard'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Server Error');
+    });
+  }
+}
 
 // =======================================================================
 // --- MODELS ---
@@ -104,19 +172,11 @@ class DriverInfo {
   final String vehicleType;
   final String carModel;
   final String carColor;
-
-  DriverInfo({
-    required this.name,
-    required this.phone,
-    required this.vehicleType,
-    required this.carModel,
-    required this.carColor,
-  });
-
+  DriverInfo({required this.name, required this.phone, required this.vehicleType, required this.carModel, required this.carColor});
   factory DriverInfo.fromJson(Map<String, dynamic> json) {
     return DriverInfo(
-      name: json['name'] ?? 'اسم غير متوفر',
-      phone: json['phone'] ?? 'رقم غير متوفر',
+      name: json['name'] ?? 'غير متوفر',
+      phone: json['phone'] ?? 'غير متوفر',
       vehicleType: json['vehicle_type'] ?? '',
       carModel: json['car_model'] ?? '',
       carColor: json['car_color'] ?? '',
@@ -139,18 +199,10 @@ class Order {
   final DriverInfo? driverInfo;
 
   Order({
-    required this.id,
-    required this.customerName,
-    required this.customerPhone,
-    required this.customerArea,
-    required this.total,
-    required this.status,
-    required this.date,
-    required this.items,
-    required this.customerFirebaseUid,
-    this.deliveryStatus,
-    this.deliveryQrCode,
-    this.driverInfo,
+    required this.id, required this.customerName, required this.customerPhone,
+    required this.customerArea, required this.total, required this.status,
+    required this.date, required this.items, required this.customerFirebaseUid,
+    this.deliveryStatus, this.deliveryQrCode, this.driverInfo,
   });
 
   factory Order.fromJson(Map<String, dynamic> json) {
@@ -166,14 +218,11 @@ class Order {
       customerFirebaseUid: json['customer_firebase_uid'] ?? '',
       deliveryStatus: json['delivery_status'],
       deliveryQrCode: json['delivery_qr_code'],
-      driverInfo: json['driver_info'] != null
-          ? DriverInfo.fromJson(json['driver_info'])
-          : null,
+      driverInfo: json['driver_info'] != null ? DriverInfo.fromJson(json['driver_info']) : null,
     );
   }
 }
 
-// ... Other Models (SubscriptionRequest, Conversation, etc. remain the same)
 class SubscriptionRequest {
   final int id;
   final String name;
@@ -181,13 +230,12 @@ class SubscriptionRequest {
   final String illnessType;
   final DateTime date;
   SubscriptionRequest({required this.id, required this.name, required this.phone, required this.illnessType, required this.date});
-
   factory SubscriptionRequest.fromJson(Map<String, dynamic> json) {
     return SubscriptionRequest(
       id: json['id'] ?? 0,
-      name: json['name'] ?? 'اسم غير متوفر',
-      phone: json['phone'] ?? 'رقم غير متوفر',
-      illnessType: json['illness_type'] ?? 'غير محدد',
+      name: json['name'] ?? '',
+      phone: json['phone'] ?? '',
+      illnessType: json['illness_type'] ?? '',
       date: DateTime.tryParse(json['date'] ?? '') ?? DateTime.now(),
     );
   }
@@ -199,19 +247,11 @@ class Conversation {
   final String fcmToken;
   final int unreadCount;
   final int lastMessageTime;
-
-  Conversation({
-    required this.uid,
-    required this.name,
-    required this.fcmToken,
-    required this.unreadCount,
-    required this.lastMessageTime,
-  });
-
+  Conversation({required this.uid, required this.name, required this.fcmToken, required this.unreadCount, required this.lastMessageTime});
   factory Conversation.fromJson(Map<String, dynamic> json) {
     return Conversation(
       uid: json['uid'] ?? '',
-      name: json['name'] ?? 'مستخدم غير معروف',
+      name: json['name'] ?? 'مستخدم',
       fcmToken: json['fcm_token'] ?? '',
       unreadCount: json['unread_count'] ?? 0,
       lastMessageTime: json['last_message_time'] ?? 0,
@@ -224,7 +264,7 @@ class Area {
   final String name;
   final int parentId;
   Area({required this.id, required this.name, required this.parentId});
-  factory Area.fromJson(Map<String, dynamic> json) => Area(id: json['id'] ?? 0, name: json['name'] ?? 'منطقة غير مسماة', parentId: json['parent'] ?? 0);
+  factory Area.fromJson(Map<String, dynamic> json) => Area(id: json['id'] ?? 0, name: json['name'] ?? 'منطقة', parentId: json['parent'] ?? 0);
 }
 
 class CartItem {
@@ -237,9 +277,7 @@ class BannerItem {
   final String imageUrl;
   final String targetType;
   final String targetUrl;
-
   BannerItem({required this.imageUrl, required this.targetType, required this.targetUrl});
-
   factory BannerItem.fromJson(Map<String, dynamic> json) {
     return BannerItem(
       imageUrl: json['imageUrl'] ?? '',
@@ -252,6 +290,8 @@ class BannerItem {
 // =======================================================================
 // --- PROVIDERS ---
 // =======================================================================
+
+// 1. AuthProvider
 class AuthProvider with ChangeNotifier {
   String? _token;
   int? _pharmacyId;
@@ -286,7 +326,7 @@ class AuthProvider with ChangeNotifier {
       final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/save_fcm_token');
       try {
         await http.post(url, headers: {'Authorization': 'Bearer $_token', 'Content-Type': 'application/json'}, body: json.encode({'fcm_token': fcmToken}));
-      } catch (e) { print("Failed to save FCM token: $e"); }
+      } catch (_) {}
     }
   }
 
@@ -302,14 +342,14 @@ class AuthProvider with ChangeNotifier {
       } else {
         await logout(navigatorKey.currentContext!);
       }
-    } catch (e) { print("Failed to fetch dashboard data: $e"); }
+    } catch (_) {}
   }
 
   Future<void> tryAutoLogin() async {
     final prefs = await SharedPreferences.getInstance();
-    if (!prefs.containsKey(AppConstants.prefsKeyToken)) { return; }
+    if (!prefs.containsKey(AppConstants.prefsKeyToken)) return;
     _token = prefs.getString(AppConstants.prefsKeyToken);
-    if (_token != null) { await fetchAndSetPharmacyInfo(); }
+    if (_token != null) await fetchAndSetPharmacyInfo();
     notifyListeners();
   }
 
@@ -324,6 +364,7 @@ class AuthProvider with ChangeNotifier {
   }
 }
 
+// 2. CartProvider
 class CartProvider with ChangeNotifier {
   Map<int, CartItem> _items = {};
   int? _pharmacyId;
@@ -343,7 +384,7 @@ class CartProvider with ChangeNotifier {
     }
     _pharmacyId = product.pharmacyId;
     if (_items.containsKey(product.id)) {
-      _items.update(product.id, (existingItem) => CartItem(product: existingItem.product, quantity: existingItem.quantity + 1));
+      _items.update(product.id, (existing) => CartItem(product: existing.product, quantity: existing.quantity + 1));
     } else {
       _items.putIfAbsent(product.id, () => CartItem(product: product));
     }
@@ -352,11 +393,11 @@ class CartProvider with ChangeNotifier {
   void removeSingleItem(int productId) {
     if (!_items.containsKey(productId)) return;
     if (_items[productId]!.quantity > 1) {
-      _items.update(productId, (existingItem) => CartItem(product: existingItem.product, quantity: existingItem.quantity - 1));
+      _items.update(productId, (existing) => CartItem(product: existing.product, quantity: existing.quantity - 1));
     } else {
       _items.remove(productId);
     }
-    if (_items.isEmpty) { _pharmacyId = null; }
+    if (_items.isEmpty) _pharmacyId = null;
     notifyListeners();
   }
   void clear() {
@@ -366,274 +407,190 @@ class CartProvider with ChangeNotifier {
   }
 }
 
-// [MODIFIED] الكلاس الكامل بعد التعديل
+// 3. PharmacyProvider (⭐ OFFLINE MODE RESTORED ⭐)
 class PharmacyProvider with ChangeNotifier {
-  // ... (This provider remains unchanged, it's for customer-facing data)
+  final ApiService _apiService = ApiService();
+
   List<PharmacyProductGroup> _productsByPharmacy = [];
-  List<Pharmacy> _allPharmacies = [];
   List<Pharmacy> _nearbyPharmacies = [];
+  List<Pharmacy> _allPharmacies = [];
   List<BannerItem> _banners = [];
+
+  bool _isLoadingHome = false;
   bool _isLoadingProducts = false;
   bool _isLoadingPharmacies = false;
-  bool _isLoadingHome = false;
   bool _hasNetworkError = false;
   String _errorMessage = '';
 
   List<PharmacyProductGroup> get productsByPharmacy => _productsByPharmacy;
-  List<Pharmacy> get allPharmacies => _allPharmacies;
   List<Pharmacy> get nearbyPharmacies => _nearbyPharmacies;
+  List<Pharmacy> get allPharmacies => _allPharmacies;
   List<BannerItem> get banners => _banners;
+
+  bool get isLoadingHome => _isLoadingHome;
   bool get isLoadingProducts => _isLoadingProducts;
   bool get isLoadingPharmacies => _isLoadingPharmacies;
-  bool get isLoadingHome => _isLoadingHome;
   bool get hasNetworkError => _hasNetworkError;
   String get errorMessage => _errorMessage;
 
-  // [MODIFIED] أضفنا "مهلة زمنية" (timeout) ليفشل الطلب أسرع على الإنترنت الضعيف
-  Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
-    int attempts = 0;
-    while (attempts < 3) {
-      try {
-        // سيفشل الطلب بعد 15 ثانية بدلاً من الانتظار طويلاً
-        return await action().timeout(const Duration(seconds: 15));
-      } catch (e) {
-        attempts++;
-        if (attempts >= 3) rethrow;
-        await Future.delayed(Duration(seconds: attempts * 2));
-      }
-    }
-    throw Exception('Failed after multiple retries');
-  }
-
-  // [MODIFIED] تم تعديل المنطق بالكامل
-  Future<void> fetchHomeData(int areaId) async {
+  // --- Home Data (Offline Support) ---
+  Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
     _hasNetworkError = false;
 
-    // 1. تحقق من وجود الكاش أولاً
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('cache_home_data_$areaId');
-
-    if (data == null) {
-      // لا يوجد كاش: أظهر التحميل (لأنه لا يوجد شيء لعرضه)
-      _isLoadingHome = true;
-      notifyListeners();
-    } else {
-      // يوجد كاش: قم بتحميله فوراً
-      await _loadHomeDataFromCache(areaId);
-      _isLoadingHome = false; // لا تظهر التحميل، لأن المستخدم يرى البيانات
+    // 1. Try Load from Cache First (Offline Mode)
+    if (!isRefresh && _nearbyPharmacies.isEmpty) {
+      await _loadHomeFromCache(areaId);
     }
 
-    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
-    try {
-      final responses = await Future.wait([
-        http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies?area_id=$areaId')),
-        http.get(Uri.parse(ApiConstants.BANNERS_URL)),
-      ]).timeout(const Duration(seconds:30)); // أضفنا مهلة زمنية هنا أيضاً
+    if (_nearbyPharmacies.isEmpty) {
+      _isLoadingHome = true;
+      notifyListeners();
+    }
 
-      if (responses[0].statusCode == 200 && responses[1].statusCode == 200) {
-        final pharmaciesData = json.decode(responses[0].body) as List;
-        _nearbyPharmacies = pharmaciesData.map((p) => Pharmacy.fromJson(p)).toList();
-        final bannersJsonData = json.decode(responses[1].body);
-        if (bannersJsonData['showBanners'] ?? false) {
-          final bannerList = List<Map<String, dynamic>>.from(bannersJsonData['banners'] ?? []);
-          _banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-        } else {
-          _banners = [];
-        }
-        // نجح الاتصال: احفظ البيانات الجديدة في الكاش
-        await _saveHomeDataToCache(areaId, responses[0].body, responses[1].body);
-      } else {
-        throw Exception('Server error');
-      }
+    try {
+      // 2. Fetch from Network
+      final pharmaciesJson = await _apiService.getPharmaciesRaw(areaId);
+
+      // Banners (Non-critical)
+      String? bannersJson;
+      try {
+        final bRes = await http.get(Uri.parse(ApiConstants.BANNERS_URL)).timeout(const Duration(seconds: 5));
+        if(bRes.statusCode == 200) bannersJson = bRes.body;
+      } catch(_) {}
+
+      // 3. Update State & Save to Cache
+      _parseAndSetHomeData(pharmaciesJson, bannersJson);
+      _saveHomeToCache(areaId, pharmaciesJson, bannersJson);
+
     } catch (e) {
-      // 3. في حال فشل الاتصال
-      if (data == null) {
-        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+      if (_nearbyPharmacies.isEmpty) {
         _hasNetworkError = true;
-        _errorMessage = '. يرجى التحقق من اتصالك بالإنترنت.';
-      } else {
-        // إذا كان هناك كاش، "ابتلع" الخطأ ولا تزعج المستخدم
-        print("Network refresh for home failed, but cache was available: $e");
+        _errorMessage = 'فشل تحميل البيانات. تأكد من الإنترنت.';
       }
+      print("Network Error in Home: $e");
     } finally {
-      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoadingHome = false;
       notifyListeners();
     }
   }
 
-  // [MODIFIED] تم تعديل المنطق بالكامل
-  Future<void> fetchAllProducts() async {
+  void _parseAndSetHomeData(String pJson, String? bJson) {
+    _nearbyPharmacies = (json.decode(pJson) as List).map((p) => Pharmacy.fromJson(p)).toList();
+    if(bJson != null) {
+      final bData = json.decode(bJson);
+      if(bData['showBanners'] == true) {
+        _banners = List<Map<String, dynamic>>.from(bData['banners']).map((e) => BannerItem.fromJson(e)).toList();
+      }
+    }
+  }
+
+  Future<void> _saveHomeToCache(int areaId, String pJson, String? bJson) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cacheData = json.encode({'pharmacies': pJson, 'banners': bJson});
+    await prefs.setString('${AppConstants.cacheKeyHome}$areaId', cacheData);
+  }
+
+  Future<void> _loadHomeFromCache(int areaId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('${AppConstants.cacheKeyHome}$areaId');
+    if (data != null) {
+      final decoded = json.decode(data);
+      _parseAndSetHomeData(decoded['pharmacies'], decoded['banners']);
+      notifyListeners();
+    }
+  }
+
+  // --- Products Data (Offline Support) ---
+  Future<void> fetchAllProducts({bool isRefresh = false}) async {
     _hasNetworkError = false;
 
-    // 1. تحقق من وجود الكاش أولاً
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('cache_products');
-
-    if (data == null) {
-      // لا يوجد كاش: أظهر التحميل
-      _isLoadingProducts = true;
-      notifyListeners();
-    } else {
-      // يوجد كاش: قم بتحميله فوراً
+    if (!isRefresh && _productsByPharmacy.isEmpty) {
       await _loadProductsFromCache();
-      _isLoadingProducts = false; // لا تظهر التحميل
     }
 
-    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
+    if (_productsByPharmacy.isEmpty) {
+      _isLoadingProducts = true;
+      notifyListeners();
+    }
+
     try {
-      await _executeWithRetry(() async {
-        final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/products'));
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          _productsByPharmacy = (data as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
-          // نجح الاتصال: احفظ البيانات الجديدة في الكاش
-          await _saveProductsToCache(response.body);
-        } else {
-          throw Exception('Server error');
-        }
-      });
+      final jsonStr = await _apiService.getProductsRaw();
+
+      _productsByPharmacy = (json.decode(jsonStr) as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
+      _saveProductsToCache(jsonStr); // Cache it
+
     } catch (e) {
-      // 3. في حال فشل الاتصال
-      if (data == null) {
-        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+      if (_productsByPharmacy.isEmpty) {
         _hasNetworkError = true;
-        _errorMessage = 'فشل في تحميل المنتجات. يرجى التحقق من اتصالك بالإنترنت.';
-      } else {
-        // إذا كان هناك كاش، "ابتلع" الخطأ
-        print("Network refresh for products failed, but cache was available: $e");
+        _errorMessage = 'فشل تحميل المنتجات.';
       }
     } finally {
-      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoadingProducts = false;
       notifyListeners();
     }
   }
 
-  // [MODIFIED] تم تعديل المنطق بالكامل
+  Future<void> _saveProductsToCache(String jsonStr) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(AppConstants.cacheKeyProducts, jsonStr);
+  }
+
+  Future<void> _loadProductsFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString(AppConstants.cacheKeyProducts);
+    if (data != null) {
+      _productsByPharmacy = (json.decode(data) as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
+      notifyListeners();
+    }
+  }
+
+  // --- All Pharmacies (Offline Support) ---
   Future<void> fetchAllPharmacies() async {
     _hasNetworkError = false;
+    if(_allPharmacies.isEmpty) await _loadAllPharmaciesCache();
 
-    // 1. تحقق من وجود الكاش أولاً
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('cache_all_pharmacies');
-
-    if (data == null) {
-      // لا يوجد كاش: أظهر التحميل
+    if(_allPharmacies.isEmpty) {
       _isLoadingPharmacies = true;
       notifyListeners();
-    } else {
-      // يوجد كاش: قم بتحميله فوراً
-      await _loadAllPharmaciesFromCache();
-      _isLoadingPharmacies = false; // لا تظهر التحميل
     }
 
-    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
     try {
-      await _executeWithRetry(() async {
-        final response = await http.get(Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacies'));
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          _allPharmacies = (data as List).map((p) => Pharmacy.fromJson(p)).toList();
-          // نجح الاتصال: احفظ البيانات الجديدة في الكاش
-          await _saveAllPharmaciesToCache(response.body);
-        } else {
-          throw Exception('Server error');
-        }
-      });
+      final jsonStr = await _apiService.getAllPharmaciesRaw();
+      _allPharmacies = (json.decode(jsonStr) as List).map((p) => Pharmacy.fromJson(p)).toList();
+      final prefs = await SharedPreferences.getInstance();
+      prefs.setString(AppConstants.cacheKeyPharmacies, jsonStr);
     } catch (e) {
-      // 3. في حال فشل الاتصال
-      if (data == null) {
-        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+      if(_allPharmacies.isEmpty) {
         _hasNetworkError = true;
-        _errorMessage = 'فشل في تحميل الصيدليات. يرجى التحقق من اتصالك بالإنترنت.';
-      } else {
-        // إذا كان هناك كاش، "ابتلع" الخطأ
-        print("Network refresh for pharmacies failed, but cache was available: $e");
+        _errorMessage = "فشل تحميل الصيدليات";
       }
     } finally {
-      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoadingPharmacies = false;
       notifyListeners();
     }
   }
 
-  // --- دوال الكاش المساعدة (لم تتغير) ---
-
-  Future<void> _saveProductsToCache(String data) async {
+  Future<void> _loadAllPharmaciesCache() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cache_products', data);
-  }
-
-  Future<void> _loadProductsFromCache() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('cache_products');
-    if (data != null) {
-      try {
-        final decoded = json.decode(data);
-        _productsByPharmacy = (decoded as List).map((g) => PharmacyProductGroup.fromJson(g)).toList();
-        notifyListeners();
-      } catch (e) {
-        print("Failed to load products from cache: $e");
-        await prefs.remove('cache_products'); // الكاش تالف، قم بحذفه
-      }
-    }
-  }
-
-  Future<void> _saveAllPharmaciesToCache(String data) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cache_all_pharmacies', data);
-  }
-
-  Future<void> _loadAllPharmaciesFromCache() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('cache_all_pharmacies');
-    if (data != null) {
-      try {
-        final decoded = json.decode(data);
-        _allPharmacies = (decoded as List).map((p) => Pharmacy.fromJson(p)).toList();
-        notifyListeners();
-      } catch (e) {
-        print("Failed to load pharmacies from cache: $e");
-        await prefs.remove('cache_all_pharmacies'); // الكاش تالف، قم بحذفه
-      }
-    }
-  }
-
-  Future<void> _saveHomeDataToCache(int areaId, String pharmaciesData, String bannersData) async {
-    final prefs = await SharedPreferences.getInstance();
-    final combinedData = json.encode({'pharmacies': pharmaciesData, 'banners': bannersData,});
-    await prefs.setString('cache_home_data_$areaId', combinedData);
-  }
-
-  Future<void> _loadHomeDataFromCache(int areaId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('cache_home_data_$areaId');
-    if (data != null) {
-      try {
-        final decoded = json.decode(data);
-        final pharmaciesData = json.decode(decoded['pharmacies']) as List;
-        _nearbyPharmacies = pharmaciesData.map((p) => Pharmacy.fromJson(p)).toList();
-        final bannersJsonData = json.decode(decoded['banners']);
-        if (bannersJsonData['showBanners'] ?? false) {
-          final bannerList = List<Map<String, dynamic>>.from(bannersJsonData['banners'] ?? []);
-          _banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-        }
-        notifyListeners();
-      } catch (e) {
-        print("Failed to load home data from cache: $e");
-        await prefs.remove('cache_home_data_$areaId'); // الكاش تالف، قم بحذفه
-      }
+    final data = prefs.getString(AppConstants.cacheKeyPharmacies);
+    if(data != null) {
+      _allPharmacies = (json.decode(data) as List).map((p) => Pharmacy.fromJson(p)).toList();
+      notifyListeners();
     }
   }
 }
-// [MODIFIED] الكلاس الكامل بعد التعديل
+
+// 4. DashboardProvider (⭐ OFFLINE MODE RESTORED ⭐)
 class DashboardProvider with ChangeNotifier {
+  final ApiService _apiService = ApiService();
+
   Map<String, List<Order>> _orders = {};
   List<SubscriptionRequest> _subscriptions = [];
+
   bool _isLoading = false;
   bool _hasNetworkError = false;
   String _errorMessage = '';
+  Timer? _debounceTimer;
 
   Map<String, List<Order>> get orders => _orders;
   List<SubscriptionRequest> get subscriptions => _subscriptions;
@@ -644,113 +601,89 @@ class DashboardProvider with ChangeNotifier {
   void clearData() {
     _orders.clear();
     _subscriptions.clear();
+    _hasNetworkError = false;
     notifyListeners();
   }
 
-  // [MODIFIED] تم تعديل المنطق بالكامل
-  Future<void> fetchDashboardData(String? token) async {
+  void triggerSmartRefresh(String token) {
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+    _debounceTimer = Timer(const Duration(seconds: 3), () {
+      fetchDashboardData(token, silent: true);
+    });
+  }
+
+  void startAutoRefresh(String token) {
+    fetchDashboardData(token, silent: false);
+  }
+
+  Future<void> fetchDashboardData(String? token, {bool silent = false}) async {
     if (token == null) return;
     _hasNetworkError = false;
 
-    // 1. تحقق من وجود الكاش أولاً
-    final prefs = await SharedPreferences.getInstance();
-    final dataString = prefs.getString('cache_dashboard');
-
-    if (dataString == null) {
-      // لا يوجد كاش: أظهر التحميل (لأنه لا يوجد شيء لعرضه)
-      _isLoading = true;
-      notifyListeners();
-    } else {
-      // يوجد كاش: قم بتحميله فوراً
+    // 1. Try Load Cache if empty (so user sees old orders immediately)
+    if (_orders.isEmpty) {
       await _loadDashboardFromCache();
-      _isLoading = false; // لا تظهر التحميل، لأن المستخدم يرى البيانات
     }
 
-    // 2. الآن، حاول دائماً جلب التحديث من الشبكة
-    try {
-      final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/pharmacy/dashboard');
-      // [MODIFIED] أضفنا "مهلة زمنية" (timeout) ليفشل الطلب أسرع
-      final response = await http
-          .get(url, headers: {'Authorization': 'Bearer $token'})
-          .timeout(const Duration(seconds: 20));
+    if (!silent && _orders.isEmpty) {
+      _isLoading = true;
+      notifyListeners();
+    }
 
-      if (response.statusCode == 200 && response.body.isNotEmpty) {
-        final data = json.decode(response.body) as Map<String, dynamic>;
-        final ordersData = data['orders'] as Map<String, dynamic>? ?? {};
-        _orders.clear();
-        ordersData.forEach((status, ordersList) {
-          _orders[status] = (ordersList as List).map((d) => Order.fromJson(d)).toList();
-        });
-        final subsData = data['subscriptions'] as List? ?? [];
-        _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
-        // نجح الاتصال: احفظ البيانات الجديدة في الكاش
-        await _saveDashboardToCache(response.body);
-      } else {
-        throw Exception('Server error: ${response.statusCode}');
-      }
+    try {
+      // 2. Fetch Network
+      final jsonStr = await _apiService.getDashboardRaw(token);
+
+      // 3. Parse and Cache
+      _parseDashboard(jsonStr);
+      _saveDashboardToCache(jsonStr);
+
     } catch (e) {
-      // 3. في حال فشل الاتصال
-      if (dataString == null) {
-        // إذا لم يكن هناك كاش أصلاً، أظهر رسالة الخطأ
+      if (_orders.isEmpty) {
         _hasNetworkError = true;
-        _errorMessage = 'فشل في تحديث البيانات. يرجى التحقق من اتصالك بالإنترنت.';
-      } else {
-        // إذا كان هناك كاش، "ابتلع" الخطأ ولا تزعج المستخدم
-        print("Dashboard refresh failed, but cache was available: $e");
+        _errorMessage = 'فشل الاتصال. يتم عرض البيانات المخزنة إن وجدت.';
       }
     } finally {
-      // 4. في كل الأحوال، تأكد من إخفاء علامة التحميل وأبلغ الواجهة
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  Future<void> _saveDashboardToCache(String data) async {
+  void _parseDashboard(String jsonStr) {
+    final data = json.decode(jsonStr) as Map<String, dynamic>;
+    final ordersData = data['orders'] as Map<String, dynamic>? ?? {};
+    _orders.clear();
+    ordersData.forEach((status, list) {
+      _orders[status] = (list as List).map((d) => Order.fromJson(d)).toList();
+    });
+    final subsData = data['subscriptions'] as List? ?? [];
+    _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
+  }
+
+  Future<void> _saveDashboardToCache(String jsonStr) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cache_dashboard', data);
+    await prefs.setString(AppConstants.cacheKeyDashboard, jsonStr);
   }
 
   Future<void> _loadDashboardFromCache() async {
     final prefs = await SharedPreferences.getInstance();
-    final dataString = prefs.getString('cache_dashboard');
-    if (dataString != null) {
+    final data = prefs.getString(AppConstants.cacheKeyDashboard);
+    if (data != null) {
       try {
-        final data = json.decode(dataString) as Map<String, dynamic>;
-        if (data['orders'] != null) {
-          final ordersData = data['orders'] as Map<String, dynamic>;
-          _orders.clear();
-          ordersData.forEach((status, ordersList) {
-            _orders[status] = (ordersList as List).map((d) => Order.fromJson(d)).toList();
-          });
-        }
-        if (data['subscriptions'] != null) {
-          final subsData = data['subscriptions'] as List;
-          _subscriptions = subsData.map((d) => SubscriptionRequest.fromJson(d)).toList();
-        }
+        _parseDashboard(data);
         notifyListeners();
-      } catch (e) {
-        print("Failed to load dashboard from cache: $e");
-        await prefs.remove('cache_dashboard'); // الكاش تالف، قم بحذفه
-      }
+      } catch (_) {}
     }
   }
-}// ... (CartProvider and PharmacyProvider remain the same)
+}
 
 // =======================================================================
 // --- SERVICES ---
 // =======================================================================
 class NotificationService {
-  // ... (This class remains unchanged)
   static final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
-
-  static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
-      'high_importance_channel',
-      'إشعارات هامة',
-      description: 'هذه القناة للإشعارات المهمة.',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true);
+  static const AndroidNotificationChannel _channel = AndroidNotificationChannel('high_importance_channel', 'إشعارات هامة', importance: Importance.max, playSound: true, enableVibration: true);
 
   static Future<void> initialize() async {
     await _firebaseMessaging.requestPermission();
@@ -769,12 +702,8 @@ class NotificationService {
     final title = message.data['title'] ?? 'إشعار جديد';
     final body = message.data['body'] ?? 'لديك رسالة جديدة.';
     _localNotifications.show(
-        DateTime.now().millisecondsSinceEpoch.remainder(100000),
-        title,
-        body,
-        NotificationDetails(
-            android: AndroidNotificationDetails(_channel.id, _channel.name, channelDescription: _channel.description, icon: '@mipmap/ic_launcher', importance: Importance.max, priority: Priority.high),
-            iOS: const DarwinNotificationDetails(presentSound: true)),
+        DateTime.now().millisecondsSinceEpoch.remainder(100000), title, body,
+        NotificationDetails(android: AndroidNotificationDetails(_channel.id, _channel.name, icon: '@mipmap/ic_launcher', importance: Importance.max, priority: Priority.high), iOS: const DarwinNotificationDetails(presentSound: true)),
         payload: json.encode(message.data));
   }
 
@@ -788,7 +717,7 @@ class NotificationService {
         if (authProvider.isAuth) {
           final customerUid = data['sender_uid'] as String?;
           final customerName = data['sender_name'] as String?;
-          if (customerUid != null && customerName != null && authProvider.pharmacyId != null && authProvider.pharmacyName != null) {
+          if (customerUid != null && customerName != null && authProvider.pharmacyId != null) {
             navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: authProvider.pharmacyId!, pharmacyName: authProvider.pharmacyName!, customerUid: customerUid, customerName: customerName)));
           }
         } else {
@@ -797,9 +726,7 @@ class NotificationService {
             navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacyId!, pharmacyName: "صيدلية")));
           }
         }
-      } catch (e) {
-        print("Error navigating from notification tap: $e");
-      }
+      } catch (e) { print("Error navigating: $e"); }
     }
   }
 }
@@ -811,297 +738,104 @@ class OrderCard extends StatefulWidget {
   final Order order;
   final Function onStatusChanged;
   const OrderCard({super.key, required this.order, required this.onStatusChanged});
-
   @override
   State<OrderCard> createState() => _OrderCardState();
 }
 class _OrderCardState extends State<OrderCard> {
   bool _isLoading = false;
 
-  // 1. دالة جديدة تفتح نافذة لإدخال المنطقة والسعر
   void _showRequestDeliveryDialog() {
     final priceController = TextEditingController();
-    // اقتراح المنطقة تلقائياً من تفاصيل الطلب
     final areaController = TextEditingController(text: widget.order.customerArea);
     final formKey = GlobalKey<FormState>();
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
+    showDialog(context: context, builder: (ctx) => AlertDialog(
         title: const Text('طلب توصيل'),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: areaController,
-                decoration: const InputDecoration(
-                  labelText: 'المنطقة المراد التوصيل لها',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) => (value == null || value.isEmpty) ? 'الرجاء إدخال المنطقة' : null,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: priceController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'أجرة التوصيل (د.ع)',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) return 'الرجاء إدخال السعر';
-                  if (double.tryParse(value) == null) return 'رقم غير صالح';
-                  return null;
-                },
-              ),
-            ],
-          ),
-        ),
+        content: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextFormField(controller: areaController, decoration: const InputDecoration(labelText: 'المنطقة', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+          const SizedBox(height: 16),
+          TextFormField(controller: priceController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'أجرة التوصيل (د.ع)', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+        ])),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () {
-              if (formKey.currentState?.validate() ?? false) {
-                final price = double.parse(priceController.text);
-                final area = areaController.text;
-                Navigator.of(ctx).pop();
-                _requestDelivery(area, price); // إرسال البيانات الجديدة
-              }
-            },
-            child: const Text('تأكيد وطلب'),
-          ),
-        ],
-      ),
-    );
+          ElevatedButton(onPressed: () { if (formKey.currentState?.validate() ?? false) {
+            final price = double.parse(priceController.text);
+            final area = areaController.text;
+            Navigator.of(ctx).pop();
+            _requestDelivery(area, price);
+          } }, child: const Text('تأكيد')),
+        ]));
   }
 
-  // 2. دالة إرسال الطلب المعدلة
-  Future<void> _requestDelivery(String destinationArea, double deliveryFee) async {
+  Future<void> _requestDelivery(String area, double fee) async {
     setState(() => _isLoading = true);
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    // استخدمنا رابط جديد ومبسط
-    final url = Uri.parse('${ApiConstants.PHARMACY_API_URL}/orders/${widget.order.id}/request-delivery-simple');
-
+    final auth = Provider.of<AuthProvider>(context, listen: false);
     try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Authorization': 'Bearer ${authProvider.token}',
-          'Content-Type': 'application/json'
-        },
-        body: json.encode({
-          'delivery_fee': deliveryFee,
-          'destination_area': destinationArea,
-        }),
-      );
-
-      final responseData = json.decode(response.body);
-
+      final response = await http.post(Uri.parse('${ApiConstants.PHARMACY_API_URL}/orders/${widget.order.id}/request-delivery-simple'),
+          headers: {'Authorization': 'Bearer ${auth.token}', 'Content-Type': 'application/json'},
+          body: json.encode({'delivery_fee': fee, 'destination_area': area}));
+      final data = json.decode(response.body);
       if (response.statusCode == 201) {
-        if (mounted) _showQrCodeDialog(responseData['qr_code_data']);
+        if(mounted) _showQrCodeDialog(data['qr_code_data']);
         widget.onStatusChanged();
-      } else {
-        throw Exception(responseData['message'] ?? 'فشل طلب المندوب');
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().replaceAll("Exception: ", "")),
-          backgroundColor: Colors.red,
-        ));
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+      } else throw Exception(data['message']);
+    } catch (e) { if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red)); }
+    finally { if(mounted) setState(() => _isLoading = false); }
   }
 
-  void _showQrCodeDialog(String qrData) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => QrCodeDisplayDialog(qrData: qrData),
-    );
-  }
+  void _showQrCodeDialog(String qr) => showDialog(context: context, builder: (_) => QrCodeDisplayDialog(qrData: qr));
 
   Widget _buildActionButtons() {
-    // الحالة الافتراضية للطلب من ووكومرس
     if (widget.order.status != 'processing') return const SizedBox.shrink();
-
-    // متغير جديد لتسهيل القراءة، يأتي من الخادم
-    final deliveryStatus = widget.order.deliveryStatus;
-
-    // 1. إذا لم يكن هناك طلب توصيل بعد (deliveryStatus فارغ)
-    if (deliveryStatus == null) {
-      return _isLoading
-          ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2))
-          : ElevatedButton.icon(
-        icon: const Icon(Icons.delivery_dining, size: 18),
-        label: const Text('طلب توصيل'),
-        onPressed: _showRequestDeliveryDialog, // الدالة التي تفتح نافذة إدخال البيانات
-      );
-    }
-
-    // 2. إذا تم طلب المندوب وهو الآن "بانتظار الاستلام"
-    if (deliveryStatus == 'awaiting_pickup') {
-      return ElevatedButton.icon(
-        icon: const Icon(Icons.qr_code_2),
-        label: const Text('إظهار الرمز'),
-        onPressed: () => _showQrCodeDialog(widget.order.deliveryQrCode!), // يعرض الباركود المحفوظ
-        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
-      );
-    }
-
-    // 3. إذا كانت هناك أي حالة أخرى (مثل "تم الاستلام"، "في الطريق"، إلخ)
-    return Chip(
-      label: Text(_getDeliveryStatusText(deliveryStatus), style: const TextStyle(color: Colors.white)),
-      backgroundColor: Colors.teal,
-    );
-  }
-  Widget _buildDriverInfo() {
-    final driver = widget.order.driverInfo;
-    if (driver == null) return const SizedBox.shrink();
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      margin: const EdgeInsets.only(top: 8),
-      decoration: BoxDecoration(
-          color: Colors.blue.shade50,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.blue.shade200)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('معلومات المندوب:', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          Text('الاسم: ${driver.name}'),
-          Text('الهاتف: ${driver.phone}'),
-          Text('المركبة: ${driver.vehicleType} - ${driver.carModel} (${driver.carColor})'),
-        ],
-      ),
-    );
-  }
-
-  String _getDeliveryStatusText(String status) {
-    switch (status) {
-      case 'awaiting_pickup': return 'بانتظار الاستلام';
-      case 'pending': return 'بانتظار سائق';
-      case 'accepted': return 'السائق في الطريق';
-      case 'at_store': return 'السائق عند الصيدلية';
-      case 'picked_up': return 'في الطريق للزبون';
-      case 'delivered': return 'تم التوصيل';
-      case 'cancelled': return 'ملغى';
-      default: return 'جاري التوصيل';
-    }
+    if (widget.order.deliveryStatus == null) return _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : ElevatedButton.icon(icon: const Icon(Icons.delivery_dining, size: 18), label: const Text('طلب توصيل'), onPressed: _showRequestDeliveryDialog);
+    if (widget.order.deliveryStatus == 'awaiting_pickup') return ElevatedButton.icon(icon: const Icon(Icons.qr_code, size: 18), label: const Text('الرمز'), onPressed: () => _showQrCodeDialog(widget.order.deliveryQrCode!));
+    return Chip(label: Text(widget.order.deliveryStatus ?? ''), backgroundColor: Colors.teal, labelStyle: const TextStyle(color: Colors.white));
   }
 
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text('#${widget.order.id}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              Text(DateFormat('yyyy-MM-dd').format(widget.order.date), style: TextStyle(color: Colors.grey.shade600))
-            ]),
-            const Divider(),
-            Text('الزبون: ${widget.order.customerName}'),
-            Text('المنطقة: ${widget.order.customerArea}'),
-            const SizedBox(height: 8),
-            const Text('المنتجات:', style: TextStyle(fontWeight: FontWeight.bold)),
-            ...widget.order.items.map((item) => Text('- ${item.name} (الكمية: ${item.quantity})')),
-            _buildDriverInfo(),
-            const Divider(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text('الإجمالي: ${widget.order.total} د.ع', style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
-                _buildActionButtons(),
-              ],
-            )
-          ],
-        ),
-      ),
+      child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('#${widget.order.id}', style: const TextStyle(fontWeight: FontWeight.bold)), Text(DateFormat('yyyy-MM-dd').format(widget.order.date))]),
+        const Divider(),
+        Text('الزبون: ${widget.order.customerName}'),
+        Text('المنطقة: ${widget.order.customerArea}'),
+        const SizedBox(height: 8),
+        ...widget.order.items.map((i) => Text('- ${i.name} (الكمية: ${i.quantity})')),
+        if(widget.order.driverInfo != null) Container(margin: const EdgeInsets.only(top: 8), padding: const EdgeInsets.all(8), color: Colors.blue.shade50, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('معلومات المندوب:', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text('الاسم: ${widget.order.driverInfo!.name}'),
+          Text('الهاتف: ${widget.order.driverInfo!.phone}'),
+        ])),
+        const Divider(),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('الإجمالي: ${widget.order.total} د.ع', style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)), _buildActionButtons()])
+      ])),
     );
   }
 }
+
 class QrCodeDisplayDialog extends StatelessWidget {
   final String qrData;
   const QrCodeDisplayDialog({super.key, required this.qrData});
-
   @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+  Widget build(BuildContext context) => AlertDialog(
       title: const Text('رمز تأكيد الاستلام', textAlign: TextAlign.center),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 200,
-            height: 200,
-            child: QrImageView(
-              data: qrData,
-              version: QrVersions.auto,
-              size: 200.0,
-            ),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'يرجى إظهار هذا الرمز لمندوب التوصيل عند وصوله لتأكيد استلام الطلب.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('إغلاق'),
-        ),
-      ],
-    );
-  }
+      content: SizedBox(width: 200, height: 200, child: QrImageView(data: qrData, size: 200, version: QrVersions.auto)),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق'))]
+  );
 }
 
-// ... All other widgets (NetworkErrorWidget, ProductCard, etc. remain the same)
 class NetworkErrorWidget extends StatelessWidget {
   final String message;
-  final VoidCallback onRetry;
-
-  const NetworkErrorWidget({
-    super.key,
-    required this.message,
-    required this.onRetry,
-  });
-
+  final VoidCallback? onRetry;
+  const NetworkErrorWidget({super.key, required this.message, required this.onRetry});
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.wifi_off_rounded, size: 80, color: Colors.grey.shade400),
-            const SizedBox(height: 24),
-            Text('حدث خطأ في الشبكة', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-            const SizedBox(height: 8),
-            Text(message, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey.shade600), textAlign: TextAlign.center),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh_rounded), label: const Text('إعادة المحاولة')),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+    const Icon(Icons.wifi_off_rounded, size: 80, color: Colors.grey),
+    const SizedBox(height: 10), Text(message), const SizedBox(height: 20),
+    if(onRetry != null) ElevatedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('إعادة المحاولة'))
+  ]));
 }
 
 class ProductCard extends StatelessWidget {
@@ -1114,24 +848,15 @@ class ProductCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(child: Padding(padding: const EdgeInsets.all(8.0), child: CachedNetworkImage(imageUrl: product.imageUrl, fit: BoxFit.contain, placeholder: (context, url) => const Center(child: CircularProgressIndicator(strokeWidth: 2)), errorWidget: (c, u, e) => const Icon(Icons.medication, size: 60, color: Colors.grey)))),
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 12.0), child: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis)),
-          Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 8), child: Text('${product.price} د.ع', style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold))),
+          Expanded(child: Padding(padding: const EdgeInsets.all(8.0), child: CachedNetworkImage(imageUrl: product.imageUrl, fit: BoxFit.contain, errorWidget: (_,__,___) => const Icon(Icons.medication, size: 50, color: Colors.grey)))),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Text(product.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold))),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Text('${product.price} د.ع', style: TextStyle(color: Theme.of(context).primaryColor))),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.add_shopping_cart, size: 18),
-              label: const Text('أضف للسلة'),
-              onPressed: () {
-                final cart = Provider.of<CartProvider>(context, listen: false);
-                try {
-                  cart.addItem(product);
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تمت إضافة ${product.name} إلى السلة'), duration: const Duration(seconds: 2), backgroundColor: Colors.green));
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
-                }
-              },
-            ),
+            padding: const EdgeInsets.all(4.0),
+            child: ElevatedButton.icon(onPressed: () {
+              try { Provider.of<CartProvider>(context, listen: false).addItem(product); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تمت الإضافة للسلة'), duration: Duration(milliseconds: 800))); }
+              catch(e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")))); }
+            }, icon: const Icon(Icons.add_shopping_cart, size: 16), label: const Text('أضف'), style: ElevatedButton.styleFrom(padding: EdgeInsets.zero)),
           )
         ],
       ),
@@ -1146,21 +871,10 @@ class PharmacyListItemCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Row(
-          children: [
-            ClipRRect(borderRadius: BorderRadius.circular(8.0), child: CachedNetworkImage(imageUrl: pharmacy.logoUrl, width: 60, height: 60, fit: BoxFit.cover, placeholder: (context, url) => Container(width: 60, height: 60, color: Colors.grey.shade200), errorWidget: (context, url, error) => const Icon(Icons.storefront, size: 60, color: Colors.grey))),
-            const SizedBox(width: 16),
-            Expanded(child: Text(pharmacy.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
-            const SizedBox(width: 16),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.chat_bubble_outline, size: 18),
-              label: const Text('دردشة'),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacy.id, pharmacyName: pharmacy.name))),
-            ),
-          ],
-        ),
+      child: ListTile(
+        leading: ClipRRect(borderRadius: BorderRadius.circular(8), child: CachedNetworkImage(imageUrl: pharmacy.logoUrl, width: 50, height: 50, fit: BoxFit.cover, errorWidget: (_,__,___) => const Icon(Icons.store, size: 50))),
+        title: Text(pharmacy.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+        trailing: ElevatedButton.icon(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacy.id, pharmacyName: pharmacy.name))), icon: const Icon(Icons.chat_bubble_outline, size: 18), label: const Text('دردشة')),
       ),
     );
   }
@@ -1169,39 +883,13 @@ class PharmacyListItemCard extends StatelessWidget {
 class SubscriptionCard extends StatelessWidget {
   final SubscriptionRequest subscription;
   const SubscriptionCard({super.key, required this.subscription});
-  Future<void> _makePhoneCall(String phoneNumber, BuildContext context) async {
-    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('لا يمكن إجراء الاتصال بالرقم $phoneNumber')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(subscription.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), Text(DateFormat('yyyy-MM-dd').format(subscription.date), style: TextStyle(color: Colors.grey.shade600))]),
-            const Divider(),
-            Text('الهاتف: ${subscription.phone}'),
-            Text('نوع المرض: ${subscription.illnessType}'),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.phone_outlined, size: 18),
-                label: const Text('اتصال'),
-                onPressed: () => _makePhoneCall(subscription.phone, context),
-              ),
-            ),
-          ],
-        ),
+      child: ListTile(
+        title: Text(subscription.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('${subscription.illnessType}\n${subscription.phone}'),
+        trailing: IconButton(icon: const Icon(Icons.phone, color: Colors.green), onPressed: () => launchUrl(Uri.parse('tel:${subscription.phone}'))),
       ),
     );
   }
@@ -1211,38 +899,14 @@ class SubscriptionButtons extends StatelessWidget {
   final int areaId;
   const SubscriptionButtons({super.key, required this.areaId});
   @override
-  Widget build(BuildContext context) {
-    return ElevatedButton.icon(
-      onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => SubscriptionScreen(areaId: areaId))),
-      icon: const Icon(Icons.monitor_heart_outlined, size: 28),
-      label: const Text('اشتراك الأمراض المزمنة', textAlign: TextAlign.center, style: TextStyle(fontSize: 15)),
-    );
-  }
+  Widget build(BuildContext context) => ElevatedButton.icon(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SubscriptionScreen(areaId: areaId))), icon: const Icon(Icons.monitor_heart_outlined), label: const Text('اشتراك الأمراض المزمنة'));
 }
 
 class ConsultationCard extends StatelessWidget {
   final Pharmacy pharmacy;
   const ConsultationCard({super.key, required this.pharmacy});
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacy.id, pharmacyName: pharmacy.name))),
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              Icon(Icons.chat_bubble_outline_rounded, color: Theme.of(context).primaryColor, size: 40),
-              const SizedBox(width: 16),
-              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('الحصول على استشارة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)), SizedBox(height: 4), Text('تحدث مباشرة مع صيدلية منطقتك', style: TextStyle(fontSize: 14, color: Colors.grey))])),
-              const Icon(Icons.arrow_forward_ios, color: Colors.grey),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Card(child: ListTile(leading: Icon(Icons.chat_bubble_rounded, size: 40, color: Theme.of(context).primaryColor), title: const Text('استشارة صيدلانية'), subtitle: const Text('تحدث مباشرة مع الصيدلي'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(pharmacyId: pharmacy.id, pharmacyName: pharmacy.name)))));
 }
 
 // =======================================================================
@@ -1253,98 +917,49 @@ class AuthWrapper extends StatefulWidget {
   @override
   _AuthWrapperState createState() => _AuthWrapperState();
 }
-
 class _AuthWrapperState extends State<AuthWrapper> {
   late Future<void> _autoLoginFuture;
-
   @override
   void initState() {
     super.initState();
     _autoLoginFuture = Provider.of<AuthProvider>(context, listen: false).tryAutoLogin();
-    _setupNotificationHandlers();
-  }
-
-  void _setupNotificationHandlers() {
-    FirebaseMessaging.instance.getInitialMessage().then((message) {
-      if (message != null) NotificationService._handleNotificationTap(message.data);
-    });
-
-    FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      NotificationService._handleNotificationTap(message.data);
-    });
-
     FirebaseMessaging.onMessage.listen((message) {
       final auth = Provider.of<AuthProvider>(context, listen: false);
-      final type = message.data['type'] as String?;
-
-      // -->> This is the most important part for real-time updates
-      if (auth.isAuth && (type == 'new_order' || type == 'delivery_status_update')) {
-        Provider.of<DashboardProvider>(context, listen: false).fetchDashboardData(auth.token);
+      if (auth.isAuth && (message.data['type'] == 'new_order' || message.data['type'] == 'delivery_status_update')) {
+        Provider.of<DashboardProvider>(context, listen: false).triggerSmartRefresh(auth.token!);
       }
-
       NotificationService._showLocalNotification(message);
     });
+    FirebaseMessaging.onMessageOpenedApp.listen((message) => NotificationService._handleNotificationTap(message.data));
   }
-
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder(
-      future: _autoLoginFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
-        return Consumer<AuthProvider>(
-          builder: (ctx, authProvider, _) {
-            if (authProvider.isAuth) {
-              return const PharmacyDashboardScreen();
-            }
-            return StreamBuilder<User?>(
-              stream: FirebaseAuth.instance.authStateChanges(),
-              builder: (context, userSnapshot) {
-                if (userSnapshot.connectionState == ConnectionState.waiting) {
-                  return const Scaffold(body: Center(child: CircularProgressIndicator()));
-                }
-                if (userSnapshot.hasData) {
-                  return const LocationCheckWrapper();
-                }
-                return const CustomerLoginScreen();
-              },
-            );
-          },
-        );
-      },
-    );
+    return FutureBuilder(future: _autoLoginFuture, builder: (ctx, snap) {
+      if (snap.connectionState == ConnectionState.waiting) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Consumer<AuthProvider>(builder: (_, auth, __) {
+        if (auth.isAuth) return const PharmacyDashboardScreen();
+        return StreamBuilder<User?>(stream: FirebaseAuth.instance.authStateChanges(), builder: (_, snapUser) {
+          if (snapUser.hasData) return const LocationCheckWrapper();
+          return const CustomerLoginScreen();
+        });
+      });
+    });
   }
 }
 
-// ... All other Screens remain the same ...
 class LocationCheckWrapper extends StatefulWidget {
   const LocationCheckWrapper({super.key});
   @override
   State<LocationCheckWrapper> createState() => _LocationCheckWrapperState();
 }
-
 class _LocationCheckWrapperState extends State<LocationCheckWrapper> {
-  Future<int?> _checkLocation() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(AppConstants.prefsKeyAreaId);
-  }
+  Future<int?> _check() async { final p = await SharedPreferences.getInstance(); return p.getInt(AppConstants.prefsKeyAreaId); }
   @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<int?>(
-      future: _checkLocation(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
-        if (snapshot.hasData && snapshot.data != null) {
-          return CustomerMainShell(areaId: snapshot.data!);
-        }
-        return const SelectLocationScreen();
-      },
-    );
-  }
+  Widget build(BuildContext context) => FutureBuilder<int?>(future: _check(), builder: (_, snap) {
+    if (snap.connectionState == ConnectionState.waiting) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (snap.data != null) return CustomerMainShell(areaId: snap.data!);
+    return const SelectLocationScreen();
+  });
 }
 
 class SelectLocationScreen extends StatefulWidget {
@@ -1353,140 +968,68 @@ class SelectLocationScreen extends StatefulWidget {
   @override
   State<SelectLocationScreen> createState() => _SelectLocationScreenState();
 }
-
 class _SelectLocationScreenState extends State<SelectLocationScreen> {
-  Future<List<Area>>? _areasFuture;
-  int? _selectedGovernorateId;
-  final String areasApiUrl = '${ApiConstants.BASE_URL}/wp/v2/area?per_page=100';
+  Future<List<Area>>? _areas;
+  int? _selGov;
   @override
-  void initState() {
-    super.initState();
-    _areasFuture = _getAreas();
-  }
-  Future<List<Area>> _getAreas() async {
-    try {
-      final response = await http.get(Uri.parse(areasApiUrl));
-      if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((d) => Area.fromJson(d)).toList();
-      } else { throw Exception('فشل في جلب المناطق: ${response.statusCode}'); }
-    } catch (e) { throw Exception('فشل في جلب المناطق: $e'); }
-  }
-  Future<void> _saveSelection(int areaId, String areaName) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(AppConstants.prefsKeyAreaId, areaId);
-    await prefs.setString(AppConstants.prefsKeyAreaName, areaName);
-    Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => CustomerMainShell(areaId: areaId)), (route) => false);
+  void initState() { super.initState(); _areas = _fetch(); }
+  Future<List<Area>> _fetch() async {
+    final r = await http.get(Uri.parse('${ApiConstants.BASE_URL}/wp/v2/area?per_page=100'));
+    if (r.statusCode == 200) return (json.decode(r.body) as List).map((e) => Area.fromJson(e)).toList();
+    throw Exception('خطأ في جلب المناطق');
   }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('اختر منطقة الخدمة'), automaticallyImplyLeading: widget.isCancellable),
-      body: FutureBuilder<List<Area>>(
-        future: _areasFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (snapshot.hasError) return Center(child: NetworkErrorWidget(message: 'فشل في جلب المناطق', onRetry: () => setState(() => _areasFuture = _getAreas())));
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("لم يتم العثور على مناطق."));
+      appBar: AppBar(title: const Text('اختر المنطقة'), automaticallyImplyLeading: widget.isCancellable),
+      body: FutureBuilder<List<Area>>(future: _areas, builder: (_, snap) {
+        if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+        if (!snap.hasData) return const Center(child: NetworkErrorWidget(message: 'لا يمكن جلب المناطق', onRetry:  null));
 
-          final allAreas = snapshot.data!;
-          final governorates = allAreas.where((a) => a.parentId == 0).toList();
-          final cities = _selectedGovernorateId == null ? <Area>[] : allAreas.where((a) => a.parentId == _selectedGovernorateId).toList();
+        final gov = snap.data!.where((a) => a.parentId == 0).toList();
+        final cities = _selGov == null ? <Area>[] : snap.data!.where((a) => a.parentId == _selGov).toList();
 
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                DropdownButtonFormField<int>(
-                  decoration: const InputDecoration(labelText: 'اختر المحافظة', border: OutlineInputBorder()),
-                  value: _selectedGovernorateId,
-                  items: governorates.map((g) => DropdownMenuItem<int>(value: g.id, child: Text(g.name))).toList(),
-                  onChanged: (v) => setState(() => _selectedGovernorateId = v),
-                ),
-                const SizedBox(height: 20),
-                if (_selectedGovernorateId != null)
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: cities.length,
-                    itemBuilder: (ctx, i) => Card(
-                      margin: const EdgeInsets.only(top: 8),
-                      child: ListTile(
-                        title: Text(cities[i].name),
-                        onTap: () {
-                          final govName = governorates.firstWhere((g) => g.id == _selectedGovernorateId).name;
-                          _saveSelection(cities[i].id, "$govName - ${cities[i].name}");
-                        },
-                        trailing: const Icon(Icons.arrow_forward_ios),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
-      ),
+        return ListView(padding: const EdgeInsets.all(16), children: [
+          DropdownButtonFormField(
+              decoration: const InputDecoration(labelText: 'المحافظة', border: OutlineInputBorder()),
+              value: _selGov, items: gov.map((g) => DropdownMenuItem(value: g.id, child: Text(g.name))).toList(),
+              onChanged: (v) => setState(() => _selGov = v as int?)
+          ),
+          const SizedBox(height: 20),
+          ...cities.map((c) => Card(child: ListTile(title: Text(c.name), onTap: () async {
+            final p = await SharedPreferences.getInstance();
+            await p.setInt(AppConstants.prefsKeyAreaId, c.id);
+            await p.setString(AppConstants.prefsKeyAreaName, c.name);
+            Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => CustomerMainShell(areaId: c.id)), (r) => false);
+          }, trailing: const Icon(Icons.arrow_forward_ios))))
+        ]);
+      }),
     );
   }
 }
 
-class CustomerLoginScreen extends StatefulWidget {
+class CustomerLoginScreen extends StatelessWidget {
   const CustomerLoginScreen({super.key});
   @override
-  _CustomerLoginScreenState createState() => _CustomerLoginScreenState();
-}
-class _CustomerLoginScreenState extends State<CustomerLoginScreen> {
-  final _nameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
-  bool _isLoading = false;
-
-  Future<void> _registerAndLogin() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
-    try {
-      final userCredential = await FirebaseAuth.instance.signInAnonymously();
-      final user = userCredential.user;
-      if (user != null) {
-        await FirebaseFirestore.instance.collection('pharmacy_users').doc(user.uid).set({
-          'name': _nameController.text, 'phone': _phoneController.text, 'createdAt': FieldValue.serverTimestamp()
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حدث خطأ: ${e.toString()}')));
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Icon(Icons.local_pharmacy_outlined, size: 80, color: Theme.of(context).primaryColor),
-                const SizedBox(height: 20),
-                Text('مرحباً بك في صيدليات  منصة بيتي', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 32),
-                TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person_outline)), validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
-                const SizedBox(height: 16),
-                TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone_outlined)), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null),
-                const SizedBox(height: 24),
-                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _registerAndLogin, child: const Text('دخول / إنشاء حساب')),
-                const SizedBox(height: 20),
-                TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PharmacyLoginScreen())), child: const Text('هل أنت صاحب صيدلية؟')),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    final nameC = TextEditingController(); final phoneC = TextEditingController();
+    return Scaffold(body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Icon(Icons.local_pharmacy_outlined, size: 80, color: Theme.of(context).primaryColor),
+      const SizedBox(height: 20), const Text('أهلاً بك في صيدليات بيتي', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 30),
+      TextField(controller: nameC, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person))),
+      const SizedBox(height: 10),
+      TextField(controller: phoneC, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.phone),
+      const SizedBox(height: 20),
+      ElevatedButton(onPressed: () async {
+        if(nameC.text.isNotEmpty && phoneC.text.isNotEmpty) {
+          try {
+            final cred = await FirebaseAuth.instance.signInAnonymously();
+            FirebaseFirestore.instance.collection('pharmacy_users').doc(cred.user!.uid).set({'name': nameC.text, 'phone': phoneC.text});
+          } catch(e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()))); }
+        }
+      }, child: const Text('تسجيل الدخول')),
+      TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PharmacyLoginScreen())), child: const Text('تسجيل دخول الصيدلية'))
+    ]))));
   }
 }
 
@@ -1496,49 +1039,22 @@ class PharmacyLoginScreen extends StatefulWidget {
   _PharmacyLoginScreenState createState() => _PharmacyLoginScreenState();
 }
 class _PharmacyLoginScreenState extends State<PharmacyLoginScreen> {
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
-  bool _isLoading = false;
-  Future<void> _login() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    bool success = await authProvider.login(_usernameController.text, _passwordController.text);
-    if (mounted) {
-      if (!success) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تسجيل الدخول. تأكد من البيانات.')));
-      }
-      setState(() => _isLoading = false);
-    }
-  }
+  final uC = TextEditingController(); final pC = TextEditingController(); bool _loading = false;
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('تسجيل دخول الصيدلية')),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Icon(Icons.storefront_outlined, size: 80, color: Theme.of(context).primaryColor),
-                const SizedBox(height: 20),
-                Text('يمكنك اضافة صيدليتك بالتواصل على رقم: 07854076931', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 32),
-                TextFormField(controller: _usernameController, decoration: const InputDecoration(labelText: 'اسم المستخدم', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
-                const SizedBox(height: 16),
-                TextFormField(controller: _passwordController, decoration: const InputDecoration(labelText: 'كلمة المرور', border: OutlineInputBorder()), obscureText: true, validator: (v) => v!.isEmpty ? 'مطلوب' : null),
-                const SizedBox(height: 24),
-                _isLoading ? const Center(child: CircularProgressIndicator()) : ElevatedButton(onPressed: _login, child: const Text('دخول')),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    return Scaffold(appBar: AppBar(title: const Text('دخول الصيدلية')), body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(children: [
+      Icon(Icons.storefront, size: 80, color: Theme.of(context).primaryColor),
+      const SizedBox(height: 30),
+      TextField(controller: uC, decoration: const InputDecoration(labelText: 'اسم المستخدم', border: OutlineInputBorder())),
+      const SizedBox(height: 10),
+      TextField(controller: pC, obscureText: true, decoration: const InputDecoration(labelText: 'كلمة المرور', border: OutlineInputBorder())),
+      const SizedBox(height: 20),
+      _loading ? const CircularProgressIndicator() : ElevatedButton(onPressed: () async {
+        setState(() => _loading = true);
+        if(await Provider.of<AuthProvider>(context, listen: false).login(uC.text, pC.text)) Navigator.pop(context);
+        else if(mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل الدخول'))); setState(() => _loading = false); }
+      }, child: const Text('دخول'))
+    ]))));
   }
 }
 
@@ -1640,7 +1156,7 @@ class _PharmacyHomeScreenState extends State<PharmacyHomeScreen> {
         final pharmacyInArea = provider.nearbyPharmacies.isNotEmpty ? provider.nearbyPharmacies.first : null;
 
         return RefreshIndicator(
-          onRefresh: () => provider.fetchHomeData(widget.areaId),
+          onRefresh: () => provider.fetchHomeData(widget.areaId, isRefresh: true),
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -1701,7 +1217,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
             return NetworkErrorWidget(message: provider.errorMessage, onRetry: () => provider.fetchAllProducts());
           }
           return RefreshIndicator(
-            onRefresh: () => provider.fetchAllProducts(),
+            onRefresh: () => provider.fetchAllProducts(isRefresh: true),
             child: provider.productsByPharmacy.isEmpty
                 ? const Center(child: Text('لا توجد منتجات متاحة حالياً.'))
                 : ListView.builder(
@@ -1961,11 +1477,50 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
   Future<void> _handleAttachmentPressed() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: SizedBox(
+            height: 160,
+            child: Column(
+              children: <Widget>[
+                const SizedBox(height: 10),
+                Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                ListTile(
+                  leading: const Icon(Icons.image_rounded, color: Colors.purple),
+                  title: const Text('إرسال صورة'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickFile(FileType.image);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.attach_file_rounded, color: Colors.blue),
+                  title: const Text('إرسال ملف'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickFile(FileType.any);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _pickFile(FileType type) async {
+    final result = await FilePicker.platform.pickFiles(type: type);
     if (result == null || result.files.single.path == null) return;
+
     final file = result.files.single;
     final bytes = await File(file.path!).readAsBytes();
     final mimeType = lookupMimeType(file.path!) ?? 'application/octet-stream';
+
     types.Message message;
     if (mimeType.startsWith('image/')) {
       final image = await decodeImageFromList(bytes);
@@ -1973,6 +1528,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       message = types.FileMessage(author: _chatUser, id: const Uuid().v4(), createdAt: DateTime.now().millisecondsSinceEpoch, name: file.name, size: file.size, uri: file.path!, mimeType: mimeType);
     }
+
     _addMessageToFirestore(message);
     try {
       final uploadUrl = Uri.parse('${ApiConstants.PHARMACY_API_URL}/chats/upload_file');
@@ -1990,6 +1546,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) { /* handle error */ }
   }
+
   void _addMessageToFirestore(types.Message message) {
     final messageData = message.toJson();
     messageData.remove('author');
@@ -2018,19 +1575,24 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final chatTitle = _isPharmacyOwner ? 'محادثة مع ${widget.customerName}' : widget.pharmacyName;
     return Scaffold(
-      appBar: AppBar(title: Text(chatTitle)),
+      appBar: AppBar(title: Text(chatTitle), backgroundColor: const Color(0xFFF7F7F7)),
       body: Chat(
         messages: _messages,
         onSendPressed: _handleSendPressed,
         onAttachmentPressed: _handleAttachmentPressed,
         user: _chatUser,
         theme: DefaultChatTheme(
-          primaryColor: Theme.of(context).primaryColor,
-          inputBackgroundColor: Colors.white,
-          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          backgroundColor: const Color(0xFFF2F4F5),
+          inputBackgroundColor: const Color(0xFF1F2937), inputTextColor: Colors.white,
+          inputBorderRadius: const BorderRadius.all(Radius.circular(24)),
+          inputPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          attachmentButtonIcon: const Icon(Icons.add_circle_outline, color: Colors.white70),
+          sendButtonIcon: const Icon(Icons.send_rounded, color: Colors.blueAccent),
+          primaryColor: Theme.of(context).primaryColor, secondaryColor: Colors.white,
+          sentMessageBodyTextStyle: GoogleFonts.cairo(color: Colors.white, fontSize: 16),
+          receivedMessageBodyTextStyle: GoogleFonts.cairo(color: Colors.black87, fontSize: 16),
         ),
-        l10n: const ChatL10nEn(inputPlaceholder: 'اكتب استفسارك هنا...'),
-        emptyState: const Center(child: Text('ابدأ محادثتك')),
+        l10n: const ChatL10nEn(inputPlaceholder: 'اكتب رسالتك هنا...'),
       ),
     );
   }
@@ -2361,7 +1923,8 @@ class PharmacyApp extends StatelessWidget {
           create: (_) => DashboardProvider(),
           update: (_, auth, dashboard) {
             if (auth.isAuth && dashboard != null && dashboard.orders.isEmpty) {
-              dashboard.fetchDashboardData(auth.token);
+              // ✅ التحديث الذكي عند بدء التطبيق
+              dashboard.startAutoRefresh(auth.token!);
             }
             return dashboard!;
           },
