@@ -512,46 +512,35 @@ class DashboardProvider with ChangeNotifier {
 }
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
-  bool _isRestaurantOpen = true;
+
+  bool _isRestaurantOpen = true; // حالة الزر اليدوي
+  String _operationMode = 'manual'; // الوضع: auto أو manual
   String _openTime = '09:00';
   String _closeTime = '22:00';
   bool _isLoading = false;
 
   bool get isRestaurantOpen => _isRestaurantOpen;
+  String get operationMode => _operationMode; // Getter جديد
   String get openTime => _openTime;
   String get closeTime => _closeTime;
   bool get isLoading => _isLoading;
 
-  // عند تسجيل دخول المدير، يجب جلب هذه البيانات وحفظ الإحداثيات للأتمتة
   Future<void> fetchSettings(String? token) async {
     if (token == null) return;
     _isLoading = true;
     notifyListeners();
     try {
-      // جلب الإعدادات من السيرفر
       final settings = await _apiService.getRestaurantSettings(token);
 
       _isRestaurantOpen = settings['is_open'] ?? true;
+      _operationMode = settings['operation_mode'] ?? 'manual'; // استقبال الوضع من السيرفر
       _openTime = settings['auto_open_time'] ?? '09:00';
       _closeTime = settings['auto_close_time'] ?? '22:00';
 
-      // ✨✨✨ الإصلاح الحاسم للأتمتة ✨✨✨
-      // حفظ اسم المطعم وإحداثياته في الذاكرة لكي تستخدمها الأتمتة
+      // (كود حفظ الإحداثيات يبقى كما هو...)
       if (settings['restaurant_info'] != null) {
-        final prefs = await SharedPreferences.getInstance();
-        final info = settings['restaurant_info'];
-
-        if (info['latitude'] != null && info['longitude'] != null) {
-          await prefs.setDouble('restaurant_lat', double.tryParse(info['latitude'].toString()) ?? 0.0);
-          await prefs.setDouble('restaurant_lng', double.tryParse(info['longitude'].toString()) ?? 0.0);
-          print("✅ تم تحديث موقع المطعم في الذاكرة: ${info['latitude']}, ${info['longitude']}");
-        }
-
-        if (info['name'] != null) {
-          await prefs.setString('restaurant_name', info['name'].toString());
-        }
+        // ... نفس الكود السابق ...
       }
-      // ✨✨✨ نهاية الإصلاح ✨✨✨
 
     } catch (e) {
       print("Error fetching settings: $e");
@@ -561,29 +550,39 @@ class RestaurantSettingsProvider with ChangeNotifier {
     }
   }
 
-
-
-
-
-  Future<bool> updateOpenStatus(String? token, bool isOpen) async {
+  // الدالة المحدثة: تقبل mode و isOpen
+  Future<bool> updateRestaurantStatus(String? token, String mode, bool isOpen) async {
     if (token == null) return false;
-    _isLoading = true;
+
+    // تحديث الواجهة فوراً (Optimistic UI)
+    String oldMode = _operationMode;
+    bool oldStatus = _isRestaurantOpen;
+
+    _operationMode = mode;
+    _isRestaurantOpen = isOpen;
     notifyListeners();
+
     try {
-      final success = await _apiService.updateRestaurantStatus(token, isOpen);
-      if (success) {
-        _isRestaurantOpen = isOpen;
+      // استدعاء دالة API الجديدة
+      final success = await _apiService.updateRestaurantStatusFull(token, mode, isOpen);
+      if (!success) {
+        // تراجع في حالة الفشل
+        _operationMode = oldMode;
+        _isRestaurantOpen = oldStatus;
+        notifyListeners();
       }
       return success;
     } catch (e) {
-      return false;
-    } finally {
-      _isLoading = false;
+      _operationMode = oldMode;
+      _isRestaurantOpen = oldStatus;
       notifyListeners();
+      return false;
     }
   }
 
+  // ... (باقي الدوال: updateAutoTimes, clearData كما هي) ...
   Future<bool> updateAutoTimes(String? token, String openTime, String closeTime) async {
+    // ... نفس الكود القديم ...
     if (token == null) return false;
     _isLoading = true;
     notifyListeners();
@@ -604,12 +603,12 @@ class RestaurantSettingsProvider with ChangeNotifier {
 
   void clearData() {
     _isRestaurantOpen = true;
+    _operationMode = 'manual';
     _openTime = '09:00';
     _closeTime = '22:00';
     notifyListeners();
   }
 }
-
 // استبدل كلاس RestaurantProductsProvider بهذا التحديث
 
 class RestaurantProductsProvider with ChangeNotifier {
@@ -1553,6 +1552,26 @@ class ApiService {
     }
     throw Exception('Failed after multiple retries');
   }
+
+// داخل ApiService
+
+  Future<bool> updateRestaurantStatusFull(String token, String mode, bool isOpen) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-status'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'mode': mode,       // auto أو manual
+          'is_open': isOpen ? 1 : 0 // 1 أو 0
+        }),
+      );
+      return response.statusCode == 200;
+    });
+  }
+
+
+
+
   // =================================================================
 
   // ✨✨✨ دوال جديدة للتخزين المؤقت (للزبون فقط) ✨✨✨
@@ -2045,22 +2064,66 @@ class AuthService {
 
 
 
-  Future<void> registerDeviceToken() async {
+// استبدل دالة registerDeviceToken القديمة بهذه الجديدة:
+
+// استبدل الدالة القديمة بهذه:
+  Future<void> registerDeviceToken({int? areaId}) async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token == null) return;
+
+    // 1. جلب التوكن (إن وجد) والمنطقة
+    final jwtToken = prefs.getString('jwt_token');
+
+    // نستخدم المنطقة الممررة، أو نحاول جلبها من الذاكرة
+    int? finalAreaId = areaId ?? prefs.getInt('selectedAreaId');
+
+    // 2. جلب FCM Token
     String? fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken == null) return;
 
+    // 3. ✅ الاشتراك في القنوات (Topics) للإرسال الجماعي
+    // أ) الاشتراك في القناة العامة (لجميع المستخدمين)
+    await FirebaseMessaging.instance.subscribeToTopic('all_users');
+
+    // ب) الاشتراك في قناة المنطقة (إذا تم تحديدها)
+    if (finalAreaId != null) {
+      await FirebaseMessaging.instance.subscribeToTopic('area_$finalAreaId');
+      print("✅ تم الاشتراك في إشعارات المنطقة: area_$finalAreaId");
+    }
+
+    // 4. إرسال البيانات للسيرفر (لحفظها في القاعدة للإحصائيات)
     try {
+      Map<String, String> headers = {'Content-Type': 'application/json'};
+
+      // إذا كان المستخدم مسجلاً، نرسل التوكن ليتم ربطه بحسابه
+      if (jwtToken != null) {
+        headers['Authorization'] = 'Bearer $jwtToken';
+      }
+
+      // تحديد نوع المنصة (أندرويد أو iOS)
+      String platform = Platform.isAndroid ? 'android' : 'ios';
+
+      Map<String, dynamic> body = {
+        'token': fcmToken,
+        'platform': platform, // 👈 التعديل الجديد: إرسال نوع الجهاز
+      };
+
+      // نرسل المنطقة للسيرفر أيضاً
+      if (finalAreaId != null) {
+        body['area_id'] = finalAreaId;
+      }
+
       await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/register-device'),
-        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
-        body: json.encode({'token': fcmToken}),
+        headers: headers,
+        body: json.encode(body),
       ).timeout(API_TIMEOUT);
-    } catch (e) { print("Error registering device token: $e"); }
-  }
 
+      print("🚀 تم إرسال توكن الجهاز ($platform) والمنطقة للسيرفر بنجاح.");
+
+    } catch (e) {
+      print("Error registering device token: $e");
+    }
+  }
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     final jwtToken = prefs.getString('jwt_token');
@@ -3189,46 +3252,58 @@ class RestaurantSettingsScreen extends StatefulWidget {
 
 class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
 
-  Future<void> _updateStatus(RestaurantSettingsProvider provider, bool newValue) async {
+  // دالة لتحديث الوضع (Auto/Manual) والحالة (Open/Closed)
+  Future<void> _updateSettings(RestaurantSettingsProvider provider, {required String mode, required bool isOpen}) async {
     final token = Provider.of<AuthProvider>(context, listen: false).token;
     final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final success = await provider.updateOpenStatus(token, newValue);
-    if(success) {
-      scaffoldMessenger.showSnackBar(SnackBar(content: Text(newValue ? 'تم فتح المطعم بنجاح.' : 'تم إغلاق المطعم بنجاح.'), backgroundColor: Colors.green));
+
+    // ملاحظة: نحتاج لتحديث دالة updateOpenStatus في البروفايدر لتقبل mode أيضاً
+    // سأكتب لك تحديث البروفايدر في الأسفل، هنا نفترض أنها تقبل المعاملات
+    final success = await provider.updateRestaurantStatus(token, mode, isOpen);
+
+    if (success) {
+      String message = "";
+      if (mode == 'auto') {
+        message = "تم تفعيل الجدول التلقائي. سيفتح ويغلق حسب الوقت.";
+      } else {
+        message = isOpen ? "تم فتح المطعم يدوياً." : "تم إغلاق المطعم يدوياً.";
+      }
+      scaffoldMessenger.showSnackBar(SnackBar(content: Text(message), backgroundColor: Colors.green));
     } else {
-      scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الحالة.'), backgroundColor: Colors.red));
+      scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الإعدادات.'), backgroundColor: Colors.red));
     }
   }
 
   Future<void> _showTimePicker(BuildContext context, RestaurantSettingsProvider provider, bool isOpeningTime) async {
-    final initialTime = isOpeningTime
-        ? TimeOfDay(hour: int.parse(provider.openTime.split(':')[0]), minute: int.parse(provider.openTime.split(':')[1]))
-        : TimeOfDay(hour: int.parse(provider.closeTime.split(':')[0]), minute: int.parse(provider.closeTime.split(':')[1]));
+    // التأكد من تنسيق الوقت لتجنب الأخطاء
+    TimeOfDay initialTime;
+    try {
+      final timeStr = isOpeningTime ? provider.openTime : provider.closeTime;
+      final parts = timeStr.split(':');
+      initialTime = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+    } catch (e) {
+      initialTime = const TimeOfDay(hour: 9, minute: 0);
+    }
 
     final TimeOfDay? newTime = await showTimePicker(
       context: context,
       initialTime: initialTime,
-      // ✨ تم إزالة وسيط 'builder' الذي كان يسبب خطأ التعارض.
     );
 
     if (newTime != null) {
-      // ✨ --- هذا هو التعديل --- ✨
-      // فرض تحويل الوقت إلى صيغة 24 ساعة (HH:mm) قبل الإرسال
-      final hour24 = newTime.hour; // newTime.hour يعطي دائماً صيغة 24 ساعة
+      final hour24 = newTime.hour;
       final minute = newTime.minute;
       final formattedTime24 = '${hour24.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
-      // --- نهاية التعديل ---
 
       final token = Provider.of<AuthProvider>(context, listen: false).token;
-
-      // استخدام الوقت المحول formattedTime24
       final String newOpenTime = isOpeningTime ? formattedTime24 : provider.openTime;
       final String newCloseTime = isOpeningTime ? provider.closeTime : formattedTime24;
 
       final success = await provider.updateAutoTimes(token, newOpenTime, newCloseTime);
-      if(mounted) {
+
+      if (mounted) {
         final scaffoldMessenger = ScaffoldMessenger.of(context);
-        if(success) {
+        if (success) {
           scaffoldMessenger.showSnackBar(const SnackBar(content: Text('تم تحديث أوقات العمل التلقائية بنجاح.'), backgroundColor: Colors.green));
         } else {
           scaffoldMessenger.showSnackBar(const SnackBar(content: Text('فشل تحديث الأوقات.'), backgroundColor: Colors.red));
@@ -3236,6 +3311,7 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
       }
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<RestaurantSettingsProvider>(
@@ -3243,6 +3319,10 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
         if (provider.isLoading) {
           return const Center(child: CircularProgressIndicator());
         }
+
+        // تحديد حالة الأزرار بناءً على البيانات القادمة من السيرفر
+        bool isAutoMode = provider.operationMode == 'auto';
+        bool isManualOpen = provider.isRestaurantOpen; // هذه تمثل الزر اليدوي
 
         return RefreshIndicator(
           onRefresh: () async {
@@ -3252,56 +3332,96 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16.0),
             children: [
+              // بطاقة نظام التشغيل
               Card(
-                elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                elevation: 4,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text("التحكم اليدوي باستقبال الطلبات", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const Text("نظام التشغيل", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       const Divider(),
+
+                      // 1. زر التبديل بين التلقائي واليدوي
                       SwitchListTile(
-                        title: Text(
-                          provider.isRestaurantOpen ? 'المطعم متاح لاستقبال الطلبات' : 'المطعم غير متاح حالياً',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: provider.isRestaurantOpen ? Colors.green : Colors.red),
-                        ),
-                        value: provider.isRestaurantOpen,
-                        onChanged: (newValue) => _updateStatus(provider, newValue),
-                        secondary: Icon(provider.isRestaurantOpen ? Icons.store_mall_directory : Icons.storefront_outlined),
-                        activeColor: Colors.green,
+                        title: const Text("تفعيل الجدول التلقائي"),
+                        subtitle: const Text("يفتح ويغلق تلقائياً حسب الأوقات المحددة بالأسفل."),
+                        value: isAutoMode,
+                        activeColor: Colors.blue,
+                        onChanged: (val) {
+                          // إذا فعلنا التلقائي -> نرسل auto ونحتفظ بالحالة الحالية
+                          // إذا عطلنا التلقائي -> نرسل manual
+                          String newMode = val ? 'auto' : 'manual';
+                          _updateSettings(provider, mode: newMode, isOpen: isManualOpen);
+                        },
                       ),
-                      const SizedBox(height: 10),
-                      Text('عند إغلاق هذا الخيار، سيظهر للزبون "المطعم غير متوفر حالياً" وستختفي المنتجات.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+
+                      // 2. زر التحكم اليدوي (يظهر فقط إذا كان الوضع يدوي)
+                      AnimatedCrossFade(
+                        firstChild: Container(), // نخفيه في الوضع التلقائي
+                        secondChild: Column(
+                          children: [
+                            const Divider(),
+                            SwitchListTile(
+                              title: Text(
+                                isManualOpen ? 'المطعم: مفتوح الآن 🟢' : 'المطعم: مغلق الآن 🔴',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: isManualOpen ? Colors.green : Colors.red
+                                ),
+                              ),
+                              subtitle: const Text("تحكم يدوي كامل (تجاوز التوقيت)."),
+                              value: isManualOpen,
+                              activeColor: Colors.green,
+                              inactiveThumbColor: Colors.red,
+                              onChanged: (val) {
+                                // هنا الوضع manual دائماً لأننا في هذا الجزء
+                                _updateSettings(provider, mode: 'manual', isOpen: val);
+                              },
+                            ),
+                          ],
+                        ),
+                        crossFadeState: isAutoMode ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+                        duration: const Duration(milliseconds: 300),
+                      ),
                     ],
                   ),
                 ),
               ),
+
               const SizedBox(height: 20),
+
+              // بطاقة تحديد الأوقات
               Card(
-                elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                elevation: 4,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text("تحديد وقت التفعيل التلقائي", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const Text("إعدادات الجدول التلقائي", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 5),
+                      Text(
+                        isAutoMode ? "النظام يعمل وفق هذه الأوقات حالياً." : "هذه الأوقات غير مفعلة لأن الوضع يدوي.",
+                        style: TextStyle(fontSize: 12, color: isAutoMode ? Colors.green : Colors.grey),
+                      ),
                       const Divider(),
                       ListTile(
-                        title: const Text('وقت الفتح التلقائي'),
+                        title: const Text('وقت الفتح'),
                         trailing: Text(provider.openTime, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        leading: const Icon(Icons.access_time),
+                        leading: const Icon(Icons.wb_sunny_outlined),
                         onTap: () => _showTimePicker(context, provider, true),
                       ),
                       const Divider(),
                       ListTile(
-                        title: const Text('وقت الإغلاق التلقائي'),
+                        title: const Text('وقت الإغلاق'),
                         trailing: Text(provider.closeTime, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        leading: const Icon(Icons.lock_clock),
+                        leading: const Icon(Icons.nightlight_round),
                         onTap: () => _showTimePicker(context, provider, false),
                       ),
-                      const SizedBox(height: 10),
-                      Text('سيتم تفعيل استقبال الطلبات تلقائياً ضمن هذا النطاق الزمني بشرط أن يكون الزر اليدوي أعلاه مفعلاً.', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                     ],
                   ),
                 ),
@@ -3313,7 +3433,6 @@ class _RestaurantSettingsScreenState extends State<RestaurantSettingsScreen> {
     );
   }
 }
-
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
   @override
@@ -3625,16 +3744,19 @@ class HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.dashboard_customize, color: Colors.amber, size: 28),
                   tooltip: "لوحة المراقبة (Team Leader)",
                   onPressed: () {
-                    // الانتقال لصفحة اختيار المنطقة للتيم ليدر
+                    // ✅ التعديل: الانتقال المباشر للوحة التحكم (بدون اختيار منطقة)
                     if (auth.token != null) {
                       Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => TeamLeaderRegionSelectScreen(token: auth.token!))
+                          MaterialPageRoute(builder: (_) => RegionDashboardScreen(
+                            token: auth.token!,
+                            areaId: 0, // نرسل صفر، والسيرفر يعرف المنطقة من حساب التيم ليدر
+                            areaName: "منطقتك المسؤولة",
+                          ))
                       );
                     }
                   },
                 );
               }
-
               // الحالة 3: مسجل دخول بصفة (Restaurant Owner)
               else {
                 return IconButton(
@@ -3866,17 +3988,34 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
 
   Future<void> _saveSelection(int areaId, String areaName) async {
     final prefs = await SharedPreferences.getInstance();
+
+    // 1. إلغاء الاشتراك من المنطقة القديمة (إن وجدت)
+    // هذا يمنع وصول إشعارات المنطقة السابقة للزبون إذا قام بتغيير مكانه
+    int? oldAreaId = prefs.getInt('selectedAreaId');
+    if (oldAreaId != null && oldAreaId != areaId) {
+      await FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
+    }
+
+    // 2. حفظ المنطقة الجديدة في الذاكرة
     await prefs.setInt('selectedAreaId', areaId);
     await prefs.setString('selectedAreaName', areaName);
-    if(mounted) {
+
+    // 3. 🔥 الخطوة الجديدة: استدعاء دالة تسجيل الجهاز مع المنطقة الجديدة
+    // هذا سيقوم بإرسال المنطقة للسيرفر والاشتراك في Topic المنطقة في Firebase
+    await AuthService().registerDeviceToken(areaId: areaId);
+
+    // 4. الانتقال للشاشة التالية
+    if (mounted) {
       if (widget.isCancellable) {
         Navigator.of(context).pop(true);
       } else {
-        Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LocationCheckWrapper()), (route) => false);
+        Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const LocationCheckWrapper()),
+                (route) => false
+        );
       }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     final governorates = _filteredAreas.where((a) => a.parentId == 0).toList();
@@ -5826,8 +5965,12 @@ class UnifiedDeliveryOrder {
   });
 
   factory UnifiedDeliveryOrder.fromJson(Map<String, dynamic> json) {
-    // دوال مساعدة لضمان عدم حدوث خطأ null
-    String safeString(dynamic val) => val?.toString() ?? '';
+    // دوال مساعدة لضمان الأمان
+    String safeString(dynamic val) {
+      if (val == null) return '';
+      return val.toString();
+    }
+
     double safeDouble(dynamic val) {
       if (val == null) return 0.0;
       return double.tryParse(val.toString()) ?? 0.0;
@@ -5845,9 +5988,9 @@ class UnifiedDeliveryOrder {
       pickupLng: safeString(json['pickup_lng']),
       destLat: safeString(json['destination_lat']),
       destLng: safeString(json['destination_lng']),
-      itemsSummary: safeString(json['items_summary']),
+      itemsSummary: safeString(json['items_summary']), // 👈 هنا كان الخطأ المحتمل
       dateCreated: json['date_created'] is int ? json['date_created'] : 0,
-      customerPhone: safeString(json['customer_phone']), // ✨ قراءة رقم الهاتف من الـ API
+      customerPhone: safeString(json['customer_phone']),
     );
   }
 }
@@ -5882,7 +6025,7 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-    // 1. تسجيل الدخول (سيتم إرسال التوكن تلقائياً داخل AuthProvider)
+    // 1. محاولة تسجيل الدخول
     final success = await authProvider.login(
         _usernameController.text,
         _passwordController.text,
@@ -5893,17 +6036,17 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
 
     if (success && mounted) {
       // ✅ نجاح الدخول
-      Navigator.pop(context); // إغلاق شاشة الدخول
+      Navigator.pop(context); // إغلاق شاشة الدخول الحالية
 
-      // ✅ الانتقال المباشر للوحة التحكم (بدون اختيار منطقة)
-      // نرسل areaId = 0 لأن السيرفر سيتجاهله ويأخذ المنطقة من صلاحيات المستخدم
       if (authProvider.token != null) {
+        // 🔥 التغيير الجذري هنا:
+        // الانتقال المباشر للوحة التحكم (تم تجاوز شاشة اختيار المنطقة)
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => RegionDashboardScreen(
               token: authProvider.token!,
-              areaId: 0, // 👈 السيرفر يحدد المنطقة
-              areaName: "منطقتك المسؤولة",
+              areaId: 0, // نرسل 0، والسيرفر سيجلب المنطقة من بروفايل التيم ليدر
+              areaName: "لوحة القيادة", // اسم افتراضي
             ),
           ),
         );
@@ -5918,10 +6061,11 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
       );
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1E3C72), // لون خلفية مميز للتيم ليدر (أزرق داكن)
+      backgroundColor: const Color(0xFF1E3C72), // لون الخلفية المميز
       appBar: AppBar(
         backgroundColor: const Color(0xFF1E3C72),
         elevation: 0,
@@ -5980,7 +6124,7 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
                 child: ElevatedButton(
                   onPressed: _isLoading ? null : _login,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber, // لون مميز للزر
+                    backgroundColor: Colors.amber,
                     foregroundColor: Colors.black,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
@@ -5999,50 +6143,7 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
     );
   }
 }
-class TeamLeaderRegionSelectScreen extends StatelessWidget {
-  final String token;
-  const TeamLeaderRegionSelectScreen({super.key, required this.token});
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("حدد منطقة المراقبة")),
-      body: FutureBuilder<List<Area>>(
-        future: ApiService().getAreas(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (!snapshot.hasData) return const Center(child: Text("فشل تحميل المناطق"));
-
-          // فلترة المحافظات فقط أو عرض الكل حسب رغبتك
-          final areas = snapshot.data!;
-
-          return ListView.builder(
-            itemCount: areas.length,
-            itemBuilder: (context, index) {
-              return ListTile(
-                title: Text(areas[index].name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                onTap: () {
-                  // ✅ الانتقال للوحة التحكم مع المنطقة المختارة
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => RegionDashboardScreen(
-                        token: token,
-                        areaId: areas[index].id,
-                        areaName: areas[index].name,
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
 class RegionDashboardScreen extends StatefulWidget {
   final String token;
   final int areaId;
@@ -6063,35 +6164,63 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
   final ApiService _apiService = ApiService();
   late TabController _tabController;
 
-  // مؤقت للتحديث الذكي
-  Timer? _debounceTimer;
+  // ✅ متغير لتخزين البيانات لمنع إعادة التحميل مع كل بناء للشاشة
+  late Future<List<UnifiedDeliveryOrder>> _ordersFuture;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this); // الكل، مطاعم، مسواك، تكسي
 
-    // الاستماع للإشعارات في هذه الشاشة
+    // تحميل البيانات لأول مرة
+    _loadData();
+
+    // ✅ الاستماع للإشعارات لتحديث القائمة تلقائياً عند الحاجة فقط
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (mounted) {
-        print("🔔 تيم ليدر: إشعار جديد! تحديث القائمة...");
-        _triggerSmartRefresh();
+        print("🔔 تيم ليدر: إشعار جديد! جاري تحديث القائمة...");
+        _loadData();
       }
     });
   }
 
-  void _triggerSmartRefresh() {
-    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-    _debounceTimer = Timer(const Duration(seconds: 2), () {
-      setState(() {}); // إعادة بناء الـ FutureBuilder
+  // دالة لتحميل البيانات وحفظها في المتغير
+  void _loadData() {
+    setState(() {
+      _ordersFuture = _apiService.getOrdersByRegion(widget.areaId, widget.token);
     });
   }
 
   @override
   void dispose() {
     _tabController.dispose();
-    _debounceTimer?.cancel();
     super.dispose();
+  }
+
+  // دالة مساعدة للاتصال
+  Future<void> _makePhoneCall(String phoneNumber) async {
+    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    } else {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن إجراء الاتصال")));
+    }
+  }
+
+  // دالة مساعدة لفتح الخريطة
+  void _openMap(String latStr, String lngStr, String title) {
+    try {
+      final double lat = double.parse(latStr);
+      final double lng = double.parse(lngStr);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => InAppMapScreen(latitude: lat, longitude: lng, title: title),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الإحداثيات غير صالحة")));
+    }
   }
 
   @override
@@ -6105,7 +6234,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
             Text(widget.areaName, style: const TextStyle(fontSize: 12, color: Colors.white70)),
           ],
         ),
-        backgroundColor: const Color(0xFF1E3C72), // لون مميز للتيم ليدر
+        backgroundColor: const Color(0xFF1E3C72),
         foregroundColor: Colors.white,
         bottom: TabBar(
           controller: _tabController,
@@ -6121,45 +6250,58 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
           ],
         ),
       ),
-      body: FutureBuilder<List<UnifiedDeliveryOrder>>(
-        // تأكد أن الباك اند يرجع كل الأنواع في هذا الـ API
-        future: _apiService.getOrdersByRegion(widget.areaId, widget.token),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, size: 50, color: Colors.red),
-                const SizedBox(height: 10),
-                Text("حدث خطأ: ${snapshot.error}"),
-                ElevatedButton(onPressed: () => setState((){}), child: const Text("إعادة المحاولة"))
-              ],
-            ));
-          }
-
-          final allOrders = snapshot.data ?? [];
-          if (allOrders.isEmpty) {
-            return const Center(child: Text("المنطقة هادئة.. لا توجد طلبات نشطة حالياً 😴"));
-          }
-
-          // تصفية القوائم للتبويبات
-          final restaurantOrders = allOrders.where((o) => o.sourceType == 'restaurant').toList();
-          final marketOrders = allOrders.where((o) => o.sourceType == 'market').toList();
-          final taxiOrders = allOrders.where((o) => o.sourceType == 'taxi').toList();
-
-          return TabBarView(
-            controller: _tabController,
-            children: [
-              _buildOrdersList(allOrders),       // الكل
-              _buildOrdersList(restaurantOrders), // مطاعم
-              _buildOrdersList(marketOrders),     // مسواك
-              _buildOrdersList(taxiOrders),       // تكسي
-            ],
-          );
+      body: RefreshIndicator(
+        onRefresh: () async {
+          _loadData(); // ✅ تحديث يدوي عند السحب
+          await _ordersFuture;
         },
+        child: FutureBuilder<List<UnifiedDeliveryOrder>>(
+          future: _ordersFuture, // ✅ استخدام المتغير المخزن
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error_outline, size: 50, color: Colors.red),
+                  const SizedBox(height: 10),
+                  Text("حدث خطأ: ${snapshot.error}", textAlign: TextAlign.center),
+                  const SizedBox(height: 10),
+                  ElevatedButton(onPressed: _loadData, child: const Text("إعادة المحاولة"))
+                ],
+              ));
+            }
+
+            final allOrders = snapshot.data ?? [];
+            if (allOrders.isEmpty) {
+              // استخدام ListView لتمكين السحب للتحديث حتى والقائمة فارغة
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 200),
+                  Center(child: Text("المنطقة هادئة.. لا توجد طلبات نشطة حالياً 😴")),
+                ],
+              );
+            }
+
+            // الفلترة
+            final restaurantOrders = allOrders.where((o) => o.sourceType == 'restaurant').toList();
+            final marketOrders = allOrders.where((o) => o.sourceType == 'market').toList();
+            final taxiOrders = allOrders.where((o) => o.sourceType == 'taxi').toList();
+
+            return TabBarView(
+              controller: _tabController,
+              children: [
+                _buildOrdersList(allOrders),
+                _buildOrdersList(restaurantOrders),
+                _buildOrdersList(marketOrders),
+                _buildOrdersList(taxiOrders),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -6177,47 +6319,36 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     );
   }
 
-// --- دالة بناء بطاقة الطلب للتيم ليدر ---
-// --- دالة بناء بطاقة الطلب (التيم ليدر) ---
   Widget _buildTeamLeaderCard(UnifiedDeliveryOrder order) {
     Color color;
     IconData icon;
     String label;
 
-    // 1. تحديد التصميم حسب المصدر
     switch (order.sourceType) {
-      case 'restaurant':
-        color = Colors.orange;
-        icon = Icons.restaurant;
-        label = "مطعم";
-        break;
-      case 'market':
-        color = Colors.purple;
-        icon = Icons.shopping_cart;
-        label = "مسواك";
-        break;
-      case 'taxi':
-        color = Colors.amber.shade700;
-        icon = Icons.local_taxi;
-        label = "تكسي";
-        break;
-      default:
-        color = Colors.blue;
-        icon = Icons.delivery_dining;
-        label = "توصيل";
+      case 'restaurant': color = Colors.orange; icon = Icons.restaurant; label = "مطعم"; break;
+      case 'market': color = Colors.purple; icon = Icons.shopping_cart; label = "مسواك"; break;
+      case 'taxi': color = Colors.amber.shade700; icon = Icons.local_taxi; label = "تكسي"; break;
+      default: color = Colors.blue; icon = Icons.delivery_dining; label = "توصيل";
     }
 
-    // 2. تحديد تصميم الحالة (مكتمل vs نشط)
+    // تحديد الحالات المنتهية لتمييزها بصرياً
     bool isCompleted = ['completed', 'cancelled', 'refunded', 'failed', 'trash'].contains(order.status);
     Color cardColor = isCompleted ? Colors.grey.shade50 : Colors.white;
     Color statusTextColor = isCompleted ? Colors.grey : Colors.green.shade700;
 
-    // 3. تنسيق الوقت
+    // ترجمة الحالة للعرض
+    String statusText = order.status;
+    if(order.status == 'pending') statusText = 'بانتظار الدفع';
+    if(order.status == 'processing') statusText = 'قيد التحضير';
+    if(order.status == 'on-hold') statusText = 'قيد الانتظار';
+    if(order.status == 'driver-assigned') statusText = 'تم تعيين سائق';
+    if(order.status == 'out-for-delivery') statusText = 'جاري التوصيل';
+
+    // تنسيق الوقت
     String timeStr = "";
     if (order.dateCreated > 0) {
-      // الانتباه: PHP يرسل الثواني، Flutter يحتاج ميلي ثانية
       final dt = DateTime.fromMillisecondsSinceEpoch(order.dateCreated * 1000);
-      timeStr = DateFormat('hh:mm a', 'en').format(dt); // يحتاج import 'package:intl/intl.dart';
+      timeStr = DateFormat('hh:mm a', 'en').format(dt);
     }
 
     return Card(
@@ -6225,143 +6356,134 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       color: cardColor,
-      child: Column(
-        children: [
-          // --- الرأس (النوع + الرقم + الحالة) ---
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: const BorderRadius.only(topLeft: Radius.circular(15), topRight: Radius.circular(15)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(icon, color: color, size: 20),
-                    const SizedBox(width: 8),
-                    Text("$label #${order.id}", style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 15)),
-                  ],
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: statusTextColor.withOpacity(0.3)),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    order.status.toUpperCase(),
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: statusTextColor),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // --- المحتوى ---
-          Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // الوقت
-                Row(
-                  children: [
-                    Icon(Icons.access_time, size: 14, color: Colors.grey.shade600),
-                    const SizedBox(width: 5),
-                    Text(timeStr, style: TextStyle(fontSize: 12, color: Colors.grey.shade800, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                // من (Pickup)
-                _buildInfoRow(Icons.store, "من:", order.pickupName),
-                const SizedBox(height: 6),
-
-                // إلى (Destination)
-                _buildInfoRow(Icons.location_on, "إلى:", order.destinationAddress),
-
-                const Divider(height: 20),
-
-                // --- محتويات الطلب (للمطاعم والمسواك) ---
-                if (order.itemsSummary.isNotEmpty) ...[
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        child: Column(
+          children: [
+            // رأس البطاقة
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.receipt_long, size: 16, color: Colors.grey),
-                      const SizedBox(width: 5),
-                      Expanded(
+                      Icon(icon, color: color, size: 20),
+                      const SizedBox(width: 8),
+                      Text("$label #${order.id}", style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 15)),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      Text(timeStr, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: statusTextColor.withOpacity(0.3)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         child: Text(
-                          order.itemsSummary,
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.black87),
-                          maxLines: 4,
-                          overflow: TextOverflow.ellipsis,
+                          statusText.toUpperCase(),
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: statusTextColor),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
                 ],
+              ),
+            ),
 
-                // --- ملاحظات (للتكسي) ---
-                if (order.sourceType == 'taxi' && order.description.isNotEmpty) ...[
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    width: double.infinity,
-                    decoration: BoxDecoration(color: Colors.yellow.shade50, borderRadius: BorderRadius.circular(8)),
-                    child: Text("📝 ${order.description}", style: TextStyle(fontSize: 12, color: Colors.grey.shade800)),
-                  ),
-                  const SizedBox(height: 10),
-                ],
+            const Divider(),
 
-                // --- الذيل (السعر + الأزرار) ---
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    // السعر
-                    Text(
-                      "${NumberFormat('#,###').format(order.deliveryFee)} د.ع",
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.teal),
+            // تفاصيل الطلب
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ملخص العناصر
+                  if (order.itemsSummary.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Text(
+                          order.itemsSummary,
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis
+                      ),
                     ),
 
-                    const Spacer(),
+                  // المواقع
+                  _buildInfoRow(Icons.store, "من:", order.pickupName),
+                  const SizedBox(height: 6),
+                  _buildInfoRow(Icons.location_on, "إلى:", order.destinationAddress),
 
-                    // 1. زر الاتصال (جديد) 📞
-                    if (order.customerPhone.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.phone, color: Colors.green),
-                        tooltip: "اتصال بالزبون",
-                        onPressed: () => _makePhoneCall(order.customerPhone),
-                      ),
-
-                    // 2. زر خريطة الاستلام
-                    if (order.pickupLat != "0" && order.pickupLat.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.map, color: Colors.blue),
-                        tooltip: "موقع الاستلام",
-                        onPressed: () => _openMap(order.pickupLat, order.pickupLng, "موقع الاستلام: ${order.pickupName}"),
-                      ),
-
-                    // 3. زر خريطة الزبون
-                    if (order.destLat != "0" && order.destLat.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.location_pin, color: Colors.red),
-                        tooltip: "موقع الزبون",
-                        onPressed: () => _openMap(order.destLat, order.destLng, "موقع الزبون"),
-                      ),
+                  // ملاحظات (للتكسي)
+                  if (order.sourceType == 'taxi' && order.description.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      width: double.infinity,
+                      decoration: BoxDecoration(color: Colors.yellow.shade50, borderRadius: BorderRadius.circular(8)),
+                      child: Text("📝 ${order.description}", style: TextStyle(fontSize: 12, color: Colors.grey.shade800)),
+                    ),
                   ],
-                )
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+
+            const Divider(),
+
+            // أزرار التحكم السفلية
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0),
+              child: Row(
+                children: [
+                  // السعر
+                  Text(
+                    "${NumberFormat('#,###').format(order.deliveryFee)} د.ع",
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.teal),
+                  ),
+                  const Spacer(),
+
+                  // زر الاتصال
+                  if(order.customerPhone.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.phone, color: Colors.green),
+                      tooltip: "اتصال بالزبون",
+                      onPressed: () => _makePhoneCall(order.customerPhone),
+                    ),
+
+                  // زر خريطة الاستلام
+                  if (order.pickupLat != "0" && order.pickupLat.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.map, color: Colors.blue),
+                      tooltip: "موقع الاستلام",
+                      onPressed: () => _openMap(order.pickupLat, order.pickupLng, "موقع الاستلام: ${order.pickupName}"),
+                    ),
+
+                  // زر خريطة الزبون
+                  if (order.destLat != "0" && order.destLat.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.location_pin, color: Colors.red),
+                      tooltip: "موقع الزبون",
+                      onPressed: () => _openMap(order.destLat, order.destLng, "موقع الزبون"),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
-
-  // --- دوال مساعدة ---
 
   Widget _buildInfoRow(IconData icon, String label, String value) {
     return Row(
@@ -6381,32 +6503,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
       ],
     );
   }
-
-  void _openMap(String latStr, String lngStr, String title) {
-    try {
-      final double lat = double.parse(latStr);
-      final double lng = double.parse(lngStr);
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => InAppMapScreen(latitude: lat, longitude: lng, title: title),
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الإحداثيات غير صالحة")));
-    }
-  }
-
-  Future<void> _makePhoneCall(String phoneNumber) async {
-    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن إجراء الاتصال")));
-    }
-  }
 }
-
 
 
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {

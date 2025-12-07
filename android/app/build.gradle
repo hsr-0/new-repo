@@ -45,8 +45,8 @@ android {
         applicationId = "co.median.android.wqwnby"
         minSdk = 23
         targetSdk = 35
-        versionCode = 40
-        versionName = "1.4.1"
+        versionCode = 41
+        versionName = "1.4.2"
     }
 
     signingConfigs {

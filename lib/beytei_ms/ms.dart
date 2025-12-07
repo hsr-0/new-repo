@@ -5152,11 +5152,15 @@ class InAppMapScreen extends StatelessWidget {
 // --- Restaurant Dashboard Screen (Complete) ---
 // =======================================================================
 
+// =======================================================================
+// --- Store Dashboard Screen (Updated V19) ---
+// =======================================================================
 class StoreDashboardScreen extends StatefulWidget {
   const StoreDashboardScreen({super.key});
   @override
   State<StoreDashboardScreen> createState() => _StoreDashboardScreenState();
 }
+
 class _StoreDashboardScreenState extends State<StoreDashboardScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final ApiService _apiService = ApiService();
@@ -5352,6 +5356,17 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
       appBar: AppBar(
         title: const Text('لوحة تحكم المسواك'),
         actions: [
+          // 🔥 زر الفحص الجديد (Store Debugger)
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: Colors.orange),
+            tooltip: "فحص النظام",
+            onPressed: () {
+              Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const StoreDebugScreen())
+              );
+            },
+          ),
+
           IconButton(icon: const Icon(Icons.notifications_active_outlined), onPressed: () async {
             final scaffoldMessenger = ScaffoldMessenger.of(context);
             try {
@@ -5382,7 +5397,6 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
         controller: _tabController,
         children: [
           // يمكن استخدام نفس الشاشات لأنها تعتمد على DashboardProvider المشترك
-          // أو يمكن نسخها وتخصيصها إذا أردت تغيير النصوص بداخلها
           OrdersListScreen(status: 'active'),
           OrdersListScreen(status: 'completed'),
           const ProductManagementTab(),
@@ -5401,8 +5415,6 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
     );
   }
 }
-
-
 // =======================================================================
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================
@@ -5888,7 +5900,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
 }
 
 
-
 class OrdersListScreen extends StatefulWidget {
   final String status;
   const OrdersListScreen({super.key, required this.status});
@@ -5899,6 +5910,7 @@ class OrdersListScreen extends StatefulWidget {
 class _OrdersListScreenState extends State<OrdersListScreen> {
   @override
   Widget build(BuildContext context) {
+    // استخدام StoreAuthProvider لأننا في قسم المسواك
     final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
 
     return Consumer<DashboardProvider>(
@@ -5906,57 +5918,74 @@ class _OrdersListScreenState extends State<OrdersListScreen> {
         final orders = dashboard.orders[widget.status] ?? [];
         final pickupCodes = dashboard.pickupCodes;
 
-        // 1. حالة التحميل (نظهر مؤشر التحميل في الوسط)
+        // 1. حالة التحميل
         if (dashboard.isLoading && orders.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // 2. بناء القائمة مع معالجة حالة الفراغ
+        // 2. حالة وجود خطأ (Error State)
+        if (dashboard.error != null && orders.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 60, color: Colors.red),
+                const SizedBox(height: 10),
+                Text(
+                  "حدث خطأ في جلب البيانات",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Text(dashboard.error!, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () => dashboard.fetchDashboardData(authProvider.token),
+                  child: const Text("إعادة المحاولة"),
+                )
+              ],
+            ),
+          );
+        }
+
+        // 3. حالة القائمة الفارغة (Empty State)
+        if (orders.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                Icon(Icons.inbox_outlined, size: 80, color: Colors.grey.shade300),
+                const SizedBox(height: 20),
+                const Center(child: Text("لا توجد طلبات هنا حالياً", style: TextStyle(fontSize: 18, color: Colors.grey))),
+              ],
+            ),
+          );
+        }
+
+        // 4. عرض القائمة
         return RefreshIndicator(
           onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
-          child: Stack( // نستخدم Stack لتغطية ListView برسالة الفراغ
-            children: [
-              // القائمة الأساسية (دائماً موجودة لتمكين السحب)
-              ListView.builder(
-                physics: const AlwaysScrollableScrollPhysics(), // لتمكين السحب دائمًا
-                padding: const EdgeInsets.all(8),
-                itemCount: orders.length,
-                itemBuilder: (context, index) {
-                  final order = orders[index];
-                  final code = pickupCodes[order.id];
-                  return OrderCard(
-                    order: order,
-                    onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
-                    isCompleted: widget.status != 'active',
-                    pickupCode: code,
-                  );
-                },
-              ),
-
-              // رسالة المحتوى الفارغ (فقط إذا كانت القائمة فارغة)
-              if (orders.isEmpty)
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.inbox_outlined, size: 60, color: Colors.grey),
-                      const SizedBox(height: 10),
-                      Text(
-                          dashboard.error ?? 'لا توجد طلبات في هذا القسم حالياً', // ✅ عرض رسالة الخطأ أو رسالة الفراغ
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 16, color: Colors.grey.shade600)
-                      )
-                    ],
-                  ),
-                ),
-            ],
+          child: ListView.builder(
+            padding: const EdgeInsets.all(8),
+            itemCount: orders.length,
+            itemBuilder: (context, index) {
+              final order = orders[index];
+              final code = pickupCodes[order.id];
+              return OrderCard(
+                order: order,
+                onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
+                isCompleted: widget.status != 'active',
+                pickupCode: code,
+              );
+            },
           ),
         );
       },
     );
   }
 }
-
 class RatingsDashboardScreen extends StatefulWidget {
   const RatingsDashboardScreen({super.key});
   @override
@@ -6478,6 +6507,147 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
             const Text("إجمالي التقييمات", style: TextStyle(color: Colors.grey)),
           ]),
         ]),
+      ),
+    );
+  }
+}
+class StoreDebugScreen extends StatefulWidget {
+  const StoreDebugScreen({super.key});
+
+  @override
+  State<StoreDebugScreen> createState() => _StoreDebugScreenState();
+}
+
+class _StoreDebugScreenState extends State<StoreDebugScreen> {
+  String _logs = "اضغط على الأزرار لبدء الفحص...\n";
+  bool _isLoading = false;
+  final ApiService _apiService = ApiService();
+
+  void _addLog(String message) {
+    setState(() {
+      _logs += "\n$message";
+    });
+    print(message);
+  }
+
+  Future<void> _checkTokenAndAuth() async {
+    setState(() => _isLoading = true);
+    _addLog("--- 1. فحص المصادقة ---");
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('store_jwt_token');
+    final role = prefs.getString('store_user_role');
+
+    if (token != null) {
+      _addLog("✅ التوكن موجود: ${token.substring(0, 10)}...");
+      _addLog("👤 الرتبة المسجلة: $role");
+
+      // فحص إعدادات المطعم/المسواك
+      try {
+        _addLog("🔄 جاري جلب إعدادات المتجر...");
+        final settings = await _apiService.getRestaurantSettings(token);
+        _addLog("✅ الاتصال نجح! بيانات المتجر: $settings");
+      } catch (e) {
+        _addLog("❌ فشل الاتصال بإعدادات المتجر: $e");
+      }
+
+    } else {
+      _addLog("❌ التوكن غير موجود! (يجب تسجيل الدخول)");
+    }
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _testOrdersApi() async {
+    setState(() => _isLoading = true);
+    _addLog("\n--- 2. فحص طلبات المتجر (Orders) ---");
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('store_jwt_token');
+
+    if (token == null) {
+      _addLog("❌ لا يمكن الفحص بدون توكن.");
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      _addLog("📡 جاري طلب البيانات من: /get-orders?status=active");
+      final orders = await _apiService.getRestaurantOrders(status: 'active', token: token);
+
+      if (orders.isEmpty) {
+        _addLog("⚠️ القائمة فارغة (0 طلبات). هذا يعني أن الاتصال نجح لكن لا توجد طلبات.");
+      } else {
+        _addLog("✅ تم جلب ${orders.length} طلب بنجاح!");
+        _addLog("أول طلب: ID=${orders[0].id}, Status=${orders[0].status}");
+      }
+    } catch (e) {
+      _addLog("❌ خطأ أثناء جلب الطلبات: $e");
+    }
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _testProductsApi() async {
+    setState(() => _isLoading = true);
+    _addLog("\n--- 3. فحص المنتجات (Products) ---");
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('store_jwt_token');
+
+    if (token == null) {
+      _addLog("❌ لا يمكن الفحص بدون توكن.");
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      _addLog("📡 جاري طلب المنتجات...");
+      final products = await _apiService.getMyRestaurantProducts(token);
+
+      if (products.isEmpty) {
+        _addLog("⚠️ القائمة فارغة (0 منتجات).");
+      } else {
+        _addLog("✅ تم جلب ${products.length} منتج بنجاح!");
+        _addLog("أول منتج: ${products[0].name}");
+      }
+    } catch (e) {
+      _addLog("❌ خطأ أثناء جلب المنتجات: $e");
+    }
+    setState(() => _isLoading = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("🛠️ فحص نظام المسواك")),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            color: Colors.grey.shade200,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                ElevatedButton(onPressed: _isLoading ? null : _checkTokenAndAuth, child: const Text("فحص الدخول")),
+                ElevatedButton(onPressed: _isLoading ? null : _testOrdersApi, child: const Text("فحص الطلبات")),
+                ElevatedButton(onPressed: _isLoading ? null : _testProductsApi, child: const Text("فحص المنتجات")),
+              ],
+            ),
+          ),
+          if (_isLoading) const LinearProgressIndicator(),
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              color: Colors.black,
+              child: SingleChildScrollView(
+                child: Text(
+                  _logs,
+                  style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 14),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
