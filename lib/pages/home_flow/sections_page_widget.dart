@@ -176,6 +176,14 @@ class SectionsPageWidget extends StatefulWidget {
 
 class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
+
+
+  // 🔥 ثوابت الكاش الجديدة
+  static const String CACHE_KEY_BANNERS = 'cached_banner_data';
+  static const String CACHE_KEY_BANNER_TIME = 'cached_banner_time';
+  static const int CACHE_DURATION_HOURS = 24;
+
+
   List<BannerItem> banners = [];
 
   bool showBanners = false;
@@ -423,41 +431,71 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
 
   Future<void> fetchBannerImages() async {
-
     final url = Uri.parse('https://banner.beytei.com/images/banners.json');
+    final prefs = await SharedPreferences.getInstance();
 
-    try {
+    final cachedData = prefs.getString(CACHE_KEY_BANNERS);
+    final lastFetchTime = prefs.getInt(CACHE_KEY_BANNER_TIME);
 
-      final response = await http.get(url);
+    // 1. --- التحقق من الكاش (القراءة الفورية) ---
+    if (cachedData != null && lastFetchTime != null) {
+      final expiration = DateTime.fromMillisecondsSinceEpoch(lastFetchTime).add(const Duration(hours: CACHE_DURATION_HOURS));
 
-      if (response.statusCode == 200) {
-
-        final jsonData = json.decode(response.body);
-
-        final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
-
+      // إذا الكاش سليم، أعرضه فوراً واخرج
+      if (DateTime.now().isBefore(expiration)) {
+        print('✅ [Banner] Loading from cache (Valid).');
+        final jsonData = json.decode(cachedData);
         if (mounted) {
-
           setState(() {
-
             showBanners = jsonData['showBanners'] ?? false;
-
+            final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
+            // ✅ المحافظة على طريقة الاختفاء: إذا كانت القائمة فارغة، ستبقى showBanners=false
             banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-
           });
-
         }
-
+        return; // 🛑 الخروج لمنع الاتصال بالشبكة
       }
-
-    } catch (e) {
-
-      print('Error fetching banners: $e');
-
     }
 
-  }
+    // 2. --- الجلب من الشبكة (إذا انتهت صلاحية الكاش أو لم يوجد) ---
+    print('⚠️ [Banner] Cache expired or missing. Fetching from network...');
+    try {
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
 
+      if (response.statusCode == 200) {
+        final responseBody = response.body;
+        final jsonData = json.decode(responseBody);
+
+        // حفظ البيانات الجديدة والوقت الجديد
+        await prefs.setString(CACHE_KEY_BANNERS, responseBody);
+        await prefs.setInt(CACHE_KEY_BANNER_TIME, DateTime.now().millisecondsSinceEpoch);
+
+        if (mounted) {
+          setState(() {
+            showBanners = jsonData['showBanners'] ?? false;
+            final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
+            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+          });
+        }
+      } else {
+        throw Exception('Server returned status ${response.statusCode}');
+      }
+    } catch (e) {
+      // 3. في حال فشل الشبكة: اعرض البيانات القديمة (Stale Cache) لتجنب الشاشة الفارغة
+      if (cachedData != null) {
+        print('⚠️ [Banner] Network failed. Displaying stale cache.');
+        final jsonData = json.decode(cachedData);
+        if (mounted) {
+          setState(() {
+            showBanners = jsonData['showBanners'] ?? false;
+            final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
+            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+          });
+        }
+      }
+      print('Error fetching banners: $e');
+    }
+  }
 
 
   void _onBannerTapped(BannerItem banner) {

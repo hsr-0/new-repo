@@ -96,35 +96,48 @@ class StoreAuthProvider with ChangeNotifier {
   bool get isLoggedIn => _token != null;
 
   StoreAuthProvider() {
+    print("🔍 DEBUG: [AuthProvider] Constructor Initialized");
     _checkLoginStatus();
   }
 
   Future<void> _checkLoginStatus() async {
+    print("🔍 DEBUG: [AuthProvider] Checking SharedPreferences for saved token...");
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('store_jwt_token');
     _userRole = prefs.getString('store_user_role');
     _isLoading = false;
+
+    print("🔍 DEBUG: [AuthProvider] Initial Check Result -> Token found: ${_token != null}, Role: $_userRole");
     notifyListeners();
   }
 
-  // ✅ تم إضافة دالة تسجيل الدخول المفقودة
+  // ✅ دالة تسجيل الدخول مع تتبع الأخطاء
   Future<bool> login(String username, String password, String role, {String? lat, String? lng}) async {
     _isLoading = true;
     notifyListeners();
 
+    print("🔍 DEBUG: [AuthProvider] 1. Starting Login Process for user: $username");
+
     final authService = AuthService();
+    // محاولة الاتصال بالسيرفر
     final token = await authService.loginRestaurantOwner(username, password);
+
+    print("🔍 DEBUG: [AuthProvider] 2. API Response Received. Token is: ${token != null ? 'VALID (Not Null)' : 'NULL'}");
 
     if (token != null) {
       _token = token;
       _userRole = role;
 
+      // حفظ البيانات
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('store_jwt_token', token);
       await prefs.setString('store_user_role', role);
 
+      print("🔍 DEBUG: [AuthProvider] 3. Token & Role saved to SharedPreferences successfully.");
+
       // تحديث الموقع إذا تم تمريره
       if (lat != null && lng != null) {
+        print("🔍 DEBUG: [AuthProvider] 4. Updating Location...");
         final apiService = ApiService();
         await apiService.updateMyLocation(token, lat, lng);
       }
@@ -133,16 +146,21 @@ class StoreAuthProvider with ChangeNotifier {
       await authService.registerDeviceToken();
 
       _isLoading = false;
+
+      print("🔍 DEBUG: [AuthProvider] 5. Login Successful. Current State -> isLoggedIn: $isLoggedIn. Calling notifyListeners()...");
+      // هذه اللحظة الحاسمة التي يجب أن يستجيب لها الـ Wrapper
       notifyListeners();
       return true;
     }
 
+    print("🔍 DEBUG: [AuthProvider] X. Login Failed (Invalid Credentials or Server Error).");
     _isLoading = false;
     notifyListeners();
     return false;
   }
 
   Future<void> logout(BuildContext context) async {
+    print("🔍 DEBUG: [AuthProvider] Logging out...");
     final authService = AuthService();
     await authService.logout();
 
@@ -155,9 +173,15 @@ class StoreAuthProvider with ChangeNotifier {
 
     if (context.mounted) {
       // تنظيف البيانات عند الخروج
-      Provider.of<StoreCustomerProvider>(context, listen: false).clearData();
-      Provider.of<DashboardProvider>(context, listen: false).stopAutoRefresh();
+      try {
+        Provider.of<StoreCustomerProvider>(context, listen: false).clearData();
+        Provider.of<DashboardProvider>(context, listen: false).stopAutoRefresh();
+      } catch (e) {
+        print("🔍 DEBUG: Error clearing data providers: $e");
+      }
     }
+
+    print("🔍 DEBUG: [AuthProvider] Logged out completely.");
     notifyListeners();
   }
 }
@@ -218,7 +242,7 @@ class StoreCustomerProvider with ChangeNotifier {
     }
 
     // 2. الكاش الصارم (يمنع طلبات الشبكة المتكررة)
-    if (!isRefresh && _homeData.isNotEmpty && await _isCacheValid('home_$areaId', minutes: 5)) {
+    if (!isRefresh && _homeData.isNotEmpty && await _isCacheValid('home_$areaId', minutes: 1400)) {
       print("✅ استخدام الكاش للمسواك (البيانات حديثة).");
       return;
     }
@@ -289,7 +313,7 @@ class StoreCustomerProvider with ChangeNotifier {
     }
 
     // ب) التحقق من الوقت (10 دقائق للمنتجات)
-    if (!isRefresh && _storeItems.containsKey(storeId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_MISWAK_PREFIX}menu_$storeId', minutes: 10)) {
+    if (!isRefresh && _storeItems.containsKey(storeId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_MISWAK_PREFIX}menu_$storeId', minutes: 60)) {
       print("✅ استخدام الكاش لمنتجات المسواك (البيانات حديثة)");
       _isLoadingMenu = false;
       notifyListeners();
@@ -1960,35 +1984,62 @@ class ApiService {
   }
 }
 class AuthService {
+  // دالة تسجيل الدخول المحسنة مع طباعة تفاصيل الخطأ
   Future<String?> loginRestaurantOwner(String username, String password) async {
+    final url = '$BEYTEI_URL/wp-json/jwt-auth/v1/token';
+
+    print("🔍 DEBUG: [AuthService] 🚀 Connecting to: $url");
+    print("🔍 DEBUG: [AuthService] 👤 Username sent: $username");
+
     try {
       final response = await http.post(
-          Uri.parse('$BEYTEI_URL/wp-json/jwt-auth/v1/token'),
+          Uri.parse(url),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'username': username, 'password': password})
       ).timeout(API_TIMEOUT);
 
+      print("🔍 DEBUG: [AuthService] 📡 Status Code: ${response.statusCode}");
+      print("🔍 DEBUG: [AuthService] 📄 Response Body: ${response.body}");
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final token = data['token'];
+
         if (token != null) {
+          print("🔍 DEBUG: [AuthService] ✅ Token found successfully: ${token.substring(0, 10)}..."); // طباعة جزء من التوكن للتأكد
+
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('jwt_token', token);
+          await prefs.setString('jwt_token', token); // حفظ التوكن باسمه القياسي
+          // ملاحظة: الـ StoreAuthProvider سيقوم أيضاً بحفظه باسم store_jwt_token وهذا جيد (زيادة تأكيد)
+
           return token;
+        } else {
+          print("🔍 DEBUG: [AuthService] ❌ Response 200 OK but 'token' key is Missing in JSON!");
         }
+      } else {
+        print("🔍 DEBUG: [AuthService] ❌ Server Error. Status: ${response.statusCode}");
       }
       return null;
-    } catch (e) { return null; }
+    } catch (e) {
+      print("🔍 DEBUG: [AuthService] 💥 Exception: $e");
+      return null;
+    }
   }
-
-
 
   Future<void> registerDeviceToken() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token == null) return;
+    // نحاول قراءة التوكن من المكانين المحتملين لضمان العثور عليه
+    final token = prefs.getString('jwt_token') ?? prefs.getString('store_jwt_token');
+
+    if (token == null) {
+      print("🔍 DEBUG: [AuthService] Cannot register device. Token is null.");
+      return;
+    }
+
     String? fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken == null) return;
+
+    print("🔍 DEBUG: [AuthService] Registering FCM Token...");
 
     try {
       await http.post(
@@ -1996,12 +2047,15 @@ class AuthService {
         headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
         body: json.encode({'token': fcmToken}),
       ).timeout(API_TIMEOUT);
-    } catch (e) { print("Error registering device token: $e"); }
+      print("🔍 DEBUG: [AuthService] Device Registered Successfully.");
+    } catch (e) {
+      print("🔍 DEBUG: [AuthService] Error registering device token: $e");
+    }
   }
 
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
-    final jwtToken = prefs.getString('jwt_token');
+    final jwtToken = prefs.getString('jwt_token') ?? prefs.getString('store_jwt_token');
 
     if (jwtToken != null) {
       try {
@@ -2014,12 +2068,18 @@ class AuthService {
     await FirebaseMessaging.instance.deleteToken();
     final cacheService = CacheService();
     await cacheService.clearAllCache();
+
+    // حذف جميع مفاتيح التوكن المحتملة
     await prefs.remove('jwt_token');
+    await prefs.remove('store_jwt_token'); // مهم جداً
+    await prefs.remove('store_user_role');
+
     await prefs.remove('selectedAreaId');
     await prefs.remove('selectedAreaName');
+
+    print("🔍 DEBUG: [AuthService] Logout completed & Cache cleared.");
   }
 }
-
 // =======================================================================
 // --- WIDGETS (Reusable UI Components) ---
 // =======================================================================
@@ -2366,7 +2426,7 @@ class RestaurantCard extends StatelessWidget {
                               ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
                               : () => _showClosedDialog(context, restaurant),
                           icon: const Icon(Icons.menu_book, size: 14),
-                          label: const Text(' عرض المنيو', style: TextStyle(fontSize: 12)),
+                          label: const Text(' عرض ', style: TextStyle(fontSize: 12)),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: canOrder ? Theme.of(context).primaryColor : Colors.grey, // تغيير اللون إذا كان مغلقاً
                             foregroundColor: Colors.white,
@@ -2999,10 +3059,14 @@ class ShimmerFoodCard extends StatelessWidget {
 // =======================================================================
 // --- MAIN APP ENTRY POINT & WRAPPERS ---
 // =======================================================================
+// --- MAIN APP ENTRY POINT & WRAPPERS (تم التعديل لإصلاح الشاشة البيضاء) ---
+// =======================================================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  await initializeDateFormatting('ar', null);  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  await initializeDateFormatting('ar', null);
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
   runApp(const RestaurantModule());
 }
 
@@ -3011,6 +3075,7 @@ class RestaurantModule extends StatefulWidget {
   @override
   State<RestaurantModule> createState() => _RestaurantModuleState();
 }
+
 class _RestaurantModuleState extends State<RestaurantModule> {
   @override
   void initState() {
@@ -3028,18 +3093,23 @@ class _RestaurantModuleState extends State<RestaurantModule> {
 
       // 2. تحديث البيانات فوراً (بدلاً من انتظار المؤقت)
       if (mounted) {
-        final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
+        // نستخدم try-catch لتجنب الأخطاء إذا كان السياق غير جاهز
+        try {
+          final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
 
-        if (authProvider.isLoggedIn && authProvider.token != null) {
-          print("🔔 إشعار جديد وصل! جاري تحديث بيانات  فوراً...");
+          if (authProvider.isLoggedIn && authProvider.token != null) {
+            print("🔔 إشعار جديد وصل! جاري تحديث بيانات الفوراً...");
 
-          // أ) تحديث قائمة الطلبات (النشطة والمكتملة)
-          Provider.of<DashboardProvider>(context, listen: false)
-              .fetchDashboardData(authProvider.token, silent: true);
+            // أ) تحديث قائمة الطلبات (النشطة والمكتملة)
+            Provider.of<DashboardProvider>(context, listen: false)
+                .fetchDashboardData(authProvider.token, silent: true);
 
-          // ب) تحديث إعدادات المطعم (للاحتياط، في حال تغيرت الحالة)
-          Provider.of<RestaurantSettingsProvider>(context, listen: false)
-              .fetchSettings(authProvider.token);
+            // ب) تحديث إعدادات المطعم (للاحتياط، في حال تغيرت الحالة)
+            Provider.of<RestaurantSettingsProvider>(context, listen: false)
+                .fetchSettings(authProvider.token);
+          }
+        } catch (e) {
+          print("Ignored notification update error: $e");
         }
       }
     });
@@ -3049,55 +3119,21 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Providers الأساسية
+        // 1. المزودات الأساسية (تعمل دائماً)
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
         ChangeNotifierProvider(create: (_) => StoreAuthProvider()),
         ChangeNotifierProvider(create: (_) => StoreCustomerProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+
+        // 2. مزودات لوحة التحكم (تم تحويلها لمزودات عادية لإصلاح الشاشة البيضاء)
+        // ✅ الآن سيتم إنشاؤها فوراً عند بدء التطبيق ولن يظهر خطأ Provider not found
+        ChangeNotifierProvider(create: (_) => DashboardProvider()),
         ChangeNotifierProvider(create: (_) => RestaurantSettingsProvider()),
+        ChangeNotifierProvider(create: (_) => RestaurantProductsProvider()),
+
+        // 3. مزود التوصيل
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
-
-        // Providers المعتمدة على AuthProvider (Proxy)
-
-        // 1. ربط DashboardProvider
-        ChangeNotifierProxyProvider<StoreAuthProvider, DashboardProvider>(
-          create: (_) => DashboardProvider(),
-          update: (_, auth, dashboard) {
-            if(auth.isLoggedIn && dashboard != null && auth.token != null) {
-              // عند بدء التطبيق، نجلب البيانات مرة واحدة (initial fetch)
-              // التحديثات اللاحقة ستتم عبر الإشعارات (الكود أعلاه)
-              dashboard.startAutoRefresh(auth.token!);
-            }
-            return dashboard!;
-          },
-        ),
-
-        // 2. ربط RestaurantSettingsProvider
-        ChangeNotifierProxyProvider<StoreAuthProvider, RestaurantSettingsProvider>(
-          create: (_) => RestaurantSettingsProvider(),
-          update: (_, auth, settings) {
-            if(settings != null && auth.isLoggedIn && auth.token != null) {
-              settings.fetchSettings(auth.token);
-            } else if (settings != null && !auth.isLoggedIn) {
-              settings.clearData();
-            }
-            return settings!;
-          },
-        ),
-
-        // 3. ربط RestaurantProductsProvider
-        ChangeNotifierProxyProvider<StoreAuthProvider, RestaurantProductsProvider>(
-          create: (_) => RestaurantProductsProvider(),
-          update: (_, auth, products) {
-            if (products != null && auth.isLoggedIn && auth.token != null) {
-              products.fetchProducts(auth.token);
-            } else if (products != null && !auth.isLoggedIn) {
-              products.clearData();
-            }
-            return products!;
-          },
-        ),
       ],
       child: MaterialApp(
         title: 'Beytei Restaurants',
@@ -3113,6 +3149,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
             )
         ),
         debugShowCheckedModeBanner: false,
+        // نقطة البداية تعتمد على الموجه الذكي
         home: const AuthWrapper(),
       ),
     );
@@ -3262,26 +3299,30 @@ class AuthWrapper extends StatelessWidget {
     return const StoreLocationCheckWrapper();
   }
 }
-
 class StoreLocationCheckWrapper extends StatelessWidget {
   const StoreLocationCheckWrapper({super.key});
 
   Future<int?> _checkLocation() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('miswak_area_id');
+    final areaId = prefs.getInt('miswak_area_id');
+    print("🔍 DEBUG: [Wrapper] CheckLocation found Area ID: $areaId"); // 9
+    return areaId;
   }
 
   @override
   Widget build(BuildContext context) {
-    // 🚀 Fix: التحقق من حالة المدير أولاً
     final authProvider = Provider.of<StoreAuthProvider>(context);
 
-    if (authProvider.isLoggedIn) {
-      // إذا كان مسجل دخول (مدير)، انتقل للداشبورد مباشرة
+    print("🔍 DEBUG: [Wrapper] Rebuild triggered."); // 10
+    print("🔍 DEBUG: [Wrapper] Auth State -> IsLoggedIn: ${authProvider.isLoggedIn}, Token: ${authProvider.token}"); // 11
+
+    // الأولوية 1: المدير
+    if (authProvider.isLoggedIn && authProvider.token != null) {
+      print("🔍 DEBUG: [Wrapper] DECISION -> GOING TO DASHBOARD (Manager Detected)"); // 12
       return const StoreDashboardScreen();
     }
 
-    // إذا كان زبون عادي، تحقق من المنطقة
+    // الأولوية 2: الزبون
     return FutureBuilder<int?>(
       future: _checkLocation(),
       builder: (context, snapshot) {
@@ -3290,16 +3331,19 @@ class StoreLocationCheckWrapper extends StatelessWidget {
         }
 
         if (snapshot.hasData && snapshot.data != null) {
-          // المنطقة محددة، اذهب للرئيسية
+          print("🔍 DEBUG: [Wrapper] DECISION -> GOING TO MAIN SCREEN (Customer Area Found)"); // 13
           return const MainScreen();
         }
 
-        // المنطقة غير محددة، اطلب التحديد
+        print("🔍 DEBUG: [Wrapper] DECISION -> GOING TO SELECT LOCATION (New User)"); // 14
         return const SelectLocationScreen(isCancellable: false);
       },
     );
   }
-}// =======================================================================
+}
+
+
+
 // --- SCREENS ---
 // =======================================================================
 
@@ -4812,7 +4856,6 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
   bool _isLoading = false;
   String _locationStatus = 'لم يتم تحديد موقع المتجر';
 
-  // نستخدم ApiService الموحد
   final ApiService _apiService = ApiService();
 
   @override
@@ -4829,7 +4872,6 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
     setState(() => _locationStatus = 'جاري تحديد الموقع...');
 
     try {
-      // 1. استخدام خدمة الصلاحيات
       final hasPermission = await PermissionService.handleLocationPermission(context);
 
       if (!hasPermission) {
@@ -4837,12 +4879,10 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
         return;
       }
 
-      // 2. الحصول على الموقع
       Position position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high
       );
 
-      // 3. حفظ الإحداثيات في المتحكمات
       if (!mounted) return;
 
       _latController.text = position.latitude.toString();
@@ -4860,11 +4900,12 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
   }
 
   Future<void> _login() async {
-    // التحقق من الحقول
+    print("🔍 DEBUG: [LoginScreen] 1. Login Button Pressed");
+
     if (!_formKey.currentState!.validate()) return;
 
-    // التحقق من الموقع
     if (_latController.text.isEmpty || _lngController.text.isEmpty) {
+      print("🔍 DEBUG: [LoginScreen] Location is missing");
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('الرجاء تحديد موقع المتجر أولاً.'))
       );
@@ -4874,6 +4915,7 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
     setState(() => _isLoading = true);
 
     try {
+      print("🔍 DEBUG: [LoginScreen] 2. Calling AuthProvider...");
       final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
 
       final success = await authProvider.login(
@@ -4884,21 +4926,35 @@ class _StoreLoginScreenState extends State<StoreLoginScreen> {
         lng: _lngController.text,
       );
 
-      if (!mounted) return;
+      if (!mounted) {
+        print("🔍 DEBUG: [LoginScreen] Widget unmounted during process");
+        return;
+      }
+
+      print("🔍 DEBUG: [LoginScreen] 3. Login Result: $success");
 
       if (success) {
-        // 🚀 Fix: التوجيه المباشر إلى لوحة التحكم وحذف جميع الصفحات السابقة
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const StoreDashboardScreen()),
-              (Route<dynamic> route) => false, // يزيل كل الصفحات تحتها
-        );
+        // 🔥🔥 التعديل الحاسم: الانتظار قليلاً لضمان تحديث الـ Provider 🔥🔥
+        print("🔍 DEBUG: [LoginScreen] 4. Success! Waiting 100ms...");
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        if (mounted) {
+          print("🔍 DEBUG: [LoginScreen] 5. Executing Navigation to Dashboard...");
+          // استخدام pushAndRemoveUntil لمسح أي شاشة سابقة (بما فيها الرئيسية إذا فتحت بالخطأ)
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const StoreDashboardScreen()),
+                (Route<dynamic> route) => false,
+          );
+        }
       } else {
+        print("🔍 DEBUG: [LoginScreen] Login failed (Success = false)");
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('اسم المستخدم أو كلمة المرور غير صحيحة'), backgroundColor: Colors.red)
+            const SnackBar(content: Text('بيانات الدخول غير صحيحة'), backgroundColor: Colors.red)
         );
       }
     } catch (e) {
-      if(mounted) {
+      print("🔍 DEBUG: [LoginScreen] Exception Caught: $e");
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('حدث خطأ: $e'), backgroundColor: Colors.red)
         );
