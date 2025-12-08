@@ -1538,10 +1538,8 @@ class ApiService {
   final CacheService _cacheService = CacheService();
 
   // =================================================================
-  // 1. Helper Methods (المساعدات)
+  // 🔥 1. دالة التنفيذ الذكي (Exponential Backoff) - المحدثة
   // =================================================================
-
-  // 🔥 دالة التنفيذ الذكي (Exponential Backoff)
   Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
     int attempts = 0;
     while (attempts < 3) {
@@ -1551,15 +1549,15 @@ class ApiService {
         attempts++;
         String errorString = e.toString();
 
-        // 🛑 توقف فوراً في حالة الحظر
-        if (errorString.contains('403') || errorString.contains('429')) {
-          print("⛔ تم إيقاف المحاولات لتجنب الحظر: $errorString");
+        // 🛑 توقف فوراً في حالة الحظر أو الأخطاء الصريحة
+        if (errorString.contains('403') || errorString.contains('429') || errorString.contains('صلاحيات')) {
+          print("⛔ تم إيقاف المحاولات لتجنب الحظر أو لعدم الصلاحية: $errorString");
           rethrow;
         }
 
         if (attempts >= 3) rethrow;
 
-        // ⏳ انتظار تصاعدي
+        // ⏳ انتظار تصاعدي (2 ثانية، 4 ثواني...)
         int delaySeconds = pow(2, attempts).toInt();
         print("⚠️ فشل الطلب (محاولة $attempts)، انتظار $delaySeconds ثواني...");
         await Future.delayed(Duration(seconds: delaySeconds));
@@ -1569,97 +1567,73 @@ class ApiService {
   }
 
   // =================================================================
-  // 2. Customer & Store Caching Methods (للتخزين الدائم)
-  // =================================================================
-  // هذه الدوال تعيد النص الخام (String) ليتم حفظه في الهاتف
-
-  // أ) جلب القائمة (مطاعم أو مسواك)
-  Future<String> getRawRestaurants(int areaId) async {
-    const fields = 'id,name,image,count,meta_data';
-    // per_page=100 لضمان جلب الكل وحفظه
-    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields&area_id=$areaId';
-
-    return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
-      if (response.statusCode == 200) return response.body;
-      throw Exception('Failed to load raw restaurants');
-    });
-  }
-
-  // ب) جلب IDs المتاحة للتوصيل
-  Future<String> getRawDeliverableIds(int areaId) async {
-    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
-    return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) return response.body;
-      throw Exception('Failed to load raw deliverable IDs');
-    });
-  }
-
-  // ج) جلب المنيو/المنتجات
-  Future<String> getRawMenu(int parentId) async {
-    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
-    final url = '$BEYTEI_URL/wp-json/wc/v3/products?category=$parentId&per_page=100&_fields=$fields';
-
-    return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
-      if (response.statusCode == 200) return response.body;
-      throw Exception('Failed to load raw menu');
-    });
-  }
-
-  // =================================================================
-  // 3. General Getters (للاستخدام المباشر بدون كاش معقد)
+  // 2. دوال المتجر / المدير (Store Manager Methods)
   // =================================================================
 
-  Future<List<Area>> getAreas() async {
-    const cacheKey = 'all_areas';
+  // ✅ جلب الطلبات (مع طباعة الخطأ)
+  Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
     return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
+      final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
+      final response = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      );
+
       if (response.statusCode == 200) {
-        await _cacheService.saveData(cacheKey, response.body);
-        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
+        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
       }
-      throw Exception('Server error ${response.statusCode}');
+
+      // 🔥 طباعة الخطأ الحقيقي من السيرفر
+      print("❌ API Error [getOrders]: Code ${response.statusCode}, Body: ${response.body}");
+
+      if (response.statusCode == 403) {
+        throw Exception("صلاحيات غير كافية (403): تأكد من ربط حساب المدير بمتجر في ووردبريس.");
+      }
+
+      throw Exception('Failed to load orders: ${response.statusCode}');
     });
   }
 
-  Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
-    // نستخدم النسخة الخام ونحولها هنا للتوافق مع الأكواد القديمة
-    final jsonStr = await getRawRestaurants(areaId);
-    final data = json.decode(jsonStr) as List;
-    return data.map((json) => Restaurant.fromJson(json)).toList();
-  }
-
-  Future<Set<int>> getDeliverableRestaurantIds(int areaId) async {
-    final jsonStr = await getRawDeliverableIds(areaId);
-    final List<dynamic> data = json.decode(jsonStr);
-    return data.map<int>((item) => item['id'] as int).toSet();
-  }
-
-  Future<List<FoodItem>> getMenuForRestaurant(int categoryId) async {
-    final jsonStr = await getRawMenu(categoryId);
-    final data = json.decode(jsonStr) as List;
-    return data.map((json) => FoodItem.fromJson(json)).toList();
-  }
-
-  // البحث (لا يحتاج كاش دائم)
-  Future<List<FoodItem>> searchProducts({required String query}) async {
-    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
-    final url = '$BEYTEI_URL/wp-json/wc/v3/products?search=$query&per_page=20&_fields=$fields';
+  // ✅ جلب المنتجات (مع طباعة الخطأ)
+  Future<List<FoodItem>> getMyRestaurantProducts(String token) async {
     return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/my-products'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
       if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
+        final data = json.decode(response.body) as List;
+        return data.map((json) => FoodItem.fromJson(json)).toList();
       }
-      throw Exception('Failed search');
+
+      // 🔥 طباعة الخطأ الحقيقي
+      print("❌ API Error [getProducts]: Code ${response.statusCode}, Body: ${response.body}");
+
+      throw Exception('Failed to load restaurant products: ${response.statusCode}');
     });
   }
 
-  // =================================================================
-  // 4. Manager / Owner Methods (دوال المدير)
-  // =================================================================
+  // ✅ جلب الإعدادات (مع طباعة الخطأ)
+  Future<Map<String, dynamic>> getRestaurantSettings(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-settings'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
 
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+
+      // 🔥 طباعة الخطأ الحقيقي
+      print("❌ API Error [getSettings]: Code ${response.statusCode}, Body: ${response.body}");
+
+      throw Exception('Failed to load settings: ${response.statusCode}');
+    });
+  }
+
+  // إضافة منتج
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -1683,6 +1657,7 @@ class ApiService {
     });
   }
 
+  // تحديث منتج
   Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -1706,31 +1681,6 @@ class ApiService {
     });
   }
 
-  Future<List<FoodItem>> getMyRestaurantProducts(String token) async {
-    return _executeWithRetry(() async {
-      final response = await http.get(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/my-products'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body) as List;
-        return data.map((json) => FoodItem.fromJson(json)).toList();
-      }
-      throw Exception('Failed to load restaurant products');
-    });
-  }
-
-  Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
-    return _executeWithRetry(() async {
-      final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
-      final response = await http.get(uri, headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'});
-      if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
-      }
-      throw Exception('Failed to load orders');
-    });
-  }
-
   Future<bool> updateOrderStatus(int orderId, String status) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('jwt_token') ?? prefs.getString('store_jwt_token');
@@ -1751,21 +1701,9 @@ class ApiService {
         headers: {'Authorization': 'Bearer $token'},
       );
       if (response.statusCode == 200) return RestaurantRatingsDashboard.fromJson(json.decode(response.body));
-      throw Exception('Failed to load dashboard ratings');
-    });
-  }
 
-  // إعدادات المطعم/المتجر
-  Future<Map<String, dynamic>> getRestaurantSettings(String token) async {
-    return _executeWithRetry(() async {
-      final response = await http.get(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-settings'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
-      throw Exception('Failed to load settings');
+      print("❌ API Error [getRatings]: Code ${response.statusCode}, Body: ${response.body}");
+      throw Exception('Failed to load dashboard ratings');
     });
   }
 
@@ -1815,28 +1753,107 @@ class ApiService {
   }
 
   // =================================================================
-  // 5. Delivery & Order Submission (التوصيل والطلبات)
+  // 3. دوال الزبون (Customer Side)
+  // =================================================================
+
+  Future<String> getRawRestaurants(int areaId) async {
+    const fields = 'id,name,image,count,meta_data';
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields&area_id=$areaId';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load raw restaurants');
+    });
+  }
+
+  Future<String> getRawDeliverableIds(int areaId) async {
+    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load deliverable IDs raw');
+    });
+  }
+
+  Future<String> getRawMenu(int parentId) async {
+    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products?category=$parentId&per_page=100&_fields=$fields';
+
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) return response.body;
+      throw Exception('Failed to load raw menu');
+    });
+  }
+
+  Future<List<Area>> getAreas() async {
+    const cacheKey = 'all_areas';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
+      if (response.statusCode == 200) {
+        await _cacheService.saveData(cacheKey, response.body);
+        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
+      }
+      throw Exception('Server error ${response.statusCode}');
+    });
+  }
+
+  Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
+    final jsonStr = await getRawRestaurants(areaId);
+    final data = json.decode(jsonStr) as List;
+    return data.map((json) => Restaurant.fromJson(json)).toList();
+  }
+
+  Future<Set<int>> getDeliverableRestaurantIds(int areaId) async {
+    final jsonStr = await getRawDeliverableIds(areaId);
+    final List<dynamic> data = json.decode(jsonStr);
+    return data.map<int>((item) => item['id'] as int).toSet();
+  }
+
+  Future<List<FoodItem>> getMenuForRestaurant(int categoryId) async {
+    final jsonStr = await getRawMenu(categoryId);
+    final data = json.decode(jsonStr) as List;
+    return data.map((json) => FoodItem.fromJson(json)).toList();
+  }
+
+  Future<List<FoodItem>> searchProducts({required String query}) async {
+    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+    final url = '$BEYTEI_URL/wp-json/wc/v3/products?search=$query&per_page=20&_fields=$fields';
+    return _executeWithRetry(() async {
+      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      if (response.statusCode == 200) {
+        return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
+      }
+      throw Exception('Failed search');
+    });
+  }
+
+  // =================================================================
+  // 4. التوصيل والطلبات الموحدة (Delivery & Unified Orders)
   // =================================================================
 
   Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
-    final url = '$BEYTEI_URL/wp-json/taxi/v2/delivery/available';
+    // ✅ الرابط الجديد الموحد
+    final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/region-orders?area_id=$areaId';
+
     return _executeWithRetry(() async {
       final response = await http.get(
         Uri.parse(url),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
       );
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        var ordersList = data['orders'] ?? data['data'];
-        if (data is List) ordersList = data;
-
-        if (ordersList != null && ordersList is List) {
-          return ordersList.map<UnifiedDeliveryOrder>((json) => UnifiedDeliveryOrder.fromJson(json)).toList();
-        }
-        return [];
+        final List<dynamic> data = json.decode(response.body);
+        return data.map<UnifiedDeliveryOrder>((json) {
+          return UnifiedDeliveryOrder.fromJson(json);
+        }).toList();
+      } else {
+        throw Exception('Server Error: ${response.statusCode}');
       }
-      throw Exception('Failed to load delivery orders');
     });
   }
 
@@ -2520,10 +2537,11 @@ class _OrderCardState extends State<OrderCard> {
     final destAddressController = TextEditingController(text: order.address);
 
     final orderDetails = order.lineItems.map((item) => '- ${item.quantity} x ${item.name}').join('\n');
-    notesController.text = 'توصيل طلب  رقم #${order.id}\nالمحتويات:\n$orderDetails';
+    notesController.text = 'توصيل طلب رقم #${order.id}\nالمحتويات:\n$orderDetails';
 
     SharedPreferences.getInstance().then((prefs) {
-      pickupNameController.text = prefs.getString('restaurant_name') ?? '';
+      // محاولة جلب الاسم المحفوظ، أو الاسم الافتراضي للمطعم
+      pickupNameController.text = prefs.getString('saved_restaurant_name') ?? prefs.getString('restaurant_name') ?? '';
     });
 
     showDialog(
@@ -2545,7 +2563,7 @@ class _OrderCardState extends State<OrderCard> {
                       const Text("1. تفاصيل نقطة الاستلام:", style: TextStyle(fontWeight: FontWeight.bold)),
                       TextFormField(
                         controller: pickupNameController,
-                        decoration: const InputDecoration(labelText: 'اسم /الفرع'),
+                        decoration: const InputDecoration(labelText: 'اسم المتجر/الفرع'),
                         validator: (value) => value == null || value.isEmpty ? 'الحقل مطلوب' : null,
                       ),
                       const SizedBox(height: 16),
@@ -2594,15 +2612,21 @@ class _OrderCardState extends State<OrderCard> {
                       setDialogState(() => isSubmitting = true);
                       try {
                         final prefs = await SharedPreferences.getInstance();
-                        final restaurantToken = prefs.getString('jwt_token');
+
+                        // ✅ قراءة التوكن (يدعم المطعم والمسواك)
+                        final restaurantToken = prefs.getString('jwt_token') ?? prefs.getString('store_jwt_token');
+
                         final double? restaurantLat = prefs.getDouble('restaurant_lat');
                         final double? restaurantLng = prefs.getDouble('restaurant_lng');
 
-                        if (restaurantToken == null || restaurantLat == null || restaurantLng == null) throw Exception("بيانات  ناقصة");
+                        if (restaurantToken == null || restaurantLat == null || restaurantLng == null) throw Exception("بيانات الموقع ناقصة. يرجى إعادة تسجيل الدخول.");
+
+                        // حفظ الاسم للمستقبل
+                        await prefs.setString('saved_restaurant_name', pickupNameController.text);
 
                         final result = await _apiService.createUnifiedDeliveryRequest(
                           token: restaurantToken,
-                          sourceType: 'restaurant',
+                          sourceType: 'store', // يمكن تغييرها ديناميكياً إذا أردت
                           sourceOrderId: order.id.toString(),
                           pickupName: pickupNameController.text,
                           pickupLat: restaurantLat,
@@ -2654,6 +2678,7 @@ class _OrderCardState extends State<OrderCard> {
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       child: Column(
+        mainAxisSize: MainAxisSize.min, // ✅ هام جداً: يمنع تمدد البطاقة ويحل مشكلة الشاشة البيضاء
         children: [
           Container(
             color: Colors.teal.withOpacity(0.05),
@@ -2672,7 +2697,7 @@ class _OrderCardState extends State<OrderCard> {
                 const SizedBox(height: 8),
                 _buildInfoRow(Icons.location_on, 'العنوان:', widget.order.address),
 
-                // ✨ زر الخريطة (الإصلاح)
+                // زر الخريطة
                 if (widget.order.destinationLat != null &&
                     widget.order.destinationLat!.isNotEmpty &&
                     widget.order.destinationLat != "0" &&
@@ -2708,7 +2733,6 @@ class _OrderCardState extends State<OrderCard> {
                   ],
                 ),
 
-                // ✨ الرسالة المطلوبة
                 if (isDeliveryRequested) ...[
                   const SizedBox(height: 15),
                   Container(
@@ -3061,11 +3085,37 @@ class ShimmerFoodCard extends StatelessWidget {
 // =======================================================================
 // --- MAIN APP ENTRY POINT & WRAPPERS (تم التعديل لإصلاح الشاشة البيضاء) ---
 // =======================================================================
+// =======================================================================
+// --- MAIN APP ENTRY POINT & WRAPPERS ---
+// =======================================================================
+
+// =================================================================
+// الخطوة 1: استبدل main و RestaurantModule بهذا الكود
+// =================================================================
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   await initializeDateFormatting('ar', null);
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // كود تحويل الشاشة البيضاء إلى شاشة زرقاء تحتوي على الخطأ
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return Material(
+      child: Container(
+        color: const Color(0xFF0D47A1), // أزرق غامق
+        padding: const EdgeInsets.all(20),
+        child: Center(
+          child: SingleChildScrollView(
+            child: Text(
+              details.exception.toString(),
+              style: const TextStyle(color: Colors.yellowAccent, fontFamily: 'monospace'),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
 
   runApp(const RestaurantModule());
 }
@@ -3085,58 +3135,29 @@ class _RestaurantModuleState extends State<RestaurantModule> {
 
   Future<void> _initializeServices() async {
     await NotificationService.initialize();
-
-    // 🔥 الاستماع للإشعارات القادمة والتطبيق مفتوح (Foreground) 🔥
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      // 1. عرض التنبيه (صوت + إشعار منبثق)
       NotificationService.display(message);
-
-      // 2. تحديث البيانات فوراً (بدلاً من انتظار المؤقت)
-      if (mounted) {
-        // نستخدم try-catch لتجنب الأخطاء إذا كان السياق غير جاهز
-        try {
-          final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
-
-          if (authProvider.isLoggedIn && authProvider.token != null) {
-            print("🔔 إشعار جديد وصل! جاري تحديث بيانات الفوراً...");
-
-            // أ) تحديث قائمة الطلبات (النشطة والمكتملة)
-            Provider.of<DashboardProvider>(context, listen: false)
-                .fetchDashboardData(authProvider.token, silent: true);
-
-            // ب) تحديث إعدادات المطعم (للاحتياط، في حال تغيرت الحالة)
-            Provider.of<RestaurantSettingsProvider>(context, listen: false)
-                .fetchSettings(authProvider.token);
-          }
-        } catch (e) {
-          print("Ignored notification update error: $e");
-        }
-      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
+      // ✅ تعريف المزودات هنا يحل مشكلة Provider not found
       providers: [
-        // 1. المزودات الأساسية (تعمل دائماً)
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
         ChangeNotifierProvider(create: (_) => StoreAuthProvider()),
         ChangeNotifierProvider(create: (_) => StoreCustomerProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
-
-        // 2. مزودات لوحة التحكم (تم تحويلها لمزودات عادية لإصلاح الشاشة البيضاء)
-        // ✅ الآن سيتم إنشاؤها فوراً عند بدء التطبيق ولن يظهر خطأ Provider not found
         ChangeNotifierProvider(create: (_) => DashboardProvider()),
         ChangeNotifierProvider(create: (_) => RestaurantSettingsProvider()),
         ChangeNotifierProvider(create: (_) => RestaurantProductsProvider()),
-
-        // 3. مزود التوصيل
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
       ],
       child: MaterialApp(
         title: 'Beytei Restaurants',
+        debugShowCheckedModeBanner: false,
         theme: ThemeData(
             primarySwatch: Colors.teal,
             scaffoldBackgroundColor: const Color(0xFFF5F5F5),
@@ -3148,14 +3169,12 @@ class _RestaurantModuleState extends State<RestaurantModule> {
                 titleTextStyle: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'Tajawal')
             )
         ),
-        debugShowCheckedModeBanner: false,
-        // نقطة البداية تعتمد على الموجه الذكي
         home: const AuthWrapper(),
       ),
     );
   }
 }
-// ✨ NEW: Restaurant Settings Screen
+
 class RestaurantSettingsScreen extends StatefulWidget {
   const RestaurantSettingsScreen({super.key});
 
@@ -5155,6 +5174,16 @@ class InAppMapScreen extends StatelessWidget {
 // =======================================================================
 // --- Store Dashboard Screen (Updated V19) ---
 // =======================================================================
+// =======================================================================
+// --- Store Dashboard Screen (Updated V21 - With Safe UI & Debugger) ---
+// =======================================================================
+// =================================================================
+// 2. StoreDashboardScreen (لوحة التحكم) - نسخة المطعم
+// =================================================================
+// =================================================================
+// 2. StoreDashboardScreen (لوحة التحكم - النسخة الكاملة V22)
+// =================================================================
+
 class StoreDashboardScreen extends StatefulWidget {
   const StoreDashboardScreen({super.key});
   @override
@@ -5176,7 +5205,7 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
       final token = Provider.of<StoreAuthProvider>(context, listen: false).token;
 
       if (token != null) {
-        // 1. جلب الإعدادات أولاً (لحفظ الموقع في الذاكرة لاستخدامه في طلبات التوصيل)
+        // 1. جلب الإعدادات أولاً (لحفظ الموقع في الذاكرة)
         Provider.of<RestaurantSettingsProvider>(context, listen: false)
             .fetchSettings(token)
             .then((_) {
@@ -5192,13 +5221,15 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
 
   @override
   void dispose() {
-    // إيقاف التحديث التلقائي عند الخروج
-    Provider.of<DashboardProvider>(context, listen: false).stopAutoRefresh();
+    // إيقاف التحديث التلقائي عند الخروج لعدم استهلاك الموارد
+    if (mounted) {
+      Provider.of<DashboardProvider>(context, listen: false).stopAutoRefresh();
+    }
     _tabController.dispose();
     super.dispose();
   }
 
-  // --- نافذة طلب التوصيل الخاص (معدلة للمسواك) ---
+  // --- نافذة طلب التوصيل الخاص (الكاملة) ---
   void _showPrivateDeliveryRequestDialog(BuildContext context) {
     final _formKey = GlobalKey<FormState>();
     final _pickupNameController = TextEditingController();
@@ -5212,7 +5243,7 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
 
     // تحميل الاسم المحفوظ مسبقاً
     SharedPreferences.getInstance().then((prefs) {
-      final savedName = prefs.getString('saved_restaurant_name') ?? ''; // نستخدم نفس المفتاح للتوافق
+      final savedName = prefs.getString('saved_restaurant_name') ?? '';
       _pickupNameController.text = savedName;
     });
 
@@ -5289,11 +5320,10 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
                       try {
                         final prefs = await SharedPreferences.getInstance();
 
-                        // ✅ هام: قراءة توكن المسواك المخزن بواسطة StoreAuthProvider
+                        // ✅ قراءة التوكن (يدعم المطعم والمسواك)
                         final token = prefs.getString('store_jwt_token');
 
                         // ملاحظة: RestaurantSettingsProvider يحفظ الموقع في restaurant_lat/lng
-                        // لذلك نستخدم نفس المفاتيح هنا للتوافق
                         final pickupLat = prefs.getDouble('restaurant_lat');
                         final pickupLng = prefs.getDouble('restaurant_lng');
 
@@ -5393,16 +5423,19 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
         ),
       ),
 
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          // يمكن استخدام نفس الشاشات لأنها تعتمد على DashboardProvider المشترك
-          OrdersListScreen(status: 'active'),
-          OrdersListScreen(status: 'completed'),
-          const ProductManagementTab(),
-          const RatingsDashboardScreen(),
-          const RestaurantSettingsScreen(),
-        ],
+      // ✅ استخدام SafeArea لمنع تداخل العناصر مع حواف الشاشة (سبب الشاشة البيضاء أحياناً)
+      body: SafeArea(
+        child: TabBarView(
+          controller: _tabController,
+          children: [
+            // ✅ تم استخدام Safe Area داخل الصفحات أيضاً لضمان الأمان
+            OrdersListScreen(status: 'active'),
+            OrdersListScreen(status: 'completed'),
+            const ProductManagementTab(),
+            const RatingsDashboardScreen(),
+            const RestaurantSettingsScreen(),
+          ],
+        ),
       ),
 
       floatingActionButton: FloatingActionButton.extended(
@@ -5415,8 +5448,7 @@ class _StoreDashboardScreenState extends State<StoreDashboardScreen> with Single
     );
   }
 }
-// =======================================================================
-// --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
+
 // =======================================================================
 // استبدل كلاس ProductManagementTab بهذا الكود
 
@@ -5900,84 +5932,79 @@ class _AddProductScreenState extends State<AddProductScreen> {
 }
 
 
-class OrdersListScreen extends StatefulWidget {
+// =================================================================
+// 3. OrdersListScreen (عرض الطلبات) - الآمنة والمجربة
+// =================================================================
+// =================================================================
+// الخطوة 3: استبدل OrdersListScreen بهذا الكود
+// =================================================================
+
+class OrdersListScreen extends StatelessWidget {
   final String status;
   const OrdersListScreen({super.key, required this.status});
-  @override
-  State<OrdersListScreen> createState() => _OrdersListScreenState();
-}
 
-class _OrdersListScreenState extends State<OrdersListScreen> {
   @override
   Widget build(BuildContext context) {
-    // استخدام StoreAuthProvider لأننا في قسم المسواك
-    final authProvider = Provider.of<StoreAuthProvider>(context, listen: false);
-
-    return Consumer<DashboardProvider>(
-      builder: (context, dashboard, child) {
-        final orders = dashboard.orders[widget.status] ?? [];
-        final pickupCodes = dashboard.pickupCodes;
+    // استخدام Consumer لتجنب أخطاء Providers
+    return Consumer2<DashboardProvider, StoreAuthProvider>(
+      builder: (context, dashboard, auth, child) {
+        final orders = dashboard.orders[status] ?? [];
 
         // 1. حالة التحميل
         if (dashboard.isLoading && orders.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // 2. حالة وجود خطأ (Error State)
+        // 2. حالة الخطأ (لا توجد بيانات + يوجد خطأ)
         if (dashboard.error != null && orders.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.error_outline, size: 60, color: Colors.red),
+                const Icon(Icons.error_outline, size: 50, color: Colors.red),
                 const SizedBox(height: 10),
-                Text(
-                  "حدث خطأ في جلب البيانات",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Text(dashboard.error!, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-                ),
+                Text(dashboard.error!),
                 ElevatedButton(
-                  onPressed: () => dashboard.fetchDashboardData(authProvider.token),
-                  child: const Text("إعادة المحاولة"),
+                  onPressed: () => dashboard.fetchDashboardData(auth.token),
+                  child: const Text("حاول مرة أخرى"),
                 )
               ],
             ),
           );
         }
 
-        // 3. حالة القائمة الفارغة (Empty State)
+        // 3. حالة القائمة الفارغة (لا توجد طلبات)
         if (orders.isEmpty) {
           return RefreshIndicator(
-            onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+            onRefresh: () => dashboard.fetchDashboardData(auth.token),
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 SizedBox(height: MediaQuery.of(context).size.height * 0.3),
                 Icon(Icons.inbox_outlined, size: 80, color: Colors.grey.shade300),
                 const SizedBox(height: 20),
-                const Center(child: Text("لا توجد طلبات هنا حالياً", style: TextStyle(fontSize: 18, color: Colors.grey))),
+                const Center(child: Text('لا توجد طلبات حالياً', style: TextStyle(fontSize: 18, color: Colors.grey))),
               ],
             ),
           );
         }
 
-        // 4. عرض القائمة
+        // 4. عرض القائمة (الوضع الطبيعي)
         return RefreshIndicator(
-          onRefresh: () => dashboard.fetchDashboardData(authProvider.token),
+          onRefresh: () => dashboard.fetchDashboardData(auth.token),
           child: ListView.builder(
             padding: const EdgeInsets.all(8),
             itemCount: orders.length,
             itemBuilder: (context, index) {
-              final order = orders[index];
-              final code = pickupCodes[order.id];
-              return OrderCard(
-                order: order,
-                onStatusChanged: () => dashboard.fetchDashboardData(authProvider.token),
-                isCompleted: widget.status != 'active',
-                pickupCode: code,
+              return Container(
+                // إضافة مسافة لتجنب التلاصق
+                margin: const EdgeInsets.only(bottom: 10),
+                child: OrderCard(
+                  order: orders[index],
+                  onStatusChanged: () => dashboard.fetchDashboardData(auth.token),
+                  isCompleted: status != 'active',
+                  pickupCode: dashboard.pickupCodes[orders[index].id],
+                ),
               );
             },
           ),
@@ -5986,6 +6013,11 @@ class _OrdersListScreenState extends State<OrdersListScreen> {
     );
   }
 }
+
+
+
+
+
 class RatingsDashboardScreen extends StatefulWidget {
   const RatingsDashboardScreen({super.key});
   @override
