@@ -193,7 +193,7 @@ builder: (context, params) => HomeMainPageWidget(),
       path: '/miswak-store',
       // ✅ التعديل هنا: نستدعي نقطة الدخول الجديدة (MiswakAppEntryPoint)
       // بدلاً من (LocationCheckWrapper) مباشرة
-      builder: (context, params) => const MiswakAppEntryPoint(),
+      builder: (context, params) => const MiswakModule(),
     ),
     FFRoute(
       name: 'medicalstorepage',
