@@ -26,10 +26,18 @@ import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 
+import 'cal.dart';
 import 'cash.dart';
 import 'de.dart';
-
+// 1. أضف هذا الكود في السطور الأولى من الملف (بعد الـ imports مباشرة)
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  // هذا الكود يضمن أن النظام يستلم الإشعار حتى والتطبيق مغلق
+  debugPrint("Handling a background message: ${message.messageId}");
+}
 final ValueNotifier<Map<String, dynamic>?> acceptedRideNotifier = ValueNotifier(null);
 // 👇 متغير عام للاستماع لتحديثات قائمة الرحلات
 final ValueNotifier<bool> rideListRefreshNotifier = ValueNotifier(false);
@@ -77,35 +85,25 @@ class FirebaseApi {
 
     // 3. التعامل مع التطبيق وهو مفتوح (Foreground)
     FirebaseMessaging.onMessage.listen((message) {
-      debugPrint("--- رحلة جديد وصل --- البيانات: ${message.data}");
+      debugPrint("--- إشعار جديد وصل --- البيانات: ${message.data}");
 
-      // 🔥🔥🔥 التعديل الهام هنا 🔥🔥🔥
-      // هذا السطر يخبر شاشة السائق: "حدث القائمة فوراً، هناك طلب جديد!"
+      // تحديث القوائم فوراً
       rideListRefreshNotifier.value = !rideListRefreshNotifier.value;
 
+      // التعامل مع البيانات
       final notification = message.notification;
-      if (notification == null) return;
+      final android = message.notification?.android;
 
-      // منطق قبول الرحلة المباشر
-      final status = message.data['status'] as String?;
-      if (status == 'accepted' && message.data['ride_data'] != null) {
-        try {
-          final rideData = json.decode(message.data['ride_data']);
-          acceptedRideNotifier.value = rideData;
-        } catch (e) {
-          debugPrint("Error parsing ride data: $e");
-        }
+      // حتى لو كان الإشعار "Data Only" سنقوم بإنشاء تنبيه محلي
+      if (notification != null || message.data.isNotEmpty) {
+        NotificationService.showNotification(
+          notification?.title ?? message.data['title'] ?? 'تنبيه جديد',
+          notification?.body ?? message.data['body'] ?? 'يوجد طلب جديد، اضغط للتفاصيل',
+          payload: json.encode(message.data),
+          type: 'high_priority',
+        );
       }
-
-      // إظهار الإشعار المنبثق
-      NotificationService.showNotification(
-        notification.title ?? 'تنبيه جديد',
-        notification.body ?? '',
-        payload: json.encode(message.data),
-        type: 'high_priority',
-      );
-    });
-  }
+    });  }
 }
 // =============================================================================
 // Helper Classes & Functions
@@ -177,6 +175,10 @@ class PermissionService {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // 2. تسجيل دالة الخلفية (هذا السطر هو الجديد والمهم)
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
   await NotificationService.initialize();
   final prefs = await SharedPreferences.getInstance();
   final showOnboarding = prefs.getBool('showOnboarding') ?? true;
@@ -190,8 +192,8 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: navigatorKey,
-      title: 'تكسي بيتي',
+      // 👇 هذا السطر مهم جداً لكي تظهر شاشة الاتصال فوق كل شيء
+      navigatorKey: navigatorKey, //      title: 'تكسي بيتي',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.amber,
@@ -757,6 +759,7 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> {
   AuthStatus _authStatus = AuthStatus.unknown;
   AuthResult? _authResult;
+
   @override
   void initState() {
     super.initState();
@@ -777,6 +780,12 @@ class _AuthGateState extends State<AuthGate> {
         if (fcmToken != null) {
           await ApiService.updateFcmToken(authData.token, fcmToken);
         }
+
+        // 👇👇👇 إضافة 1: تهيئة خدمة الاتصال عند الفتح التلقائي 👇👇👇
+        await CallService.initService(
+          userId: authData.userId,
+          userName: authData.displayName,
+        );
       }
     }
   }
@@ -797,13 +806,24 @@ class _AuthGateState extends State<AuthGate> {
       _authResult = authResult;
       _authStatus = authResult != null ? AuthStatus.authenticated : AuthStatus.unauthenticated;
     });
-  }
 
+    // تهيئة فورية عند تحديث الحالة
+    if (authResult != null) {
+      CallService.initService(
+        userId: authResult.userId,
+        userName: authResult.displayName,
+      );
+    }
+  }
   Future<void> _logout() async {
     final authData = await ApiService.getStoredAuthData();
     if (authData != null && authData.isDriver) {
       await ApiService.setDriverActiveStatus(authData.token, false);
     }
+
+    // 👇👇👇 إضافة 3: إنهاء خدمة الاتصال عند تسجيل الخروج 👇👇👇
+    await CallService.uninitService();
+
     await ApiService.clearAuthData();
     await fb_auth.FirebaseAuth.instance.signOut();
     _updateAuthStatus(null);
@@ -3433,8 +3453,6 @@ class DriverCurrentRideScreen extends StatefulWidget {
   State<DriverCurrentRideScreen> createState() => _DriverCurrentRideScreenState();
 }
 
-
-// ============== ✂️✂️✂️  ابدأ النسخ من هنا ✂️✂️✂️ ==============
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide;
   bool _isLoading = false;
@@ -3634,11 +3652,13 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       appBar: AppBar(
         title: const Text('الرحلة الحالية'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.call, color: Colors.green),
-            onPressed: () => makePhoneCall(customerPhone, context),
-            tooltip: 'الاتصال بالزبون',
+          // 👇 استبدال زر الاتصال القديم بـ SmartCallButton
+          SmartCallButton(
+            targetUserID: _currentRide['author'].toString(), // ID الزبون من بيانات الرحلة
+            targetUserName: "الزبون", // يمكن استبداله باسم الزبون الحقيقي إذا توفر
+            phoneNumber: customerPhone,
           ),
+
           TextButton.icon(
             icon: ChatIconWithBadge(
               chatId: 'ride_${_currentRide['id']}',
@@ -3742,7 +3762,11 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       ),
     );
   }
-}// =============================================================================
+}
+
+
+
+// =============================================================================
 // Customer Quick Ride Screen (with Improved Location Selection)
 // =============================================================================
 enum BookingStage { selectingPickup, selectingDestination, confirmingRequest }
@@ -3761,6 +3785,7 @@ class QuickRideMapScreen extends StatefulWidget {
   @override
   State<QuickRideMapScreen> createState() => _QuickRideMapScreenState();
 }
+
 class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   Map<String, dynamic>? _activeRide;
@@ -3879,10 +3904,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           _assignedDriverLocation = newDriverLocation;
           _assignedDriverBearing = newBearing;
         });
-
-        // 🛑 تم إيقاف رسم المسار المتكرر (توفير رصيد خرائط)
-        // final pickupPoint = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
-        // _getRoute(_assignedDriverLocation!, pickupPoint);
       }
     });
   }
@@ -3897,26 +3918,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     }
   }
 
-  Future<void> _getRoute(LatLng start, LatLng end) async {
-    const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
-    if (orsApiKey.length < 50) return;
-
-    // لا ترسم إذا كان المسار موجوداً بالفعل
-    if (_routeToCustomer.isNotEmpty) return;
-
-    final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
-    try {
-      final response = await http.get(Uri.parse(url));
-      if (mounted && response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final coordinates = data['features'][0]['geometry']['coordinates'] as List;
-        setState(() => _routeToCustomer = coordinates.map((c) => LatLng(c[1], c[0])).toList());
-      }
-    } catch (e) {
-      debugPrint("ORS Exception: ${e.toString()}");
-    }
-  }
-
   Future<void> _fetchActiveDrivers() async {
     if (!mounted || _activeRide != null) return;
     try {
@@ -3924,7 +3925,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       if (!mounted) return;
       final newDriversData = {for (var d in driversList) d['id'].toString(): d};
 
-      // منطق التحريك (Animation) كما هو
       for (var driverId in newDriversData.keys) {
         final oldDriver = _driversData[driverId];
         final newDriver = newDriversData[driverId];
@@ -4251,6 +4251,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           },
         );
       } else {
+        // 👇 هنا يتم استخدام ActiveRideInfoCard المعدلة
         return ActiveRideInfoCard(
           ride: _activeRide!,
           onCancel: _cancelRide,
@@ -4362,6 +4363,102 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     );
   }
 }
+
+// -----------------------------------------------------------------------------
+// ✅ ActiveRideInfoCard المعدل مع زر الاتصال الذكي
+// -----------------------------------------------------------------------------
+class ActiveRideInfoCard extends StatelessWidget {
+  final Map<String, dynamic> ride;
+  final VoidCallback onCancel;
+  final AuthResult authResult;
+  const ActiveRideInfoCard({super.key, required this.ride, required this.onCancel, required this.authResult});
+  String _getStatusText(String status) {
+    switch (status) {
+      case 'pending':
+        return 'جاري البحث عن سائق...';
+      case 'accepted':
+        return 'تم قبول طلبك! السائق في الطريق...';
+      case 'arrived_pickup':
+        return 'السائق وصل لنقطة الانطلاق';
+      case 'ongoing':
+        return 'الرحلة جارية...';
+      case 'completed':
+        return 'اكتملت الرحلة';
+      case 'cancelled':
+        return 'تم إلغاء الرحلة';
+      default:
+        return 'حالة غير معروفة';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = ride['status'] ?? 'pending';
+    final driver = ride['driver'];
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_getStatusText(status), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
+            const Divider(),
+            if (driver != null)
+              ListTile(
+                leading: CircleAvatar(backgroundImage: driver['image'] != null && driver['image'].isNotEmpty ? NetworkImage(driver['image']) : null, child: driver['image'] == null || driver['image'].isEmpty ? const Icon(Icons.person) : null),
+                title: Text(driver['name'] ?? 'اسم السائق'),
+                subtitle: Text('${driver['car_model'] ?? ''} - ${driver['phone'] ?? ''}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 👇 زر الاتصال الذكي (الجديد)
+                    SmartCallButton(
+                      targetUserID: driver['user_id']?.toString() ?? '', // ID السائق
+                      targetUserName: driver['name'] ?? 'السائق',
+                      phoneNumber: driver['phone'],
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () {
+                        Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => ChatScreen(
+                            chatId: 'ride_${ride['id']}',
+                            chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
+                            authResult: authResult,
+                            participants: {
+                              'customer': authResult.userId,
+                              'driver': driver['user_id']?.toString(),
+                            },
+                          ),
+                        ));
+                      },
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ChatIconWithBadge(
+                            chatId: 'ride_${ride['id']}',
+                            currentUserId: authResult.userId,
+                            onPressed: () {}, // Handled by parent InkWell
+                          ),
+                          const Text("محادثة", style: TextStyle(fontSize: 8)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              const Text('بانتظار قبول السائق...'),
+            const SizedBox(height: 10),
+            if (status == 'pending') SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.cancel), label: const Text('إلغاء الطلب'), onPressed: onCancel, style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class ProvinceTaxiButton extends StatelessWidget {
   final VoidCallback onPressed;
   const ProvinceTaxiButton({super.key, required this.onPressed});
@@ -4816,92 +4913,6 @@ class _ParentTrackingScreenState extends State<ParentTrackingScreen> {
 }
 
 
-class ActiveRideInfoCard extends StatelessWidget {
-  final Map<String, dynamic> ride;
-  final VoidCallback onCancel;
-  final AuthResult authResult;
-  const ActiveRideInfoCard({super.key, required this.ride, required this.onCancel, required this.authResult});
-  String _getStatusText(String status) {
-    switch (status) {
-      case 'pending':
-        return 'جاري البحث عن سائق...';
-      case 'accepted':
-        return 'تم قبول طلبك! السائق في الطريق...';
-      case 'arrived_pickup':
-        return 'السائق وصل لنقطة الانطلاق';
-      case 'ongoing':
-        return 'الرحلة جارية...';
-      case 'completed':
-        return 'اكتملت الرحلة';
-      case 'cancelled':
-        return 'تم إلغاء الرحلة';
-      default:
-        return 'حالة غير معروفة';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final status = ride['status'] ?? 'pending';
-    final driver = ride['driver'];
-    return Card(
-      margin: const EdgeInsets.all(12),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_getStatusText(status), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
-            const Divider(),
-            if (driver != null)
-              ListTile(
-                leading: CircleAvatar(backgroundImage: driver['image'] != null && driver['image'].isNotEmpty ? NetworkImage(driver['image']) : null, child: driver['image'] == null || driver['image'].isEmpty ? const Icon(Icons.person) : null),
-                title: Text(driver['name'] ?? 'اسم السائق'),
-                subtitle: Text('${driver['car_model'] ?? ''} - ${driver['phone'] ?? ''}'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(icon: const Icon(Icons.call, color: Colors.green), tooltip: 'الاتصال بالسائق', onPressed: () => makePhoneCall(driver['phone'], context)),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () {
-                        Navigator.of(context).push(MaterialPageRoute(
-                          builder: (_) => ChatScreen(
-                            chatId: 'ride_${ride['id']}',
-                            chatName: 'محادثة مع ${driver['name'] ?? 'السائق'}',
-                            authResult: authResult,
-                            participants: {
-                              'customer': authResult.userId,
-                              'driver': driver['user_id']?.toString(),
-                            },
-                          ),
-                        ));
-                      },
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ChatIconWithBadge(
-                            chatId: 'ride_${ride['id']}',
-                            currentUserId: authResult.userId,
-                            onPressed: () {}, // Handled by parent InkWell
-                          ),
-                          const Text("محادثة", style: TextStyle(fontSize: 8)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              const Text('بانتظار قبول السائق...'),
-            const SizedBox(height: 10),
-            if (status == 'pending') SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.cancel), label: const Text('إلغاء الطلب'), onPressed: onCancel, style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white))),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class TripListScreen extends StatefulWidget {
   final AuthResult authResult;
@@ -5253,7 +5264,14 @@ class PassengersScreen extends StatelessWidget {
   final String currentUserId;
   final Future<void> Function(String) onCancelBooking;
   final AuthResult authResult;
-  const PassengersScreen({super.key, required this.trip, required this.currentUserId, required this.onCancelBooking, required this.authResult});
+
+  const PassengersScreen({
+    super.key,
+    required this.trip,
+    required this.currentUserId,
+    required this.onCancelBooking,
+    required this.authResult,
+  });
 
   void _showRatingDialog(BuildContext context) {
     showDialog(
@@ -5275,7 +5293,7 @@ class PassengersScreen extends StatelessWidget {
     final isTripOver = DateTime.parse(trip['date']).isBefore(DateTime.now());
     final bool canRate = isTripOver && !isDriver && currentUserBookings.isNotEmpty;
 
-    // <-- FIX: Collect all participant IDs for group chat.
+    // تجميع المشاركين للمحادثة الجماعية
     final Set<String> participantIds = {};
     if (trip['driver']?['user_id'] != null) {
       participantIds.add(trip['driver']['user_id'].toString());
@@ -5285,14 +5303,13 @@ class PassengersScreen extends StatelessWidget {
         participantIds.add(p['user_id'].toString());
       }
     }
-    final Map<String, String> participantsMap = { for (var id in participantIds) id : id };
+    final Map<String, String> participantsMap = {for (var id in participantIds) id: id};
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('قائمة الركاب'),
         centerTitle: true,
         actions: [
-          // <-- FIX: Chat button is now fully functional for group chat.
           TextButton.icon(
             icon: const Icon(Icons.chat_bubble_outline),
             label: const Text("محادثة الرحلة"),
@@ -5314,10 +5331,31 @@ class PassengersScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [Text('${trip['from']} → ${trip['to']}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center), const SizedBox(height: 8), Text('${_formatDate(trip['date'].toString())} - ${trip['time']}', style: const TextStyle(color: Colors.grey)), const SizedBox(height: 8), Text('المقاعد: ${passengers.fold<int>(0, (sum, p) => sum + (int.tryParse(p['quantity']?.toString() ?? '1') ?? 1))}/$totalSeats', style: const TextStyle(fontWeight: FontWeight.bold))]))),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Text('${trip['from']} → ${trip['to']}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                    const SizedBox(height: 8),
+                    Text('${_formatDate(trip['date'].toString())} - ${trip['time']}', style: const TextStyle(color: Colors.grey)),
+                    const SizedBox(height: 8),
+                    Text('المقاعد: ${passengers.fold<int>(0, (sum, p) => sum + (int.tryParse(p['quantity']?.toString() ?? '1') ?? 1))}/$totalSeats', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
             if (canRate) ...[
               const SizedBox(height: 16),
-              SizedBox(width: double.infinity, child: ElevatedButton.icon(onPressed: () => _showRatingDialog(context), icon: const Icon(Icons.star), label: const Text('تقييم السائق'), style: ElevatedButton.styleFrom(backgroundColor: Colors.amber))),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _showRatingDialog(context),
+                  icon: const Icon(Icons.star),
+                  label: const Text('تقييم السائق'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+                ),
+              ),
             ],
             const SizedBox(height: 16),
             if (!isDriver) ...[
@@ -5336,7 +5374,27 @@ class PassengersScreen extends StatelessWidget {
                     leading: CircleAvatar(backgroundColor: Colors.blue.withOpacity(0.2), child: Text('${passenger['quantity'] ?? 1}')),
                     title: Text(passenger['name']?.toString() ?? 'غير معروف'),
                     subtitle: Text('رقم الهاتف: ${passenger['phone']?.toString() ?? ''}', style: const TextStyle(fontSize: 12, color: Colors.blueGrey)),
-                    trailing: IconButton(icon: const Icon(Icons.cancel, color: Colors.red), onPressed: () => showDialog(context: context, builder: (dialogContext) => AlertDialog(title: const Text('تأكيد الإلغاء'), content: const Text('هل أنت متأكد من إلغاء هذا الحجز؟'), actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('لا')), TextButton(onPressed: () async { Navigator.pop(dialogContext); await onCancelBooking(passenger['id'].toString()); if (context.mounted) Navigator.pop(context); }, child: const Text('نعم، إلغاء'))]))),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.cancel, color: Colors.red),
+                      onPressed: () => showDialog(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('تأكيد الإلغاء'),
+                          content: const Text('هل أنت متأكد من إلغاء هذا الحجز؟'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('لا')),
+                            TextButton(
+                              onPressed: () async {
+                                Navigator.pop(dialogContext);
+                                await onCancelBooking(passenger['id'].toString());
+                                if (context.mounted) Navigator.pop(context);
+                              },
+                              child: const Text('نعم، إلغاء'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   );
                 },
               ),
@@ -5357,7 +5415,15 @@ class PassengersScreen extends StatelessWidget {
                   leading: CircleAvatar(backgroundColor: Colors.grey.withOpacity(0.2), child: Text('${passenger['quantity'] ?? 1}')),
                   title: Text(passenger['name']?.toString() ?? 'غير معروف'),
                   subtitle: isDriver ? Text('العنوان: ${passenger['address']?.toString() ?? 'غير محدد'}', style: const TextStyle(fontSize: 12)) : null,
-                  trailing: isDriver ? IconButton(icon: const Icon(Icons.call, color: Colors.green), onPressed: () => makePhoneCall(passenger['phone'], context)) : null,
+
+                  // 👇👇👇 التعديل هنا: استخدام زر الاتصال الذكي 👇👇👇
+                  trailing: isDriver
+                      ? SmartCallButton(
+                    targetUserID: passenger['user_id']?.toString() ?? '',
+                    targetUserName: passenger['name']?.toString() ?? 'الراكب',
+                    phoneNumber: passenger['phone']?.toString(),
+                  )
+                      : null,
                 );
               },
             ),
@@ -5849,12 +5915,19 @@ class ActivePrivateRequestCard extends StatelessWidget {
   final Map<String, dynamic> request;
   final VoidCallback onCancel;
   final AuthResult authResult;
-  const ActivePrivateRequestCard({super.key, required this.request, required this.onCancel, required this.authResult});
+
+  const ActivePrivateRequestCard({
+    super.key,
+    required this.request,
+    required this.onCancel,
+    required this.authResult
+  });
 
   @override
   Widget build(BuildContext context) {
     final driver = request['accepted_driver'];
     final bool isAccepted = request['status'] == 'accepted' && driver != null;
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Center(
@@ -5876,20 +5949,38 @@ class ActivePrivateRequestCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 _buildInfoRow(Icons.access_time, "الوقت:", request['time']),
                 const Divider(height: 24),
+
                 if (isAccepted) ...[
                   Text('تم قبول طلبك!', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green[700])),
                   const SizedBox(height: 12),
                   ListTile(
-                    leading: CircleAvatar(backgroundImage: driver['image'] != null && driver['image'].isNotEmpty ? NetworkImage(driver['image']) : null, child: driver['image'] == null || driver['image'].isEmpty ? const Icon(Icons.person) : null),
+                    leading: CircleAvatar(
+                        backgroundImage: driver['image'] != null && driver['image'].isNotEmpty
+                            ? NetworkImage(driver['image'])
+                            : null,
+                        child: driver['image'] == null || driver['image'].isEmpty
+                            ? const Icon(Icons.person)
+                            : null
+                    ),
                     title: Text(driver['name'] ?? 'اسم السائق'),
                     subtitle: Text(driver['car_model'] ?? 'بيانات السيارة'),
-                    trailing: IconButton(icon: const Icon(Icons.call, color: Colors.green, size: 30), onPressed: () => makePhoneCall(driver['phone'], context)),
+
+                    // 👇👇👇 التعديل هنا: استخدام زر الاتصال الذكي 👇👇👇
+                    trailing: SmartCallButton(
+                      targetUserID: driver['user_id']?.toString() ?? '', // ID السائق
+                      targetUserName: driver['name'] ?? 'السائق',
+                      phoneNumber: driver['phone'], // رقم الهاتف للاتصال العادي
+                    ),
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      icon: ChatIconWithBadge(chatId: 'private_${request['id']}', currentUserId: authResult.userId, onPressed: () {}),
+                      icon: ChatIconWithBadge(
+                          chatId: 'private_${request['id']}',
+                          currentUserId: authResult.userId,
+                          onPressed: () {}
+                      ),
                       label: const Text("التحدث مع السائق"),
                       onPressed: () {
                         Navigator.of(context).push(MaterialPageRoute(
@@ -5899,7 +5990,7 @@ class ActivePrivateRequestCard extends StatelessWidget {
                             authResult: authResult,
                             participants: {
                               'customer': authResult.userId,
-                              'driver': driver['id']?.toString(),
+                              'driver': driver['id']?.toString(), // أو user_id حسب البنية
                             },
                           ),
                         ));
@@ -5910,6 +6001,7 @@ class ActivePrivateRequestCard extends StatelessWidget {
                 ] else ...[
                   Row(children: [const CircularProgressIndicator(strokeWidth: 2), const SizedBox(width: 16), Text('جاري البحث عن سائق...', style: TextStyle(fontSize: 16, color: Colors.grey[700]))]),
                 ],
+
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
@@ -5929,10 +6021,15 @@ class ActivePrivateRequestCard extends StatelessWidget {
   }
 
   Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(children: [Icon(icon, color: Colors.grey[600], size: 20), const SizedBox(width: 12), Text(label, style: TextStyle(color: Colors.grey[800], fontSize: 16)), const SizedBox(width: 8), Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)))]);
+    return Row(children: [
+      Icon(icon, color: Colors.grey[600], size: 20),
+      const SizedBox(width: 12),
+      Text(label, style: TextStyle(color: Colors.grey[800], fontSize: 16)),
+      const SizedBox(width: 8),
+      Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)))
+    ]);
   }
 }
-
 class DriverPrivateRequestsScreen extends StatefulWidget {
   final AuthResult authResult;
   const DriverPrivateRequestsScreen({super.key, required this.authResult});
