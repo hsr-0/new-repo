@@ -4525,25 +4525,33 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
     setState(() => _filteredAreas = _allAreas.where((area) => area.name.toLowerCase().contains(query)).toList());
   }
 
+// داخل _SelectLocationScreenState
+
   Future<void> _saveSelection(int areaId, String areaName) async {
+    // إظهار مؤشر تحميل بسيط فوق الزر أو منع النقر المتكرر (اختياري)
+    // لكننا نريد الانتقال فوراً
+
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. إلغاء الاشتراك من المنطقة القديمة (إن وجدت)
-    // هذا يمنع وصول إشعارات المنطقة السابقة للزبون إذا قام بتغيير مكانه
-    int? oldAreaId = prefs.getInt('selectedAreaId');
-    if (oldAreaId != null && oldAreaId != areaId) {
-      await FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
-    }
-
-    // 2. حفظ المنطقة الجديدة في الذاكرة
+    // 1. حفظ البيانات محلياً (عملية سريعة جداً - أجزاء من الثانية)
     await prefs.setInt('selectedAreaId', areaId);
     await prefs.setString('selectedAreaName', areaName);
 
-    // 3. 🔥 الخطوة الجديدة: استدعاء دالة تسجيل الجهاز مع المنطقة الجديدة
-    // هذا سيقوم بإرسال المنطقة للسيرفر والاشتراك في Topic المنطقة في Firebase
-    await AuthService().registerDeviceToken(areaId: areaId);
+    // 2. 🔥 الحل السحري: تشغيل تسجيل الجهاز في الخلفية (بدون await)
+    // لا ننتظر اكتمال هذه العملية للانتقال للصفحة التالية
+    AuthService().registerDeviceToken(areaId: areaId).then((_) {
+      print("✅ تم تسجيل الجهاز في الخلفية بنجاح");
+    }).catchError((e) {
+      print("⚠️ فشل تسجيل الجهاز في الخلفية (غير مؤثر على تجربة المستخدم): $e");
+    });
 
-    // 4. الانتقال للشاشة التالية
+    // إلغاء الاشتراك القديم أيضاً في الخلفية
+    int? oldAreaId = prefs.getInt('selectedAreaId');
+    if (oldAreaId != null && oldAreaId != areaId) {
+      FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
+    }
+
+    // 3. الانتقال فوراً للصفحة التالية
     if (mounted) {
       if (widget.isCancellable) {
         Navigator.of(context).pop(true);
