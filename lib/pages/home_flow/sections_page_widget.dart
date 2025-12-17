@@ -1,1051 +1,636 @@
 import 'dart:async';
-
 import 'dart:convert';
-
 import 'dart:io';
 
-
-
 import 'package:flutter/material.dart';
-
 import 'package:go_router/go_router.dart';
-
 import 'package:http/http.dart' as http;
-
 import 'package:firebase_core/firebase_core.dart';
-
 import 'package:firebase_messaging/firebase_messaging.dart';
-
 import 'package:carousel_slider/carousel_slider.dart';
-
-
-
-// --- الحزم المطلوبة ---
-
 import 'package:firebase_remote_config/firebase_remote_config.dart';
-
 import 'package:package_info_plus/package_info_plus.dart';
-
 import 'package:url_launcher/url_launcher.dart';
-
 import 'package:version/version.dart';
-
 import 'package:in_app_review/in_app_review.dart';
-
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-import 'package:permission_handler/permission_handler.dart'; // [جديد] حزمة الأذونات
-
-
-
+// تأكد من صحة مسار هذه الملفات في مشروعك
 import '../../doctore/medical_home_screen.dart';
-
+import '../../zone.dart';
 import '../webview_flow/webview_page.dart';
 
-
-
-
-
-// --- كلاس طلب التقييم مع تعديلات لتصحيح الأخطاء ---
-
-class AppReviewManager {
-
-  final InAppReview _inAppReview = InAppReview.instance;
-
-
-
-  Future<void> requestReviewIfAppropriate() async {
-
-    try {
-
-      final prefs = await SharedPreferences.getInstance();
-
-      int appOpenCount = prefs.getInt('appOpenCount') ?? 0;
-
-      bool hasRequestedReview = prefs.getBool('hasRequestedReview') ?? false;
-
-
-
-// [للتشخيص] طباعة الحالة الحالية
-
-      print('[AppReview] Open count: $appOpenCount, Has review been requested before? $hasRequestedReview');
-
-
-
-      if (hasRequestedReview) {
-
-        print('[AppReview] Review already requested. Skipping.');
-
-        return;
-
-      }
-
-
-
-      appOpenCount++;
-
-      await prefs.setInt('appOpenCount', appOpenCount);
-
-
-
-// غيرنا الشرط ليكون أكثر واقعية (مثلاً بعد 5 مرات)
-
-      if (appOpenCount >= 5) {
-
-        print('[AppReview] Threshold reached. Requesting review...');
-
-        if (await _inAppReview.isAvailable()) {
-
-          _inAppReview.requestReview();
-
-          await prefs.setBool('hasRequestedReview', true);
-
-          print('[AppReview] Review requested successfully and flag set to true.');
-
-        } else {
-
-          print('[AppReview] In-app review is not available on this device.');
-
-        }
-
-      } else {
-
-        print('[AppReview] Threshold not reached yet.');
-
-      }
-
-    } catch (e) {
-
-      print('[AppReview] Failed to request App Review: $e');
-
-    }
-
-  }
-
+// --- ثوابت التخزين ---
+class CacheConstants {
+  static const String CACHE_KEY_BANNERS = 'cached_banner_data';
+  static const String CACHE_KEY_BANNER_TIME = 'cached_banner_time';
+  static const int CACHE_DURATION_HOURS = 6;
 }
 
+// --- مدير نافذة الترويج ---
+class PromoManager {
+  static const String PROMO_TITLE = "🏆 كل ما تطلب أكثر تربح أكثر!";
+  static const String PROMO_MESSAGE = "تطبيق منصة بيتي يقدم لك هدايا وجوائز يومية\n\n🎁 الهدية اليومية توزع الساعة 8 مساءً\n💰 كل طلب يؤهلك للفوز\n📱 اطلب الآن قبل انتهاء الوقت!";
 
+  static Future<bool> shouldShowPromo() async {
+    return true; // تظهر دائماً كما طلبت
+  }
+}
 
+// --- كلاس طلب التقييم ---
+class AppReviewManager {
+  final InAppReview _inAppReview = InAppReview.instance;
 
+  Future<void> requestReviewIfAppropriate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      int appOpenCount = prefs.getInt('appOpenCount') ?? 0;
+      bool hasRequestedReview = prefs.getBool('hasRequestedReview') ?? false;
+
+      if (hasRequestedReview) return;
+
+      appOpenCount++;
+      await prefs.setInt('appOpenCount', appOpenCount);
+
+      if (appOpenCount >= 5) {
+        if (await _inAppReview.isAvailable()) {
+          await _inAppReview.requestReview();
+          await prefs.setBool('hasRequestedReview', true);
+        }
+      }
+    } catch (e) {
+      print('App Review Error: $e');
+    }
+  }
+}
 
 class BannerItem {
-
   final String imageUrl;
-
   final String targetType;
-
   final String targetUrl;
-
-
 
   BannerItem({required this.imageUrl, required this.targetType, required this.targetUrl});
 
-
-
   factory BannerItem.fromJson(Map<String, dynamic> json) {
-
     return BannerItem(
-
       imageUrl: json['imageUrl'],
-
       targetType: json['targetType'],
-
       targetUrl: json['targetUrl'],
-
     );
-
   }
-
 }
-
-
 
 class SectionsPageWidget extends StatefulWidget {
-
   const SectionsPageWidget({Key? key}) : super(key: key);
 
-
-
   @override
-
   State<SectionsPageWidget> createState() => _SectionsPageWidgetState();
-
 }
 
-
-
 class _SectionsPageWidgetState extends State<SectionsPageWidget> {
-
-
-
-  // 🔥 ثوابت الكاش الجديدة
-  static const String CACHE_KEY_BANNERS = 'cached_banner_data';
-  static const String CACHE_KEY_BANNER_TIME = 'cached_banner_time';
-  static const int CACHE_DURATION_HOURS = 24;
-
-
   List<BannerItem> banners = [];
-
   bool showBanners = false;
-
-
+  // ❌ تم حذف متغير _isLoading لضمان الفتح المباشر
 
   @override
-
   void initState() {
-
     super.initState();
-
-    _initialize();
-
+    // ✅ تشغيل الدوال في الخلفية فوراً دون انتظار (Fire and Forget)
+    _startBackgroundTasks();
   }
 
+  void _startBackgroundTasks() {
+    // 1. طلب الأذونات
+    _requestAllPermissions();
 
+    // 2. تحميل البانرات (سيتم تحديث الواجهة تلقائياً عند الانتهاء)
+    _loadBannersWithCache();
 
-  Future<void> _initialize() async {
-
-// افترض أن تهيئة Firebase تمت في شاشة الـ splash
-
-
-
-// [جديد] طلب الأذونات أولاً
-
-    await _requestAllPermissions();
-
-
-
-    fetchBannerImages();
-
+    // 3. التحقق من التحديثات
     _checkForUpdate();
 
+    // 4. طلب التقييم
     AppReviewManager().requestReviewIfAppropriate();
 
+    // 5. عرض نافذة الترويج (بعد تأخير بسيط جداً لضمان تحميل الواجهة أولاً)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(seconds: 1)); // تأخير ثانية واحدة لجمالية العرض
+      if (mounted) {
+        if (await PromoManager.shouldShowPromo()) {
+          _showPromoDialog();
+        }
+      }
+    });
   }
 
-
-
-// --- [جديد] دالة مجمعة لطلب كل الأذونات ---
+  // ... (نفس دالة نافذة الترويج السابقة) ...
+  Future<void> _showPromoDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(25),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Stack(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Colors.deepPurple, Colors.purpleAccent],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(25),
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(23),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      decoration: const BoxDecoration(
+                        color: Colors.deepPurple,
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(23),
+                          topRight: Radius.circular(23),
+                        ),
+                      ),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.card_giftcard_rounded, color: Colors.yellow.shade300, size: 60),
+                            const SizedBox(height: 10),
+                            const Text(
+                              PromoManager.PROMO_TITLE,
+                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(25),
+                      child: Column(
+                        children: [
+                          Text(
+                            PromoManager.PROMO_MESSAGE,
+                            style: TextStyle(fontSize: 16, height: 1.6, color: Colors.grey.shade800),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 25),
+                          Container(
+                            padding: const EdgeInsets.all(15),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade50,
+                              borderRadius: BorderRadius.circular(15),
+                              border: Border.all(color: Colors.orange.shade200),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.access_time_filled_rounded, color: Colors.orange.shade700),
+                                const SizedBox(width: 10),
+                                Text(
+                                  "موعد التوزيع: 8:00 مساءً",
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.orange.shade800),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 25, right: 25, bottom: 25),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 15),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                side: BorderSide(color: Colors.grey.shade400),
+                              ),
+                              child: Text('لاحقاً', style: TextStyle(color: Colors.grey.shade700, fontSize: 15, fontWeight: FontWeight.w600)),
+                            ),
+                          ),
+                          const SizedBox(width: 15),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                Navigator.push(context, MaterialPageRoute(builder: (context) => const BeyteiZoneScreen()));
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.deepPurple,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 15),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: 3,
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.rocket_launch_rounded, size: 20),
+                                  SizedBox(width: 8),
+                                  Text('ابدأ الفوز', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: 10,
+              left: 10,
+              child: IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 5)],
+                  ),
+                  child: Icon(Icons.close_rounded, color: Colors.grey.shade600, size: 20),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> _requestAllPermissions() async {
-
     if (Platform.isIOS) {
-
-      await _requestNotificationPermission();
-
+      await FirebaseMessaging.instance.requestPermission();
     }
-
-    await _requestLocationPermission();
-
-  }
-
-
-
-// دالة طلب إذن الإشعارات
-
-  Future<void> _requestNotificationPermission() async {
-
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
-
-    NotificationSettings settings = await messaging.requestPermission(
-
-      alert: true,
-
-      badge: true,
-
-      sound: true,
-
-    );
-
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-
-      print('[Permissions] Notification permission granted.');
-
-    } else {
-
-      print('[Permissions] Notification permission denied.');
-
+    final locationStatus = await Permission.location.status;
+    if (locationStatus.isDenied) {
+      await Permission.location.request();
     }
-
   }
-
-
-
-// --- [جديد] دالة طلب إذن الموقع ---
-
-  Future<void> _requestLocationPermission() async {
-
-    var status = await Permission.location.status;
-
-    if (status.isDenied) {
-
-// إذا لم يتم طلب الإذن من قبل، اطلبه الآن
-
-      final result = await Permission.location.request();
-
-      if (result.isGranted) {
-
-        print('[Permissions] Location permission granted.');
-
-      } else {
-
-        print('[Permissions] Location permission denied.');
-
-      }
-
-    } else if (status.isPermanentlyDenied) {
-
-// إذا رفض المستخدم الإذن بشكل دائم
-
-      print('[Permissions] Location permission permanently denied. Opening app settings.');
-
-      await openAppSettings(); // فتح إعدادات التطبيق ليقوم المستخدم بتفعيله يدوياً
-
-    } else if (status.isGranted) {
-
-      print('[Permissions] Location permission already granted.');
-
-    }
-
-  }
-
-
-
-
 
   Future<void> _checkForUpdate() async {
-
     try {
-
       final remoteConfig = FirebaseRemoteConfig.instance;
-
-      await remoteConfig.setConfigSettings(RemoteConfigSettings(
-
-        fetchTimeout: const Duration(seconds: 25),
-
-        minimumFetchInterval: const Duration(minutes: 5),
-
-      ));
-
       await remoteConfig.fetchAndActivate();
-
-
-
       final configString = remoteConfig.getString('app_update_config');
-
       if (configString.isEmpty) return;
-
-
-
-      final config = jsonDecode(configString) as Map<String, dynamic>;
-
-      final platformConfig = (Platform.isIOS ? config['ios'] : config['android']) as Map<String, dynamic>;
-
-      final minimumVersionStr = platformConfig['minimum_version'] as String?;
-
-      final storeUrl = platformConfig['store_url'] as String?;
-
-
-
-      if (minimumVersionStr == null || storeUrl == null) return;
-
-
-
-      final minimumVersion = Version.parse(minimumVersionStr);
-
-      final packageInfo = await PackageInfo.fromPlatform();
-
-      final currentVersion = Version.parse(packageInfo.version);
-
-
-
-      if (currentVersion < minimumVersion) {
-
-        if (mounted) {
-
-          _showUpdateDialog(storeUrl);
-
+      final config = jsonDecode(configString);
+      final platformConfig = Platform.isIOS ? config['ios'] : config['android'];
+      final minVer = platformConfig['minimum_version'];
+      final url = platformConfig['store_url'];
+      if (minVer != null && url != null) {
+        final current = Version.parse((await PackageInfo.fromPlatform()).version);
+        if (current < Version.parse(minVer)) {
+          if (mounted) _showUpdateDialog(url);
         }
-
       }
-
     } catch (e) {
-
-      print('Error checking for update: $e');
-
+      print('Update check error: $e');
     }
-
   }
-
-
 
   void _showUpdateDialog(String updateUrl) {
-
     showDialog(
-
       context: context,
-
       barrierDismissible: false,
-
-      builder: (BuildContext context) {
-
-        return AlertDialog(
-
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-
-          title: const Text('تحديث إجباري', style: TextStyle(fontWeight: FontWeight.bold)),
-
-          content: const Text('يتوفر إصدار جديد من التطبيق. يرجى التحديث الآن لمتابعة استخدام أفضل الخدمات.'),
-
-          actions: <Widget>[
-
-            TextButton(
-
-              style: TextButton.styleFrom(backgroundColor: Colors.blue.shade700),
-
-              child: const Text('تحديث الآن', style: TextStyle(color: Colors.white)),
-
-              onPressed: () async {
-
-                final uri = Uri.parse(updateUrl);
-
-                if (await canLaunchUrl(uri)) {
-
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-
-                }
-
-              },
-
-            ),
-
-          ],
-
-        );
-
-      },
-
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: const Text('تحديث إجباري'),
+        content: const Text('يرجى تحديث التطبيق للمتابعة.'),
+        actions: [
+          TextButton(
+            child: const Text('تحديث'),
+            onPressed: () async {
+              final uri = Uri.parse(updateUrl);
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+          )
+        ],
+      ),
     );
-
   }
 
-
-
-  Future<void> fetchBannerImages() async {
-    final url = Uri.parse('https://banner.beytei.com/images/banners.json');
+  Future<void> _loadBannersWithCache() async {
     final prefs = await SharedPreferences.getInstance();
+    final cachedData = prefs.getString(CacheConstants.CACHE_KEY_BANNERS);
+    final lastFetchTime = prefs.getInt(CacheConstants.CACHE_KEY_BANNER_TIME);
 
-    final cachedData = prefs.getString(CACHE_KEY_BANNERS);
-    final lastFetchTime = prefs.getInt(CACHE_KEY_BANNER_TIME);
-
-    // 1. --- التحقق من الكاش (القراءة الفورية) ---
     if (cachedData != null && lastFetchTime != null) {
-      final expiration = DateTime.fromMillisecondsSinceEpoch(lastFetchTime).add(const Duration(hours: CACHE_DURATION_HOURS));
-
-      // إذا الكاش سليم، أعرضه فوراً واخرج
-      if (DateTime.now().isBefore(expiration)) {
-        print('✅ [Banner] Loading from cache (Valid).');
-        final jsonData = json.decode(cachedData);
-        if (mounted) {
-          setState(() {
-            showBanners = jsonData['showBanners'] ?? false;
-            final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
-            // ✅ المحافظة على طريقة الاختفاء: إذا كانت القائمة فارغة، ستبقى showBanners=false
-            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-          });
-        }
-        return; // 🛑 الخروج لمنع الاتصال بالشبكة
+      final cacheAge = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(lastFetchTime));
+      if (cacheAge < const Duration(hours: CacheConstants.CACHE_DURATION_HOURS)) {
+        _processBannerData(cachedData);
+        // حتى لو استخدمنا الكاش، نحاول التحديث في الخلفية بصمت
+        _fetchBannersSilently();
+        return;
       }
     }
+    _fetchBannersSilently();
+  }
 
-    // 2. --- الجلب من الشبكة (إذا انتهت صلاحية الكاش أو لم يوجد) ---
-    print('⚠️ [Banner] Cache expired or missing. Fetching from network...');
+  Future<void> _fetchBannersSilently() async {
     try {
+      final url = Uri.parse('https://banner.beytei.com/images/banners.json');
       final response = await http.get(url).timeout(const Duration(seconds: 10));
-
       if (response.statusCode == 200) {
-        final responseBody = response.body;
-        final jsonData = json.decode(responseBody);
-
-        // حفظ البيانات الجديدة والوقت الجديد
-        await prefs.setString(CACHE_KEY_BANNERS, responseBody);
-        await prefs.setInt(CACHE_KEY_BANNER_TIME, DateTime.now().millisecondsSinceEpoch);
-
-        if (mounted) {
-          setState(() {
-            showBanners = jsonData['showBanners'] ?? false;
-            final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
-            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-          });
-        }
-      } else {
-        throw Exception('Server returned status ${response.statusCode}');
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(CacheConstants.CACHE_KEY_BANNERS, response.body);
+        await prefs.setInt(CacheConstants.CACHE_KEY_BANNER_TIME, DateTime.now().millisecondsSinceEpoch);
+        _processBannerData(response.body);
       }
     } catch (e) {
-      // 3. في حال فشل الشبكة: اعرض البيانات القديمة (Stale Cache) لتجنب الشاشة الفارغة
-      if (cachedData != null) {
-        print('⚠️ [Banner] Network failed. Displaying stale cache.');
-        final jsonData = json.decode(cachedData);
-        if (mounted) {
-          setState(() {
-            showBanners = jsonData['showBanners'] ?? false;
-            final bannerList = List<Map<String, dynamic>>.from(jsonData['banners'] ?? []);
-            banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
-          });
-        }
-      }
-      print('Error fetching banners: $e');
+      print("Banner fetch error: $e");
     }
   }
 
+  void _processBannerData(String jsonData) {
+    try {
+      final jsonMap = json.decode(jsonData);
+      if (mounted) {
+        setState(() {
+          showBanners = jsonMap['showBanners'] ?? false;
+          final bannerList = List<Map<String, dynamic>>.from(jsonMap['banners'] ?? []);
+          banners = bannerList.map((item) => BannerItem.fromJson(item)).toList();
+        });
+      }
+    } catch (e) {
+      print('Banner processing error: $e');
+    }
+  }
 
   void _onBannerTapped(BannerItem banner) {
-
     if (banner.targetType == 'route') {
-
       GoRouter.of(context).push(banner.targetUrl);
-
     } else if (banner.targetType == 'webview') {
-
-      Navigator.push(
-
-        context,
-
-        MaterialPageRoute(builder: (context) => WebViewPage(url: banner.targetUrl)),
-
-      );
-
+      Navigator.push(context, MaterialPageRoute(builder: (context) => WebViewPage(url: banner.targetUrl)));
     }
-
   }
-
-
 
   @override
-
   Widget build(BuildContext context) {
-
     return Scaffold(
-
       appBar: AppBar(
-
         title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
-
         centerTitle: true,
-
         backgroundColor: Colors.white,
-
         actions: [
-
-          IconButton(onPressed: () {}, icon: const Icon(Icons.discount)),
-
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const BeyteiZoneScreen()),
+              );
+            },
+            icon: const Icon(Icons.card_giftcard, color: Colors.deepPurple),
+          ),
         ],
-
       ),
-
-      body: SingleChildScrollView(
-
-        child: Column(
-
-          children: [
-
-// ... باقي واجهة المستخدم كما هي
-
-            if (showBanners && banners.isNotEmpty) ...[
-
-              const Padding(
-
-                padding: EdgeInsets.fromLTRB(10, 20, 10, 10),
-
-                child: Text(
-
-                  'العروض المميزة',
-
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-
+      // ✅ تم إزالة شرط التحميل _isLoading نهائياً ليظهر المحتوى فوراً
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await _loadBannersWithCache();
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
+            children: [
+              // قسم البانرات (يظهر فقط عند انتهاء تحميله)
+              if (showBanners && banners.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(10, 20, 10, 10),
+                  child: Text(
+                    'العروض المميزة',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                 ),
-
-              ),
-
-              CarouselSlider(
-
-                options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true),
-
-                items: banners.map((banner) {
-
-                  return Builder(
-
-                    builder: (BuildContext context) {
-
-                      return GestureDetector(
-
-                        onTap: () => _onBannerTapped(banner),
-
-                        child: ClipRRect(
-
-                          borderRadius: BorderRadius.circular(15),
-
-                          child: Image.network(
-
-                            banner.imageUrl,
-
-                            fit: BoxFit.cover,
-
-                            width: double.infinity,
-
-                            loadingBuilder: (context, child, loadingProgress) {
-
-                              if (loadingProgress == null) return child;
-
-                              return const Center(child: CircularProgressIndicator());
-
-                            },
-
-                            errorBuilder: (context, error, stackTrace) {
-
-                              return const Center(child: Icon(Icons.error));
-
-                            },
-
+                CarouselSlider(
+                  options: CarouselOptions(height: 180.0, autoPlay: true, enlargeCenterPage: true),
+                  items: banners.map((banner) {
+                    return Builder(
+                      builder: (BuildContext context) {
+                        return GestureDetector(
+                          onTap: () => _onBannerTapped(banner),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(15),
+                            child: Image.network(
+                              banner.imageUrl,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) return child;
+                                return const Center(child: CircularProgressIndicator());
+                              },
+                              errorBuilder: (context, error, stackTrace) {
+                                return const Center(child: Icon(Icons.error));
+                              },
+                            ),
                           ),
-
-                        ),
-
-                      );
-
-                    },
-
-                  );
-
-                }).toList(),
-
-              ),
-
-            ],
-
-            const SizedBox(height: 20),
-
-            const Padding(
-
-              padding: EdgeInsets.symmetric(horizontal: 10),
-
-              child: Text(
-
-                'خدماتنا',
-
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-
-              ),
-
-            ),
-
-            const SizedBox(height: 10),
-
-            Padding(
-
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-
-              child: GridView.count(
-
-                crossAxisCount: 2,
-
-                crossAxisSpacing: 10,
-
-                mainAxisSpacing: 10,
-
-                shrinkWrap: true,
-
-                physics: const NeverScrollableScrollPhysics(),
-
-                children: [
-
-// ... محتوى الـ GridView كما هو
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'منصة بيتي العقارية',
-
-                    description: '',
-
-                    imagePath: 'assets/images/beytei.png',
-
-                    onTap: () {
-
-                      Navigator.push(
-
-                        context,
-
-                        MaterialPageRoute(
-
-                            builder: (context) =>
-
-                            const WebViewPage(url: 'https://beytei.com')),
-
-                      );
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'الصيدليات ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/ph.png',
-
-                    onTap: () {
-
-                      context.push('/pharmacy-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'بوتيك وكوزمتك بيتي',
-
-                    description: '',
-
-                    imagePath: 'assets/images/cosmetics.png',
-
-                    onTap: () {
-
-                      context.push('/splash');
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'تكسي بيتي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/taxi.png',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/trb-store');
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'استشارة بيتي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/clinic.png',
-
-                    onTap: () {
-
-                      context.push('/medical-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'المطاعم ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/re.jpg',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/restaurants-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'الحجز الطبي',
-
-                    description: 'حجز موعد مع الطبيب',
-
-                    imagePath: 'assets/images/medical.png',
-
-                    onTap: () {
-
-                      Navigator.push(
-
-                        context,
-
-                        MaterialPageRoute(
-
-                            builder: (context) => MedicalHomeScreen()),
-
-                      );
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'مسواك بيتي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/ms.jpg',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/miswak-store');
-
-                    },
-
-                  ),
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'سجل بيتي الطبي ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/ph.png',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/do-store');
-
-                    },
-
-                  ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  _buildGridCard(
-
-                    context: context,
-
-                    title: 'المختبرات ',
-
-                    description: '',
-
-                    imagePath: 'assets/images/lab.jpg',
-
-                    onTap: () {
-
-                      GoRouter.of(context).push('/lab-store');
-
-                    },
-
-                  ),
-
-                ],
-
-              ),
-
-            ),
-
-            const SizedBox(height: 20),
-
-          ],
-
-        ),
-
-      ),
-
-      bottomNavigationBar: BottomNavigationBar(
-
-        items: const [
-
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'الرئيسية'),
-
-          BottomNavigationBarItem(icon: Icon(Icons.discount), label: 'الخصومات'),
-
-        ],
-
-      ),
-
-    );
-
-  }
-
-
-
-  Widget _buildGridCard({
-
-    required BuildContext context,
-
-    required String title,
-
-    required String description,
-
-    required String imagePath,
-
-    required VoidCallback onTap,
-
-  }) {
-
-    return GestureDetector(
-
-      onTap: onTap,
-
-      child: Card(
-
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-
-        child: Column(
-
-          crossAxisAlignment: CrossAxisAlignment.start,
-
-          children: [
-
-            Expanded(
-
-              child: ClipRRect(
-
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-
-                child: Image.asset(imagePath, width: double.infinity, fit: BoxFit.cover),
-
-              ),
-
-            ),
-
-            Padding(
-
-              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 5.0),
-
-              child: Text(
-
-                title,
-
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue),
-
-              ),
-
-            ),
-
-            if (description.isNotEmpty)
-
-              Padding(
-
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-
-                child: Text(
-
-                  description,
-
-                  style: const TextStyle(fontSize: 14, color: Colors.black),
-
-                  maxLines: 2,
-
-                  overflow: TextOverflow.ellipsis,
-
+                        );
+                      },
+                    );
+                  }).toList(),
                 ),
+              ],
 
+              const SizedBox(height: 20),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: Text(
+                  'خدماتنا',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
               ),
+              const SizedBox(height: 10),
 
-            const SizedBox(height: 8),
-
-          ],
-
+              // ✅ شبكة الخدمات (تظهر فوراً)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: GridView.count(
+                  crossAxisCount: 2,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    _buildGridCard(
+                      context: context,
+                      title: 'منصة بيتي العقارية',
+                      imagePath: 'assets/images/beytei.png',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) =>
+                              const WebViewPage(url: 'https://beytei.com')),
+                        );
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'الصيدليات ',
+                      imagePath: 'assets/images/ph.png',
+                      onTap: () {
+                        context.push('/pharmacy-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'بوتيك وكوزمتك بيتي',
+                      imagePath: 'assets/images/cosmetics.png',
+                      onTap: () {
+                        context.push('/splash');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'تكسي بيتي ',
+                      imagePath: 'assets/images/taxi.png',
+                      onTap: () {
+                        GoRouter.of(context).push('/trb-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'استشارة بيتي ',
+                      imagePath: 'assets/images/clinic.png',
+                      onTap: () {
+                        context.push('/medical-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'المطاعم ',
+                      imagePath: 'assets/images/re.jpg',
+                      onTap: () {
+                        GoRouter.of(context).push('/restaurants-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'الحجز الطبي',
+                      imagePath: 'assets/images/medical.png',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => MedicalHomeScreen()),
+                        );
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'مسواك بيتي ',
+                      imagePath: 'assets/images/ms.jpg',
+                      onTap: () {
+                        GoRouter.of(context).push('/miswak-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'سجل بيتي الطبي ',
+                      imagePath: 'assets/images/ph.png',
+                      onTap: () {
+                        GoRouter.of(context).push('/do-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'المختبرات ',
+                      imagePath: 'assets/images/lab.jpg',
+                      onTap: () {
+                        GoRouter.of(context).push('/lab-store');
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
         ),
-
       ),
-
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: 0,
+        selectedItemColor: Colors.deepPurple,
+        unselectedItemColor: Colors.grey,
+        onTap: (index) {
+          if (index == 1) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const BeyteiZoneScreen()),
+            );
+          }
+        },
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'الرئيسية'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.stars),
+            label: 'بيتي زون',
+          ),
+        ],
+      ),
     );
-
   }
 
+  // ✅ التصميم القديم (صورة كبيرة + نص أزرق + بدون وصف)
+  Widget _buildGridCard({
+    required BuildContext context,
+    required String title,
+    required String imagePath,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Card(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        elevation: 2, // إضافة ظل خفيف لجمالية البطاقة
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+                child: Image.asset(imagePath, width: double.infinity, fit: BoxFit.cover),
+              ),
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              color: Colors.blue.withOpacity(0.05),
+              child: Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue, // اللون الأزرق
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

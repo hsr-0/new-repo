@@ -1559,54 +1559,77 @@ class ApiService {
 
 
   // 1. جلب بيانات المحفظة والتحديات
+// داخل class ApiService
+
+// 1. جلب بيانات المحفظة والتحديات (حقيقي)
   Future<Map<String, dynamic>> getTeamLeaderRewards(String token) async {
-    // محاكاة الاتصال بالسيرفر (استبدل هذا برابط الـ API الحقيقي)
-    // final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/leader/v1/rewards'), ...);
+    return _executeWithRetry(() async {
+      // نستخدم نفس نقطة النهاية للمطعم والتيم ليدر، السيرفر يميز بينهم
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/wallet'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
 
-    // بيانات وهمية للتجربة (Mock Data)
-    await Future.delayed(const Duration(seconds: 1));
-    return {
-      'wallet': {'my_balance': 150000, 'liability': 25000},
-      'challenges': [
-        {
-          'id': 101,
-          'title': 'بطل التوصيل السريع',
-          'description': 'أكمل 10 طلبات توصيل في منطقتك خلال ساعتين.',
-          'reward_amount': '10,000 د.ع',
-          'type': 'urgent',
-          'icon_url': 'https://cdn-icons-png.flaticon.com/512/2548/2548523.png'
-        },
-        {
-          'id': 102,
-          'title': 'تحدي المسواك',
-          'description': 'تأكد من توصيل جميع طلبات المسواك المعلقة قبل الساعة 4 مساءً.',
-          'reward_amount': '5,000 د.ع',
-          'type': 'market',
-          'icon_url': 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png'
-        }
-      ]
-    };
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      throw Exception('فشل تحميل بيانات المحفظة');
+    });
   }
 
-  // 2. الاستجابة للتحدي (قبول أو تجاهل)
+// داخل class ApiService
+
+  // 2. الاستجابة للتحدي (حقيقي الآن)
   Future<bool> respondToChallenge(String token, int challengeId, String action) async {
-    // action = 'accept' or 'ignore'
-    /*
-    final response = await http.post(
-      Uri.parse('$BEYTEI_URL/wp-json/leader/v1/challenge-respond'),
-      headers: {'Authorization': 'Bearer $token'},
-      body: {'challenge_id': challengeId, 'action': action}
-    );
-    return response.statusCode == 200;
-    */
-    await Future.delayed(const Duration(milliseconds: 500));
-    return true;
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/challenge-respond'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json'
+        },
+        body: json.encode({
+          'challenge_id': challengeId,
+          'action': action // 'accept' أو 'ignore'
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        print("فشل الاستجابة للتحدي: ${response.body}");
+        return false;
+      }
+    });
   }
 
 
+// داخل ApiService class
+  Future<Map<String, dynamic>> getWalletData(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/wallet'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      throw Exception('Failed to load wallet');
+    });
+  }
 
-
-
+  Future<bool> buyNotification(String token, String text) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/buy-notification'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({'text': text}),
+      );
+      if (response.statusCode == 200) return true;
+      final body = json.decode(response.body);
+      throw Exception(body['message'] ?? 'فشل العملية');
+    });
+  }
 
 
 
@@ -2204,15 +2227,18 @@ class AuthService {
 }
 
 class TeamLeaderWallet {
-  final double myBalance; // رصيدي (لك)
-  final double liability; // في ذمتك (عليك)
+  final double myBalance; // الرصيد المتاح
+  final double liability; // الديون
+  final double totalEarnings; // الأرباح الكلية (اختياري)
 
-  TeamLeaderWallet({required this.myBalance, required this.liability});
+  TeamLeaderWallet({required this.myBalance, required this.liability, required this.totalEarnings});
 
   factory TeamLeaderWallet.fromJson(Map<String, dynamic> json) {
+    // قراءة البيانات المسطحة القادمة من السيرفر
     return TeamLeaderWallet(
-      myBalance: double.tryParse(json['my_balance'].toString()) ?? 0.0,
+      myBalance: double.tryParse(json['wallet_balance'].toString()) ?? 0.0,
       liability: double.tryParse(json['liability'].toString()) ?? 0.0,
+      totalEarnings: double.tryParse(json['total_earnings'].toString()) ?? 0.0,
     );
   }
 }
@@ -2221,9 +2247,9 @@ class TeamLeaderChallenge {
   final int id;
   final String title;
   final String description;
-  final String rewardAmount; // مثلاً "5,000 د.ع" أو "نقطة"
-  final String type; // 'delivery_count', 'urgent', etc.
-  final String iconUrl; // رابط صورة الشعار (اختياري)
+  final String rewardAmount;
+  final String type;
+  final String iconUrl;
 
   TeamLeaderChallenge({
     required this.id,
@@ -2236,7 +2262,7 @@ class TeamLeaderChallenge {
 
   factory TeamLeaderChallenge.fromJson(Map<String, dynamic> json) {
     return TeamLeaderChallenge(
-      id: json['id'],
+      id: json['id'] is int ? json['id'] : int.tryParse(json['id'].toString()) ?? 0,
       title: json['title'] ?? 'تحدي جديد',
       description: json['description'] ?? '',
       rewardAmount: json['reward_amount'] ?? '',
@@ -2245,16 +2271,6 @@ class TeamLeaderChallenge {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2280,14 +2296,24 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
   }
 
   Future<void> _loadData() async {
+    if(!mounted) return;
     setState(() => _isLoading = true);
     try {
+      // 1. جلب البيانات الحقيقية من السيرفر
       final data = await _apiService.getTeamLeaderRewards(widget.token);
+
       if (mounted) {
         setState(() {
-          _wallet = TeamLeaderWallet.fromJson(data['wallet']);
-          final list = data['challenges'] as List;
-          _challenges = list.map((e) => TeamLeaderChallenge.fromJson(e)).toList();
+          // 2. تعبئة المحفظة من البيانات المسطحة
+          _wallet = TeamLeaderWallet.fromJson(data);
+
+          // 3. تعبئة قائمة التحديات
+          if (data['challenges'] != null) {
+            final list = data['challenges'] as List;
+            _challenges = list.map((e) => TeamLeaderChallenge.fromJson(e)).toList();
+          } else {
+            _challenges = [];
+          }
           _isLoading = false;
         });
       }
@@ -2299,26 +2325,36 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
     }
   }
 
+  // فتح الواتساب (لطلب الشحن أو التسوية)
+  void _openWhatsAppRecharge() async {
+    const phone = '9647854076931'; // رقم الواتساب الموحد
+    final url = Uri.parse("https://wa.me/$phone?text=${Uri.encodeComponent('مرحباً، أنا تيم ليدر وأرغب بتسوية الحسابات أو شحن الرصيد.')}");
+    if (await canLaunchUrl(url)) await launchUrl(url, mode: LaunchMode.externalApplication);
+  }
+
   Future<void> _handleChallengeAction(int id, String action) async {
-    // حذف التحدي من القائمة فوراً لإعطاء شعور بالسرعة (Optimistic UI)
+    // تحديث الواجهة فوراً لإخفاء التحدي (Optimistic UI)
     final index = _challenges.indexWhere((c) => c.id == id);
+    if (index == -1) return;
+
     final removedChallenge = _challenges[index];
 
     setState(() {
       _challenges.removeAt(index);
     });
 
+    // إرسال الرد للسيرفر
     final success = await _apiService.respondToChallenge(widget.token, id, action);
 
     if (!success && mounted) {
-      // إرجاع التحدي في حال فشل الاتصال
+      // في حال الفشل، نعيد التحدي للقائمة
       setState(() {
         _challenges.insert(index, removedChallenge);
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل تنفيذ الأمر، حاول مرة أخرى.")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل الاتصال، حاول مرة أخرى.")));
     } else {
-      if(action == 'accept') {
-        // عرض تأثير احتفالي بسيط أو رسالة
+      // في حال النجاح والقبول
+      if(action == 'accept' && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تم قبول التحدي! بالتوفيق 💪"), backgroundColor: Colors.green));
       }
     }
@@ -2327,13 +2363,19 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA), // خلفية رمادية فاتحة جداً وعصرية
+      backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
         title: const Text("مكافآتي والرصيد", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.black87),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.blueGrey),
+            onPressed: _loadData,
+          )
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -2342,37 +2384,35 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            // --- قسم المحفظات ---
-            Row(
-              children: [
-                // 1. محفظة رصيدي
-                Expanded(
-                  child: _buildWalletCard(
-                    title: "رصيدي",
-                    amount: _wallet?.myBalance ?? 0.0,
-                    gradientColors: [Colors.teal.shade400, Colors.teal.shade700],
-                    icon: Icons.account_balance_wallet,
-                    textColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 15),
-                // 2. محفظة في ذمتك
-                Expanded(
-                  child: _buildWalletCard(
-                    title: "في ذمتك",
-                    amount: _wallet?.liability ?? 0.0,
-                    gradientColors: [Colors.orange.shade700, Colors.red.shade800],
-                    icon: Icons.warning_amber_rounded,
-                    textColor: Colors.white,
-                    isLiability: true,
-                  ),
-                ),
-              ],
+            // --- البطاقة الأولى: الرصيد المتاح (الأرباح) ---
+            _buildWalletCard(
+                title: "رصيدي (الأرباح)",
+                amount: _wallet?.myBalance ?? 0.0,
+                gradientColors: [const Color(0xFF1E3C72), const Color(0xFF2A5298)], // أزرق كحلي أنيق
+                icon: Icons.account_balance_wallet,
+                textColor: Colors.white,
+                actionLabel: "سحب / شحن",
+                onActionTap: _openWhatsAppRecharge
             ),
+
+            const SizedBox(height: 15),
+
+            // --- البطاقة الثانية: الديون (تظهر فقط إذا كانت > 0) ---
+            if ((_wallet?.liability ?? 0) > 0)
+              _buildWalletCard(
+                  title: "في ذمتك (للمنصة)",
+                  amount: _wallet?.liability ?? 0.0,
+                  gradientColors: [Colors.orange.shade800, Colors.red.shade800], // برتقالي محمر للتحذير
+                  icon: Icons.warning_amber_rounded,
+                  textColor: Colors.white,
+                  isLiability: true,
+                  actionLabel: "تسديد الآن",
+                  onActionTap: _openWhatsAppRecharge
+              ),
 
             const SizedBox(height: 30),
 
-            // --- عنوان التحديات ---
+            // --- قسم التحديات ---
             Row(
               children: [
                 const Text(
@@ -2390,7 +2430,7 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
             ),
             const SizedBox(height: 15),
 
-            // --- قائمة التحديات ---
+            // --- عرض التحديات ---
             if (_challenges.isEmpty)
               _buildEmptyState()
             else
@@ -2401,7 +2441,7 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
     );
   }
 
-  // --- تصميم بطاقة المحفظة ---
+  // --- Widget: بطاقة المحفظة العصرية ---
   Widget _buildWalletCard({
     required String title,
     required double amount,
@@ -2409,58 +2449,89 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
     required IconData icon,
     required Color textColor,
     bool isLiability = false,
+    String? actionLabel,
+    VoidCallback? onActionTap,
   }) {
     final format = NumberFormat('#,###', 'ar_IQ');
+
     return Container(
-      height: 140,
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: LinearGradient(colors: gradientColors, begin: Alignment.topLeft, end: Alignment.bottomRight),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
-          BoxShadow(color: gradientColors.last.withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 6)),
+          BoxShadow(color: gradientColors.last.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 5)),
         ],
       ),
       child: Stack(
         children: [
-          // زخرفة خلفية
-          Positioned(right: -20, top: -20, child: Icon(icon, size: 100, color: Colors.white.withOpacity(0.1))),
+          // زخرفة خلفية خفيفة
+          Positioned(
+            right: -20, top: -20,
+            child: Icon(icon, size: 100, color: Colors.white.withOpacity(0.1)),
+          ),
 
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(icon, color: Colors.white70, size: 20),
-                    const SizedBox(width: 8),
-                    Text(title, style: TextStyle(color: textColor.withOpacity(0.9), fontSize: 16, fontWeight: FontWeight.w600)),
-                  ],
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      "${format.format(amount)} د.ع",
-                      style: TextStyle(color: textColor, fontSize: 22, fontWeight: FontWeight.bold),
-                    ),
-                    if (isLiability)
-                      const Text(
-                        "يجب تسديدها للمنصة",
-                        style: TextStyle(color: Colors.white70, fontSize: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(icon, color: Colors.white70, size: 24),
+                      const SizedBox(width: 10),
+                      Text(title, style: TextStyle(color: textColor.withOpacity(0.9), fontSize: 16, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+
+                  // زر الإجراء الصغير (شحن/تسديد)
+                  if (actionLabel != null)
+                    InkWell(
+                      onTap: onActionTap,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(actionLabel, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.arrow_forward_ios, size: 10, color: Colors.white)
+                          ],
+                        ),
                       ),
-                  ],
+                    )
+                ],
+              ),
+
+              const SizedBox(height: 25),
+
+              Text(
+                "${format.format(amount)} د.ع",
+                style: TextStyle(color: textColor, fontSize: 32, fontWeight: FontWeight.bold),
+              ),
+
+              if (isLiability)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5.0),
+                  child: const Text(
+                    "يرجى تسويتها لتجنب توقف الحساب",
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
                 ),
-              ],
-            ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // --- تصميم بطاقة التحدي ---
+  // --- Widget: بطاقة التحدي التفاعلية ---
   Widget _buildChallengeCard(TeamLeaderChallenge challenge) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -2476,7 +2547,7 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // الشعار أو الأيقونة
+                // أيقونة التحدي
                 Container(
                   width: 50,
                   height: 50,
@@ -2484,12 +2555,11 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
                     color: Colors.amber.shade50,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: challenge.iconUrl.isNotEmpty
-                      ? Padding(padding: const EdgeInsets.all(8.0), child: CachedNetworkImage(imageUrl: challenge.iconUrl))
-                      : const Icon(Icons.emoji_events, color: Colors.amber, size: 30),
+                  child: const Icon(Icons.emoji_events, color: Colors.amber, size: 30),
                 ),
                 const SizedBox(width: 15),
-                // النصوص
+
+                // تفاصيل التحدي
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2516,11 +2586,13 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
               ],
             ),
           ),
-          // الأزرار (قبول / تجاهل)
+
+          // أزرار التحكم (قبول / تجاهل)
           Container(
             decoration: BoxDecoration(
               color: Colors.grey.shade50,
               borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(20), bottomRight: Radius.circular(20)),
+              border: Border(top: BorderSide(color: Colors.grey.shade200)),
             ),
             child: Row(
               children: [
@@ -2547,6 +2619,7 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
     );
   }
 
+  // --- Widget: حالة فارغة ---
   Widget _buildEmptyState() {
     return Container(
       padding: const EdgeInsets.all(40),
@@ -2562,9 +2635,6 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
     );
   }
 }
-
-
-
 
 
 
@@ -3357,6 +3427,303 @@ class TeamLeaderOrderCard extends StatefulWidget {
   @override
   State<TeamLeaderOrderCard> createState() => _TeamLeaderOrderCardState();
 }
+
+
+
+
+class WalletScreen extends StatefulWidget {
+  const WalletScreen({super.key});
+
+  @override
+  State<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends State<WalletScreen> {
+  bool _isLoading = true;
+  Map<String, dynamic>? _data;
+  final ApiService _apiService = ApiService();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final token = Provider.of<AuthProvider>(context, listen: false).token;
+    if (token == null) return;
+    try {
+      final data = await _apiService.getWalletData(token);
+      if (mounted) setState(() { _data = data; _isLoading = false; });
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // فتح الواتساب للشحن
+  void _openWhatsAppRecharge() async {
+    const phone = '9647854076931'; // الرقم الدولي
+    const message = 'مرحباً، أرغب بشحن رصيد محفظتي في منصة بيتي.';
+    final url = Uri.parse("https://wa.me/$phone?text=${Uri.encodeComponent(message)}");
+    if (await canLaunchUrl(url)) await launchUrl(url, mode: LaunchMode.externalApplication);
+  }
+
+  // شراء الإشعار
+  void _showBuyNotificationDialog() {
+    final TextEditingController _textController = TextEditingController();
+    final balance = _data?['wallet_balance'] ?? 0;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: const Row(children: [Icon(Icons.campaign, color: Colors.orange), SizedBox(width: 10), Text("إعلان للمنطقة")]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("أرسل إشعاراً لجميع المستخدمين في منطقتك لزيادة مبيعاتك! 🚀", style: TextStyle(fontSize: 13, color: Colors.grey)),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(10)),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("تلفة الخدمة:", style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text("5,000 د.ع", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 15),
+            TextField(
+              controller: _textController,
+              decoration: const InputDecoration(
+                hintText: "اكتب نص العرض هنا... (مثال: خصم 20% اليوم فقط!)",
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+            if (balance < 5000)
+              Padding(
+                padding: const EdgeInsets.only(top: 10.0),
+                child: Text("رصيدك الحالي ($balance د.ع) غير كافي.", style: const TextStyle(color: Colors.red, fontSize: 12)),
+              )
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
+          ElevatedButton(
+            onPressed: balance < 5000 ? null : () async {
+              Navigator.pop(ctx);
+              _processPurchase(_textController.text);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text("شراء وإرسال"),
+          )
+        ],
+      ),
+    );
+  }
+
+  Future<void> _processPurchase(String text) async {
+    if(text.isEmpty) return;
+    final token = Provider.of<AuthProvider>(context, listen: false).token!;
+    // إظهار تحميل
+    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+
+    try {
+      await _apiService.buyNotification(token, text);
+      if(mounted) {
+        Navigator.pop(context); // غلق التحميل
+        _loadData(); // تحديث الرصيد
+        showDialog(context: context, builder: (_) => AlertDialog(
+          title: const Text("تم بنجاح! 🎉"),
+          content: const Text("تم استلام طلبك وخصم المبلغ. سيتم إرسال الإشعار للمستخدمين بعد المراجعة السريعة."),
+          actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: const Text("تم"))],
+        ));
+      }
+    } catch(e) {
+      if(mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: ${e.toString().replaceAll("Exception: ", "")}"), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final role = Provider.of<AuthProvider>(context).userRole; // owner or leader
+
+    if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+    final walletBalance = _data?['wallet_balance'] ?? 0;
+    final totalEarnings = _data?['total_earnings'] ?? 0; // مبيعات المطعم
+    final liability = _data?['liability'] ?? 0;
+    final challenges = _data?['challenges'] as List? ?? [];
+
+    return Scaffold(
+      appBar: AppBar(title: const Text("محفظتي والأرباح"), centerTitle: true),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // بطاقة الأرباح (مبيعات المطعم)
+            _buildCard(
+              title: "إجمالي المبيعات (مكتملة)",
+              amount: totalEarnings,
+              color: Colors.green,
+              icon: Icons.store,
+              subtitle: "جميع الطلبات التي قمت بتجهيزها",
+            ),
+            const SizedBox(height: 15),
+
+            // بطاقة الرصيد (القابل للشحن)
+            _buildCard(
+                title: "رصيدي الحالي",
+                amount: walletBalance,
+                color: const Color(0xFF1E3C72),
+                icon: Icons.account_balance_wallet,
+                subtitle: "رصيد الخدمات والمكافآت",
+                action: ElevatedButton.icon(
+                  onPressed: _openWhatsAppRecharge,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text("شحن رصيد"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF1E3C72),
+                    elevation: 0,
+                  ),
+                )
+            ),
+            const SizedBox(height: 15),
+
+            // بطاقة الديون (في الذمة)
+            if (liability > 0)
+              _buildCard(
+                title: "مستحقات للمنصة (في ذمتك)",
+                amount: liability,
+                color: Colors.red.shade700,
+                icon: Icons.warning_amber_rounded,
+                subtitle: "يرجى تسديدها لتجنب إيقاف الحساب",
+              ),
+
+            const SizedBox(height: 25),
+
+            // زر خدمة الإشعار المدفوع (للمطاعم)
+            if (role == 'owner') ...[
+              const Text("🚀 خدمات التسويق", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              InkWell(
+                onTap: _showBuyNotificationDialog,
+                child: Container(
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [Colors.orange.shade400, Colors.deepOrange]),
+                    borderRadius: BorderRadius.circular(15),
+                    boxShadow: [BoxShadow(color: Colors.orange.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+                        child: const Icon(Icons.campaign, color: Colors.white, size: 28),
+                      ),
+                      const SizedBox(width: 15),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("أرسل إشعار للمنطقة", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                            Text("الوصول لجميع الزبائن بـ 5,000 د.ع", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 16),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 25),
+            ],
+
+            // قسم التحديات
+            const Align(alignment: Alignment.centerRight, child: Text("التحديات والعروض 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+            const SizedBox(height: 10),
+            if (challenges.isEmpty)
+              const Center(child: Padding(padding: EdgeInsets.all(20), child: Text("لا توجد تحديات نشطة حالياً")))
+            else
+              ...challenges.map((c) => _buildChallengeCard(c)).toList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCard({required String title, required dynamic amount, required Color color, required IconData icon, String? subtitle, Widget? action}) {
+    final format = NumberFormat('#,###', 'ar_IQ');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: color.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 5))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: Colors.white70),
+                  const SizedBox(width: 10),
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                ],
+              ),
+              if (action != null) action,
+            ],
+          ),
+          const SizedBox(height: 15),
+          Text("${format.format(amount)} د.ع", style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          if (subtitle != null) ...[
+            const SizedBox(height: 5),
+            Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ]
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChallengeCard(dynamic challenge) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: ListTile(
+        leading: const CircleAvatar(backgroundColor: Colors.amber, child: Icon(Icons.emoji_events, color: Colors.white)),
+        title: Text(challenge['title'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(challenge['description'] ?? ''),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8)),
+          child: Text(challenge['reward_amount'] ?? '', style: TextStyle(color: Colors.green.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
+
 
 class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
   bool _isLoading = false;
@@ -4525,25 +4892,33 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
     setState(() => _filteredAreas = _allAreas.where((area) => area.name.toLowerCase().contains(query)).toList());
   }
 
+// داخل _SelectLocationScreenState
+
   Future<void> _saveSelection(int areaId, String areaName) async {
+    // إظهار مؤشر تحميل بسيط فوق الزر أو منع النقر المتكرر (اختياري)
+    // لكننا نريد الانتقال فوراً
+
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. إلغاء الاشتراك من المنطقة القديمة (إن وجدت)
-    // هذا يمنع وصول إشعارات المنطقة السابقة للزبون إذا قام بتغيير مكانه
-    int? oldAreaId = prefs.getInt('selectedAreaId');
-    if (oldAreaId != null && oldAreaId != areaId) {
-      await FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
-    }
-
-    // 2. حفظ المنطقة الجديدة في الذاكرة
+    // 1. حفظ البيانات محلياً (عملية سريعة جداً - أجزاء من الثانية)
     await prefs.setInt('selectedAreaId', areaId);
     await prefs.setString('selectedAreaName', areaName);
 
-    // 3. 🔥 الخطوة الجديدة: استدعاء دالة تسجيل الجهاز مع المنطقة الجديدة
-    // هذا سيقوم بإرسال المنطقة للسيرفر والاشتراك في Topic المنطقة في Firebase
-    await AuthService().registerDeviceToken(areaId: areaId);
+    // 2. 🔥 الحل السحري: تشغيل تسجيل الجهاز في الخلفية (بدون await)
+    // لا ننتظر اكتمال هذه العملية للانتقال للصفحة التالية
+    AuthService().registerDeviceToken(areaId: areaId).then((_) {
+      print("✅ تم تسجيل الجهاز في الخلفية بنجاح");
+    }).catchError((e) {
+      print("⚠️ فشل تسجيل الجهاز في الخلفية (غير مؤثر على تجربة المستخدم): $e");
+    });
 
-    // 4. الانتقال للشاشة التالية
+    // إلغاء الاشتراك القديم أيضاً في الخلفية
+    int? oldAreaId = prefs.getInt('selectedAreaId');
+    if (oldAreaId != null && oldAreaId != areaId) {
+      FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
+    }
+
+    // 3. الانتقال فوراً للصفحة التالية
     if (mounted) {
       if (widget.isCancellable) {
         Navigator.of(context).pop(true);
@@ -5638,7 +6013,6 @@ class InAppMapScreen extends StatelessWidget {
 // =======================================================================
 // --- Restaurant Dashboard Screen (Complete) ---
 // =======================================================================
-
 class RestaurantDashboardScreen extends StatefulWidget {
   const RestaurantDashboardScreen({super.key});
 
@@ -5648,7 +6022,7 @@ class RestaurantDashboardScreen extends StatefulWidget {
 
 class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final ApiService _apiService = ApiService(); // لاستخدامه في نافذة الطلب الخاص
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
@@ -5656,25 +6030,82 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
     // 1. تهيئة التبويبات (5 تبويبات)
     _tabController = TabController(length: 5, vsync: this);
 
-    // 2. المنطق التسلسلي الصحيح (جلب الموقع ثم تشغيل الأتمتة)
+    // 2. المنطق التسلسلي (جلب الموقع + الأتمتة + الحيلة التسويقية)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final token = Provider.of<AuthProvider>(context, listen: false).token;
-      if (token != null) {
 
-        // أ) نطلب جلب الإعدادات أولاً (ليتم تخزين restaurant_lat في الهاتف)
+      if (token != null) {
+        // أ) جلب إعدادات المطعم (الموقع) وتشغيل التحديث التلقائي
         Provider.of<RestaurantSettingsProvider>(context, listen: false)
             .fetchSettings(token)
             .then((_) {
-
-          // ب) بعد انتهاء جلب الإعدادات، نتأكد أننا ما زلنا في الشاشة
           if (mounted) {
-            // ج) الآن نشغل الأتمتة (التي ستجد الموقع محفوظاً وتعمل بنجاح)
             Provider.of<DashboardProvider>(context, listen: false).startAutoRefresh(token);
           }
-
         });
+
+        // 🔥 ب) الحيلة التسويقية: فحص الرصيد وعرض الإعلان
+        _checkWalletAndShowPromo(token);
       }
     });
+  }
+
+  // دالة الحيلة التسويقية
+  Future<void> _checkWalletAndShowPromo(String token) async {
+    try {
+      final walletData = await _apiService.getWalletData(token);
+      // تحويل آمن للرصيد
+      final dynamic rawBalance = walletData['wallet_balance'];
+      double balance = 0.0;
+      if (rawBalance is int) balance = rawBalance.toDouble();
+      if (rawBalance is double) balance = rawBalance;
+      if (rawBalance is String) balance = double.tryParse(rawBalance) ?? 0.0;
+
+      // إذا كان الرصيد يسمح بإرسال إشعار (5000 أو أكثر)
+      if (balance >= 5000 && mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            backgroundColor: Colors.white,
+            title: const Center(child: Text("🔥 فرصة لزيادة مبيعاتك!", style: TextStyle(fontWeight: FontWeight.bold))),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.rocket_launch, size: 60, color: Colors.orange),
+                const SizedBox(height: 15),
+                Text("لديك رصيد متاح بقيمة ${NumberFormat('#,###').format(balance)} د.ع",
+                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                const Text(
+                  "هل تعلم أنه يمكنك إرسال إشعار ترويجي لجميع الزبائن في منطقتك الآن؟",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text("لا شكراً")
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  // الانتقال لشاشة المحفظة
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const WalletScreen()));
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
+                child: const Text("أرسل الإشعار الآن"),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      // تجاهل الأخطاء بصمت حتى لا نزعج المستخدم عند فتح التطبيق
+      print("Promo check failed: $e");
+    }
   }
 
   @override
@@ -5837,6 +6268,13 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
       appBar: AppBar(
         title: const Text('لوحة تحكم المطعم'),
         actions: [
+          // 💰 زر المحفظة الجديد
+          IconButton(
+            icon: const Icon(Icons.account_balance_wallet, color: Colors.green),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WalletScreen())),
+            tooltip: 'المحفظة والأرباح',
+          ),
+
           IconButton(icon: const Icon(Icons.notifications_active_outlined), onPressed: () async {
             final scaffoldMessenger = ScaffoldMessenger.of(context);
             try {
@@ -5846,11 +6284,12 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
               scaffoldMessenger.showSnackBar(SnackBar(content: Text("فشل إرسال الإشعار: ${e.toString()}"), backgroundColor: Colors.red));
             }
           }, tooltip: 'اختبار الإشعارات'),
+
           IconButton(icon: const Icon(Icons.logout), onPressed: () => auth.logout(context), tooltip: 'تسجيل الخروج')
         ],
         bottom: TabBar(
             controller: _tabController,
-            isScrollable: true, // للسماح بعرض 5 تبويبات
+            isScrollable: true,
             tabs: const [
               Tab(icon: Icon(Icons.list_alt), text: 'الطلبات'),
               Tab(icon: Icon(Icons.history), text: 'المكتملة'),
@@ -5882,8 +6321,6 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
     );
   }
 }
-
-
 // =======================================================================
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================

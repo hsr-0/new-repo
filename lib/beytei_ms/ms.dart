@@ -1677,6 +1677,7 @@ class ApiService {
   }
 
   // إضافة منتج
+// إضافة منتج (نسخة التصحيح Debug Version)
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -1685,21 +1686,36 @@ class ApiService {
         imageBase64 = base64Encode(imageBytes);
       }
 
+      print("🚀 جاري إرسال طلب إضافة المنتج...");
+      print("Token: ${token.substring(0, 10)}...");
+
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json'
+        },
         body: json.encode({
           'name': name,
           'regular_price': price,
           'sale_price': salePrice,
           'description': description,
-          'image_base64': imageBase64,
+          'image_base64': imageBase64, // الصورة المرسلة
         }),
       );
-      return response.statusCode == 201 || response.statusCode == 200;
+
+      print("📡 كود الحالة: ${response.statusCode}");
+      print("📄 رد السيرفر: ${response.body}"); // 🔥 هذا السطر سيخبرك بالسبب الحقيقي
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return true;
+      } else {
+        // إذا كان هناك خطأ، قم برمي استثناء ليظهر في التطبيق
+        final body = json.decode(response.body);
+        throw Exception(body['message'] ?? 'خطأ غير معروف من السيرفر');
+      }
     });
   }
-
   // تحديث منتج
   Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile) async {
     return _executeWithRetry(() async {
@@ -3855,6 +3871,7 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
   }
 
   Future<void> _loadAreas() async {
+
     try {
       final areas = await _apiService.getAreas();
       if (mounted) {
@@ -3866,7 +3883,6 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
-      // يمكن إضافة رسالة خطأ هنا إذا أردت
     }
   }
 
@@ -3881,18 +3897,13 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
 
   Future<void> _saveSelection(int areaId, String areaName) async {
     final prefs = await SharedPreferences.getInstance();
-
-    // ✅ الحفظ في مفاتيح المسواك الخاصة
     await prefs.setInt('miswak_area_id', areaId);
     await prefs.setString('miswak_area_name', areaName);
 
     if (mounted) {
       if (widget.isCancellable) {
-        // إذا كنا نغير المنطقة من داخل التطبيق، نغلق الصفحة ونرسل 'true' لتحديث البيانات
         Navigator.of(context).pop(true);
       } else {
-        // ✅ التعديل الحاسم:
-        // التوجيه إلى MainScreen مباشرة لضمان ظهور الشريط السفلي (السلة، الطلبات..)
         Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (_) => const MainScreen()),
                 (route) => false
@@ -3901,56 +3912,134 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
     }
   }
 
+  // ✨ ويدجت التحميل العصري (Shimmer)
+  Widget _buildModernLoading() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: 6,
+        itemBuilder: (_, __) => Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: Container(
+            height: 80,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(15),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // تصفية المحافظات (التي ليس لها أب)
+    // تصفية المحافظات
     final governorates = _filteredAreas.where((a) => a.parentId == 0).toList();
 
     return Scaffold(
+      backgroundColor: Colors.grey[50], // خلفية فاتحة عصرية
       appBar: AppBar(
-        title: const Text('اختر منطقة التوصيل للمسواك'),
-        automaticallyImplyLeading: widget.isCancellable,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        title: const Text(
+          'تحديد الموقع',
+          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+        ),
+        iconTheme: const IconThemeData(color: Colors.black),
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                  hintText: 'ابحث عن مدينتك...',
-                  prefixIcon: const Icon(Icons.search),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(30),
-                      borderSide: BorderSide.none
-                  ),
-                  filled: true,
-                  fillColor: Colors.grey.shade200
+          // ✨ 1. الإشارة العصرية (Header) والبحث
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(30),
+                bottomRight: Radius.circular(30),
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // نص ترحيبي
+                Row(
+                  children: [
+                    Icon(Icons.location_on, color: Theme.of(context).primaryColor, size: 28),
+                    const SizedBox(width: 10),
+                    const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("أين تريد التوصيل؟", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text("اختر مدينتك ", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      ],
+                    ),
+                  ],
+                ),
+
+              ],
             ),
           ),
+
+          // ✨ 2. المحتوى (قائمة أو تحميل)
           Expanded(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? _buildModernLoading() // عرض التحميل العصري
                 : governorates.isEmpty
-                ? const Center(child: Text("لا توجد مناطق مطابقة للبحث"))
+                ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.map_outlined, size: 80, color: Colors.grey.shade300),
+                const SizedBox(height: 10),
+                const Text("لا توجد مناطق مطابقة", style: TextStyle(color: Colors.grey)),
+              ],
+            )
                 : ListView.builder(
+              padding: const EdgeInsets.all(16),
               itemCount: governorates.length,
               itemBuilder: (context, index) {
                 final governorate = governorates[index];
-                // جلب المدن التابعة لهذه المحافظة
                 final cities = _filteredAreas.where((a) => a.parentId == governorate.id).toList();
 
-                return ExpansionTile(
-                  title: Text(
-                      governorate.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold)
+                return Card(
+                  elevation: 2,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  child: Theme(
+                    data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.location_city, color: Theme.of(context).primaryColor),
+                      ),
+                      title: Text(
+                        governorate.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      childrenPadding: const EdgeInsets.only(bottom: 10),
+                      children: cities.map((city) => ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                        title: Text(city.name),
+                        leading: const Icon(Icons.subdirectory_arrow_right, size: 18, color: Colors.grey),
+                        trailing: const Icon(Icons.check_circle_outline, color: Colors.grey),
+                        onTap: () => _saveSelection(city.id, city.name),
+                      )).toList(),
+                    ),
                   ),
-                  children: cities.map((city) => ListTile(
-                      title: Text(city.name),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-                      onTap: () => _saveSelection(city.id, city.name)
-                  )).toList(),
                 );
               },
             ),
@@ -3960,6 +4049,8 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
     );
   }
 }
+
+
 class RestaurantsScreen extends StatefulWidget {
   const RestaurantsScreen({super.key});
   @override
