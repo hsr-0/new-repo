@@ -35,7 +35,7 @@ const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
-
+const String MISWAK_URL = 'https://beytei.com';    // 🔥 سيرفر المسواك (جديد)
 
 class AppConstants {
 
@@ -79,15 +79,18 @@ class NavigationProvider with ChangeNotifier {
 
 
 
-
 class AuthProvider with ChangeNotifier {
-  String? _token;
-  String? _userRole; // 'owner' أو 'leader'
+  String? _token;       // توكن سيرفر المطاعم (re.beytei.com)
+  String? _miswakToken; // 🔥 توكن سيرفر المسواك (beytei.com)
+  String? _userRole;    // 'owner' أو 'leader'
   bool _isLoading = true;
 
   String? get token => _token;
+  String? get miswakToken => _miswakToken; // Getter جديد للوصول لتوكن المسواك
   String? get userRole => _userRole;
   bool get isLoading => _isLoading;
+
+  // يعتبر مسجل دخول إذا نجح الدخول للسيرفر الرئيسي (المطاعم) على الأقل
   bool get isLoggedIn => _token != null;
 
   AuthProvider() {
@@ -97,25 +100,49 @@ class AuthProvider with ChangeNotifier {
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('jwt_token');
-    _userRole = prefs.getString('user_role'); // استرجاع الرتبة
+    _miswakToken = prefs.getString('miswak_jwt_token'); // 🔥 استرجاع توكن المسواك
+    _userRole = prefs.getString('user_role');
     _isLoading = false;
     notifyListeners();
   }
 
-  // دالة تسجيل دخول موحدة مع تحديد الرتبة
+  // 🔥 دالة تسجيل الدخول الموحدة (المعدلة)
   Future<bool> login(String username, String password, String role, {String? restaurantLat, String? restaurantLng}) async {
     final authService = AuthService();
-    _token = await authService.loginRestaurantOwner(username, password);
 
+    // 1. محاولة تسجيل الدخول في سيرفر المطاعم (الأساسي للجميع)
+    // ملاحظة: نستخدم loginToServer بدلاً من loginRestaurantOwner لمرونة الرابط
+    _token = await authService.loginToServer(BEYTEI_URL, username, password);
+
+    // 2. إذا كان المستخدم "تيم ليدر"، نحاول تسجيل الدخول في سيرفر المسواك أيضاً
+    if (role == 'leader') {
+      try {
+        _miswakToken = await authService.loginToServer(MISWAK_URL, username, password);
+        print("✅ تم تسجيل دخول التيم ليدر في سيرفر المسواك بنجاح");
+      } catch (e) {
+        print("⚠️ فشل تسجيل الدخول في سيرفر المسواك: $e");
+        // لا نوقف العملية، قد يكون الخطأ مؤقتاً، يكفي دخول المطاعم حالياً
+      }
+    }
+
+    // 3. إذا نجح الدخول للسيرفر الرئيسي على الأقل
     if (_token != null) {
       final prefs = await SharedPreferences.getInstance();
+
+      // حفظ البيانات الأساسية
       await prefs.setString('jwt_token', _token!);
-      await prefs.setString('user_role', role); // حفظ الرتبة (owner/leader)
-      _userRole = role;
+      await prefs.setString('user_role', role);
 
-      // تحديث FCM
-      await authService.registerDeviceToken();
+      // 🔥 حفظ توكن المسواك إن وجد
+      if (_miswakToken != null) {
+        await prefs.setString('miswak_jwt_token', _miswakToken!);
+      }
 
+      // 🔥 تسجيل جهاز التيم ليدر في السيرفرين لاستقبال الإشعارات من الجهتين
+      // نستخدم الدالة الجديدة registerDeviceTokenDual الموجودة في AuthService
+      await authService.registerDeviceTokenDual(_token, _miswakToken);
+
+      // حفظ الإحداثيات (للمطاعم فقط عادةً)
       if (restaurantLat != null && restaurantLng != null) {
         await prefs.setDouble('restaurant_lat', double.tryParse(restaurantLat) ?? 0.0);
         await prefs.setDouble('restaurant_lng', double.tryParse(restaurantLng) ?? 0.0);
@@ -124,28 +151,36 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
       return true;
     }
+
+    // فشل الدخول للسيرفر الرئيسي
     return false;
   }
 
   Future<void> logout(BuildContext context) async {
     final authService = AuthService();
+
+    // تسجيل الخروج من السيرفر (إلغاء التوكن إن أمكن)
     await authService.logout();
+
     _token = null;
+    _miswakToken = null; // تصفير المتغير
     _userRole = null;
 
-    // مسح البيانات من الذاكرة
+    // مسح البيانات من الذاكرة المحلية
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('jwt_token');
+    await prefs.remove('miswak_jwt_token'); // 🔥 حذف توكن المسواك
     await prefs.remove('user_role');
 
     if (context.mounted) {
+      // تنظيف البيانات من البروفايدرات الأخرى
       Provider.of<CustomerProvider>(context, listen: false).clearData();
       Provider.of<RestaurantSettingsProvider>(context, listen: false).clearData();
+      // يمكن إضافة تنظيف لبيانات التيم ليدر هنا إذا لزم الأمر
     }
     notifyListeners();
   }
 }
-
 class CustomerProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -1555,13 +1590,79 @@ class ApiService {
 
 
 
+// داخل ApiService
 
+  Future<List<UnifiedDeliveryOrder>> getMiswakOrdersByRegion(int areaId, String token) async {
+    // نرسل الطلب بدون تحديد حالة (ليجلب الافتراضي) أو نحدد active
+    final url = '$MISWAK_URL/wp-json/restaurant-app/v1/region-orders?area_id=$areaId&status=active';
+    print("🟡 [1] طلب المسواك جاري الإرسال إلى: $url");
 
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
 
-  // 1. جلب بيانات المحفظة والتحديات
-// داخل class ApiService
+      print("🟡 [2] استجابة المسواك: كود ${response.statusCode}");
 
-// 1. جلب بيانات المحفظة والتحديات (حقيقي)
+      if (response.statusCode == 200) {
+        try {
+          final List<dynamic> data = json.decode(response.body);
+
+          if (data.isEmpty) {
+            print("⚠️ [4] قائمة المسواك فارغة");
+            return [];
+          }
+
+          List<UnifiedDeliveryOrder> parsedOrders = data.map<UnifiedDeliveryOrder>((json) {
+            // دوال مساعدة للقراءة الآمنة
+            double safeDouble(dynamic val) => val == null ? 0.0 : (double.tryParse(val.toString()) ?? 0.0);
+
+            return UnifiedDeliveryOrder(
+              id: json['id'],
+              status: json['status'] ?? 'unknown',
+              description: "مسواك: ${json['store_name'] ?? ''}",
+
+              // محاولة قراءة سعر التوصيل (shipping_total) أو وضعه 0
+              deliveryFee: safeDouble(json['shipping_total']),
+
+              // ✨ [جديد 1] قراءة السعر الكلي (total)
+              orderTotal: safeDouble(json['total']),
+
+              pickupName: json['store_name'] ?? 'متجر مسواك',
+              sourceType: 'market', // 🛒 تحديد المصدر
+              destinationAddress: json['billing']?['address_1'] ?? '',
+              pickupLat: "0", // يحتاج تعديل من الباك اند لإرسال موقع المتجر
+              pickupLng: "0",
+              destLat: json['destination_lat']?.toString() ?? "0",
+              destLng: json['destination_lng']?.toString() ?? "0",
+              itemsSummary: "${json['line_items']?.length ?? 0} منتجات",
+              dateCreated: DateTime.parse(json['date_created']).millisecondsSinceEpoch ~/ 1000,
+              customerPhone: json['billing']?['phone'] ?? '',
+
+              // ✨ [جديد 2] قراءة تفاصيل المنتجات
+              lineItems: json['line_items'] is List ? json['line_items'] : [],
+            );
+          }).toList();
+
+          print("✅ [5] تم تحليل ${parsedOrders.length} طلب مسواك بنجاح");
+          return parsedOrders;
+
+        } catch (e) {
+          print("❌ [خطأ تحليل بيانات المسواك]: $e");
+          return [];
+        }
+      } else {
+        print("❌ [خطأ سيرفر المسواك]: ${response.body}");
+        return [];
+      }
+    });
+  }
+
+  // 1. جلب بيانات المحفظة والتحديات (حقيقي)
   Future<Map<String, dynamic>> getTeamLeaderRewards(String token) async {
     return _executeWithRetry(() async {
       // نستخدم نفس نقطة النهاية للمطعم والتيم ليدر، السيرفر يميز بينهم
@@ -2122,89 +2223,82 @@ class ApiService {
 }
 
 class AuthService {
-  Future<String?> loginRestaurantOwner(String username, String password) async {
+  // 🔥 الدالة المفقودة 1: تسجيل الدخول لأي سيرفر (مطاعم أو مسواك)
+  Future<String?> loginToServer(String baseUrl, String username, String password) async {
     try {
+      print("Testing login to: $baseUrl");
       final response = await http.post(
-          Uri.parse('$BEYTEI_URL/wp-json/jwt-auth/v1/token'),
+          Uri.parse('$baseUrl/wp-json/jwt-auth/v1/token'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'username': username, 'password': password})
-      ).timeout(API_TIMEOUT);
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final token = data['token'];
-        if (token != null) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('jwt_token', token);
-          return token;
-        }
+        return data['token'];
       }
       return null;
-    } catch (e) { return null; }
+    } catch (e) {
+      print("Login Error ($baseUrl): $e");
+      return null;
+    }
   }
 
-
-
-// استبدل دالة registerDeviceToken القديمة بهذه الجديدة:
-
-// استبدل الدالة القديمة بهذه:
-  Future<void> registerDeviceToken({int? areaId}) async {
-    final prefs = await SharedPreferences.getInstance();
-
-    // 1. جلب التوكن (إن وجد) والمنطقة
-    final jwtToken = prefs.getString('jwt_token');
-
-    // نستخدم المنطقة الممررة، أو نحاول جلبها من الذاكرة
-    int? finalAreaId = areaId ?? prefs.getInt('selectedAreaId');
-
-    // 2. جلب FCM Token
+  // 🔥 الدالة المفقودة 2: تسجيل الجهاز في السيرفرين معاً
+  Future<void> registerDeviceTokenDual(String? restToken, String? miswakToken) async {
     String? fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken == null) return;
 
-    // 3. ✅ الاشتراك في القنوات (Topics) للإرسال الجماعي
-    // أ) الاشتراك في القناة العامة (لجميع المستخدمين)
+    // الاشتراك في القنوات العامة
     await FirebaseMessaging.instance.subscribeToTopic('all_users');
 
-    // ب) الاشتراك في قناة المنطقة (إذا تم تحديدها)
-    if (finalAreaId != null) {
-      await FirebaseMessaging.instance.subscribeToTopic('area_$finalAreaId');
-      print("✅ تم الاشتراك في إشعارات المنطقة: area_$finalAreaId");
+    String platform = Platform.isAndroid ? 'android' : 'ios';
+    Map<String, dynamic> body = {'token': fcmToken, 'platform': platform};
+
+    // 1. إرسال لسيرفر المطاعم (إذا وجد التوكن)
+    if (restToken != null) {
+      try {
+        await http.post(
+          Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/register-device'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $restToken'},
+          body: json.encode(body),
+        );
+        print("✅ تم تفعيل إشعارات المطاعم");
+      } catch (e) { print("خطأ إشعارات المطاعم: $e"); }
     }
 
-    // 4. إرسال البيانات للسيرفر (لحفظها في القاعدة للإحصائيات)
-    try {
-      Map<String, String> headers = {'Content-Type': 'application/json'};
+    // 2. إرسال لسيرفر المسواك (إذا وجد التوكن - للتيم ليدر)
+    if (miswakToken != null) {
+      try {
+        // لاحظ: نستخدم الـ namespace الجديد miswak-app/v1
+        await http.post(
+          Uri.parse('$MISWAK_URL/wp-json/restaurant-app/v1/register-device'), // ✅ توحيد المسار
 
-      // إذا كان المستخدم مسجلاً، نرسل التوكن ليتم ربطه بحسابه
-      if (jwtToken != null) {
-        headers['Authorization'] = 'Bearer $jwtToken';
-      }
 
-      // تحديد نوع المنصة (أندرويد أو iOS)
-      String platform = Platform.isAndroid ? 'android' : 'ios';
-
-      Map<String, dynamic> body = {
-        'token': fcmToken,
-        'platform': platform, // 👈 التعديل الجديد: إرسال نوع الجهاز
-      };
-
-      // نرسل المنطقة للسيرفر أيضاً
-      if (finalAreaId != null) {
-        body['area_id'] = finalAreaId;
-      }
-
-      await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/register-device'),
-        headers: headers,
-        body: json.encode(body),
-      ).timeout(API_TIMEOUT);
-
-      print("🚀 تم إرسال توكن الجهاز ($platform) والمنطقة للسيرفر بنجاح.");
-
-    } catch (e) {
-      print("Error registering device token: $e");
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $miswakToken'},
+          body: json.encode(body),
+        );
+        print("✅ تم تفعيل إشعارات المسواك");
+      } catch (e) { print("خطأ إشعارات المسواك: $e"); }
     }
   }
+
+  // الدالة القديمة (نحتفظ بها للتوافق إذا تم استدعاؤها من مكان آخر)
+  Future<String?> loginRestaurantOwner(String username, String password) async {
+    return loginToServer(BEYTEI_URL, username, password);
+  }
+
+  // الدالة القديمة لتسجيل الجهاز (للمطاعم فقط)
+  Future<void> registerDeviceToken({int? areaId}) async {
+    // يمكنك تركها كما هي أو توجيهها للدالة الجديدة
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token');
+    if (token != null) {
+      await registerDeviceTokenDual(token, null);
+    }
+  }
+
+  // تسجيل الخروج
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     final jwtToken = prefs.getString('jwt_token');
@@ -2214,18 +2308,20 @@ class AuthService {
         await http.post(
           Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/unregister-device'),
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $jwtToken'},
-        ).timeout(API_TIMEOUT);
+        ).timeout(const Duration(seconds: 5));
       } catch (e) { print("Failed to unregister device: $e"); }
     }
+
     await FirebaseMessaging.instance.deleteToken();
     final cacheService = CacheService();
     await cacheService.clearAllCache();
+
     await prefs.remove('jwt_token');
+    await prefs.remove('miswak_jwt_token'); // حذف توكن المسواك
     await prefs.remove('selectedAreaId');
     await prefs.remove('selectedAreaName');
   }
 }
-
 class TeamLeaderWallet {
   final double myBalance; // الرصيد المتاح
   final double liability; // الديون
@@ -3723,55 +3819,144 @@ class _WalletScreenState extends State<WalletScreen> {
 
 
 
-
-
 class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
   bool _isLoading = false;
   final ApiService _apiService = ApiService();
 
-  // 🔥 وظيفة التدخل السريع (قبول نيابة عن المطعم)
+  // --- دالة عرض التفاصيل (النافذة المنبثقة) ---
+  void _showOrderDetails(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 1. العنوان
+              Center(
+                child: Container(
+                  width: 50, height: 5,
+                  margin: const EdgeInsets.only(bottom: 15),
+                  decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text("تفاصيل الطلب #${widget.order.id}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text(widget.order.sourceType == 'market' ? "🛒 مسواك" : "🍔 مطعم", style: TextStyle(color: Colors.grey[600], fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const Divider(height: 25),
+
+              // 2. قائمة المنتجات
+              Flexible(
+                child: widget.order.lineItems.isNotEmpty
+                    ? ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: widget.order.lineItems.length,
+                  itemBuilder: (context, index) {
+                    final item = widget.order.lineItems[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(8)),
+                            child: Text("${item['quantity']}x", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(item['name'] ?? '', style: const TextStyle(fontSize: 16))),
+                          Text("${NumberFormat('#,###').format(double.tryParse(item['total'].toString()) ?? 0)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    );
+                  },
+                )
+                    : Center(child: Text(widget.order.itemsSummary.isNotEmpty ? widget.order.itemsSummary : "لا توجد تفاصيل إضافية")),
+              ),
+              const Divider(height: 25),
+
+              // 3. ملخص الحساب
+              _buildSummaryRow("سعر الطلب:", widget.order.orderTotal, isBold: false),
+              const SizedBox(height: 8),
+              _buildSummaryRow("سعر التوصيل:", widget.order.deliveryFee, isBold: false),
+              const Divider(height: 20),
+              _buildSummaryRow("الإجمالي الكلي:", widget.order.orderTotal + widget.order.deliveryFee, isBold: true, color: Colors.green),
+
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    foregroundColor: Colors.black,
+                  ),
+                  child: const Text("إغلاق"),
+                ),
+              )
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSummaryRow(String label, double amount, {bool isBold = false, Color? color}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(fontSize: 16, fontWeight: isBold ? FontWeight.bold : FontWeight.normal)),
+        Text(
+          "${NumberFormat('#,###').format(amount)} د.ع",
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color ?? Colors.black),
+        ),
+      ],
+    );
+  }
+
   Future<void> _interveneAndRequestTaxi() async {
     setState(() => _isLoading = true);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
-      // 1. تغيير حالة الطلب في ووكومرس إلى "مكتمل" (Completed)
-      // ملاحظة: التيم ليدر يقوم بذلك بتوكينه الخاص (يجب أن يسمح السيرفر بذلك)
       final statusSuccess = await _apiService.updateOrderStatus(widget.order.id, 'completed');
       if (!statusSuccess) throw Exception("فشل تحديث حالة الطلب في النظام");
 
-      // 2. إنشاء طلب التوصيل (التكسي) باستخدام بيانات الطلب الموجودة
-      // نستخدم بيانات المطعم الموجودة في الـ Order نفسه
       await _apiService.createUnifiedDeliveryRequest(
         token: widget.token,
-        sourceType: widget.order.sourceType, // نرسل نفس نوع المصدر (مطعم/مسواك)
+        sourceType: widget.order.sourceType,
         sourceOrderId: widget.order.id.toString(),
-        pickupName: widget.order.pickupName, // اسم المطعم
+        pickupName: widget.order.pickupName,
         pickupLat: double.tryParse(widget.order.pickupLat) ?? 0.0,
         pickupLng: double.tryParse(widget.order.pickupLng) ?? 0.0,
         destinationAddress: widget.order.destinationAddress,
         destinationLat: double.tryParse(widget.order.destLat) ?? 0.0,
         destinationLng: double.tryParse(widget.order.destLng) ?? 0.0,
-        deliveryFee: widget.order.deliveryFee.toStringAsFixed(0), // السعر الموجود
+        deliveryFee: widget.order.deliveryFee.toStringAsFixed(0),
         orderDescription: "تم القبول بواسطة التيم ليدر 👮\n${widget.order.description}",
-        endCustomerPhone: widget.order.customerPhone, // رقم الزبون
+        endCustomerPhone: widget.order.customerPhone,
       );
 
-      // 3. نجاح العملية
       if (mounted) {
         showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text("تم الإنقاذ بنجاح! 👮‍♂️"),
-            content: const Text("تم قبول الطلب وطلب المندوب نيابة عن المطعم."),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))
-            ],
+            content: const Text("تم قبول الطلب وطلب المندوب نيابة عن المطعم/المتجر."),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))],
           ),
         );
-        widget.onActionComplete(); // تحديث القائمة لإخفاء الطلب
+        widget.onActionComplete();
       }
-
     } catch (e) {
       if (mounted) scaffoldMessenger.showSnackBar(SnackBar(content: Text("خطأ: $e"), backgroundColor: Colors.red));
     } finally {
@@ -3786,14 +3971,15 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
 
   @override
   Widget build(BuildContext context) {
-    // تحديد نوع المصدر للتلوين
     Color color = Colors.blue;
     IconData icon = Icons.info;
     if (widget.order.sourceType == 'restaurant') { color = Colors.orange; icon = Icons.restaurant; }
     else if (widget.order.sourceType == 'market') { color = Colors.purple; icon = Icons.shopping_basket; }
 
-    // التحقق هل الطلب يحتاج تدخل (نشط) أم منتهي
     bool isActive = !['completed', 'cancelled', 'refunded', 'failed', 'trash', 'out-for-delivery'].contains(widget.order.status);
+
+    // حساب الإجمالي للعرض في الكرت المصغر
+    double grandTotal = widget.order.orderTotal + widget.order.deliveryFee;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -3813,9 +3999,19 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
                   backgroundColor: color,
                   labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
-                Text(
-                  "${NumberFormat('#,###').format(widget.order.deliveryFee)} د.ع",
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green),
+                // عرض السعر الكلي (طلب + توصيل)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      "${NumberFormat('#,###').format(grandTotal)} د.ع",
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green),
+                    ),
+                    Text(
+                      "توصيل: ${NumberFormat('#,###').format(widget.order.deliveryFee)}",
+                      style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                    )
+                  ],
                 ),
               ],
             ),
@@ -3825,32 +4021,42 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text("من: ${widget.order.pickupName}", style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text("إلى: ${widget.order.destinationAddress}"),
+              subtitle: Text("إلى: ${widget.order.destinationAddress}", maxLines: 1, overflow: TextOverflow.ellipsis),
               trailing: IconButton(
                 icon: const Icon(Icons.phone, color: Colors.green),
                 onPressed: () => _makePhoneCall(widget.order.customerPhone),
               ),
             ),
 
-            if(widget.order.itemsSummary.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                color: Colors.grey.shade100,
-                child: Text(widget.order.itemsSummary, style: TextStyle(fontSize: 12, color: Colors.grey.shade800)),
-              ),
-
             const SizedBox(height: 10),
 
-            // 🔥 أزرار التحكم (تظهر فقط للطلبات المعلقة)
+            // 🔥 أزرار التحكم الجديدة
             if (isActive)
               Row(
                 children: [
+                  // زر التفاصيل (جديد)
                   Expanded(
+                    flex: 1,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.list_alt, size: 18),
+                      label: const Text("التفاصيل"),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        side: BorderSide(color: Colors.grey.shade300),
+                        foregroundColor: Colors.black87,
+                      ),
+                      onPressed: () => _showOrderDetails(context),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // زر القبول (الموجود سابقاً)
+                  Expanded(
+                    flex: 2,
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.flash_on, size: 18),
-                      label: const Text("قبول وتجهيز (نيابة)"),
+                      label: const Text("قبول (نيابة)"),
                       style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                           backgroundColor: Colors.redAccent.shade700,
                           foregroundColor: Colors.white,
                           elevation: 0
@@ -3865,7 +4071,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
                 padding: const EdgeInsets.symmetric(vertical: 5),
                 width: double.infinity,
                 color: Colors.green.shade50,
-                child: const Text("✅ حالة الطلب مستقرة", textAlign: TextAlign.center, style: TextStyle(color: Colors.green)),
+                child: const Text("✅ الطلب منتهي / مكتمل", textAlign: TextAlign.center, style: TextStyle(color: Colors.green)),
               )
           ],
         ),
@@ -3873,8 +4079,6 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     );
   }
 }
-
-
 class RatingDialog extends StatefulWidget {
   final int productId;
   const RatingDialog({super.key, required this.productId});
@@ -6906,28 +7110,30 @@ class RatingsDashboardScreen extends StatefulWidget {
 
 
 
-
 class UnifiedDeliveryOrder {
   final int id;
-  final String status;      // حالة الطلب
-  final String description; // وصف
-  final double deliveryFee;
+  final String status;
+  final String description;
+  final double deliveryFee; // سعر التوصيل
+  final double orderTotal;  // ✨ جديد: سعر المنتجات الكلي
   final String pickupName;
-  final String sourceType;  // 'restaurant', 'market', 'taxi'
+  final String sourceType;
   final String destinationAddress;
   final String pickupLat;
   final String pickupLng;
   final String destLat;
   final String destLng;
-  final String itemsSummary; // ملخص الوجبات
-  final int dateCreated;     // التوقيت
-  final String customerPhone; // ✨ جديد: رقم هاتف الزبون
+  final String itemsSummary;
+  final int dateCreated;
+  final String customerPhone;
+  final List<dynamic> lineItems; // ✨ جديد: قائمة المنتجات التفصيلية
 
   UnifiedDeliveryOrder({
     required this.id,
     required this.status,
     required this.description,
     required this.deliveryFee,
+    required this.orderTotal, // ✨
     required this.pickupName,
     required this.sourceType,
     required this.destinationAddress,
@@ -6937,26 +7143,20 @@ class UnifiedDeliveryOrder {
     required this.destLng,
     required this.itemsSummary,
     required this.dateCreated,
-    required this.customerPhone, // ✨
+    required this.customerPhone,
+    required this.lineItems, // ✨
   });
 
   factory UnifiedDeliveryOrder.fromJson(Map<String, dynamic> json) {
-    // دوال مساعدة لضمان الأمان
-    String safeString(dynamic val) {
-      if (val == null) return '';
-      return val.toString();
-    }
-
-    double safeDouble(dynamic val) {
-      if (val == null) return 0.0;
-      return double.tryParse(val.toString()) ?? 0.0;
-    }
+    String safeString(dynamic val) => val == null ? '' : val.toString();
+    double safeDouble(dynamic val) => val == null ? 0.0 : (double.tryParse(val.toString()) ?? 0.0);
 
     return UnifiedDeliveryOrder(
       id: json['id'] is int ? json['id'] : int.tryParse(json['id'].toString()) ?? 0,
       status: safeString(json['order_status']),
       description: safeString(json['order_description']),
       deliveryFee: safeDouble(json['delivery_fee']),
+      orderTotal: safeDouble(json['order_total']), // ✨ قراءة السعر الكلي من الـ API
       pickupName: safeString(json['pickup_location_name']),
       sourceType: safeString(json['source_type']),
       destinationAddress: safeString(json['destination_address']),
@@ -6964,12 +7164,18 @@ class UnifiedDeliveryOrder {
       pickupLng: safeString(json['pickup_lng']),
       destLat: safeString(json['destination_lat']),
       destLng: safeString(json['destination_lng']),
-      itemsSummary: safeString(json['items_summary']), // 👈 هنا كان الخطأ المحتمل
+      itemsSummary: safeString(json['items_summary']),
       dateCreated: json['date_created'] is int ? json['date_created'] : 0,
       customerPhone: safeString(json['customer_phone']),
+      lineItems: json['line_items'] is List ? json['line_items'] : [], // ✨ قراءة القائمة
     );
   }
 }
+
+
+
+
+
 class TeamLeaderLoginScreen extends StatefulWidget {
   const TeamLeaderLoginScreen({super.key});
 
@@ -7135,7 +7341,6 @@ class RegionDashboardScreen extends StatefulWidget {
   @override
   State<RegionDashboardScreen> createState() => _RegionDashboardScreenState();
 }
-
 class _RegionDashboardScreenState extends State<RegionDashboardScreen> with SingleTickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   late TabController _tabController;
@@ -7143,18 +7348,33 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
   // متغير لتخزين البيانات لمنع إعادة التحميل مع كل بناء للشاشة
   late Future<List<UnifiedDeliveryOrder>> _ordersFuture;
 
+  // مؤقت لتنظيم التحديث (لحماية السيرفر من تكرار الطلبات)
+  Timer? _debounceTimer;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this); // الكل، مطاعم، مسواك، تكسي
 
-    // تحميل البيانات لأول مرة
+    // 1. تحميل البيانات لأول مرة
     _loadData();
 
-    // الاستماع للإشعارات لتحديث القائمة تلقائياً عند الحاجة فقط
+    // 2. الاستماع للإشعارات لتحديث القائمة تلقائياً
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (mounted) {
-        print("🔔 تيم ليدر: إشعار جديد! جاري تحديث القائمة...");
+        print("🔔 تيم ليدر: إشعار جديد! جدولة التحديث...");
+        _triggerSmartRefresh(); // استخدام التحديث الذكي
+      }
+    });
+  }
+
+  // دالة التحديث الذكي (تنتظر 2 ثانية لتجميع الإشعارات)
+  void _triggerSmartRefresh() {
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+
+    _debounceTimer = Timer(const Duration(seconds: 25), () {
+      if (mounted) {
+        print("🚀 تنفيذ التحديث الآن!");
         _loadData();
       }
     });
@@ -7163,14 +7383,51 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
   // دالة لتحميل البيانات وحفظها في المتغير
   void _loadData() {
     setState(() {
-      _ordersFuture = _apiService.getOrdersByRegion(widget.areaId, widget.token);
+      // 🔥 استخدام دالة الدمج الجديدة
+      _ordersFuture = _fetchAllOrdersCombined();
     });
   }
 
   @override
   void dispose() {
+    _debounceTimer?.cancel(); // إلغاء المؤقت عند الخروج
     _tabController.dispose();
     super.dispose();
+  }
+
+  // 🔥🔥🔥 الدالة الجوهرية: دمج طلبات المطاعم والمسواك 🔥🔥🔥
+  Future<List<UnifiedDeliveryOrder>> _fetchAllOrdersCombined() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+
+    // 1. طلبات المطاعم (من سيرفر re.beytei.com)
+    // نستخدم توكن المطاعم الممرر (widget.token)
+    final restaurantFuture = _apiService.getOrdersByRegion(widget.areaId, widget.token);
+
+    // 2. طلبات المسواك (من سيرفر beytei.com)
+    // نستخدم توكن المسواك المخزن في AuthProvider
+    Future<List<UnifiedDeliveryOrder>> miswakFuture = Future.value([]);
+
+    if (auth.miswakToken != null) {
+      miswakFuture = _apiService.getMiswakOrdersByRegion(widget.areaId, auth.miswakToken!);
+    }
+
+    try {
+      // 3. انتظار الاثنين ودمجهم
+      final results = await Future.wait([restaurantFuture, miswakFuture]);
+
+      List<UnifiedDeliveryOrder> allOrders = [];
+      allOrders.addAll(results[0]); // إضافة المطاعم
+      allOrders.addAll(results[1]); // إضافة المسواك
+
+      // 4. الترتيب حسب التاريخ (الأحدث أولاً)
+      allOrders.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+
+      return allOrders;
+    } catch (e) {
+      print("Error merging orders: $e");
+      // في حال حدوث خطأ، نعيد قائمة فارغة لعدم إيقاف التطبيق
+      return [];
+    }
   }
 
   // دالة مساعدة للاتصال
@@ -7213,7 +7470,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
         backgroundColor: const Color(0xFF1E3C72),
         foregroundColor: Colors.white,
 
-        // ✨✨✨ هنا تمت إضافة زر المحفظة والمكافآت ✨✨✨
+        // زر المحفظة والمكافآت
         actions: [
           IconButton(
             icon: const Icon(Icons.account_balance_wallet, color: Colors.amber),
@@ -7221,14 +7478,12 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  // تأكد أن كلاس TeamLeaderRewardsScreen موجود في المشروع
                   builder: (_) => TeamLeaderRewardsScreen(token: widget.token),
                 ),
               );
             },
           ),
         ],
-        // ✨✨✨ نهاية الإضافة ✨✨✨
 
         bottom: TabBar(
           controller: _tabController,
@@ -7279,7 +7534,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
               );
             }
 
-            // الفلترة
+            // الفلترة حسب النوع
             final restaurantOrders = allOrders.where((o) => o.sourceType == 'restaurant').toList();
             final marketOrders = allOrders.where((o) => o.sourceType == 'market').toList();
             final taxiOrders = allOrders.where((o) => o.sourceType == 'taxi').toList();
@@ -7307,7 +7562,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
       padding: const EdgeInsets.all(12),
       itemCount: orders.length,
       itemBuilder: (context, index) {
-        // ✅ استخدام البطاقة الذكية الجديدة
+        // ✅ استخدام البطاقة الذكية
         return TeamLeaderOrderCard(
           order: orders[index],
           token: widget.token,
@@ -7319,185 +7574,10 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
       },
     );
   }
-
-  Widget _buildTeamLeaderCard(UnifiedDeliveryOrder order) {
-    Color color;
-    IconData icon;
-    String label;
-
-    switch (order.sourceType) {
-      case 'restaurant': color = Colors.orange; icon = Icons.restaurant; label = "مطعم"; break;
-      case 'market': color = Colors.purple; icon = Icons.shopping_cart; label = "مسواك"; break;
-      case 'taxi': color = Colors.amber.shade700; icon = Icons.local_taxi; label = "تكسي"; break;
-      default: color = Colors.blue; icon = Icons.delivery_dining; label = "توصيل";
-    }
-
-    // تحديد الحالات المنتهية
-    bool isCompleted = ['completed', 'cancelled', 'refunded', 'failed', 'trash'].contains(order.status);
-    Color cardColor = isCompleted ? Colors.grey.shade50 : Colors.white;
-    Color statusTextColor = isCompleted ? Colors.grey : Colors.green.shade700;
-
-    // ترجمة الحالة للعرض
-    String statusText = order.status;
-    if(order.status == 'pending') statusText = 'بانتظار الدفع';
-    if(order.status == 'processing') statusText = 'قيد التحضير';
-    if(order.status == 'on-hold') statusText = 'قيد الانتظار';
-    if(order.status == 'driver-assigned') statusText = 'تم تعيين سائق';
-    if(order.status == 'out-for-delivery') statusText = 'جاري التوصيل';
-
-    // تنسيق الوقت
-    String timeStr = "";
-    if (order.dateCreated > 0) {
-      final dt = DateTime.fromMillisecondsSinceEpoch(order.dateCreated * 1000);
-      timeStr = DateFormat('hh:mm a', 'en').format(dt);
-    }
-
-    return Card(
-      elevation: isCompleted ? 1 : 3,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      color: cardColor,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0),
-        child: Column(
-          children: [
-            // رأس البطاقة
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              margin: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Icon(icon, color: color, size: 20),
-                      const SizedBox(width: 8),
-                      Text("$label #${order.id}", style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 15)),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      Text(timeStr, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          border: Border.all(color: statusTextColor.withOpacity(0.3)),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          statusText.toUpperCase(),
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: statusTextColor),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            const Divider(),
-
-            // تفاصيل الطلب
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (order.itemsSummary.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: Text(
-                          order.itemsSummary,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis
-                      ),
-                    ),
-
-                  _buildInfoRow(Icons.store, "من:", order.pickupName),
-                  const SizedBox(height: 6),
-                  _buildInfoRow(Icons.location_on, "إلى:", order.destinationAddress),
-
-                  if (order.sourceType == 'taxi' && order.description.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      width: double.infinity,
-                      decoration: BoxDecoration(color: Colors.yellow.shade50, borderRadius: BorderRadius.circular(8)),
-                      child: Text("📝 ${order.description}", style: TextStyle(fontSize: 12, color: Colors.grey.shade800)),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-
-            const Divider(),
-
-            // أزرار التحكم السفلية
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12.0),
-              child: Row(
-                children: [
-                  Text(
-                    "${NumberFormat('#,###').format(order.deliveryFee)} د.ع",
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.teal),
-                  ),
-                  const Spacer(),
-
-                  if(order.customerPhone.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.phone, color: Colors.green),
-                      tooltip: "اتصال بالزبون",
-                      onPressed: () => _makePhoneCall(order.customerPhone),
-                    ),
-
-                  if (order.pickupLat != "0" && order.pickupLat.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.map, color: Colors.blue),
-                      tooltip: "موقع الاستلام",
-                      onPressed: () => _openMap(order.pickupLat, order.pickupLng, "موقع الاستلام: ${order.pickupName}"),
-                    ),
-
-                  if (order.destLat != "0" && order.destLat.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.location_pin, color: Colors.red),
-                      tooltip: "موقع الزبون",
-                      onPressed: () => _openMap(order.destLat, order.destLng, "موقع الزبون"),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.grey),
-        const SizedBox(width: 5),
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-        const SizedBox(width: 5),
-        Expanded(
-          child: Text(
-              value,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis
-          ),
-        ),
-      ],
-    );
-  }
 }
+
+
+
 
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
   @override

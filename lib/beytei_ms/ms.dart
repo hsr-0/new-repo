@@ -874,6 +874,7 @@ class Restaurant {
     );
   }
 }
+
 class FoodItem {
   final int id;
   final String name;
@@ -887,9 +888,12 @@ class FoodItem {
   final double averageRating;
   final int ratingCount;
 
-  // ✨ [جديد] حقول لاستقبال موقع المطعم مع المنتج
+  // ✨ حقول لاستقبال موقع المطعم مع المنتج
   final double restaurantLat;
   final double restaurantLng;
+
+  // ✨ [جديد] الوزن المختار (الافتراضي 1.0)
+  double selectedWeight;
 
   FoodItem({
     required this.id,
@@ -903,13 +907,13 @@ class FoodItem {
     this.isDeliverable = false,
     this.averageRating = 0.0,
     this.ratingCount = 0,
-    // ✨ تهيئة القيم
     this.restaurantLat = 0.0,
     this.restaurantLng = 0.0,
+    // ✨ تهيئة الوزن
+    this.selectedWeight = 1.0,
   });
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
-    // دالة مساعدة لقراءة الأرقام بأمان
     double safeParseDouble(dynamic value, [double defaultValue = 0.0]) {
       if (value == null) return defaultValue;
       if (value is double) return value;
@@ -949,15 +953,12 @@ class FoodItem {
       return '';
     }
 
-    // ✨ استخراج الإحداثيات بدقة من الميتا داتا
     double rLat = 0.0;
     double rLng = 0.0;
     if (json['meta_data'] != null && json['meta_data'] is List) {
       final metaData = json['meta_data'] as List;
-
       var latMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_latitude', orElse: () => null);
       if (latMeta != null) rLat = safeParseDouble(latMeta['value']);
-
       var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
       if (lngMeta != null) rLng = safeParseDouble(lngMeta['value']);
     }
@@ -972,17 +973,33 @@ class FoodItem {
       categoryId: extractRestaurantId(json),
       averageRating: safeParseDouble(json['average_rating']),
       ratingCount: safeParseInt(json['rating_count']),
-      // ✨ تمرير الإحداثيات المستخرجة
       restaurantLat: rLat,
       restaurantLng: rLng,
+      selectedWeight: 1.0, // الافتراضي عند الجلب من النت
     );
   }
 
-  double get displayPrice => salePrice != null && salePrice! >= 0 ? salePrice! : price;
+  // ✨ حساب السعر النهائي (السعر الأساسي * الوزن)
+  double get displayPrice {
+    double base = salePrice != null && salePrice! >= 0 ? salePrice! : price;
+    return base * selectedWeight;
+  }
 
+  // ✨ تنسيق السعر
   String get formattedPrice {
     final format = NumberFormat('#,###', 'ar_IQ');
     return '${format.format(displayPrice)} د.ع';
+  }
+
+  // ✨ نص يعرض الوزن بشكل جميل
+  String get weightLabel {
+    if (selectedWeight == 0.25) return "ربع كيلو (250غم)";
+    if (selectedWeight == 0.5) return "نصف كيلو (500غم)";
+    if (selectedWeight == 1.0) return "1 كيلو";
+    // إذا كان رقماً صحيحاً (مثل 2.0 أو 3.0) نعرضه بدون كسور
+    if (selectedWeight % 1 == 0) return "${selectedWeight.toInt()} كيلو";
+
+    return "$selectedWeight كيلو";
   }
 
   Map<String, dynamic> toJson() => {
@@ -990,9 +1007,10 @@ class FoodItem {
     'name': name,
     'quantity': quantity,
     'categoryId': categoryId,
-    // يمكنك إضافة الإحداثيات هنا إذا كنت تريد حفظ السلة محلياً
+    'selectedWeight': selectedWeight, // حفظ الوزن
   };
 }
+
 class Order {
   final int id;
   final String status;
@@ -1346,29 +1364,35 @@ class _LoyaltyChallengeWidgetState extends State<LoyaltyChallengeWidget> {
 }
 // (الصق هذا الكلاس بالكامل بدلاً من CartProvider القديم)
 
+
 class CartProvider with ChangeNotifier {
   final List<FoodItem> _items = [];
+
   List<FoodItem> get items => _items;
+
   int get cartCount => _items.fold(0, (sum, item) => sum + item.quantity);
+
+  // السعر الكلي (يعتمد على displayPrice في FoodItem الذي يحسب السعر × الوزن)
   double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.displayPrice * item.quantity));
+
   String? _appliedCoupon;
   double _discountPercentage = 0.0;
   double _discountAmount = 0.0;
   String _discountType = '';
 
-// ✨ NEW: تتبع حالة المروج والخصم
+  // ✨ متغيرات نظام الولاء (المروج)
   String? _promoterCode;
-  int _usageCount = 0; // عدد مرات الاستخدام المكتملة
+  int _usageCount = 0;
   double _loyaltyDiscountPercentage = 0.0;
 
-  String? get appliedCoupon => _appliedCoupon; // الحفاظ على Getter القديم
+  String? get appliedCoupon => _appliedCoupon;
   String? get promoterCode => _promoterCode;
   int get usageCount => _usageCount;
 
-// ✨ Getter معدل لحساب الخصم الكلي
+  // --- حساب الخصومات ---
+
   double get totalDiscountAmount {
     double couponDiscount = 0.0;
-    // حساب خصم الكوبون العادي
     if (_discountType == 'fixed_cart') {
       couponDiscount = _discountAmount;
     } else if (_discountType == 'percent') {
@@ -1377,7 +1401,7 @@ class CartProvider with ChangeNotifier {
 
     double loyaltyDiscount = totalPrice * (_loyaltyDiscountPercentage / 100);
 
-    // نستخدم أكبر خصم متاح (إما خصم الكوبون أو خصم الولاء 50%)
+    // نطبق الخصم الأكبر (إما الكوبون أو الولاء)
     return max(couponDiscount, loyaltyDiscount);
   }
 
@@ -1385,37 +1409,32 @@ class CartProvider with ChangeNotifier {
     return (totalPrice - totalDiscountAmount).clamp(0, double.infinity);
   }
 
-// ✨ وظيفة لقراءة عدد الاستخدامات من الذاكرة المحلية
+  // --- إدارة نظام الولاء ---
+
   Future<int> _loadUsageCount(String code) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('promoter_usage_$code') ?? 0;
   }
 
-// ✨ وظيفة لتسجيل الاستخدام بعد إتمام الطلب بنجاح (يجب استدعاؤها بعد إنشاء الطلب)
   Future<void> _recordSuccessfulOrder() async {
     final prefs = await SharedPreferences.getInstance();
     if (_promoterCode != null) {
       int currentCount = await _loadUsageCount(_promoterCode!);
       if (currentCount < 3) {
-        // زيادة العدد بعد طلب ناجح
         await prefs.setInt('promoter_usage_$_promoterCode', currentCount + 1);
       } else {
-        // إعادة تعيين العداد إلى 0 بعد استخدام خصم 50%
         await prefs.setInt('promoter_usage_$_promoterCode', 0);
       }
     }
   }
 
-// ✨ دالة مساعدة لحساب رسالة التحدي الحالية (مطلوبة للـ Widget الجديد)
   Map<String, dynamic> get getLoyaltyChallengeStatus {
     if (_promoterCode == null) {
       return {'show': false, 'message': 'لا يوجد رمز مروج مفعل.'};
     }
-
     if (_usageCount == 3) {
       return {'show': true, 'message': '🎉 تهانينا! خصم الـ 50% متاح الآن على سلتك!'};
     }
-
     final remaining = 3 - _usageCount;
     return {
       'show': true,
@@ -1423,14 +1442,14 @@ class CartProvider with ChangeNotifier {
     };
   }
 
+  // --- إدارة الكوبونات ---
 
   Future<Map<String, dynamic>> applyCoupon(String code) async {
+    // افترض أن ApiService مستورد
     final result = await ApiService().validateCoupon(code);
 
     if (result['is_promoter'] == true) {
       _promoterCode = code.toUpperCase();
-
-      // جلب عدد الاستخدامات وحساب الخصم
       _usageCount = await _loadUsageCount(_promoterCode!);
 
       if (_usageCount == 3) {
@@ -1447,53 +1466,52 @@ class CartProvider with ChangeNotifier {
       _appliedCoupon = null;
       _discountAmount = 0.0;
       _discountPercentage = 0.0;
-
       notifyListeners();
       return result;
 
     } else if (result['valid'] == true) {
-      // منطق كوبون ووكومرس العادي
       _appliedCoupon = code.toUpperCase();
       _discountType = result['discount_type'];
       _discountAmount = double.tryParse(result['amount'].toString()) ?? 0.0;
       if (_discountType == 'percent') _discountPercentage = _discountAmount;
 
-      // تصفير حقول الولاء عند استخدام كوبون عادي
       _promoterCode = null;
       _loyaltyDiscountPercentage = 0.0;
-
       notifyListeners();
       return result;
     }
     return result;
   }
+
   void removeCoupon() {
     _appliedCoupon = null;
     _discountPercentage = 0.0;
     _discountAmount = 0.0;
     _discountType = '';
-
-    // تصفير حقول الولاء
     _promoterCode = null;
     _loyaltyDiscountPercentage = 0.0;
-
     notifyListeners();
   }
 
-  // ✨ --- [ هذا هو الإصلاح ] --- ✨
-  // (استبدل الدالة القديمة بهذه)
-  void addToCart(FoodItem foodItem, BuildContext context) {
-    // 1. التحقق من توفر المنتج
+  // --- 🔥 إدارة السلة (الإضافة والتعديل) 🔥 ---
+
+  // ✅ تم تحديث الدالة لتقبل الوزن (weight)
+  void addToCart(FoodItem foodItem, BuildContext context, {double weight = 1.0}) {
     if (!foodItem.isDeliverable) {
       _showItemUnavailableDialog(context, foodItem);
       return;
     }
 
-    final existingIndex = _items.indexWhere((item) => item.id == foodItem.id);
+    // ✅ البحث عن منتج بنفس المعرف ونفس الوزن
+    // (لكي لا يتم دمج 1 كيلو مع نصف كيلو)
+    final existingIndex = _items.indexWhere((item) =>
+    item.id == foodItem.id && item.selectedWeight == weight);
+
     if (existingIndex != -1) {
+      // إذا وجد نفس المنتج بنفس الوزن، نزيد الكمية
       _items[existingIndex].quantity++;
     } else {
-      // 2. إضافة المنتج للسلة مع نسخ الإحداثيات
+      // إذا لم يوجد، نضيف كعنصر جديد مع الوزن المحدد
       _items.add(FoodItem(
         id: foodItem.id,
         name: foodItem.name,
@@ -1504,31 +1522,23 @@ class CartProvider with ChangeNotifier {
         quantity: 1,
         categoryId: foodItem.categoryId,
         isDeliverable: foodItem.isDeliverable,
-        // ✅✅✅ هنا الإصلاح: نقل الإحداثيات من المنتج الأصلي إلى السلة ✅✅✅
         restaurantLat: foodItem.restaurantLat,
         restaurantLng: foodItem.restaurantLng,
+        averageRating: foodItem.averageRating,
+        ratingCount: foodItem.ratingCount,
+        // ✅ حفظ الوزن المختار
+        selectedWeight: weight,
       ));
     }
     notifyListeners();
-    _showAddToCartDialog(context, foodItem);
+    _showAddToCartDialog(context, foodItem, weight);
   }
-  // ✨ --- [ أضف هذه الدالة المساعدة الجديدة ] ---
-  void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("عذراً، المنتج غير متاح"),
-        content: Text("لا يمكن إضافة '${item.name}' إلى السلة لأن  الخاص به مغلق حالياً."),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً")),
-        ],
-      ),
-    );
-  }
-  // --- [ نهاية الإضافة ] ---
 
   void incrementQuantity(FoodItem foodItem) {
-    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
+    // البحث بالمعرف والوزن معاً
+    final itemIndex = _items.indexWhere((item) =>
+    item.id == foodItem.id && item.selectedWeight == foodItem.selectedWeight);
+
     if (itemIndex != -1) {
       _items[itemIndex].quantity++;
       notifyListeners();
@@ -1536,7 +1546,10 @@ class CartProvider with ChangeNotifier {
   }
 
   void decrementQuantity(FoodItem foodItem) {
-    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
+    // البحث بالمعرف والوزن معاً
+    final itemIndex = _items.indexWhere((item) =>
+    item.id == foodItem.id && item.selectedWeight == foodItem.selectedWeight);
+
     if (itemIndex != -1) {
       if (_items[itemIndex].quantity > 1) {
         _items[itemIndex].quantity--;
@@ -1553,27 +1566,61 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void _showAddToCartDialog(BuildContext context, FoodItem item) {
+  // --- نوافذ التنبيه ---
+
+  void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("تمت الإضافة إلى السلة"),
-        content: Text("تمت إضافة '${item.name}' بنجاح."),
+        title: const Text("عذراً، المنتج غير متاح"),
+        content: Text("لا يمكن إضافة '${item.name}' إلى السلة لأن المتجر مغلق حالياً."),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("مواصلة التسوق")),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً")),
+        ],
+      ),
+    );
+  }
+
+  void _showAddToCartDialog(BuildContext context, FoodItem item, double weight) {
+    // تجهيز نص الوزن للعرض
+    String weightText = "$weight كيلو";
+    if (weight == 0.25) weightText = "ربع كيلو";
+    if (weight == 0.5) weightText = "نصف كيلو";
+    if (weight == 1.0) weightText = "1 كيلو";
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green),
+            SizedBox(width: 10),
+            Text("تمت الإضافة"),
+          ],
+        ),
+        content: Text("تم إضافة:\n${item.name}\n(الوزن: $weightText) بنجاح."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("تابع التسوق"),
+          ),
           ElevatedButton(
             onPressed: () {
               Navigator.of(ctx).pop();
               Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
             },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+            ),
             child: const Text("الذهاب للسلة"),
           ),
         ],
       ),
     );
   }
-}
-// =======================================================================
+}// =======================================================================
 // --- API SERVICE (المعدل والنهائي) ---
 // =======================================================================
 class ApiService {
@@ -1993,12 +2040,17 @@ class ApiService {
       throw Exception(responseBody['message'] ?? 'فشل إرسال طلب التوصيل.');
     });
   }
-
   Future<Order?> submitOrder({
-    required String name, required String phone, required String address,
-    required List<FoodItem> cartItems, String? couponCode,
+    required String name,
+    required String phone,
+    required String address,
+    required List<FoodItem> cartItems,
+    String? couponCode,
     geolocator.Position? position,
     double? deliveryFee,
+    // ✨ متغيرات جديدة
+    required int? restaurantId,
+    required int? regionId,
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
@@ -2017,7 +2069,11 @@ class ApiService {
       "meta_data": [
         if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
         if (position != null) {"key": "_customer_destination_lat", "value": position.latitude.toString()},
-        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()}
+        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()},
+        // 🔥🔥🔥 هنا الإضافة الحاسمة لربط الطلب 🔥🔥🔥
+        if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
+        if (regionId != null) {"key": "_region_id", "value": regionId.toString()},
+        if (regionId != null) {"key": "_area_id", "value": regionId.toString()}, // احتياط
       ],
     };
 
@@ -4293,116 +4349,302 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 }
 
-class DetailScreen extends StatelessWidget {
+class DetailScreen extends StatefulWidget {
   final FoodItem foodItem;
   const DetailScreen({super.key, required this.foodItem});
 
   @override
+  State<DetailScreen> createState() => _DetailScreenState();
+}
+
+class _DetailScreenState extends State<DetailScreen> {
+  // الوزن المختار افتراضياً
+  double _currentWeight = 1.0;
+
+  // قائمة الخيارات السريعة
+  final List<double> _quickWeights = [0.25, 0.50, 1.0, 2.0, 3.0];
+
+  // دالة لعرض نافذة إدخال وزن مخصص
+  void _showCustomWeightDialog() {
+    final TextEditingController controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("أدخل الوزن (بالكيلو)"),
+        content: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            hintText: "مثال: 5.5",
+            suffixText: "كغم",
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("إلغاء"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(controller.text);
+              if (val != null && val > 0) {
+                setState(() {
+                  _currentWeight = val;
+                });
+                Navigator.pop(ctx);
+              }
+            },
+            child: const Text("تأكيد"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // دالة مساعدة لجلب النص المعروض للزر
+  String _getWeightLabel(double w) {
+    if (w == 0.25) return "ربع";
+    if (w == 0.5) return "نصف";
+    if (w == 1.0) return "1";
+    return "${w.toInt()}"; // يعرض 2، 3 بدون كسور
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // حساب السعر الفوري
+    final double basePrice = widget.foodItem.salePrice ?? widget.foodItem.price;
+    final double calculatedPrice = basePrice * _currentWeight;
+    final String formattedPrice = NumberFormat('#,###', 'ar_IQ').format(calculatedPrice);
 
-    // ✨ --- [إضافة جديدة] ---
-    // 1. جلب حالة المنتج
-    final bool isDeliverable = foodItem.isDeliverable;
+    final bool isDeliverable = widget.foodItem.isDeliverable;
 
-    // 2. جلب بيانات المطعم الأب (للحصول على الأوقات)
+    // جلب أوقات المطعم (لعرضها إذا كان مغلقاً)
     final provider = Provider.of<StoreCustomerProvider>(context, listen: false);
     Restaurant? restaurant;
-
-    // محاولة إيجاد المطعم في القائمة الشاملة
     try {
-      restaurant = provider.allRestaurants.firstWhere((r) => r.id == foodItem.categoryId);
-    } catch (e) {
-      // إذا لم نجده (ربما من شاشة البحث)، ابحث في بيانات الصفحة الرئيسية
-      try {
-        restaurant = (provider.homeData['restaurants'] as List<dynamic>? ?? [])
-            .cast<Restaurant>()
-            .firstWhere((r) => r.id == foodItem.categoryId);
-      } catch (e) {
-        restaurant = null; // لم يتم العثور عليه
-      }
-    }
-
-    // 3. تجهيز رسالة الأوقات
-    final String openTime = restaurant?.autoOpenTime ?? "N/A";
-    final String closeTime = restaurant?.autoCloseTime ?? "N/A";
-    // --- [نهاية الإضافة] ---
+      restaurant = provider.allRestaurants.firstWhere((r) => r.id == widget.foodItem.categoryId);
+    } catch (_) {}
 
     return Scaffold(
-      appBar: AppBar(title: Text(foodItem.name)),
-      body: SingleChildScrollView(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Hero(
-            tag: 'food_image_${foodItem.id}',
-            child: CachedNetworkImage(imageUrl: foodItem.imageUrl, fit: BoxFit.cover, height: 300, placeholder: (c, u) => Container(height: 300, color: Colors.grey[200], child: const Center(child: CircularProgressIndicator())), errorWidget: (c, u, e) => Container(height: 300, color: Colors.grey[200], child: const Icon(Icons.error))),
+      body: CustomScrollView(
+        slivers: [
+          // صورة المنتج مع تأثير تكبير
+          SliverAppBar(
+            expandedHeight: 300,
+            pinned: true,
+            flexibleSpace: FlexibleSpaceBar(
+              background: Hero(
+                tag: 'food_image_${widget.foodItem.id}',
+                child: CachedNetworkImage(
+                  imageUrl: widget.foodItem.imageUrl,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(foodItem.name, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              Text(foodItem.formattedPrice, style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              Text(foodItem.description, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700, height: 1.5)),
-              const Divider(height: 30),
-              const Text("التقييمات", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              Row(children: [
-                RatingBarIndicator(rating: foodItem.averageRating, itemBuilder: (context, index) => const Icon(Icons.star, color: Colors.amber), itemCount: 5, itemSize: 20.0, direction: Axis.horizontal),
-                const SizedBox(width: 10),
-                Text("(${foodItem.ratingCount} تقييم)", style: const TextStyle(color: Colors.grey)),
-              ]),
-              const SizedBox(height: 10),
-              Center(child: OutlinedButton(child: const Text("أضف تقييمك"), onPressed: () => showDialog(context: context, builder: (context) => RatingDialog(productId: foodItem.id)))),
-            ]),
+
+          // محتوى التفاصيل
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // الاسم والسعر
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.foodItem.name,
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            "$formattedPrice د.ع",
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).primaryColor,
+                            ),
+                          ),
+                          // عرض الوزن المختار بجانب السعر للتوضيح
+                          Text(
+                            _currentWeight < 1
+                                ? "${(_currentWeight * 1000).toInt()} غم"
+                                : "$_currentWeight كغم",
+                            style: const TextStyle(color: Colors.grey, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 25),
+
+                  // ✨✨✨ قسم اختيار الوزن العصري ✨✨✨
+                  const Text("اختر الوزن / الكمية:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 12),
+
+                  SizedBox(
+                    height: 50,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _quickWeights.length + 1, // +1 لزر "مخصص"
+                      separatorBuilder: (ctx, i) => const SizedBox(width: 10),
+                      itemBuilder: (ctx, index) {
+
+                        // زر "مخصص" (الأخير)
+                        if (index == _quickWeights.length) {
+                          bool isCustomSelected = !_quickWeights.contains(_currentWeight);
+                          return GestureDetector(
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              _showCustomWeightDialog();
+                            },
+                            child: _buildWeightChip(
+                              label: "مخصص ✏️",
+                              isSelected: isCustomSelected,
+                              isCustom: true,
+                            ),
+                          );
+                        }
+
+                        // الأزرار العادية
+                        final weightVal = _quickWeights[index];
+                        final bool isSelected = _currentWeight == weightVal;
+                        final String label = _getWeightLabel(weightVal);
+
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() => _currentWeight = weightVal);
+                            HapticFeedback.lightImpact();
+                          },
+                          child: _buildWeightChip(label: label, isSelected: isSelected),
+                        );
+                      },
+                    ),
+                  ),
+                  // ✨✨✨ نهاية القسم ✨✨✨
+
+                  const SizedBox(height: 25),
+                  const Divider(),
+                  const Text("الوصف", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.foodItem.description,
+                    style: TextStyle(color: Colors.grey.shade700, height: 1.5, fontSize: 15),
+                  ),
+                  const SizedBox(height: 100),
+                ],
+              ),
+            ),
           ),
-        ]),
+        ],
       ),
 
-      // ✨ --- [تم تعديل هذا القسم بالكامل] ---
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(16.0),
+      // الزر السفلي العائم
+      bottomNavigationBar: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))],
+        ),
         child: isDeliverable
-        // 1. في حال كان المنتج متاحاً (اعرض الزر)
-            ? ElevatedButton.icon(
-          icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
-          label: const Text("إضافة إلى السلة", style: TextStyle(color: Colors.white, fontSize: 18)),
-          onPressed: () => Provider.of<CartProvider>(context, listen: false).addToCart(foodItem, context),
-          style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), backgroundColor: Theme.of(context).primaryColor),
-        )
-        // 2. في حال كان مغلقاً (اعرض الرسالة كما في صورتك)
-            : Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade200,
-            borderRadius: BorderRadius.circular(30),
+            ? ElevatedButton(
+          onPressed: () {
+            // ✅ إضافة المنتج مع الوزن المختار للسلة
+            Provider.of<CartProvider>(context, listen: false).addToCart(
+                widget.foodItem,
+                context,
+                weight: _currentWeight
+            );
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Theme.of(context).primaryColor,
+            padding: const EdgeInsets.symmetric(vertical: 15),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            elevation: 2,
           ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.shopping_bag_outlined, color: Colors.white),
+              const SizedBox(width: 10),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text("إضافة للسلة", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  Text(
+                    "$formattedPrice", // السعر النهائي
+                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.9)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        )
+            : Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(15)),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                "ليس متاح الآن",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.red.shade700,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              if (restaurant != null) // اعرض الأوقات فقط إذا وجدنا المطعم
+              Text("غير متاح حالياً", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red.shade700)),
+              if (restaurant != null)
                 Text(
-                  "سيكون متاحاً $openTime - $closeTime",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w500,
-                    fontSize: 14,
-                  ),
+                  "يفتح ${restaurant.autoOpenTime}",
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
             ],
           ),
         ),
       ),
-      // --- [نهاية التعديل] ---
+    );
+  }
+
+  // ✨ دالة بناء تصميم الزر (Chip)
+  Widget _buildWeightChip({required String label, required bool isSelected, bool isCustom = false}) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: isSelected ? Theme.of(context).primaryColor : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isSelected ? Theme.of(context).primaryColor : Colors.grey.shade300,
+            width: 1.5
+        ),
+        boxShadow: isSelected ? [
+          BoxShadow(color: Theme.of(context).primaryColor.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))
+        ] : [],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+                color: isSelected ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.bold,
+                fontSize: 15
+            ),
+          ),
+          if (!isCustom) // إضافة كلمة كغم للأرقام فقط
+            Text(
+              " خاص للخضروات والفواكهة كغم",
+              style: TextStyle(
+                  color: isSelected ? Colors.white70 : Colors.grey,
+                  fontSize: 11
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -4605,7 +4847,6 @@ class _CartScreenState extends State<CartScreen> {
         return StatefulBuilder(builder: (context, setDialogState) {
 
           // --- دالة جلب الموقع فقط (بدون تغيير السعر) ---
-          // سنحتفظ بجلب الموقع لأغراض توجيه السائق، لكن لن يؤثر على السعر
           Future<void> fetchLocationForDriver() async {
             try {
               bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -4712,6 +4953,22 @@ class _CartScreenState extends State<CartScreen> {
 
                   setDialogState(() => isSubmitting = true);
                   try {
+                    // 🔥🔥🔥 بداية التعديل: جلب معرف المنطقة ومعرف المتجر 🔥🔥🔥
+
+                    // 1. جلب معرف المنطقة المحفوظ
+                    final prefs = await SharedPreferences.getInstance();
+                    final int? regionId = prefs.getInt('miswak_area_id');
+
+                    // 2. جلب معرف المتجر (المسواك) من أول عنصر في السلة
+                    // ملاحظة: نفترض هنا أن السلة تحتوي على منتجات من متجر واحد (مسواك واحد)
+                    // الـ categoryId في FoodItem يمثل معرف المتجر (Parent ID)
+                    int? storeId;
+                    if (cart.items.isNotEmpty) {
+                      storeId = cart.items.first.categoryId;
+                    }
+
+                    // 🔥🔥🔥 نهاية التعديل: التجهيز للإرسال 🔥🔥🔥
+
                     final createdOrder = await _apiService.submitOrder(
                         name: _nameController.text,
                         phone: _phoneController.text,
@@ -4719,7 +4976,11 @@ class _CartScreenState extends State<CartScreen> {
                         cartItems: cart.items,
                         couponCode: cart.appliedCoupon,
                         position: _capturedPosition, // نرسل الموقع إذا تم جلبه بنجاح
-                        deliveryFee: _deliveryFee // السعر الثابت (1000)
+                        deliveryFee: _deliveryFee, // السعر الثابت (1000)
+
+                        // ✅ تمرير المتغيرات الجديدة للـ API
+                        restaurantId: storeId,
+                        regionId: regionId
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -4775,7 +5036,9 @@ class _CartScreenState extends State<CartScreen> {
         });
       },
     );
-  } Widget _buildCartItemCard(
+  }
+
+  Widget _buildCartItemCard(
       BuildContext context, CartProvider cart, FoodItem item) {
     return Card(
         margin: const EdgeInsets.only(bottom: 15),
@@ -4882,6 +5145,7 @@ class _CartScreenState extends State<CartScreen> {
         ]));
   }
 }
+
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
   @override
