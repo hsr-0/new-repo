@@ -2616,7 +2616,7 @@ class _TeamLeaderRewardsScreenState extends State<TeamLeaderRewardsScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 5.0),
                   child: const Text(
-                    "يرجى تسويتها لتجنب توقف الحساب",
+                    "يرجى تسويتهاعند الوصول الى 50 الف ",
                     style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
