@@ -56,8 +56,6 @@ class _MedicalHomeScreenState extends State<MedicalHomeScreen> {
           doctors = doctorsData;
           isLoading = false;
         });
-      } else {
-        throw Exception('Failed to load doctors: ${response.statusCode}');
       }
     } catch (e) {
       print('Error: $e');
@@ -65,7 +63,7 @@ class _MedicalHomeScreenState extends State<MedicalHomeScreen> {
         isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('صيانة في هذا القسيم يمكنك الحجز عبر الرقم 07854076931: ${e.toString()}')),
+        SnackBar(content: Text('قريبا ${e.toString()}')),
       );
     }
   }
@@ -143,7 +141,7 @@ class _MedicalHomeScreenState extends State<MedicalHomeScreen> {
           children: [
             Icon(Icons.error_outline, size: 50, color: Colors.grey),
             SizedBox(height: 16),
-            Text('توجد صيانا يمكمك الحجز عبر الواتساب 07754076931 ً'),
+            Text('قريبا '),
             SizedBox(height: 16),
             ElevatedButton(
               onPressed: fetchDoctors,

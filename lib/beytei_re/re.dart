@@ -36,6 +36,9 @@ const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
 const String MISWAK_URL = 'https://beytei.com';    // 🔥 سيرفر المسواك (جديد)
+const String TAXI_URL = 'https://banner.beytei.com'; // 🚕 تكسي )
+
+
 
 class AppConstants {
 
@@ -82,11 +85,14 @@ class NavigationProvider with ChangeNotifier {
 class AuthProvider with ChangeNotifier {
   String? _token;       // توكن سيرفر المطاعم (re.beytei.com)
   String? _miswakToken; // 🔥 توكن سيرفر المسواك (beytei.com)
+  String? _taxiToken;   // 🚕 توكن سيرفر التاكسي (banner.beytei.com)
   String? _userRole;    // 'owner' أو 'leader'
   bool _isLoading = true;
 
+  // Getters
   String? get token => _token;
-  String? get miswakToken => _miswakToken; // Getter جديد للوصول لتوكن المسواك
+  String? get miswakToken => _miswakToken;
+  String? get taxiToken => _taxiToken; // Getter جديد للتاكسي
   String? get userRole => _userRole;
   bool get isLoading => _isLoading;
 
@@ -97,31 +103,41 @@ class AuthProvider with ChangeNotifier {
     _checkLoginStatus();
   }
 
+  // استرجاع البيانات عند فتح التطبيق
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('jwt_token');
-    _miswakToken = prefs.getString('miswak_jwt_token'); // 🔥 استرجاع توكن المسواك
+    _miswakToken = prefs.getString('miswak_jwt_token');
+    _taxiToken = prefs.getString('taxi_jwt_token'); // 🔥 استرجاع توكن التاكسي
     _userRole = prefs.getString('user_role');
     _isLoading = false;
     notifyListeners();
   }
 
-  // 🔥 دالة تسجيل الدخول الموحدة (المعدلة)
+  // 🔥 دالة تسجيل الدخول الموحدة (المطورة)
   Future<bool> login(String username, String password, String role, {String? restaurantLat, String? restaurantLng}) async {
     final authService = AuthService();
+    print("🚀 [AuthProvider] بدء تسجيل الدخول بصلاحية: $role");
 
     // 1. محاولة تسجيل الدخول في سيرفر المطاعم (الأساسي للجميع)
-    // ملاحظة: نستخدم loginToServer بدلاً من loginRestaurantOwner لمرونة الرابط
     _token = await authService.loginToServer(BEYTEI_URL, username, password);
 
-    // 2. إذا كان المستخدم "تيم ليدر"، نحاول تسجيل الدخول في سيرفر المسواك أيضاً
+    // 2. إذا كان المستخدم "تيم ليدر"، نحاول تسجيل الدخول في السيرفرات الأخرى
     if (role == 'leader') {
+      // أ) سيرفر المسواك
       try {
         _miswakToken = await authService.loginToServer(MISWAK_URL, username, password);
-        print("✅ تم تسجيل دخول التيم ليدر في سيرفر المسواك بنجاح");
+        if (_miswakToken != null) print("✅ تم تسجيل دخول المسواك");
       } catch (e) {
-        print("⚠️ فشل تسجيل الدخول في سيرفر المسواك: $e");
-        // لا نوقف العملية، قد يكون الخطأ مؤقتاً، يكفي دخول المطاعم حالياً
+        print("⚠️ فشل دخول المسواك: $e");
+      }
+
+      // ب) 🚕 سيرفر التاكسي (الجديد)
+      try {
+        _taxiToken = await authService.loginToTaxiServer(username, password);
+        if (_taxiToken != null) print("✅ تم تسجيل دخول التاكسي");
+      } catch (e) {
+        print("⚠️ فشل دخول التاكسي: $e");
       }
     }
 
@@ -133,16 +149,21 @@ class AuthProvider with ChangeNotifier {
       await prefs.setString('jwt_token', _token!);
       await prefs.setString('user_role', role);
 
-      // 🔥 حفظ توكن المسواك إن وجد
+      // حفظ توكن المسواك إن وجد
       if (_miswakToken != null) {
         await prefs.setString('miswak_jwt_token', _miswakToken!);
       }
 
-      // 🔥 تسجيل جهاز التيم ليدر في السيرفرين لاستقبال الإشعارات من الجهتين
-      // نستخدم الدالة الجديدة registerDeviceTokenDual الموجودة في AuthService
-      await authService.registerDeviceTokenDual(_token, _miswakToken);
+      // 🔥 حفظ توكن التاكسي إن وجد
+      if (_taxiToken != null) {
+        await prefs.setString('taxi_jwt_token', _taxiToken!);
+      }
 
-      // حفظ الإحداثيات (للمطاعم فقط عادةً)
+      // 🔥 تسجيل جهاز التيم ليدر في السيرفرات الثلاثة (Triple Registration)
+      // نمرر التوكنات الثلاثة لضمان وصول الإشعارات من أي مصدر
+      await authService.registerDeviceTokenTriple(_token, _miswakToken, _taxiToken);
+
+      // حفظ الإحداثيات (للمطاعم فقط)
       if (restaurantLat != null && restaurantLng != null) {
         await prefs.setDouble('restaurant_lat', double.tryParse(restaurantLat) ?? 0.0);
         await prefs.setDouble('restaurant_lng', double.tryParse(restaurantLng) ?? 0.0);
@@ -156,28 +177,37 @@ class AuthProvider with ChangeNotifier {
     return false;
   }
 
+  // تسجيل الخروج
   Future<void> logout(BuildContext context) async {
     final authService = AuthService();
 
-    // تسجيل الخروج من السيرفر (إلغاء التوكن إن أمكن)
+    // إرسال طلب الخروج للسيرفر
     await authService.logout();
 
+    // تصفير المتغيرات
     _token = null;
-    _miswakToken = null; // تصفير المتغير
+    _miswakToken = null;
+    _taxiToken = null; // تصفير التاكسي
     _userRole = null;
 
     // مسح البيانات من الذاكرة المحلية
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('jwt_token');
-    await prefs.remove('miswak_jwt_token'); // 🔥 حذف توكن المسواك
+    await prefs.remove('miswak_jwt_token');
+    await prefs.remove('taxi_jwt_token'); // 🔥 حذف توكن التاكسي من الذاكرة
     await prefs.remove('user_role');
 
+    // تنظيف البيانات من البروفايدرات الأخرى إذا كان السياق متاحاً
     if (context.mounted) {
-      // تنظيف البيانات من البروفايدرات الأخرى
-      Provider.of<CustomerProvider>(context, listen: false).clearData();
-      Provider.of<RestaurantSettingsProvider>(context, listen: false).clearData();
-      // يمكن إضافة تنظيف لبيانات التيم ليدر هنا إذا لزم الأمر
+      // تنظيف بيانات المطاعم والزبائن (اختياري حسب هيكلة تطبيقك)
+      try {
+        Provider.of<CustomerProvider>(context, listen: false).clearData();
+        Provider.of<RestaurantSettingsProvider>(context, listen: false).clearData();
+      } catch (e) {
+        print("Note: Could not clear other providers (safe to ignore on logout).");
+      }
     }
+
     notifyListeners();
   }
 }
@@ -2223,105 +2253,213 @@ class ApiService {
 }
 
 class AuthService {
-  // 🔥 الدالة المفقودة 1: تسجيل الدخول لأي سيرفر (مطاعم أو مسواك)
+  // 1. تسجيل الدخول للسيرفرات القياسية (مطاعم + مسواك)
+  // يعتمد على إضافة JWT Auth القياسية
   Future<String?> loginToServer(String baseUrl, String username, String password) async {
     try {
-      print("Testing login to: $baseUrl");
+      print("🔵 [Auth] محاولة الدخول إلى السيرفر: $baseUrl");
       final response = await http.post(
           Uri.parse('$baseUrl/wp-json/jwt-auth/v1/token'),
           headers: {'Content-Type': 'application/json'},
-          body: json.encode({'username': username, 'password': password})
+          body: json.encode({
+            'username': username,
+            'password': password
+          })
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        print("✅ [Auth] نجح الدخول إلى ($baseUrl)");
         return data['token'];
       }
+
+      print("❌ [Auth] فشل الدخول ($baseUrl): كود ${response.statusCode} - ${response.body}");
       return null;
     } catch (e) {
-      print("Login Error ($baseUrl): $e");
+      print("⚠️ [Auth] خطأ اتصال ($baseUrl): $e");
       return null;
     }
   }
 
-  // 🔥 الدالة المفقودة 2: تسجيل الجهاز في السيرفرين معاً
-  Future<void> registerDeviceTokenDual(String? restToken, String? miswakToken) async {
-    String? fcmToken = await FirebaseMessaging.instance.getToken();
-    if (fcmToken == null) return;
+  // 2. 🔥 [جديد] تسجيل الدخول لسيرفر التاكسي
+  // يعتمد على Endpoint مخصص: /taxi-auth/v1/login
+  Future<String?> loginToTaxiServer(String username, String password) async {
+    try {
+      print("🚕 [Taxi Auth] محاولة الدخول لسيرفر التاكسي...");
 
-    // الاشتراك في القنوات العامة
-    await FirebaseMessaging.instance.subscribeToTopic('all_users');
+      // ملاحظة: نرسل 'username' في حقل 'phone_number' لأن نظام التاكسي يعتمد على الهاتف
+      final response = await http.post(
+          Uri.parse('$TAXI_URL/wp-json/taxi-auth/v1/login'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'phone_number': username,
+            'password': password
+          })
+      ).timeout(const Duration(seconds: 15));
 
-    String platform = Platform.isAndroid ? 'android' : 'ios';
-    Map<String, dynamic> body = {'token': fcmToken, 'platform': platform};
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['token'] != null) {
+          print("✅ [Taxi Auth] نجح دخول التاكسي! Token received.");
+          return data['token'];
+        }
+      }
 
-    // 1. إرسال لسيرفر المطاعم (إذا وجد التوكن)
-    if (restToken != null) {
-      try {
-        await http.post(
-          Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/register-device'),
-          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $restToken'},
-          body: json.encode(body),
+      print("❌ [Taxi Auth] فشل الدخول: ${response.body}");
+      return null;
+    } catch (e) {
+      print("⚠️ [Taxi Auth] خطأ اتصال: $e");
+      return null;
+    }
+  }
+
+  // 3. 🔥 [تحديث] تسجيل الجهاز في السيرفرات الثلاثة (Triple Registration)
+  // هذه الدالة تضمن وصول الإشعارات من أي جهة (مطعم، مسواك، تكسي)
+  Future<void> registerDeviceTokenTriple(String? restToken, String? miswakToken, String? taxiToken) async {
+    try {
+      String? fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken == null) {
+        print("⚠️ [FCM] لم يتم العثور على توكن الجهاز (FCM Token is null).");
+        return;
+      }
+
+      print("🔔 [FCM] جاري تسجيل الجهاز... (Token: ${fcmToken.substring(0, 15)}...)");
+
+      // الاشتراك في القنوات العامة
+      await FirebaseMessaging.instance.subscribeToTopic('all_users');
+
+      String platform = Platform.isAndroid ? 'android' : 'ios';
+      Map<String, dynamic> standardBody = {'token': fcmToken, 'platform': platform};
+
+      // أ) سيرفر المطاعم (BEYTEI_URL)
+      if (restToken != null) {
+        await _sendTokenRequest(
+            BEYTEI_URL,
+            '/wp-json/restaurant-app/v1/register-device',
+            restToken,
+            standardBody,
+            "مطاعم"
         );
-        print("✅ تم تفعيل إشعارات المطاعم");
-      } catch (e) { print("خطأ إشعارات المطاعم: $e"); }
-    }
+      }
 
-    // 2. إرسال لسيرفر المسواك (إذا وجد التوكن - للتيم ليدر)
-    if (miswakToken != null) {
-      try {
-        // لاحظ: نستخدم الـ namespace الجديد miswak-app/v1
-        await http.post(
-          Uri.parse('$MISWAK_URL/wp-json/restaurant-app/v1/register-device'), // ✅ توحيد المسار
-
-
-          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $miswakToken'},
-          body: json.encode(body),
+      // ب) سيرفر المسواك (MISWAK_URL)
+      if (miswakToken != null) {
+        await _sendTokenRequest(
+            MISWAK_URL,
+            '/wp-json/restaurant-app/v1/register-device',
+            miswakToken,
+            standardBody,
+            "مسواك"
         );
-        print("✅ تم تفعيل إشعارات المسواك");
-      } catch (e) { print("خطأ إشعارات المسواك: $e"); }
+      }
+
+      // ج) 🔥 سيرفر التاكسي (TAXI_URL)
+      // ملاحظة: مسار التاكسي مختلف قليلاً ويطلب مفتاح 'fcm_token'
+      if (taxiToken != null) {
+        await _sendTokenRequest(
+            TAXI_URL,
+            '/wp-json/taxi-auth/v1/update-fcm-token',
+            taxiToken,
+            {'fcm_token': fcmToken}, // المفتاح في التاكسي هو fcm_token
+            "تاكسي"
+        );
+      }
+
+    } catch (e) {
+      print("⚠️ [FCM] خطأ عام في عملية التسجيل: $e");
     }
   }
 
-  // الدالة القديمة (نحتفظ بها للتوافق إذا تم استدعاؤها من مكان آخر)
-  Future<String?> loginRestaurantOwner(String username, String password) async {
-    return loginToServer(BEYTEI_URL, username, password);
-  }
+  // دالة مساعدة لإرسال الطلب (لتقليل تكرار الكود)
+  Future<void> _sendTokenRequest(String baseUrl, String path, String token, Map body, String serverName) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl$path'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token'
+        },
+        body: json.encode(body),
+      ).timeout(const Duration(seconds: 10));
 
-  // الدالة القديمة لتسجيل الجهاز (للمطاعم فقط)
-  Future<void> registerDeviceToken({int? areaId}) async {
-    // يمكنك تركها كما هي أو توجيهها للدالة الجديدة
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token != null) {
-      await registerDeviceTokenDual(token, null);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        print("✅ [FCM] تم حفظ التوكن في سيرفر ($serverName)");
+      } else {
+        print("🔸 [FCM] رد غير متوقع من ($serverName): ${response.statusCode}");
+      }
+    } catch (e) {
+      print("❌ [FCM] فشل الاتصال بسيرفر ($serverName): $e");
     }
   }
 
-  // تسجيل الخروج
+  // 4. تسجيل الخروج الكامل
   Future<void> logout() async {
+    print("👋 [Auth] جاري تسجيل الخروج وتنظيف البيانات...");
+
     final prefs = await SharedPreferences.getInstance();
     final jwtToken = prefs.getString('jwt_token');
 
+    // محاولة إخبار السيرفر الرئيسي بتسجيل الخروج (اختياري)
     if (jwtToken != null) {
       try {
         await http.post(
           Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/unregister-device'),
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $jwtToken'},
-        ).timeout(const Duration(seconds: 5));
-      } catch (e) { print("Failed to unregister device: $e"); }
+        ).timeout(const Duration(seconds: 3));
+      } catch (e) {
+        print("⚠️ فشل إرسال طلب الخروج للسيرفر: $e");
+      }
     }
 
-    await FirebaseMessaging.instance.deleteToken();
+    // حذف التوكن من الفايربيس (اختياري، يفضل تركه لعدم فقدان الإشعارات عند الدخول مرة أخرى بسرعة)
+    // await FirebaseMessaging.instance.deleteToken();
+
+    // تنظيف الكاش والبيانات المحلية
     final cacheService = CacheService();
     await cacheService.clearAllCache();
 
-    await prefs.remove('jwt_token');
-    await prefs.remove('miswak_jwt_token'); // حذف توكن المسواك
+    await prefs.remove('jwt_token');       // مطاعم
+    await prefs.remove('miswak_jwt_token'); // مسواك
+    await prefs.remove('taxi_jwt_token');   // تكسي
+    await prefs.remove('user_role');
     await prefs.remove('selectedAreaId');
     await prefs.remove('selectedAreaName');
+
+    print("✅ [Auth] تم تسجيل الخروج بنجاح.");
+  }
+
+  // --- دوال للتوافق مع الكود القديم (Legacy Support) ---
+
+  Future<String?> loginRestaurantOwner(String username, String password) async {
+    return loginToServer(BEYTEI_URL, username, password);
+  }
+
+  Future<void> registerDeviceToken({int? areaId}) async {
+    // هذه الدالة تستخدمها شاشة اختيار المنطقة للزوار
+    // سنقوم بتسجيل التوكن في سيرفر المطاعم فقط
+    String? fcmToken = await FirebaseMessaging.instance.getToken();
+    if (fcmToken != null) {
+      Map<String, dynamic> body = {
+        'token': fcmToken,
+        'platform': Platform.isAndroid ? 'android' : 'ios',
+        if (areaId != null) 'area_id': areaId
+      };
+
+      // نرسل الطلب بدون توكن (للزوار) أو نتركه كما هو في السيرفر
+      try {
+        await http.post(
+          Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/register-device'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode(body),
+        );
+      } catch (e) {
+        print("Error registering guest token: $e");
+      }
+    }
   }
 }
+
+
 class TeamLeaderWallet {
   final double myBalance; // الرصيد المتاح
   final double liability; // الديون
@@ -7325,7 +7463,6 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
     );
   }
 }
-
 class RegionDashboardScreen extends StatefulWidget {
   final String token;
   final int areaId;
@@ -7341,6 +7478,7 @@ class RegionDashboardScreen extends StatefulWidget {
   @override
   State<RegionDashboardScreen> createState() => _RegionDashboardScreenState();
 }
+
 class _RegionDashboardScreenState extends State<RegionDashboardScreen> with SingleTickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   late TabController _tabController;
@@ -7368,7 +7506,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     });
   }
 
-  // دالة التحديث الذكي (تنتظر 2 ثانية لتجميع الإشعارات)
+  // دالة التحديث الذكي (تنتظر 25 ثانية لتجميع الإشعارات)
   void _triggerSmartRefresh() {
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
 
@@ -7383,7 +7521,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
   // دالة لتحميل البيانات وحفظها في المتغير
   void _loadData() {
     setState(() {
-      // 🔥 استخدام دالة الدمج الجديدة
+      // استخدام دالة الدمج الجديدة
       _ordersFuture = _fetchAllOrdersCombined();
     });
   }
@@ -7395,18 +7533,15 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     super.dispose();
   }
 
-  // 🔥🔥🔥 الدالة الجوهرية: دمج طلبات المطاعم والمسواك 🔥🔥🔥
+  // 🔥🔥🔥 الدالة الجوهرية: دمج طلبات المطاعم والمسواك فقط (التاكسي له تبويب منفصل) 🔥🔥🔥
   Future<List<UnifiedDeliveryOrder>> _fetchAllOrdersCombined() async {
     final auth = Provider.of<AuthProvider>(context, listen: false);
 
     // 1. طلبات المطاعم (من سيرفر re.beytei.com)
-    // نستخدم توكن المطاعم الممرر (widget.token)
     final restaurantFuture = _apiService.getOrdersByRegion(widget.areaId, widget.token);
 
     // 2. طلبات المسواك (من سيرفر beytei.com)
-    // نستخدم توكن المسواك المخزن في AuthProvider
     Future<List<UnifiedDeliveryOrder>> miswakFuture = Future.value([]);
-
     if (auth.miswakToken != null) {
       miswakFuture = _apiService.getMiswakOrdersByRegion(widget.areaId, auth.miswakToken!);
     }
@@ -7430,34 +7565,10 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     }
   }
 
-  // دالة مساعدة للاتصال
-  Future<void> _makePhoneCall(String phoneNumber) async {
-    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
-    } else {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن إجراء الاتصال")));
-    }
-  }
-
-  // دالة مساعدة لفتح الخريطة
-  void _openMap(String latStr, String lngStr, String title) {
-    try {
-      final double lat = double.parse(latStr);
-      final double lng = double.parse(lngStr);
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => InAppMapScreen(latitude: lat, longitude: lng, title: title),
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الإحداثيات غير صالحة")));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -7499,85 +7610,195 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
           ],
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          _loadData(); // تحديث يدوي عند السحب
-          await _ordersFuture;
-        },
-        child: FutureBuilder<List<UnifiedDeliveryOrder>>(
-          future: _ordersFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return Center(child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, size: 50, color: Colors.red),
-                  const SizedBox(height: 10),
-                  Text("حدث خطأ: ${snapshot.error}", textAlign: TextAlign.center),
-                  const SizedBox(height: 10),
-                  ElevatedButton(onPressed: _loadData, child: const Text("إعادة المحاولة"))
-                ],
-              ));
-            }
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          // 1. تبويب الكل (يعرض مطاعم + مسواك)
+          _buildFutureOrdersList(type: 'all'),
 
-            final allOrders = snapshot.data ?? [];
-            if (allOrders.isEmpty) {
-              return ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  SizedBox(height: 200),
-                  Center(child: Text("المنطقة هادئة.. لا توجد طلبات نشطة حالياً 😴")),
-                ],
-              );
-            }
+          // 2. تبويب المطاعم
+          _buildFutureOrdersList(type: 'restaurant'),
 
-            // الفلترة حسب النوع
-            final restaurantOrders = allOrders.where((o) => o.sourceType == 'restaurant').toList();
-            final marketOrders = allOrders.where((o) => o.sourceType == 'market').toList();
-            final taxiOrders = allOrders.where((o) => o.sourceType == 'taxi').toList();
+          // 3. تبويب المسواك
+          _buildFutureOrdersList(type: 'market'),
 
-            return TabBarView(
-              controller: _tabController,
-              children: [
-                _buildOrdersList(allOrders),
-                _buildOrdersList(restaurantOrders),
-                _buildOrdersList(marketOrders),
-                _buildOrdersList(taxiOrders),
-              ],
-            );
-          },
-        ),
+          // 4. 🔥 تبويب التاكسي (منفصل ويستخدم التوكن الخاص به)
+          TaxiLeaderTab(token: auth.taxiToken),
+        ],
       ),
     );
   }
 
-  Widget _buildOrdersList(List<UnifiedDeliveryOrder> orders) {
-    if (orders.isEmpty) {
-      return const Center(child: Text("لا توجد طلبات في هذا القسم"));
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: orders.length,
-      itemBuilder: (context, index) {
-        // ✅ استخدام البطاقة الذكية
-        return TeamLeaderOrderCard(
-          order: orders[index],
-          token: widget.token,
-          onActionComplete: () {
-            // إعادة تحميل البيانات بعد التدخل الناجح
-            _loadData();
-          },
-        );
+  // دالة مساعدة لبناء القوائم (مطاعم ومسواك) لتجنب التكرار
+  Widget _buildFutureOrdersList({required String type}) {
+    return RefreshIndicator(
+      onRefresh: () async {
+        _loadData();
+        await _ordersFuture;
       },
+      child: FutureBuilder<List<UnifiedDeliveryOrder>>(
+        future: _ordersFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 50, color: Colors.red),
+                const SizedBox(height: 10),
+                Text("حدث خطأ: ${snapshot.error}", textAlign: TextAlign.center),
+                const SizedBox(height: 10),
+                ElevatedButton(onPressed: _loadData, child: const Text("إعادة المحاولة"))
+              ],
+            ));
+          }
+
+          List<UnifiedDeliveryOrder> orders = snapshot.data ?? [];
+
+          // فلترة حسب النوع المختار
+          if (type != 'all') {
+            orders = orders.where((o) => o.sourceType == type).toList();
+          }
+
+          if (orders.isEmpty) {
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                SizedBox(height: 200),
+                Center(child: Text("لا توجد طلبات في هذا القسم حالياً 😴")),
+              ],
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: orders.length,
+            itemBuilder: (context, index) {
+              return TeamLeaderOrderCard(
+                order: orders[index],
+                token: widget.token,
+                onActionComplete: () => _loadData(),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
+class TaxiLeaderTab extends StatefulWidget {
+  final String? token;
+  const TaxiLeaderTab({super.key, required this.token});
 
+  @override
+  State<TaxiLeaderTab> createState() => _TaxiLeaderTabState();
+}
 
+class _TaxiLeaderTabState extends State<TaxiLeaderTab> {
+  bool _isLoading = true;
+  List<dynamic> _rides = [];
+  String _regionName = "";
 
+  @override
+  void initState() {
+    super.initState();
+    _loadTaxiData();
+  }
+
+  Future<void> _loadTaxiData() async {
+    if (widget.token == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$TAXI_URL/wp-json/taxi/v2/leader/dashboard-rides'), // الرابط الجديد
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+
+      print("🚕 [Taxi Tab] Response: ${response.body}");
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (mounted) {
+          setState(() {
+            _rides = data['rides'] ?? [];
+            _regionName = data['region'] ?? "";
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      print("❌ Error loading taxi data: $e");
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.token == null) return const Center(child: Text("فشل المصادقة مع سيرفر التاكسي"));
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+
+    if (_rides.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Icon(Icons.local_taxi, size: 60, color: Colors.grey),
+            SizedBox(height: 10),
+            Text("لا توجد طلبات تكسي نشطة في منطقتك"),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadTaxiData,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: _rides.length,
+        itemBuilder: (context, index) {
+          final ride = _rides[index];
+          return Card(
+            elevation: 3,
+            margin: const EdgeInsets.only(bottom: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.amber.shade100,
+                child: const Icon(Icons.local_taxi, color: Colors.black87),
+              ),
+              title: Text("${ride['price']} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 5),
+                  Text("من: ${ride['pickup_name']}"),
+                  Text("إلى: ${ride['destination_name']}"),
+                  const SizedBox(height: 5),
+                  Row(
+                    children: [
+                      Icon(Icons.person, size: 14, color: Colors.grey[600]),
+                      const SizedBox(width: 4),
+                      Text("السائق: ${ride['driver_name']}", style: TextStyle(color: ride['is_accepted'] ? Colors.blue : Colors.grey)),
+                    ],
+                  ),
+                  Text("الحالة: ${ride['status']}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              trailing: ride['is_accepted']
+                  ? const Icon(Icons.check_circle, color: Colors.green)
+                  : const Icon(Icons.hourglass_empty, color: Colors.orange),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
 
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
   @override

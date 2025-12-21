@@ -303,25 +303,42 @@ class ApiService {
   // =========================================================
 
   // ✅ دالة تحديث الموقع الذكية (كل 30 ثانية و 150 متر)
+// داخل class ApiService
+
   static Future<void> updateDriverLocation(String token, LatLng location) async {
     final now = DateTime.now();
 
-    // شرط الوقت: 30 ثانية
+    // 1. التحقق من فرق الوقت (30 ثانية على الأقل)
     final bool timeElapsed = _lastLocationUpdateTime == null ||
-        now.difference(_lastLocationUpdateTime!).inSeconds >= 60;
+        now.difference(_lastLocationUpdateTime!).inSeconds >= 30; // جعلتها 30 ليكون التتبع أدق
 
+    // 2. التحقق من فرق المسافة (اختياري لكن مفيد: مثلاً 50 متر)
+    bool distanceMoved = true;
+    if (_lastSentLocation != null) {
+      final distance = geolocator.Geolocator.distanceBetween(
+          _lastSentLocation!.latitude, _lastSentLocation!.longitude,
+          location.latitude, location.longitude
+      );
+      if (distance < 100) distanceMoved = false; // لم يتحرك مسافة كافية
+    }
 
+    // 🔥 التصحيح: إذا لم يمر الوقت الكافي ولم يتحرك مسافة كبيرة، توقف ولا ترسل للسيرفر
+    if (!timeElapsed && !distanceMoved) {
+      return;
+    }
 
     try {
       await _post('/taxi/v2/driver/update-location', token, {'lat': location.latitude, 'lng': location.longitude});
+
+      // تحديث المؤقتات
       _lastLocationUpdateTime = now;
       _lastSentLocation = location;
-      debugPrint("📍 تم تحديث موقع السائق (اقتصادي)");
+
+      debugPrint("📍 تم تحديث موقع السائق على السيرفر (اقتصادي)");
     } catch (e) {
       debugPrint("Failed to update driver location: $e");
     }
   }
-
   static Future<void> setDriverActiveStatus(String token, bool isActive) async {
     try {
       await _post('/taxi/v2/driver/set-active-status', token, {'is_active': isActive});
