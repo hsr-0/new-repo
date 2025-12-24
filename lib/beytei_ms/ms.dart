@@ -1198,7 +1198,7 @@ class NotificationService {
     importance: Importance.max,
     playSound: true,
     // ✨ 1. تحديد الصوت للقناة (للأندرويد 8 وما فوق)
-    sound: RawResourceAndroidNotificationSound('woo_sound'),
+    sound: RawResourceAndroidNotificationSound('woo_sound.mp3'),
     enableVibration: true,
   );
 

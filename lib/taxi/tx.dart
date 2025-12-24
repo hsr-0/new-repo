@@ -3437,21 +3437,22 @@ class RideInfoCard extends StatelessWidget {
 }
 
 
-
-// =============================================================================
-// DriverCurrentRideScreen (with Auto Route Drawing)
-// =============================================================================
 class DriverCurrentRideScreen extends StatefulWidget {
   final Map<String, dynamic> initialRide;
   final AuthResult authResult;
   final VoidCallback onRideFinished;
-  const DriverCurrentRideScreen({super.key, required this.initialRide, required this.authResult, required this.onRideFinished});
+
+  const DriverCurrentRideScreen({
+    super.key,
+    required this.initialRide,
+    required this.authResult,
+    required this.onRideFinished,
+  });
+
   @override
   State<DriverCurrentRideScreen> createState() => _DriverCurrentRideScreenState();
 }
 
-
-// ============== ✂️✂️✂️  ابدأ النسخ من هنا ✂️✂️✂️ ==============
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide;
   bool _isLoading = false;
@@ -3462,6 +3463,18 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   double _distanceToPickup = 0.0;
   double _driverBearing = 0.0;
   double _previousDriverBearing = 0.0;
+
+  // ✅ دالة مساعدة: تحويل آمن للأرقام لمنع الكراش
+  double _safeParse(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    if (value is String) {
+      if (value.isEmpty) return 0.0;
+      return double.tryParse(value) ?? 0.0;
+    }
+    return 0.0;
+  }
 
   @override
   void initState() {
@@ -3479,6 +3492,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   @override
   void dispose() {
     _positionStream?.cancel();
+    _mapController.dispose(); // تنظيف الكنترولر
     super.dispose();
   }
 
@@ -3487,20 +3501,28 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     if (!mounted) return;
     setState(() => _isLoading = true);
 
-    final pickupPoint = LatLng(
-      double.parse(_currentRide['pickup']['lat']),
-      double.parse(_currentRide['pickup']['lng']),
-    );
-
     try {
-      // أ) الصلاحيات
+      // ✅ 1. تحليل الإحداثيات بشكل آمن جداً
+      final pickupLat = _safeParse(_currentRide['pickup']['lat']);
+      final pickupLng = _safeParse(_currentRide['pickup']['lng']);
+
+      // إذا كانت الإحداثيات صفر، لا تكمل (بيانات خاطئة)
+      if (pickupLat == 0.0 || pickupLng == 0.0) {
+        debugPrint("⚠️ إحداثيات غير صالحة، تم إلغاء الرسم.");
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      final pickupPoint = LatLng(pickupLat, pickupLng);
+
+      // ✅ 2. التأكد من الصلاحيات
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!mounted || !hasPermission) {
         setState(() => _isLoading = false);
         return;
       }
 
-      // ب) الموقع الأولي
+      // ✅ 3. جلب موقع السائق الحالي
       geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(
           desiredAccuracy: geolocator.LocationAccuracy.high
       );
@@ -3512,19 +3534,24 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         _driverLocation = driverNowLocation;
       });
 
-      // ج) تحريك الكاميرا
+      // ✅ 4. تحريك الكاميرا بأمان
       _mapController.move(driverNowLocation, 15);
 
-      // د) رسم المسار (مرة واحدة فقط هنا)
-      await _getRoute(driverNowLocation, pickupPoint);
+      // ✅ 5. محاولة رسم المسار (داخل try منفصل لكي لا يوقف الشاشة إذا فشل النت)
+      try {
+        await _getRoute(driverNowLocation, pickupPoint);
+      } catch (routeError) {
+        debugPrint("⚠️ فشل رسم المسار (مشكلة نت أو API): $routeError");
+      }
 
-      // هـ) بدء التتبع
+      // ✅ 6. بدء التتبع
       _startDriverLocationTracking();
 
     } catch (e) {
+      debugPrint("❌ خطأ عام في تهيئة الشاشة: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('خطأ في التهيئة: ${e.toString()}'))
+            const SnackBar(content: Text('حدث خطأ أثناء تحميل الخريطة'))
         );
       }
     } finally {
@@ -3548,36 +3575,46 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       // حساب الزاوية (Bearing) لتدوير السيارة
       double newBearing = _driverBearing;
       if (_driverLocation != null) {
-        // تحديث الزاوية فقط إذا تحرك مسافة معقولة
-        if (geolocator.Geolocator.distanceBetween(_driverLocation!.latitude, _driverLocation!.longitude, newLocation.latitude, newLocation.longitude) > 5) {
+        final dist = geolocator.Geolocator.distanceBetween(
+            _driverLocation!.latitude, _driverLocation!.longitude,
+            newLocation.latitude, newLocation.longitude
+        );
+        // تحديث الزاوية فقط إذا تحرك مسافة معقولة لمنع اهتزاز الأيقونة
+        if (dist > 2) {
           newBearing = calculateBearing(_driverLocation!, newLocation);
         }
+      }
+
+      // حساب المسافة المتبقية
+      final pickupLat = _safeParse(_currentRide['pickup']['lat']);
+      final pickupLng = _safeParse(_currentRide['pickup']['lng']);
+
+      double distToPickup = 0.0;
+      if(pickupLat != 0.0 && pickupLng != 0.0) {
+        distToPickup = geolocator.Geolocator.distanceBetween(
+            newLocation.latitude, newLocation.longitude,
+            pickupLat, pickupLng
+        );
       }
 
       setState(() {
         _previousDriverBearing = _driverBearing;
         _driverLocation = newLocation;
         _driverBearing = newBearing;
-        _distanceToPickup = geolocator.Geolocator.distanceBetween(
-            newLocation.latitude, newLocation.longitude,
-            double.parse(_currentRide['pickup']['lat']),
-            double.parse(_currentRide['pickup']['lng'])
-        );
+        _distanceToPickup = distToPickup;
       });
 
-      // 🔥🔥🔥 السحر هنا 🔥🔥🔥
-      // نحن نستدعي الدالة، ولكن "ApiService" هو من يقرر الإرسال أو المنع
-      // بناءً على شرط الـ 30 ثانية والـ 150 متر الذي كتبناه سابقاً
+      // إرسال الموقع للسيرفر (ApiService يقرر متى يرسل بناءً على الوقت)
       ApiService.updateDriverLocation(widget.authResult.token, newLocation);
     });
   }
 
   // --- 3. رسم المسار ---
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // مفتاح ORS (تأكد أنه فعال)
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
 
-    if (orsApiKey.length < 50) return;
+    // التحقق من صحة المفتاح (بسيط)
+    if (orsApiKey.length < 20) return;
 
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
 
@@ -3587,6 +3624,8 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         final data = json.decode(response.body);
         final coordinates = data['features'][0]['geometry']['coordinates'] as List;
         setState(() => _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList());
+      } else {
+        debugPrint("ORS Error: ${response.body}");
       }
     } catch (e) {
       debugPrint("Route Error: $e");
@@ -3612,13 +3651,18 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           } else {
             setState(() => _currentRide = data['ride']);
 
-            // إذا بدأت الرحلة، نرسم المسار الجديد إلى الوجهة (مرة واحدة)
-            if (newStatus == 'ongoing' && _driverLocation != null && _currentRide['destination']?['lat'] != null) {
-              final destination = LatLng(
-                  double.parse(_currentRide['destination']['lat']),
-                  double.parse(_currentRide['destination']['lng'])
-              );
-              await _getRoute(_driverLocation!, destination);
+            // إذا بدأت الرحلة (ongoing)، نرسم المسار الجديد إلى الوجهة
+            if (newStatus == 'ongoing' && _driverLocation != null) {
+              final destLat = _safeParse(_currentRide['destination']?['lat']);
+              final destLng = _safeParse(_currentRide['destination']?['lng']);
+
+              if (destLat != 0.0 && destLng != 0.0) {
+                final destination = LatLng(destLat, destLng);
+                // محاولة رسم المسار الجديد
+                try {
+                  await _getRoute(_driverLocation!, destination);
+                } catch (_) {}
+              }
             }
           }
         } else {
@@ -3633,7 +3677,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   }
 
   Widget _buildActionButton() {
-    String status = _currentRide['status'];
+    String status = _currentRide['status'] ?? '';
     if (status == 'accepted') return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.hail), label: const Text('وصلت إلى موقع العميل'), onPressed: _isLoading ? null : () => _updateStatus('arrived_pickup'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white)));
     if (status == 'arrived_pickup') return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.navigation), label: const Text('بدء الرحلة إلى الوجهة'), onPressed: _isLoading ? null : () => _updateStatus('ongoing'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white)));
     if (status == 'ongoing') return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_circle), label: const Text('إنهاء الرحلة'), onPressed: _isLoading ? null : () => _updateStatus('completed'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white)));
@@ -3642,9 +3686,18 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
 
   @override
   Widget build(BuildContext context) {
-    LatLng pickupPoint = LatLng(double.parse(_currentRide['pickup']['lat']), double.parse(_currentRide['pickup']['lng']));
-    LatLng? destinationPoint = _currentRide['destination']?['lat'] != null ? LatLng(double.parse(_currentRide['destination']['lat']), double.parse(_currentRide['destination']['lng'])) : null;
-    String status = _currentRide['status'];
+    // استخدام التحليل الآمن للعرض أيضاً
+    final pickupLat = _safeParse(_currentRide['pickup']['lat']);
+    final pickupLng = _safeParse(_currentRide['pickup']['lng']);
+    final LatLng pickupPoint = (pickupLat != 0 && pickupLng != 0)
+        ? LatLng(pickupLat, pickupLng)
+        : const LatLng(33.3152, 44.3661); // بغداد كقيمة افتراضية لمنع الكراش
+
+    final destLat = _safeParse(_currentRide['destination']?['lat']);
+    final destLng = _safeParse(_currentRide['destination']?['lng']);
+    final LatLng? destinationPoint = (destLat != 0 && destLng != 0) ? LatLng(destLat, destLng) : null;
+
+    String status = _currentRide['status'] ?? 'unknown';
     final customerPhone = _currentRide['customer_phone'] as String?;
 
     return Scaffold(
@@ -3684,7 +3737,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: pickupPoint,
+              initialCenter: _driverLocation ?? pickupPoint, // استخدام موقع السائق أو نقطة الالتقاط
               initialZoom: 14.0,
               maxZoom: 18.0,
               minZoom: 10.0,
@@ -3759,10 +3812,18 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       ),
     );
   }
-}// =============================================================================
-// Customer Quick Ride Screen (with Improved Location Selection)
+}
 // =============================================================================
+
+
+
+
+// =============================================================================
+// Customer Quick Ride Screen (Updated Pricing Logic)
+// =============================================================================
+
 enum BookingStage { selectingPickup, selectingDestination, confirmingRequest }
+
 class QuickRideMapScreen extends StatefulWidget {
   final String token;
   final AuthResult authResult;
@@ -3778,6 +3839,7 @@ class QuickRideMapScreen extends StatefulWidget {
   @override
   State<QuickRideMapScreen> createState() => _QuickRideMapScreenState();
 }
+
 class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   Map<String, dynamic>? _activeRide;
@@ -3789,7 +3851,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Map<String, dynamic>? _destinationData;
   bool _isConfirmingRideDetails = false;
   List<dynamic> _pendingOffers = [];
-  String _selectedVehicleType = 'Car';
+  String _selectedVehicleType = 'Car'; // القيمة الافتراضية
 
   LatLng? _currentUserLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
@@ -3812,14 +3874,18 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     super.initState();
     _setupInitialLocation();
 
-    // 🔥 التعديل 1: تحديث السائقين المحيطين كل 60 ثانية فقط
+    // تحديث السائقين المحيطين
     _driversTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (_activeRide == null) _fetchActiveDrivers();
     });
+
+    // استماع للإشعارات للتحديث الفوري
+    rideListRefreshNotifier.addListener(_onNotificationRefresh);
   }
 
   @override
   void dispose() {
+    rideListRefreshNotifier.removeListener(_onNotificationRefresh);
     _statusTimer?.cancel();
     _driversTimer?.cancel();
     _liveTrackingTimer?.cancel();
@@ -3829,6 +3895,42 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       controller.dispose();
     }
     super.dispose();
+  }
+
+  void _onNotificationRefresh() {
+    if (_activeRide != null) {
+      debugPrint("🔔 تحديث حالة الرحلة بناءً على الإشعار...");
+      _fetchRideStatus();
+    }
+  }
+
+  // 🔥🔥🔥 دالة حساب السعر الجديدة 🔥🔥🔥
+  int _calculateSystemPrice(LatLng start, LatLng end) {
+    // 1. حساب المسافة بالكيلومتر
+    final distanceInMeters = geolocator.Geolocator.distanceBetween(
+        start.latitude, start.longitude,
+        end.latitude, end.longitude
+    );
+    double distanceInKm = distanceInMeters / 1000;
+
+    // 2. تحديد السعر الأساسي (لأول 3 كيلو)
+    double totalPrice = 0.0;
+
+    if (_selectedVehicleType == 'Tuktuk') {
+      totalPrice = 1000.0; // سعر التكتك لأول 3 كم
+    } else {
+      totalPrice = 2000.0; // سعر السيارة لأول 3 كم
+    }
+
+    // 3. إضافة التكلفة للمسافة الزائدة عن 3 كيلو
+    if (distanceInKm > 3.0) {
+      double extraDistance = distanceInKm - 3.0;
+      totalPrice += extraDistance * 500.0; // 500 دينار لكل كيلو إضافي
+    }
+
+    // 4. تقريب السعر لأقرب 250 دينار (لسهولة الدفع)
+    // مثال: 2100 تصبح 2250
+    return (totalPrice / 250).ceil() * 250;
   }
 
   Future<void> _setupInitialLocation() async {
@@ -3842,7 +3944,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       return;
     }
     try {
-      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high); // قللنا الدقة قليلاً للتوفير
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(desiredAccuracy: geolocator.LocationAccuracy.high);
       if (mounted) {
         final initialLocation = LatLng(position.latitude, position.longitude);
         setState(() {
@@ -3855,12 +3957,11 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع. يرجى تفعيل صلاحيات الموقع .')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع.')));
         setState(() => _isLoading = false);
       }
     }
 
-    // 🔥 التعديل 2: تقليل حساسية تحديث موقع الزبون (كل 50 متر)
     const locationSettings = geolocator.LocationSettings(
       accuracy: geolocator.LocationAccuracy.high,
       distanceFilter: 50,
@@ -3874,32 +3975,22 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _startLiveTracking(String rideId) {
     _liveTrackingTimer?.cancel();
-
-    // 🔥 التعديل 3: تتبع السائق كل 60 ثانية (توفير هائل)
-    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 60), (timer) async {
+    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
       if (_activeRide == null) {
         timer.cancel();
         return;
       }
-
-      // سيستخدم الكاش من ApiService إذا لم يتغير الموقع
       final newDriverLocation = await ApiService.getRideDriverLocation(widget.token, rideId);
-
       if (mounted && newDriverLocation != null) {
         double newBearing = _assignedDriverBearing;
         if (_assignedDriverLocation != null) {
           newBearing = calculateBearing(_assignedDriverLocation!, newDriverLocation);
         }
-
         setState(() {
           _previousAssignedDriverBearing = _assignedDriverBearing;
           _assignedDriverLocation = newDriverLocation;
           _assignedDriverBearing = newBearing;
         });
-
-        // 🛑 تم إيقاف رسم المسار المتكرر (توفير رصيد خرائط)
-        // final pickupPoint = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
-        // _getRoute(_assignedDriverLocation!, pickupPoint);
       }
     });
   }
@@ -3917,8 +4008,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Future<void> _getRoute(LatLng start, LatLng end) async {
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     if (orsApiKey.length < 50) return;
-
-    // لا ترسم إذا كان المسار موجوداً بالفعل
     if (_routeToCustomer.isNotEmpty) return;
 
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
@@ -3941,7 +4030,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       if (!mounted) return;
       final newDriversData = {for (var d in driversList) d['id'].toString(): d};
 
-      // منطق التحريك (Animation) كما هو
       for (var driverId in newDriversData.keys) {
         final oldDriver = _driversData[driverId];
         final newDriver = newDriversData[driverId];
@@ -3968,9 +4056,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _startStatusTimer() {
     _statusTimer?.cancel();
-
-    // 🔥 التعديل 4: التحقق من حالة الرحلة كل 60 ثانية
-    _statusTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
+    // ✅ تحديث كل 5 ثواني
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (!mounted || _activeRide == null) {
         timer.cancel();
         return;
@@ -4347,7 +4434,17 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       ),
     );
   }
+
   Widget _buildConfirmationSheet() {
+    // ✅ حساب السعر تلقائياً (بدلاً من إدخال الزبون)
+    int systemPrice = 0;
+    if (_pickupLocation != null && _destinationData != null) {
+      systemPrice = _calculateSystemPrice(
+          _pickupLocation!,
+          LatLng(_destinationData!['lat'], _destinationData!['lng'])
+      );
+    }
+
     return Card(
       margin: const EdgeInsets.all(12),
       elevation: 8,
@@ -4359,9 +4456,30 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             Row(children: [const Icon(Icons.my_location, color: Colors.green), const SizedBox(width: 8), Expanded(child: Text(_pickupLocation != null ? "من: موقعك المحدد" : "من: ...", style: const TextStyle(fontWeight: FontWeight.bold)))]),
             const Divider(),
             Row(children: [const Icon(Icons.flag_outlined, color: Colors.red), const SizedBox(width: 8), Expanded(child: Text("إلى: ${_destinationData?['name'] ?? 'وجهة محددة'}", style: const TextStyle(fontWeight: FontWeight.bold)))]),
-            const SizedBox(height: 12),
-            TextField(controller: _priceController, keyboardType: const TextInputType.numberWithOptions(decimal: false), decoration: const InputDecoration(labelText: 'السعر المعروض (الكروة)', prefixIcon: Icon(Icons.money))),
             const SizedBox(height: 15),
+
+            // ✅ عرض السعر المحسوب بدلاً من TextField
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.price_check, color: Colors.green),
+                  const SizedBox(width: 10),
+                  Text(
+                    "الكروة المقدرة: $systemPrice د.ع",
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
             Row(
               children: [
                 TextButton(onPressed: (){
@@ -4370,7 +4488,14 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
                   });
                 }, child: const Text("إلغاء")),
                 const SizedBox(width: 10),
-                Expanded(child: ElevatedButton(onPressed: _requestRide, child: const Text('اطلب الآن'))),
+                Expanded(child: ElevatedButton(
+                    onPressed: () {
+                      // ✅ تعيين السعر في الكنترولر ليتم إرساله للسيرفر
+                      _priceController.text = systemPrice.toString();
+                      _requestRide();
+                    },
+                    child: const Text('اطلب الآن')
+                )),
               ],
             ),
           ],

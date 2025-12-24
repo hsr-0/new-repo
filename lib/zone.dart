@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 class BeyteiZoneScreen extends StatefulWidget {
   const BeyteiZoneScreen({Key? key}) : super(key: key);
@@ -15,15 +14,15 @@ class BeyteiZoneScreen extends StatefulWidget {
 
 class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _spinAnimation;
+  late Animation<double> _spinAnimation; // الأنيميشن الرئيسي
 
   // --- المتغيرات الرئيسية ---
-  List<Map<String, dynamic>> _participants = []; // طلبات اليوم فقط (للقائمة)
-  List<Map<String, dynamic>> _weeklyParticipants = []; // جميع طلبات الأسبوع (للعجلة - كل طلب = فرصة)
+  List<Map<String, dynamic>> _participants = [];
+  List<Map<String, dynamic>> _weeklyParticipants = [];
 
   bool _shouldSpin = false;
-  String? _currentWinnerName;       // الفائز الذي يتم السحب عليه الآن
-  String? _previousWinnerName;      // الفائز السابق (يظل ظاهر طوال الأسبوع)
+  String? _currentWinnerName;
+  String? _previousWinnerName;
 
   bool _isResultShown = false;
   bool _isLoading = true;
@@ -43,11 +42,16 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
   void initState() {
     super.initState();
 
-    // إعداد حركة الدوران المستمر (Idle Animation)
     _controller = AnimationController(
       duration: const Duration(seconds: 20),
       vsync: this,
-    )..repeat();
+    );
+
+    // ✅ إصلاح الكراش: تهيئة أولية للأنيميشن بقيمة صفر حتى لا تكون null عند البناء
+    _spinAnimation = Tween<double>(begin: 0, end: 0).animate(_controller);
+
+    // تشغيل دوران بطيء (Idle) في البداية
+    _controller.repeat();
 
     _startCountdown();
     _loadDataWithCacheStrategy();
@@ -80,12 +84,12 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
       final response = await http.get(Uri.parse(_apiUrl)).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+        // ✅ إصلاح النصوص العربية: استخدام utf8.decode
+        final data = json.decode(utf8.decode(response.bodyBytes));
         _processData(data);
 
-        // حفظ الكاش
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('beytei_zone_data', response.body);
+        await prefs.setString('beytei_zone_data', response.body); // حفظ الخام
 
         final now = DateTime.now();
         final timeString = "${now.hour}:${now.minute.toString().padLeft(2, '0')}";
@@ -111,7 +115,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
     }
   }
 
-  // --- معالجة البيانات ---
   void _processData(Map<String, dynamic> data) {
     if (!mounted) return;
 
@@ -119,7 +122,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
     final List<dynamic> rawWeeklyParticipants = data['weekly_participants'] ?? [];
 
     setState(() {
-      // 1. قائمة اليوم (للعرض في الأسفل فقط)
       _participants = rawParticipants.map((item) {
         return {
           'name': item['name'],
@@ -128,7 +130,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
         };
       }).toList();
 
-      // 2. القائمة الأسبوعية (للعجلة فقط - تضاعف الفرص بتكرار الاسم)
       _weeklyParticipants = rawWeeklyParticipants.map((item) {
         return {
           'name': item['name'],
@@ -136,7 +137,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
         };
       }).toList();
 
-      // 3. بيانات الفائزين
       _shouldSpin = data['should_spin'] ?? false;
       _currentWinnerName = data['winner_name'];
       _previousWinnerName = data['previous_winner'];
@@ -149,29 +149,35 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
     }
   }
 
-  // --- منطق الدوران والسحب ---
+  // --- منطق الدوران والسحب (المعدل) ---
   void _startAutoSpinToWinner() {
-    _controller.stop();
+    _controller.stop(); // إيقاف الدوران اللانهائي
 
-    // البحث عن الفائز داخل القائمة الأسبوعية
     int winnerIndex = _weeklyParticipants.indexWhere((p) => p['name'] == _currentWinnerName);
-
     if (winnerIndex == -1) winnerIndex = 0;
 
-    final double segmentAngle = 2 * math.pi / _weeklyParticipants.length;
-    double targetAngle = (winnerIndex * segmentAngle);
+    final int itemCount = _weeklyParticipants.length;
+    final double segmentAngle = 2 * math.pi / itemCount;
 
-    // معادلة التوقف
-    double endValue = (5 * 2 * math.pi) - targetAngle;
+    // ✅ إصلاح الرياضيات لتوقف العجلة عند السهم العلوي بدقة
+    // 1. حساب زاوية مركز قطعة الفائز
+    double winnerCenterAngle = (winnerIndex * segmentAngle) + (segmentAngle / 2);
+
+    // 2. تعويض مكان السهم (السهم في الأعلى عند زاوية -pi/2 أو 270 درجة)
+    // نحتاج تدوير العجلة بحيث تصبح زاوية الفائز في الأعلى
+    double offsetToTop = math.pi / 2;
+
+    // 3. عدد اللفات (5 لفات) + المسافة المتبقية للوصول
+    double endValue = (5 * 2 * math.pi) - winnerCenterAngle - offsetToTop;
 
     _spinAnimation = Tween<double>(begin: 0, end: endValue).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.decelerate),
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic), // تباطؤ سلس
     );
 
     _controller.duration = const Duration(seconds: 8);
     _controller.reset();
     _controller.forward().then((value) {
-      _showWinnerDialog();
+      if (mounted) _showWinnerDialog();
     });
   }
 
@@ -194,7 +200,7 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                 gradient: const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)]),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: Colors.amber, width: 4),
-                boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 20)],
+                boxShadow: [const BoxShadow(color: Colors.black54, blurRadius: 20)],
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -217,7 +223,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
     );
   }
 
-  // --- مؤقت يوم الجمعة ---
   void _startCountdown() {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       final now = DateTime.now();
@@ -269,7 +274,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
           )
         ],
       ),
-      // --- الزر السفلي المضاف من الكود الجديد ---
       bottomNavigationBar: Container(
         padding: const EdgeInsets.all(15),
         decoration: const BoxDecoration(
@@ -301,14 +305,12 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
           physics: const AlwaysScrollableScrollPhysics(),
           child: Column(
             children: [
-              // --- القسم العلوي (التصميم القديم) ---
               Stack(
                 alignment: Alignment.center,
                 clipBehavior: Clip.none,
                 children: [
-                  // الخلفية المتدرجة
                   Container(
-                    height: 520, // زيادة طفيفة للاستيعاب
+                    height: 520,
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
                         colors: [Color(0xFF4A00E0), Color(0xFF8E2DE2)],
@@ -326,7 +328,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                     children: [
                       const SizedBox(height: 10),
 
-                      // 🏆 بطاقة الفائز السابق (ثابتة طوال الأسبوع) 🏆
                       if (_previousWinnerName != null && _previousWinnerName!.isNotEmpty)
                         Container(
                           margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -334,7 +335,7 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                           decoration: BoxDecoration(
                             gradient: const LinearGradient(colors: [Color(0xFFD4AF37), Color(0xFFFFD700)]),
                             borderRadius: BorderRadius.circular(15),
-                            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
+                            boxShadow: [const BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
                           ),
                           child: Row(
                             children: [
@@ -359,7 +360,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
 
                       const SizedBox(height: 10),
 
-                      // العداد
                       Text(_drawInfoText, style: const TextStyle(color: Colors.white70)),
                       Text(
                         _timeUntilDraw,
@@ -371,7 +371,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
 
                       const SizedBox(height: 20),
 
-                      // 🎡 العجلة الدوارة (تعرض كل طلبات الأسبوع) 🎡
                       SizedBox(
                         height: 300,
                         width: 300,
@@ -385,11 +384,12 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                                     color: _isWeeklyDrawTime ? Colors.redAccent : Colors.amber,
                                     width: 6
                                 ),
-                                boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 20)],
+                                boxShadow: [const BoxShadow(color: Colors.black45, blurRadius: 20)],
                               ),
                               child: AnimatedBuilder(
                                 animation: _controller,
                                 builder: (context, child) {
+                                  // نستخدم قيمة الأنيميشن المخصص عند السحب، وإلا الدوران العادي
                                   double val = (_shouldSpin && !_isResultShown)
                                       ? _spinAnimation.value
                                       : _controller.value * 2 * math.pi;
@@ -398,7 +398,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                                     child: CustomPaint(
                                       size: const Size(280, 280),
                                       painter: WheelPainter(
-                                        // هنا نمرر Weekly Participants لزيادة الفرص
                                         names: _weeklyParticipants.isEmpty
                                             ? ["انتظار", "الطلبات", "الأسبوعية"]
                                             : _weeklyParticipants.map((e) => e['name'] as String).toList(),
@@ -411,11 +410,12 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                                 },
                               ),
                             ),
+                            // السهم في الأعلى
                             const Positioned(top: -15, child: Icon(Icons.arrow_drop_down, size: 70, color: Colors.white)),
                             Container(
                               width: 60, height: 60,
                               decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                              child: Center(
+                              child: const Center(
                                 child: Text(
                                     "بيتي",
                                     style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple, fontSize: 16)
@@ -432,7 +432,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
 
               const SizedBox(height: 20),
 
-              // --- قسم الإحصائيات (يعرض عدد المشاركين الكلي) ---
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Row(
@@ -451,7 +450,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
 
               const Divider(),
 
-              // --- قائمة طلبات اليوم فقط (للتأكيد للمستخدم) ---
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 child: Row(
@@ -482,7 +480,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
                   );
                 },
               ),
-
               const SizedBox(height: 50),
             ],
           ),
@@ -492,7 +489,7 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
   }
 }
 
-// 🎨 الرسام الخاص بالعجلة (التصميم القديم)
+// 🎨 الرسام الخاص بالعجلة (معدل لقص الاسم بشكل صحيح)
 class WheelPainter extends CustomPainter {
   final List<String> names;
   final List<Color> colors;
@@ -521,7 +518,9 @@ class WheelPainter extends CustomPainter {
 
   void _drawName(Canvas canvas, Offset center, double radius, double startAngle, double sweepAngle, String name) {
     final double angle = startAngle + (sweepAngle / 2);
-    String displayName = name.length > 8 ? "${name.substring(0, 6)}.." : name;
+
+    // ✅ تعديل: السماح بظهور 10 أحرف ثم وضع نقاط
+    String displayName = name.length > 10 ? "${name.substring(0, 10)}..." : name;
 
     final textSpan = TextSpan(
       text: displayName,

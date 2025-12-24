@@ -1,5 +1,6 @@
-<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Plant Shop</string>
-
+    <string name="app_name">Beytei</string>
+    <string name="facebook_app_id">2645834165619797</string>
+    <string name="facebook_client_token">ab9c1c36d72d74b52d2c1d1b30dea225</string>
 </resources>

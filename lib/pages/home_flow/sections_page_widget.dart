@@ -16,6 +16,9 @@ import 'package:in_app_review/in_app_review.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+// ✅ 1. تمت إضافة مكتبة فيسبوك هنا
+import 'package:facebook_app_events/facebook_app_events.dart';
+
 // تأكد من صحة مسار هذه الملفات في مشروعك
 import '../../doctore/medical_home_screen.dart';
 import '../../zone.dart';
@@ -91,20 +94,20 @@ class SectionsPageWidget extends StatefulWidget {
 class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   List<BannerItem> banners = [];
   bool showBanners = false;
-  // ❌ تم حذف متغير _isLoading لضمان الفتح المباشر
 
   @override
   void initState() {
     super.initState();
-    // ✅ تشغيل الدوال في الخلفية فوراً دون انتظار (Fire and Forget)
+    // تشغيل المهام الخلفية عند بدء الصفحة
     _startBackgroundTasks();
   }
 
-  void _startBackgroundTasks() {
+  // ✅ هذه الدالة تحتوي الآن على كود تفعيل فيسبوك
+  void _startBackgroundTasks() async {
     // 1. طلب الأذونات
     _requestAllPermissions();
 
-    // 2. تحميل البانرات (سيتم تحديث الواجهة تلقائياً عند الانتهاء)
+    // 2. تحميل البانرات
     _loadBannersWithCache();
 
     // 3. التحقق من التحديثات
@@ -113,9 +116,28 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     // 4. طلب التقييم
     AppReviewManager().requestReviewIfAppropriate();
 
-    // 5. عرض نافذة الترويج (بعد تأخير بسيط جداً لضمان تحميل الواجهة أولاً)
+    // ---------------------------------------------------------
+    // ✅ 5. تفعيل فيسبوك SDK (تمت الإضافة هنا)
+    // ---------------------------------------------------------
+    try {
+      final facebookAppEvents = FacebookAppEvents();
+      // تفعيل التتبع لكي تظهر النقطة الخضراء
+      await facebookAppEvents.setAdvertiserTracking(enabled: true);
+
+      // إرسال إشارة "تفعيل التطبيق" يدوياً
+      await facebookAppEvents.logEvent(
+        name: 'fb_mobile_activate_app',
+        parameters: {'platform': 'flutter_home_screen'},
+      );
+      print("✅ Facebook SDK Activated from Home Screen");
+    } catch (e) {
+      print("❌ Facebook SDK Error: $e");
+    }
+    // ---------------------------------------------------------
+
+    // 6. عرض نافذة الترويج (بعد تأخير بسيط)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await Future.delayed(const Duration(seconds: 1)); // تأخير ثانية واحدة لجمالية العرض
+      await Future.delayed(const Duration(seconds: 1));
       if (mounted) {
         if (await PromoManager.shouldShowPromo()) {
           _showPromoDialog();
@@ -124,7 +146,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     });
   }
 
-  // ... (نفس دالة نافذة الترويج السابقة) ...
+  // ... (باقي الدوال كما هي تماماً) ...
   Future<void> _showPromoDialog() async {
     await showDialog(
       context: context,
@@ -341,7 +363,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       final cacheAge = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(lastFetchTime));
       if (cacheAge < const Duration(hours: CacheConstants.CACHE_DURATION_HOURS)) {
         _processBannerData(cachedData);
-        // حتى لو استخدمنا الكاش، نحاول التحديث في الخلفية بصمت
         _fetchBannersSilently();
         return;
       }
@@ -406,7 +427,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           ),
         ],
       ),
-      // ✅ تم إزالة شرط التحميل _isLoading نهائياً ليظهر المحتوى فوراً
       body: RefreshIndicator(
         onRefresh: () async {
           await _loadBannersWithCache();
@@ -415,7 +435,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           physics: const AlwaysScrollableScrollPhysics(),
           child: Column(
             children: [
-              // قسم البانرات (يظهر فقط عند انتهاء تحميله)
               if (showBanners && banners.isNotEmpty) ...[
                 const Padding(
                   padding: EdgeInsets.fromLTRB(10, 20, 10, 10),
@@ -463,7 +482,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
               ),
               const SizedBox(height: 10),
 
-              // ✅ شبكة الخدمات (تظهر فوراً)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: GridView.count(
@@ -593,7 +611,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 
-  // ✅ التصميم القديم (صورة كبيرة + نص أزرق + بدون وصف)
   Widget _buildGridCard({
     required BuildContext context,
     required String title,
@@ -604,7 +621,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       onTap: onTap,
       child: Card(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        elevation: 2, // إضافة ظل خفيف لجمالية البطاقة
+        elevation: 2,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -624,7 +641,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
-                  color: Colors.blue, // اللون الأزرق
+                  color: Colors.blue,
                 ),
               ),
             ),
@@ -634,5 +651,3 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 }
-
-

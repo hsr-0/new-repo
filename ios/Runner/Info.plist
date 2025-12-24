@@ -5,7 +5,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>منصة بيتي </string>
+    <string>منصة بيتي</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -22,11 +22,12 @@
        <string>ar</string>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.5.9</string>
+    <string>1.6.0</string>
     <key>CFBundleVersion</key>
-    <string>55</string>
+    <string>56</string>
     <key>CFBundleSignature</key>
     <string>????</string>
+
     <key>CFBundleURLTypes</key>
     <array>
        <dict>
@@ -47,18 +48,34 @@
              <string>beytei</string>
           </array>
        </dict>
+       <dict>
+          <key>CFBundleURLSchemes</key>
+          <array>
+            <string>fb2645834165619797</string>
+          </array>
+       </dict>
     </array>
+
+    <key>FacebookAppID</key>
+    <string>2645834165619797</string>
+    <key>FacebookClientToken</key>
+    <string>ab9c1c36d72d74b52d2c1d1b30dea225</string>
+    <key>FacebookDisplayName</key>
+    <string>Beytei Platform</string>
+
     <key>FlutterDeepLinkingEnabled</key>
     <true/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+
     <key>LSApplicationQueriesSchemes</key>
     <array>
        <string>https</string>
        <string>http</string>
+       <string>fbapi</string>
+       <string>fb-messenger-share-api</string>
     </array>
 
-    <!-- ⭐ [مهم جدًا] هذا هو السطر الذي تم إضافته لإصلاح الإشعارات -->
     <key>FirebaseAppDelegateProxyEnabled</key>
     <false/>
 
@@ -71,18 +88,13 @@
     <key>NSUserNotificationUsageDescription</key>
     <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك لعرض السائقين القريبين وتحديد نقطة الانطلاق.</string>
+    <string>نحتاج إلى الوصول لموقعك .</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك في الخلفية لتحديث موقعك كسائق وتلقي الطلبات القريبة منك.</string>
+    <string>نحتاج إلى الوصول لموقعك في الخلفية  .</string>
     <key>NSLocationAlwaysUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك في الخلفية لتحديث موقعك كسائق وتلقي الطلبات القريبة منك.</string>
-
+    <string>نحتاج إلى الوصول لموقعك في الخلفية لتحديث موقعك .</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-
-    <key>SKStoreReviewController</key>
-    <dict/>
-
     <key>UIBackgroundModes</key>
     <array>
        <string>remote-notification</string>
