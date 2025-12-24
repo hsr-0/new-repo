@@ -22,9 +22,9 @@
        <string>ar</string>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.6.0</string>
+    <string>1.6.1</string>
     <key>CFBundleVersion</key>
-    <string>56</string>
+    <string>57string>
     <key>CFBundleSignature</key>
     <string>????</string>
 
@@ -59,7 +59,7 @@
     <key>FacebookAppID</key>
     <string>2645834165619797</string>
     <key>FacebookClientToken</key>
-    <string>ab9c1c36d72d74b52d2c1d1b30dea225</string>
+    <string>5a2f1db768f600b7bcf16dd88c93375f</string>
     <key>FacebookDisplayName</key>
     <string>Beytei Platform</string>
 
