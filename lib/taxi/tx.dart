@@ -578,7 +578,7 @@ class ApiService {
 
 
 // ✅ نهاية الكلاس هنا (إغلاق القوس بشكل صحيح)
- final ValueNotifier<String?> acceptedRideIdNotifier = ValueNotifier(null);
+final ValueNotifier<String?> acceptedRideIdNotifier = ValueNotifier(null);
 
 // =============================================================================
 // NotificationService (with Channels)
@@ -1396,192 +1396,120 @@ class DriverHubScreen extends StatefulWidget {
   State<DriverHubScreen> createState() => _DriverHubScreenState();
 }
 
+
 class _DriverHubScreenState extends State<DriverHubScreen> {
-  Future<Map<String, dynamic>>? _hubDataFuture;
+  // متغيرات البيانات
+  double _walletBalance = 0.0;
+  Map<String, dynamic> _stats = {};
+  List<Map<String, dynamic>> _incentives = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadHubData();
+    // 1. استرجاع البيانات المحفوظة فوراً عند الفتح
+    _loadCachedData();
+    // 2. تحديث البيانات من السيرفر في الخلفية
+    _fetchHubData();
   }
 
-  void _loadHubData() {
+  // --- دالة قراءة البيانات من ذاكرة الهاتف (الحل السحري) ---
+  Future<void> _loadCachedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
     setState(() {
-      _hubDataFuture = ApiService.getDriverHubData(widget.authResult.token);
+      // قراءة الرصيد المحفوظ
+      if (prefs.containsKey('cached_wallet_balance')) {
+        _walletBalance = prefs.getDouble('cached_wallet_balance') ?? 0.0;
+        _isLoading = false; // لا تظهر التحميل لأن لدينا بيانات
+      }
+
+      // (اختياري) يمكننا أيضاً حفظ الإحصائيات واسترجاعها بنفس الطريقة
     });
   }
 
-  // دالة لفتح واتساب لشحن الرصيد
-  Future<void> _launchWhatsApp() async {
-    const adminPhoneNumber = "+9647854076931"; // !! هام: استبدل هذا الرقم برقم الواتساب الخاص بك
-    final message = "أرغب في شحن محفظتي. اسمي: ${widget.authResult.displayName}";
-    final uri = Uri.parse("https://wa.me/$adminPhoneNumber?text=${Uri.encodeComponent(message)}");
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب. تأكد من تثبيته على جهازك.")));
+  // --- دالة جلب البيانات من السيرفر وتحديث الذاكرة ---
+  Future<void> _fetchHubData() async {
+    try {
+      final data = await ApiService.getDriverHubData(widget.authResult.token);
+
+      final newBalance = (data['wallet_balance'] as num?)?.toDouble() ?? 0.0;
+      final newStats = data['stats'] as Map<String, dynamic>? ?? {};
+      final newIncentives = List<Map<String, dynamic>>.from(data['incentives'] ?? []);
+
+      // حفظ الرصيد الجديد في الذاكرة للمرة القادمة
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('cached_wallet_balance', newBalance);
+
+      if (mounted) {
+        setState(() {
+          _walletBalance = newBalance;
+          _stats = newStats;
+          _incentives = newIncentives;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error fetching hub data: $e");
+      // في حالة الخطأ، نوقف التحميل ونحتفظ بالبيانات القديمة المعروضة
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: () async => _loadHubData(),
-        child: FutureBuilder<Map<String, dynamic>>(
-          future: _hubDataFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return Center(child: Text("خطأ في تحميل البيانات: ${snapshot.error}"));
-            }
-            if (!snapshot.hasData) {
-              return const Center(child: Text("لا توجد بيانات"));
-            }
-
-            final hubData = snapshot.data!;
-            final stats = hubData['stats'] as Map<String, dynamic>? ?? {};
-            final walletBalance = hubData['wallet_balance'] ?? 0;
-            // ▼▼▼ جلب بيانات الحوافز من الـ API ▼▼▼
-            final incentives = List<Map<String, dynamic>>.from(hubData['incentives'] ?? []);
-
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // قسم المحفظة
-                  _WalletCard(balance: walletBalance, onRecharge: _launchWhatsApp),
-                  const SizedBox(height: 24),
-
-                  // قسم الإحصائيات
-                  Text("أداء اليوم", style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  _StatsGrid(stats: stats),
-                  const SizedBox(height: 24),
-
-                  // ▼▼▼ القسم الجديد لعرض الحوافز ▼▼▼
-                  if (incentives.isNotEmpty) ...[
-                    Text("الحوافز المتاحة", style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 12),
-                    _IncentivesSection(incentives: incentives),
-                    const SizedBox(height: 24),
-                  ]
-                  // ▲▲▲ نهاية القسم الجديد ▲▲▲
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _IncentivesSection extends StatelessWidget {
-  final List<Map<String, dynamic>> incentives;
-
-  const _IncentivesSection({required this.incentives});
-
-  // --- دالة جديدة لفتح واتساب مع رسالة مخصصة ---
-  Future<void> _launchWhatsAppForPrize(BuildContext context, String incentiveTitle) async {
-    const adminPhoneNumber = "+9647854076931"; // !! استبدل هذا برقم الواتساب الخاص بالمسؤول
-    final message = "مرحباً، لقد أكملت تحدي '$incentiveTitle' وأرغب في استلام جائزتي.";
+  Future<void> _launchWhatsApp() async {
+    const adminPhoneNumber = "+9647854076931";
+    final message = "أرغب في شحن محفظتي. اسمي: ${widget.authResult.displayName}";
     final uri = Uri.parse("https://wa.me/$adminPhoneNumber?text=${Uri.encodeComponent(message)}");
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      if(context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب. تأكد من تثبيته على جهازك.")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب.")));
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: incentives.length,
-      itemBuilder: (context, index) {
-        final incentive = incentives[index];
-        final progress = (incentive['progress'] as num?)?.toDouble() ?? 0.0;
-        final bool isCompleted = incentive['is_completed_by_user'] ?? false;
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: _fetchHubData,
+        child: _isLoading && _walletBalance == 0
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // بطاقة المحفظة
+              _WalletCard(balance: _walletBalance, onRecharge: _launchWhatsApp),
+              const SizedBox(height: 24),
 
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          color: isCompleted ? Colors.green[50] : null,
-          child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-              Text(
-              incentive['title'] ?? 'حافز جديد',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                incentive['description'] ?? '',
-                style: TextStyle(color: Colors.grey[700]),
-              ),
-              const SizedBox(height: 16),
+              // الإحصائيات
+              Text("أداء اليوم", style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              _StatsGrid(stats: _stats),
+              const SizedBox(height: 24),
 
-              // --- عرض زر واتساب أو شريط التقدم بناءً على حالة الإكمال ---
-              if (isCompleted)
-          SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: () => _launchWhatsAppForPrize(context, incentive['title'] ?? ''),
-            icon: const Icon(Icons.message),
-            label: const Text('تواصل لاستلام الجائزة'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-            ),
+              // الحوافز
+              if (_incentives.isNotEmpty) ...[
+                Text("الحوافز المتاحة", style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                _IncentivesSection(incentives: _incentives),
+                const SizedBox(height: 24),
+              ]
+            ],
           ),
-        )
-        else
-        Column(
-        children: [
-        ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: LinearProgressIndicator(
-        value: progress,
-        minHeight: 10,
-        backgroundColor: Colors.grey[300],
-        valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
         ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-        Text(
-        'التقدم: ${incentive['completed_trips']}/${incentive['required_trips']} رحلة',
-        style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        Text(
-        'المكافأة: ${incentive['reward_amount']} د.ع',
-        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-        )
-        ],
-        )
-        ],
-        ),
-                ],
-              ),
-          ),
-        );
-      },
+      ),
     );
   }
 }
 
+// --- الأدوات المساعدة (Widgets) لضمان عمل الكود ---
 
-
-
-
-// ويدجت لعرض بطاقة المحفظة
 class _WalletCard extends StatelessWidget {
   final num balance;
   final VoidCallback onRecharge;
@@ -1615,7 +1543,7 @@ class _WalletCard extends StatelessWidget {
             const SizedBox(height: 20),
             ElevatedButton.icon(
               onPressed: onRecharge,
-              icon: const Icon(Icons.insert_comment_sharp),
+              icon: const Icon(Icons.add_card),
               label: const Text("شحن الرصيد"),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.teal,
@@ -1629,8 +1557,6 @@ class _WalletCard extends StatelessWidget {
   }
 }
 
-
-// ويدجت لعرض شبكة الإحصائيات
 class _StatsGrid extends StatelessWidget {
   final Map<String, dynamic> stats;
   const _StatsGrid({required this.stats});
@@ -1671,13 +1597,111 @@ class _StatItem extends StatelessWidget {
             const SizedBox(height: 8),
             Text(label, style: const TextStyle(fontSize: 12), textAlign: TextAlign.center),
             const SizedBox(height: 4),
-            Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           ],
         ),
       ),
     );
   }
 }
+
+class _IncentivesSection extends StatelessWidget {
+  final List<Map<String, dynamic>> incentives;
+
+  const _IncentivesSection({required this.incentives});
+
+  Future<void> _launchWhatsAppForPrize(BuildContext context, String incentiveTitle) async {
+    const adminPhoneNumber = "+9647854076931";
+    final message = "مرحباً، لقد أكملت تحدي '$incentiveTitle' وأرغب في استلام جائزتي.";
+    final uri = Uri.parse("https://wa.me/$adminPhoneNumber?text=${Uri.encodeComponent(message)}");
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if(context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح واتساب.")));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: incentives.length,
+      itemBuilder: (context, index) {
+        final incentive = incentives[index];
+        final progress = (incentive['progress'] as num?)?.toDouble() ?? 0.0;
+        final bool isCompleted = incentive['is_completed_by_user'] ?? false;
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          color: isCompleted ? Colors.green[50] : null,
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  incentive['title'] ?? 'حافز جديد',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  incentive['description'] ?? '',
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+                const SizedBox(height: 16),
+                if (isCompleted)
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _launchWhatsAppForPrize(context, incentive['title'] ?? ''),
+                      icon: const Icon(Icons.emoji_events),
+                      label: const Text('استلام الجائزة'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  )
+                else
+                  Column(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 10,
+                          backgroundColor: Colors.grey[300],
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '${incentive['completed_trips']}/${incentive['required_trips']}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            '${incentive['reward_amount']} د.ع',
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                          )
+                        ],
+                      )
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+
+
 
 
 
@@ -2399,7 +2423,6 @@ class DriverAvailableDeliveriesScreen extends StatefulWidget {
   @override
   State<DriverAvailableDeliveriesScreen> createState() => _DriverAvailableDeliveriesScreenState();
 }
-
 class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliveriesScreen> {
   Future<List<dynamic>>? _deliveriesFuture;
   Timer? _refreshTimer;
@@ -2448,6 +2471,66 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
     }
   }
 
+  // --- دالة جديدة لعرض تفاصيل الطلب ---
+  void _showOrderDetails(Map<String, dynamic> order) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.info_outline, color: Colors.blue),
+            const SizedBox(width: 8),
+            const Text("تفاصيل الطلب"),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: ListBody(
+            children: [
+              _buildDetailRow("رقم الطلب:", "#${order['id']}"),
+              const Divider(),
+              _buildDetailRow("اسم المتجر/الصيدلية:", order['pickup_location_name'] ?? 'غير محدد'),
+              const SizedBox(height: 8),
+              _buildDetailRow("الملاحظات:", order['notes'] ?? 'لا توجد ملاحظات', isLongText: true),
+              const SizedBox(height: 8),
+              _buildDetailRow("العناصر:", order['items_description'] ?? 'حزمة توصيل', isLongText: true),
+              const Divider(),
+              _buildDetailRow("عنوان التسليم:", order['destination_address'] ?? 'غير محدد', isLongText: true),
+              const SizedBox(height: 8),
+              _buildDetailRow("أجرة التوصيل:", "${order['delivery_fee']} د.ع", isBold: true),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("إغلاق"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _acceptDelivery(order['id'].toString());
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+            child: const Text("قبول الطلب"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value, {bool isLongText = false, bool isBold = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        if (isLongText)
+          Text(value, style: TextStyle(fontSize: 14, fontWeight: isBold ? FontWeight.bold : FontWeight.normal))
+        else
+          Text(value, style: TextStyle(fontSize: 14, fontWeight: isBold ? FontWeight.bold : FontWeight.normal)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2478,24 +2561,61 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
                     final order = orders[index];
                     return Card(
                       margin: const EdgeInsets.only(bottom: 12),
+                      elevation: 3,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // عرض اسم الصيدلية والمنطقة
-                            Text("من: ${order['pickup_location_name']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                            Text("إلى: ${order['destination_address']}", style: const TextStyle(fontSize: 16)),
-                            const Divider(height: 16),
-
+                            // رأس البطاقة
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                // عرض السعر
-                                Chip(label: Text('${order['delivery_fee']} د.ع', style: const TextStyle(fontWeight: FontWeight.bold)), backgroundColor: Colors.green.withOpacity(0.1)),
-                                ElevatedButton(
-                                  onPressed: () => _acceptDelivery(order['id'].toString()),
-                                  child: const Text('قبول'),
+                                Chip(
+                                  label: Text('${order['delivery_fee']} د.ع', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                                  backgroundColor: Colors.green,
+                                ),
+                                Text("#${order['id']}", style: const TextStyle(color: Colors.grey)),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+
+                            // تفاصيل مختصرة
+                            Row(
+                              children: [
+                                const Icon(Icons.store, size: 20, color: Colors.blue),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text("من: ${order['pickup_location_name']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Icon(Icons.location_on, size: 20, color: Colors.red),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text("إلى: ${order['destination_address']}", style: const TextStyle(fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                              ],
+                            ),
+                            const Divider(height: 20),
+
+                            // الأزرار
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => _showOrderDetails(order),
+                                    icon: const Icon(Icons.info_outline, size: 18),
+                                    label: const Text('التفاصيل'),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () => _acceptDelivery(order['id'].toString()),
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
+                                    child: const Text('قبول'),
+                                  ),
                                 ),
                               ],
                             ),
@@ -2514,10 +2634,8 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
     );
   }
 }
-
 // =============================================================================
 // NEW SCREEN: DriverCurrentDeliveryScreen
-// =============================================================================
 class DriverCurrentDeliveryScreen extends StatefulWidget {
   final Map<String, dynamic> initialDelivery;
   final AuthResult authResult;
@@ -2540,25 +2658,23 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
   late Map<String, dynamic> _currentDelivery;
   bool _isLoading = false;
 
-  // --- متغيرات الخريطة والتتبع (منسوخة من شاشة التاكسي) ---
+  // --- متغيرات الخريطة والتتبع ---
   final MapController _mapController = MapController();
   StreamSubscription<geolocator.Position>? _positionStream;
   LatLng? _driverLocation;
   List<LatLng> _routePoints = [];
-  double _distanceToTarget = 0.0;
   String _distanceToTargetString = "...";
   double _driverBearing = 0.0;
   double _previousDriverBearing = 0.0;
-  // --- نهاية متغيرات الخريطة ---
 
   @override
   void initState() {
     super.initState();
     _currentDelivery = widget.initialDelivery;
-    // استدعاء الدالة مباشرة بعد اكتمال بناء الويدجت لضمان الاستقرار
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        _initializeDelivery();
+        _initializeDeliveryTrip();
       }
     });
   }
@@ -2566,62 +2682,21 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
   @override
   void dispose() {
     _positionStream?.cancel();
+    _mapController.dispose();
     super.dispose();
   }
 
-  // --- دالة جديدة: لتهيئة الرحلة ورسم المسار تلقائيًا ---
-  Future<void> _initializeDelivery() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
-
-    // تحديد النقطة المستهدفة (إما المطعم أو الزبون)
-    final targetPoint = _getTargetPoint();
-    if (targetPoint == null) {
-      widget.onDeliveryFinished(); // إنهاء المهمة إذا لم تكن هناك إحداثيات
-      return;
-    }
-
-    try {
-      final hasPermission = await PermissionService.handleLocationPermission(context);
-      if (!mounted || !hasPermission) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('إذن الموقع مطلوب لبدء الرحلة.')));
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(
-          desiredAccuracy: geolocator.LocationAccuracy.high
-      );
-
-      if (!mounted) return;
-      final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
-
-      setState(() {
-        _driverLocation = driverNowLocation;
-      });
-
-      _mapController.move(driverNowLocation, 15);
-      await _getRoute(driverNowLocation, targetPoint);
-      _startDriverLocationTracking();
-
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('فشل تهيئة الرحلة: ${e.toString()}')));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  // --- دالة جديدة: تحدد النقطة المستهدفة بناءً على حالة الطلب ---
+  // 1. تحديد الهدف الحالي (مطعم أم زبون؟)
   LatLng? _getTargetPoint() {
     final status = _currentDelivery['order_status'];
     String? latStr, lngStr;
 
     if (status == 'accepted' || status == 'at_store') {
-      // الهدف هو المطعم (نقطة الاستلام)
+      // الهدف: المطعم
       latStr = _currentDelivery['pickup_lat'];
       lngStr = _currentDelivery['pickup_lng'];
     } else if (status == 'picked_up') {
-      // الهدف هو الزبون (نقطة التوصيل)
+      // الهدف: الزبون
       latStr = _currentDelivery['destination_lat'];
       lngStr = _currentDelivery['destination_lng'];
     }
@@ -2629,42 +2704,50 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     if (latStr != null && lngStr != null && latStr != "0" && lngStr != "0") {
       return LatLng(double.parse(latStr), double.parse(lngStr));
     }
-    return null; // لا يوجد هدف لرسم المسار
+    return null;
   }
 
-  // --- دالة جديدة: بدء التتبع المباشر ---
-  void _startDriverLocationTracking() {
-    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: const geolocator.LocationSettings(accuracy: geolocator.LocationAccuracy.bestForNavigation, distanceFilter: 5)).listen((geolocator.Position position) {
-      if (mounted) {
-        final newLocation = LatLng(position.latitude, position.longitude);
-        double newBearing = _driverBearing;
+  // 2. تهيئة الرحلة
+  Future<void> _initializeDeliveryTrip() async {
+    setState(() => _isLoading = true);
 
-        if (_driverLocation != null && (newLocation.latitude != _driverLocation!.latitude || newLocation.longitude != _driverLocation!.longitude)) {
-          newBearing = calculateBearing(_driverLocation!, newLocation);
-        }
+    final hasPermission = await PermissionService.handleLocationPermission(context);
+    if (!hasPermission || !mounted) {
+      setState(() => _isLoading = false);
+      return;
+    }
 
-        final targetPoint = _getTargetPoint();
-        String newDistanceString = "...";
+    try {
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
+          desiredAccuracy: geolocator.LocationAccuracy.high
+      );
 
-        if (targetPoint != null) {
-          _distanceToTarget = geolocator.Geolocator.distanceBetween(newLocation.latitude, newLocation.longitude, targetPoint.latitude, targetPoint.longitude);
-          newDistanceString = _distanceToTarget < 1000 ? "${_distanceToTarget.round()} متر" : "${(_distanceToTarget / 1000).toStringAsFixed(1)} كم";
-        }
+      final driverPos = LatLng(position.latitude, position.longitude);
 
-        setState(() {
-          _previousDriverBearing = _driverBearing;
-          _driverLocation = newLocation;
-          _driverBearing = newBearing;
-          _distanceToTargetString = newDistanceString;
-        });
+      setState(() {
+        _driverLocation = driverPos;
+      });
+
+      _mapController.move(driverPos, 15.0);
+
+      final target = _getTargetPoint();
+      if (target != null) {
+        await _getRoute(driverPos, target);
       }
-    });
+
+      _startLiveTracking();
+
+    } catch (e) {
+      debugPrint("Error initializing map: $e");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
-  // --- دالة جديدة: جلب المسار من API ---
+  // 3. رسم المسار (تأكد من وضع المفتاح الجديد هنا)
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // هذا المفتاح خاص بخدمة OpenRouteService المجانية، يمكنك استخدامه
-    const String orsApiKey = '5b3ce3597851110001cf62485a059801409ca93224409611d1cfabd94d7a09fb5f49edl6714de153';
+    // 👇👇👇 ضع مفتاحك الجديد هنا 👇👇👇
+    const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0';
 
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
 
@@ -2673,16 +2756,62 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       if (mounted && response.statusCode == 200) {
         final data = json.decode(response.body);
         final coordinates = data['features'][0]['geometry']['coordinates'] as List;
-        setState(() => _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList());
-      } else if(mounted) {
-        debugPrint("فشل رسم المسار: ${json.decode(response.body)['error']?['message'] ?? 'خطأ من الخادم'}");
+
+        setState(() {
+          _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList();
+        });
       }
     } catch (e) {
-      if (mounted) debugPrint("فشل رسم المسار: ${e.toString()}");
+      debugPrint("Failed to fetch route: $e");
     }
   }
 
-  // --- دالة تحديث الحالة (معدلة لكي ترسم المسار الجديد) ---
+  // 4. التتبع المباشر
+  void _startLiveTracking() {
+    const locationSettings = geolocator.LocationSettings(
+      accuracy: geolocator.LocationAccuracy.high,
+      distanceFilter: 10,
+    );
+
+    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
+      if (!mounted) return;
+
+      final newLoc = LatLng(pos.latitude, pos.longitude);
+
+      double newBearing = _driverBearing;
+      if (_driverLocation != null) {
+        final dist = geolocator.Geolocator.distanceBetween(
+            _driverLocation!.latitude, _driverLocation!.longitude,
+            newLoc.latitude, newLoc.longitude
+        );
+        if (dist > 2) {
+          newBearing = calculateBearing(_driverLocation!, newLoc);
+        }
+      }
+
+      final target = _getTargetPoint();
+      String distString = "...";
+      if (target != null) {
+        double distMeters = geolocator.Geolocator.distanceBetween(
+            newLoc.latitude, newLoc.longitude, target.latitude, target.longitude
+        );
+        distString = distMeters < 1000
+            ? "${distMeters.round()} متر"
+            : "${(distMeters / 1000).toStringAsFixed(1)} كم";
+      }
+
+      setState(() {
+        _previousDriverBearing = _driverBearing;
+        _driverBearing = newBearing;
+        _driverLocation = newLoc;
+        _distanceToTargetString = distString;
+      });
+
+      ApiService.updateDriverLocation(widget.authResult.token, newLoc);
+    });
+  }
+
+  // 5. تحديث حالة الطلب
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
@@ -2692,282 +2821,192 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
         newStatus,
       );
       final data = json.decode(response.body);
+
       if (mounted && response.statusCode == 200 && data['success'] == true) {
         if (newStatus == 'delivered' || newStatus == 'cancelled') {
-          widget.onDeliveryFinished(); // إنهاء المهمة
+          widget.onDeliveryFinished();
         } else {
-          // تحديث بيانات الطلب
-          setState(() => _currentDelivery = data['delivery_order']);
+          setState(() {
+            _currentDelivery = data['delivery_order'];
+          });
+          widget.onDataChanged();
 
-          // ✨ [جديد]: إذا استلم السائق الطلب، ارسم المسار الجديد إلى الزبون
           if (newStatus == 'picked_up' && _driverLocation != null) {
-            final destinationPoint = _getTargetPoint(); // سيجلب إحداثيات الزبون
-            if (destinationPoint != null) {
-              await _getRoute(_driverLocation!, destinationPoint);
+            final customerLocation = _getTargetPoint();
+            if (customerLocation != null) {
+              await _getRoute(_driverLocation!, customerLocation);
             }
           }
         }
-      } else if (mounted) {
-        throw Exception(data['message'] ?? 'فشل تحديث الحالة');
+      } else {
+        throw Exception(data['message'] ?? 'فشل التحديث');
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if(mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- دالة نافذة إدخال الرمز (معدلة لتحديث المسار) ---
-  Future<void> _showPickupCodeDialog() async {
-    // ... (نفس كود النافذة المنبثقة من الخطوة السابقة)
-    final codeController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    final String? enteredCode = await showDialog<String>(
+  // ✅ دالة جديدة لعرض تفاصيل الطلب (المنتجات) للسائق أثناء الرحلة
+  void _showOrderDetailsDialog() {
+    showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('تأكيد الاستلام'),
-          content: Form(
-            key: formKey,
-            child: TextFormField(
-              controller: codeController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'أدخل رمز الاستلام (4 أرقام)'),
-              validator: (v) => v == null || v.isEmpty ? 'الرمز مطلوب' : null,
-            ),
+      builder: (context) => AlertDialog(
+        title: const Text("تفاصيل الطلب"),
+        content: SingleChildScrollView(
+          child: ListBody(
+            children: [
+              Text("المتجر: ${_currentDelivery['pickup_location_name'] ?? ''}", style: const TextStyle(fontWeight: FontWeight.bold)),
+              const Divider(),
+              const Text("المواد المطلوبة:", style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 5),
+              Text(_currentDelivery['items_description'] ?? 'لا توجد تفاصيل', style: const TextStyle(fontSize: 16)),
+              const SizedBox(height: 10),
+              const Text("ملاحظات:", style: TextStyle(color: Colors.grey)),
+              Text(_currentDelivery['notes'] ?? 'لا توجد ملاحظات'),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('إلغاء')),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  Navigator.of(context).pop(codeController.text);
-                }
-              },
-              child: const Text('تأكيد'),
-            ),
-          ],
-        );
-      },
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("إغلاق")),
+        ],
+      ),
     );
-
-    if (enteredCode == null) return;
-    setState(() => _isLoading = true);
-
-    try {
-      final response = await ApiService.confirmPickupByCode(
-          widget.authResult.token,
-          _currentDelivery['id'].toString(),
-          enteredCode
-      );
-
-      final data = json.decode(response.body);
-      if (mounted && response.statusCode == 200 && data['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message']), backgroundColor: Colors.green));
-
-        // تحديث الحالة محلياً
-        setState(() => _currentDelivery['order_status'] = 'picked_up');
-        widget.onDataChanged();
-
-        // ✨ [جديد]: ارسم المسار إلى الزبون بعد تأكيد الاستلام
-        if (_driverLocation != null) {
-          final destinationPoint = _getTargetPoint(); // سيجلب إحداثيات الزبون
-          if (destinationPoint != null) {
-            await _getRoute(_driverLocation!, destinationPoint);
-          }
-        }
-
-      } else if(mounted) {
-        throw Exception(data['message'] ?? 'فشل تأكيد الاستلام');
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
   }
 
-  // --- دالة بناء أزرار الأكشن (تم تعديلها لتخطي الرمز إذا أردت) ---
   Widget _buildActionButton() {
     final status = _currentDelivery['order_status'];
     switch (status) {
       case 'accepted':
-      // "وصلت إلى المصدر"
-        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.storefront), label: const Text('وصلت إلى المصدر'), onPressed: _isLoading ? null : () => _updateStatus('at_store'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue)));
-
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.store), label: const Text('وصلت للمطعم'), onPressed: _isLoading ? null : () => _updateStatus('at_store'), style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white)));
       case 'at_store':
-      // [تم الإلغاء]: لم نعد نسأل عن الرمز
-      // "تأكيد استلام الطلب"
-        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_box_outlined), label: const Text('تأكيد استلام الطلب'), onPressed: _isLoading ? null : () => _updateStatus('picked_up'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)));
-
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.delivery_dining), label: const Text('استلمت الطلب (الذهاب للزبون)'), onPressed: _isLoading ? null : () => _updateStatus('picked_up'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white)));
       case 'picked_up':
-      // "إنهاء التوصيل"
-        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_circle), label: const Text('إنهاء التوصيل'), onPressed: _isLoading ? null : () => _updateStatus('delivered'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)));
-
+        return SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.check_circle), label: const Text('تم التسليم'), onPressed: _isLoading ? null : () => _updateStatus('delivered'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white)));
       default:
         return const SizedBox.shrink();
     }
   }
 
-  // --- دالة بناء الماركرز (جديدة) ---
   List<Marker> _buildMarkers() {
-    final List<Marker> markers = [];
+    List<Marker> markers = [];
     final status = _currentDelivery['order_status'];
 
-    // 1. ماركر السائق (دائماً موجود)
     if (_driverLocation != null) {
       markers.add(Marker(
-          point: _driverLocation!,
-          width: 40,
-          height: 40,
-          child: TweenAnimationBuilder<double>(
-              tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing),
-              duration: const Duration(milliseconds: 800),
-              builder: (context, value, child) {
-                return RotatingVehicleIcon(vehicleType: 'Tuktuk', bearing: value); // يمكنك تغيير نوع المركبة
-              }
-          )
+        point: _driverLocation!,
+        width: 50, height: 50,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing),
+          duration: const Duration(milliseconds: 800),
+          builder: (ctx, angle, child) => RotatingVehicleIcon(vehicleType: 'Tuktuk', bearing: angle),
+        ),
       ));
     }
 
-    // 2. ماركر المطعم (نقطة الاستلام)
-    final pickupPoint = LatLng(double.parse(_currentDelivery['pickup_lat']), double.parse(_currentDelivery['pickup_lng']));
-    markers.add(Marker(
-      point: pickupPoint,
-      child: Icon(Icons.store, color: Colors.green, size: 40),
-    ));
+    if (status == 'accepted' || status == 'at_store') {
+      final pickup = LatLng(double.parse(_currentDelivery['pickup_lat']), double.parse(_currentDelivery['pickup_lng']));
+      markers.add(Marker(point: pickup, child: const Icon(Icons.store, color: Colors.blue, size: 40)));
+    }
 
-    // 3. ماركر الزبون (نقطة التوصيل)
-    if (_currentDelivery['destination_lat'] != null && _currentDelivery['destination_lat'] != "0") {
-      final destinationPoint = LatLng(double.parse(_currentDelivery['destination_lat']), double.parse(_currentDelivery['destination_lng']));
-      markers.add(Marker(
-        point: destinationPoint,
-        child: Icon(Icons.flag, color: (status == 'picked_up') ? Colors.red : Colors.grey, size: 40),
-      ));
+    if (_currentDelivery['destination_lat'] != null) {
+      final dest = LatLng(double.parse(_currentDelivery['destination_lat']), double.parse(_currentDelivery['destination_lng']));
+      markers.add(Marker(point: dest, child: const Icon(Icons.person_pin_circle, color: Colors.red, size: 40)));
     }
 
     return markers;
   }
 
-  // --- دالة بناء الواجهة الرئيسية (Build) ---
   @override
   Widget build(BuildContext context) {
     final status = _currentDelivery['order_status'] ?? 'pending';
+    String statusText = "";
+    if (status == 'accepted') statusText = "الذهاب للمطعم";
+    else if (status == 'at_store') statusText = "في المطعم";
+    else if (status == 'picked_up') statusText = "جاري التوصيل للزبون";
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('مهمة التوصيل الحالية'),
+        title: Text('توصيل: $statusText'),
         actions: [
-          // زر الاتصال بالزبون
           IconButton(
             icon: const Icon(Icons.call, color: Colors.green),
             onPressed: () => makePhoneCall(_currentDelivery['end_customer_phone'], context),
-            tooltip: 'الاتصال بالزبون',
-          ),
-          // زر الاتصال بالمصدر (المطعم) - (يمكنك إضافة رقم هاتف المطعم لاحقاً)
-          // IconButton(
-          //   icon: const Icon(Icons.store, color: Colors.blue),
-          //   onPressed: () => makePhoneCall(null, context), // مرر رقم هاتف المطعم هنا
-          //   tooltip: 'الاتصال بالمطعم',
-          // ),
+          )
         ],
       ),
       body: Stack(
         children: [
-          // الخريطة
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
-              initialZoom: 14.0,
-              // إعدادات توفير الرصيد
+              initialCenter: _driverLocation ?? const LatLng(33.3152, 44.3661),
+              initialZoom: 15.0,
               maxZoom: 18.0,
               minZoom: 10.0,
-              // لون الخلفية لتقليل الوميض الأبيض أثناء التحميل
               backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
               TileLayer(
-                // رابط Mapbox الرسمي
                 urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
-
-                // 🔥 تفعيل الكاش (هام جداً للسرعة وتوفير الرصيد)
                 tileProvider: MapboxCachedTileProvider(),
-
                 additionalOptions: const {
                   'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
                   'id': 'mapbox/streets-v12',
                 },
-                userAgentPackageName: 'com.beytei.taxi',
-
-                // إعدادات السلاسة (التحميل المسبق للمناطق المحيطة)
-                panBuffer: 2,
-                keepBuffer: 5,
               ),
-
               if (_routePoints.isNotEmpty)
-                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 6)]),
-
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.blue,
+                      strokeWidth: 5.0,
+                    ),
+                  ],
+                ),
               MarkerLayer(markers: _buildMarkers()),
             ],
-          ),          // بطاقة المعلومات السفلية
+          ),
+
           Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
+            bottom: 0, left: 0, right: 0,
             child: Card(
               margin: const EdgeInsets.all(12),
-              elevation: 8,
+              elevation: 10,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // شريط المسافة والوقت
-                    if (status == 'accepted' || status == 'at_store')
-                      _buildInfoRow(Icons.store, "الوجهة:", "إلى المطعم (${_distanceToTargetString})"),
-                    if (status == 'picked_up')
-                      _buildInfoRow(Icons.flag, "الوجهة:", "إلى الزبون (${_distanceToTargetString})"),
-
-                    const Divider(height: 20),
-                    _buildInfoRow(Icons.payments, "أجرة التوصيل:", "${_currentDelivery['delivery_fee']} د.ع"),
-                    const SizedBox(height: 24),
-                    // الزر الديناميكي
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("المسافة: $_distanceToTargetString", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        // ✅ زر جديد لعرض التفاصيل
+                        TextButton.icon(
+                          onPressed: _showOrderDetailsDialog,
+                          icon: const Icon(Icons.list_alt),
+                          label: const Text("عرض الطلب"),
+                        ),
+                      ],
+                    ),
+                    const Divider(),
                     _buildActionButton(),
-                    const SizedBox(height: 12),
-                    // زر الإلغاء
-                    if (status != 'delivered' && status != 'cancelled')
-                      TextButton(onPressed: _isLoading ? null : () => _updateStatus('cancelled'), child: const Text('إلغاء الطلب', style: TextStyle(color: Colors.red))),
                   ],
                 ),
               ),
             ),
           ),
 
-          if (_isLoading) Container(color: Colors.black.withOpacity(0.2), child: const Center(child: CircularProgressIndicator())),
+          if (_isLoading) const Center(child: CircularProgressIndicator()),
         ],
       ),
     );
   }
-
-  // دالة مساعدة لعرض الصفوف
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Icon(icon, color: Colors.grey[600], size: 20),
-      const SizedBox(width: 8),
-      Text(label, style: TextStyle(color: Colors.grey[700])),
-      const SizedBox(width: 4),
-      Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold))),
-    ]);
-  }
 }
-
-// =============================================================================
-// NEW SCREEN: QR Code Scanner
-// =============================================================================
-
-
 
 
 // =============================================================================
@@ -3051,7 +3090,6 @@ class DriverAvailableRidesScreen extends StatefulWidget {
   @override
   State<DriverAvailableRidesScreen> createState() => _DriverAvailableRidesScreenState();
 }
-
 class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen> {
   List<dynamic>? _availableRides;
   bool _isLoading = true;
@@ -3068,33 +3106,54 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
   void initState() {
     super.initState();
     _pageController = PageController(viewportFraction: 0.85);
+
+    // 1. إعداد الموقع الأولي وجلب الرحلات
     _setupInitialLocationAndFetchRides();
 
-    // 🔥 1. التحديث الدوري البطيء (كل دقيقتين - لتنظيف القائمة)
-    _ridesTimer = Timer.periodic(const Duration(minutes: 2), (timer) {
+    // 2. التحديث الدوري (كل 30 ثانية بدلاً من دقيقتين لضمان عدم فوات الطلبات)
+    _ridesTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (!mounted) return;
       _fetchAvailableRides(silent: true);
     });
 
-    // 🔥 2. ربط التحديث الفوري بالإشعارات
+    // 3. الاستماع للإشعارات (الحل الجذري هنا)
     rideListRefreshNotifier.addListener(_onNotificationReceived);
   }
 
   @override
   void dispose() {
-    // 🔥 تنظيف المستمع عند الخروج
     rideListRefreshNotifier.removeListener(_onNotificationReceived);
-
     _ridesTimer?.cancel();
     _locationStream?.cancel();
     _pageController?.dispose();
     super.dispose();
   }
 
-  // دالة التحديث عند وصول إشعار
-  void _onNotificationReceived() {
-    debugPrint("🔔 وصل إشعار جديد! تحديث القائمة فوراً...");
+  // 🔥 دالة التعامل مع الإشعار الجديد
+  Future<void> _onNotificationReceived() async {
+    debugPrint("🔔 وصل إشعار جديد! جاري تحديث الموقع والقائمة...");
+
+    // خطوة 1: ننتظر قليلاً (ثانية ونصف) لضمان أن السيرفر قد جهز البيانات
+    await Future.delayed(const Duration(milliseconds: 1500));
+
+    if (!mounted) return;
+
+    // خطوة 2: إذا كان لدينا موقع حالي، نرسله للسيرفر فوراً لضمان أننا في النطاق
+    if (_driverLocation != null) {
+      await ApiService.updateDriverLocation(widget.authResult.token, _driverLocation!);
+    }
+
+    // خطوة 3: نجلب الرحلات الآن (بشكل صامت لعدم إزعاج السائق)
     _fetchAvailableRides(silent: true);
+
+    // اختياري: إظهار رسالة صغيرة (Snackbar) للسائق
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("هناك طلب جديد، جاري التحديث..."),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.blue,
+        )
+    );
   }
 
   Future<void> _setupInitialLocationAndFetchRides() async {
@@ -3105,22 +3164,32 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
       if (mounted) {
         final initialLocation = LatLng(position.latitude, position.longitude);
         setState(() => _driverLocation = initialLocation);
-        _mapController.move(initialLocation, 14.0);
+
+        // تحريك الكاميرا لموقع السائق
+        _mapController.move(initialLocation, 15.0);
+
+        // تحديث الموقع في السيرفر فوراً عند الفتح
+        ApiService.updateDriverLocation(widget.authResult.token, initialLocation);
+
         await _fetchAvailableRides();
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد موقعك الحالي.')));
     }
 
-    // استخدام إعدادات الموقع الاقتصادية
     const locationSettings = geolocator.LocationSettings(
       accuracy: geolocator.LocationAccuracy.high,
-      distanceFilter: 100, // تحديث محلي كل 100 متر
+      distanceFilter: 50, // تقليل المسافة لتحديث أدق
     );
+
     _locationStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
       if (mounted) {
-        setState(() => _driverLocation = LatLng(position.latitude, position.longitude));
+        final newLoc = LatLng(position.latitude, position.longitude);
+        setState(() => _driverLocation = newLoc);
         _updateDistanceInfo(_currentPageIndex);
+
+        // نرسل الموقع للسيرفر عبر الخدمة الذكية في ApiService
+        ApiService.updateDriverLocation(widget.authResult.token, newLoc);
       }
     });
   }
@@ -3131,8 +3200,15 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
       return;
     }
     final ride = _availableRides![pageIndex];
-    final rideLat = double.parse(ride['pickup']['lat']);
-    final rideLng = double.parse(ride['pickup']['lng']);
+
+    // حماية من البيانات الفارغة
+    if (ride['pickup'] == null) return;
+
+    final rideLat = double.tryParse(ride['pickup']['lat'].toString()) ?? 0.0;
+    final rideLng = double.tryParse(ride['pickup']['lng'].toString()) ?? 0.0;
+
+    if (rideLat == 0.0 || rideLng == 0.0) return;
+
     final distanceInMeters = geolocator.Geolocator.distanceBetween(_driverLocation!.latitude, _driverLocation!.longitude, rideLat, rideLng);
     setState(() {
       _distanceToPickup = distanceInMeters < 1000 ? "${distanceInMeters.round()} متر" : "${(distanceInMeters / 1000).toStringAsFixed(1)} كم";
@@ -3140,26 +3216,43 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     });
   }
 
-  // 🔥 تم تعديل الدالة لتقبل التحديث الصامت (بدون إظهار دائرة التحميل إذا كانت silent)
   Future<void> _fetchAvailableRides({bool silent = false}) async {
     if (!mounted) return;
 
-    // لا تظهر التحميل إذا كان التحديث صامتاً (في الخلفية)
     if (!silent) setState(() => _isLoading = true);
 
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/available-rides'), headers: {'Authorization': 'Bearer ${widget.authResult.token}'});
+      final response = await http.get(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/driver/available-rides'),
+          headers: {'Authorization': 'Bearer ${widget.authResult.token}'}
+      );
+
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
+
+        // التحقق مما إذا كانت هناك رحلات جديدة
+        final List newRides = data['rides'];
+
         setState(() {
-          _availableRides = data['rides'];
+          _availableRides = newRides;
           _isLoading = false;
+
+          // تنظيف حالة العرض المرسل إذا لم يعد الطلب موجوداً
           if (_sentOfferRideId != null && (_availableRides?.every((ride) => ride['id'].toString() != _sentOfferRideId) ?? true)) {
             _sentOfferRideId = null;
           }
         });
+
         if (_availableRides != null && _availableRides!.isNotEmpty) {
           _updateDistanceInfo(_currentPageIndex);
+
+          // 🔥 إضافة: إذا ظهرت رحلات جديدة، قم بتحريك الكاميرا لأول رحلة تلقائياً ليرى السائق الطلب
+          if (silent) { // يعني جاء من إشعار
+            final firstRide = _availableRides![0];
+            final rLat = double.tryParse(firstRide['pickup']['lat'].toString()) ?? 0;
+            final rLng = double.tryParse(firstRide['pickup']['lng'].toString()) ?? 0;
+            if(rLat != 0) _mapController.move(LatLng(rLat, rLng), 15);
+          }
         }
       }
     } catch (e) {
@@ -3168,6 +3261,93 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     }
   }
 
+  // ... (باقي الدوال: _acceptRide, _showNegotiationDialog, _buildMarkers, build كما هي)
+  // يرجى نسخ بقية الدوال من الكود السابق ولصقها هنا لضمان عدم فقدان أي وظيفة.
+  // الدوال هي:
+  // - _acceptRide
+  // - _showOfferSentDialog
+  // - _showNegotiationDialog
+  // - _buildMarkers
+  // - build
+
+  // سأضع لك دالة build للتأكيد:
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
+              initialZoom: 14.0,
+              maxZoom: 18.0,
+              minZoom: 10.0,
+              backgroundColor: const Color(0xFFE5E5E5),
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
+                tileProvider: MapboxCachedTileProvider(),
+                additionalOptions: const {
+                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
+                  'id': 'mapbox/streets-v12',
+                },
+                userAgentPackageName: 'com.beytei.taxi',
+                panBuffer: 2,
+                keepBuffer: 5,
+              ),
+              MarkerLayer(markers: _buildMarkers()),
+            ],
+          ),
+
+          // الشريط العلوي للمسافة
+          if (_availableRides != null && _availableRides!.isNotEmpty)
+            Positioned(top: 40, left: 0, right: 0, child: Center(child: TopRideInfoBar(distance: _distanceToPickup))),
+
+          if (_isLoading)
+            const Center(child: CircularProgressIndicator())
+          else if (_availableRides == null || _availableRides!.isEmpty)
+            const EmptyStateWidget(
+                svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>''',
+                message: 'لا توجد طلبات قريبة حالياً.\nانتظر الإشعارات.'
+            )
+          else
+            Positioned(
+              bottom: 20,
+              left: 0,
+              right: 0,
+              height: 220,
+              child: PageView.builder(
+                controller: _pageController,
+                itemCount: _availableRides!.length,
+                onPageChanged: (index) {
+                  final ride = _availableRides![index];
+                  final rideLat = double.tryParse(ride['pickup']['lat'].toString()) ?? 0;
+                  final rideLng = double.tryParse(ride['pickup']['lng'].toString()) ?? 0;
+                  if(rideLat != 0) {
+                    _mapController.move(LatLng(rideLat, rideLng), 15.0);
+                    _updateDistanceInfo(index);
+                  }
+                },
+                itemBuilder: (context, index) {
+                  final ride = _availableRides![index];
+                  return RideInfoCard(
+                    ride: ride,
+                    isWaitingForApproval: _sentOfferRideId == ride['id'].toString(),
+                    onAccept: () => _acceptRide(ride['id'].toString()),
+                    onNegotiate: () => _showNegotiationDialog(ride),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // انسخ بقية الدوال المساعدة هنا (_acceptRide, _showOfferSentDialog, etc.)
   Future<void> _acceptRide(String rideId) async {
     setState(() => _isLoading = true);
     try {
@@ -3276,81 +3456,15 @@ class _DriverAvailableRidesScreenState extends State<DriverAvailableRidesScreen>
     }
     if (_availableRides != null && _availableRides!.isNotEmpty && _currentPageIndex < _availableRides!.length) {
       final ride = _availableRides![_currentPageIndex];
-      final lat = double.parse(ride['pickup']['lat']);
-      final lng = double.parse(ride['pickup']['lng']);
-      markers.add(Marker(point: LatLng(lat, lng), width: 40, height: 40, child: const Icon(Icons.pin_drop, color: Colors.red, size: 40)));
+      final lat = double.tryParse(ride['pickup']['lat'].toString()) ?? 0;
+      final lng = double.tryParse(ride['pickup']['lng'].toString()) ?? 0;
+      if (lat != 0) {
+        markers.add(Marker(point: LatLng(lat, lng), width: 40, height: 40, child: const Icon(Icons.pin_drop, color: Colors.red, size: 40)));
+      }
     }
     return markers;
   }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _driverLocation ?? const LatLng(32.4741, 45.8336),
-              initialZoom: 14.0,
-              maxZoom: 18.0,
-              minZoom: 10.0,
-              backgroundColor: const Color(0xFFE5E5E5),
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
-                tileProvider: MapboxCachedTileProvider(),
-                additionalOptions: const {
-                  'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
-                  'id': 'mapbox/streets-v12',
-                },
-                userAgentPackageName: 'com.beytei.taxi',
-                panBuffer: 2,
-                keepBuffer: 5,
-              ),
-
-              MarkerLayer(markers: _buildMarkers()),
-            ],
-          ),
-          if (_availableRides != null && _availableRides!.isNotEmpty) Positioned(top: 40, left: 0, right: 0, child: Center(child: TopRideInfoBar(distance: _distanceToPickup))),
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator())
-          else if (_availableRides == null || _availableRides!.isEmpty)
-            const EmptyStateWidget(svgAsset: '''<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-coffee"><path d="M18 8h1a4 4 0 0 1 0 8h-1"></path><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path><line x1="6" y1="1" x2="6" y2="4"></line><line x1="10" y1="1" x2="10" y2="4"></line><line x1="14" y1="1" x2="14" y2="4"></line></svg>''', message: 'لا توجد طلبات متاحة حالياً.')
-          else
-            Positioned(
-              bottom: 20,
-              left: 0,
-              right: 0,
-              height: 220,
-              child: PageView.builder(
-                controller: _pageController,
-                itemCount: _availableRides!.length,
-                onPageChanged: (index) {
-                  final ride = _availableRides![index];
-                  final rideLocation = LatLng(double.parse(ride['pickup']['lat']), double.parse(ride['pickup']['lng']));
-                  _mapController.move(rideLocation, 15.0);
-                  _updateDistanceInfo(index);
-                },
-                itemBuilder: (context, index) {
-                  final ride = _availableRides![index];
-                  return RideInfoCard(
-                    ride: ride,
-                    isWaitingForApproval: _sentOfferRideId == ride['id'].toString(),
-                    onAccept: () => _acceptRide(ride['id'].toString()),
-                    onNegotiate: () => _showNegotiationDialog(ride),
-                  );
-                },
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }
-
-
 // --- ويدجت جديد: شريط المعلومات العلوي ---
 class TopRideInfoBar extends StatelessWidget {
   final String distance;
@@ -3436,7 +3550,6 @@ class RideInfoCard extends StatelessWidget {
   }
 }
 
-
 class DriverCurrentRideScreen extends StatefulWidget {
   final Map<String, dynamic> initialRide;
   final AuthResult authResult;
@@ -3455,7 +3568,8 @@ class DriverCurrentRideScreen extends StatefulWidget {
 
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide;
-  bool _isLoading = false;
+  bool _isLoading = true; // نبدأ بـ true لمنع رسم الخريطة فوراً
+  bool _isMapReady = false; // متغير للتأكد من جاهزية البيانات للخريطة
   final MapController _mapController = MapController();
   StreamSubscription<geolocator.Position>? _positionStream;
   LatLng? _driverLocation;
@@ -3464,13 +3578,13 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   double _driverBearing = 0.0;
   double _previousDriverBearing = 0.0;
 
-  // ✅ دالة مساعدة: تحويل آمن للأرقام لمنع الكراش
+  // ✅ دالة آمنة جداً لتحليل الأرقام
   double _safeParse(dynamic value) {
     if (value == null) return 0.0;
     if (value is double) return value;
     if (value is int) return value.toDouble();
     if (value is String) {
-      if (value.isEmpty) return 0.0;
+      if (value.trim().isEmpty) return 0.0;
       return double.tryParse(value) ?? 0.0;
     }
     return 0.0;
@@ -3480,142 +3594,68 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   void initState() {
     super.initState();
     _currentRide = widget.initialRide;
-
-    // استدعاء الدالة مباشرة بعد اكتمال بناء الويدجت
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _initializeRide();
-      }
-    });
+    // استدعاء التهيئة فوراً
+    _initializeRide();
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
-    _mapController.dispose(); // تنظيف الكنترولر
+    _mapController.dispose();
     super.dispose();
   }
 
-  // --- 1. تهيئة الرحلة ورسم المسار (مرة واحدة) ---
+  // --- 1. تهيئة الرحلة ---
   Future<void> _initializeRide() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
-
     try {
-      // ✅ 1. تحليل الإحداثيات بشكل آمن جداً
-      final pickupLat = _safeParse(_currentRide['pickup']['lat']);
-      final pickupLng = _safeParse(_currentRide['pickup']['lng']);
-
-      // إذا كانت الإحداثيات صفر، لا تكمل (بيانات خاطئة)
-      if (pickupLat == 0.0 || pickupLng == 0.0) {
-        debugPrint("⚠️ إحداثيات غير صالحة، تم إلغاء الرسم.");
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      final pickupPoint = LatLng(pickupLat, pickupLng);
-
-      // ✅ 2. التأكد من الصلاحيات
+      // 1. طلب الإذن أولاً
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!mounted || !hasPermission) {
         setState(() => _isLoading = false);
         return;
       }
 
-      // ✅ 3. جلب موقع السائق الحالي
-      geolocator.Position currentPosition = await geolocator.Geolocator.getCurrentPosition(
+      // 2. جلب موقع السائق الحالي
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
           desiredAccuracy: geolocator.LocationAccuracy.high
       );
 
       if (!mounted) return;
-      final driverNowLocation = LatLng(currentPosition.latitude, currentPosition.longitude);
+
+      final driverPos = LatLng(position.latitude, position.longitude);
+      final pickupLat = _safeParse(_currentRide['pickup']['lat']);
+      final pickupLng = _safeParse(_currentRide['pickup']['lng']);
+      final pickupPoint = LatLng(pickupLat, pickupLng);
 
       setState(() {
-        _driverLocation = driverNowLocation;
+        _driverLocation = driverPos;
+        _isMapReady = true; // الآن نسمح برسم الخريطة
+        _isLoading = false;
       });
 
-      // ✅ 4. تحريك الكاميرا بأمان
-      _mapController.move(driverNowLocation, 15);
-
-      // ✅ 5. محاولة رسم المسار (داخل try منفصل لكي لا يوقف الشاشة إذا فشل النت)
-      try {
-        await _getRoute(driverNowLocation, pickupPoint);
-      } catch (routeError) {
-        debugPrint("⚠️ فشل رسم المسار (مشكلة نت أو API): $routeError");
+      // 3. رسم المسار (نقوم به بعد تحديث الواجهة لضمان عدم التعليق)
+      if (pickupLat != 0 && pickupLng != 0) {
+        _getRoute(driverPos, pickupPoint);
       }
 
-      // ✅ 6. بدء التتبع
+      // 4. بدء التتبع
       _startDriverLocationTracking();
 
     } catch (e) {
-      debugPrint("❌ خطأ عام في تهيئة الشاشة: $e");
+      debugPrint("Error initializing ride: $e");
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('حدث خطأ أثناء تحميل الخريطة'))
-        );
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ في تحديد الموقع: $e")));
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- 2. تتبع الموقع الذكي ---
-  void _startDriverLocationTracking() {
-    // إعدادات التتبع المحلي (للشاشة فقط - ناعم)
-    const locationSettings = geolocator.LocationSettings(
-      accuracy: geolocator.LocationAccuracy.high,
-      distanceFilter: 10, // تحديث الشاشة كل 10 أمتار للحركة السلسة
-    );
-
-    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
-      if (!mounted) return;
-
-      final newLocation = LatLng(position.latitude, position.longitude);
-
-      // حساب الزاوية (Bearing) لتدوير السيارة
-      double newBearing = _driverBearing;
-      if (_driverLocation != null) {
-        final dist = geolocator.Geolocator.distanceBetween(
-            _driverLocation!.latitude, _driverLocation!.longitude,
-            newLocation.latitude, newLocation.longitude
-        );
-        // تحديث الزاوية فقط إذا تحرك مسافة معقولة لمنع اهتزاز الأيقونة
-        if (dist > 2) {
-          newBearing = calculateBearing(_driverLocation!, newLocation);
-        }
-      }
-
-      // حساب المسافة المتبقية
-      final pickupLat = _safeParse(_currentRide['pickup']['lat']);
-      final pickupLng = _safeParse(_currentRide['pickup']['lng']);
-
-      double distToPickup = 0.0;
-      if(pickupLat != 0.0 && pickupLng != 0.0) {
-        distToPickup = geolocator.Geolocator.distanceBetween(
-            newLocation.latitude, newLocation.longitude,
-            pickupLat, pickupLng
-        );
-      }
-
-      setState(() {
-        _previousDriverBearing = _driverBearing;
-        _driverLocation = newLocation;
-        _driverBearing = newBearing;
-        _distanceToPickup = distToPickup;
-      });
-
-      // إرسال الموقع للسيرفر (ApiService يقرر متى يرسل بناءً على الوقت)
-      ApiService.updateDriverLocation(widget.authResult.token, newLocation);
-    });
-  }
-
-  // --- 3. رسم المسار ---
+  // --- 2. رسم المسار (OpenRouteService) ---
   Future<void> _getRoute(LatLng start, LatLng end) async {
+    // تأكد من أن الإحداثيات صالحة
+    if (start.latitude == 0 || end.latitude == 0) return;
+
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
-
-    // التحقق من صحة المفتاح (بسيط)
-    if (orsApiKey.length < 20) return;
-
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
 
     try {
@@ -3623,16 +3663,57 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       if (mounted && response.statusCode == 200) {
         final data = json.decode(response.body);
         final coordinates = data['features'][0]['geometry']['coordinates'] as List;
-        setState(() => _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList());
+        setState(() {
+          _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList();
+        });
       } else {
-        debugPrint("ORS Error: ${response.body}");
+        debugPrint("Route Error: ${response.body}");
       }
     } catch (e) {
-      debugPrint("Route Error: $e");
+      debugPrint("Route Exception: $e");
     }
   }
 
-  // --- 4. تحديث حالة الرحلة ---
+  // --- 3. التتبع ---
+  void _startDriverLocationTracking() {
+    const locationSettings = geolocator.LocationSettings(
+      accuracy: geolocator.LocationAccuracy.high,
+      distanceFilter: 10,
+    );
+
+    _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
+      if (!mounted) return;
+      final newLoc = LatLng(pos.latitude, pos.longitude);
+
+      double newBearing = _driverBearing;
+      if (_driverLocation != null) {
+        final dist = geolocator.Geolocator.distanceBetween(
+            _driverLocation!.latitude, _driverLocation!.longitude,
+            newLoc.latitude, newLoc.longitude
+        );
+        if (dist > 2) newBearing = calculateBearing(_driverLocation!, newLoc);
+      }
+
+      // حساب المسافة لنقطة الالتقاط
+      final pLat = _safeParse(_currentRide['pickup']['lat']);
+      final pLng = _safeParse(_currentRide['pickup']['lng']);
+      double distToPickup = 0;
+      if(pLat != 0) {
+        distToPickup = geolocator.Geolocator.distanceBetween(newLoc.latitude, newLoc.longitude, pLat, pLng);
+      }
+
+      setState(() {
+        _driverLocation = newLoc;
+        _previousDriverBearing = _driverBearing;
+        _driverBearing = newBearing;
+        _distanceToPickup = distToPickup;
+      });
+
+      // تحديث السيرفر
+      ApiService.updateDriverLocation(widget.authResult.token, newLoc);
+    });
+  }
+
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
@@ -3641,38 +3722,26 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${widget.authResult.token}'},
           body: json.encode({'ride_id': _currentRide['id'], 'status': newStatus})
       );
-
       final data = json.decode(response.body);
-
       if (mounted) {
         if (response.statusCode == 200 && data['success'] == true) {
           if (newStatus == 'completed' || newStatus == 'cancelled') {
             widget.onRideFinished();
           } else {
             setState(() => _currentRide = data['ride']);
-
-            // إذا بدأت الرحلة (ongoing)، نرسم المسار الجديد إلى الوجهة
+            // إعادة رسم المسار إذا تغيرت الحالة إلى ongoing (الذهاب للوجهة)
             if (newStatus == 'ongoing' && _driverLocation != null) {
-              final destLat = _safeParse(_currentRide['destination']?['lat']);
-              final destLng = _safeParse(_currentRide['destination']?['lng']);
-
-              if (destLat != 0.0 && destLng != 0.0) {
-                final destination = LatLng(destLat, destLng);
-                // محاولة رسم المسار الجديد
-                try {
-                  await _getRoute(_driverLocation!, destination);
-                } catch (_) {}
-              }
+              final dLat = _safeParse(_currentRide['destination']?['lat']);
+              final dLng = _safeParse(_currentRide['destination']?['lng']);
+              if(dLat != 0) _getRoute(_driverLocation!, LatLng(dLat, dLng));
             }
           }
-        } else {
-          throw Exception(data['message'] ?? 'فشل تحديث الحالة');
         }
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: $e"), backgroundColor: Colors.red));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if(mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -3686,19 +3755,19 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // استخدام التحليل الآمن للعرض أيضاً
-    final pickupLat = _safeParse(_currentRide['pickup']['lat']);
-    final pickupLng = _safeParse(_currentRide['pickup']['lng']);
-    final LatLng pickupPoint = (pickupLat != 0 && pickupLng != 0)
-        ? LatLng(pickupLat, pickupLng)
-        : const LatLng(33.3152, 44.3661); // بغداد كقيمة افتراضية لمنع الكراش
+    // تحضير الإحداثيات للعرض
+    final pLat = _safeParse(_currentRide['pickup']['lat']);
+    final pLng = _safeParse(_currentRide['pickup']['lng']);
+    final pickupPoint = LatLng(pLat, pLng);
 
-    final destLat = _safeParse(_currentRide['destination']?['lat']);
-    final destLng = _safeParse(_currentRide['destination']?['lng']);
-    final LatLng? destinationPoint = (destLat != 0 && destLng != 0) ? LatLng(destLat, destLng) : null;
+    final dLat = _safeParse(_currentRide['destination']?['lat']);
+    final dLng = _safeParse(_currentRide['destination']?['lng']);
+    final destPoint = (dLat != 0) ? LatLng(dLat, dLng) : null;
 
-    String status = _currentRide['status'] ?? 'unknown';
-    final customerPhone = _currentRide['customer_phone'] as String?;
+    // 🔥 الحماية من الشاشة البيضاء: إذا لم تكن الخريطة جاهزة، اعرض تحميل
+    if (!_isMapReady || _driverLocation == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -3706,30 +3775,8 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.call, color: Colors.green),
-            onPressed: () => makePhoneCall(customerPhone, context),
-            tooltip: 'الاتصال بالزبون',
-          ),
-          TextButton.icon(
-            icon: ChatIconWithBadge(
-              chatId: 'ride_${_currentRide['id']}',
-              currentUserId: widget.authResult.userId,
-              onPressed: () {},
-            ),
-            label: const Text("محادثة"),
-            onPressed: () {
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => ChatScreen(
-                  chatId: 'ride_${_currentRide['id']}',
-                  chatName: 'محادثة مع زبون',
-                  authResult: widget.authResult,
-                  participants: {
-                    'customer': _currentRide['author']?.toString(),
-                    'driver': widget.authResult.userId,
-                  },
-                ),
-              ));
-            },
-          ),
+            onPressed: () => makePhoneCall(_currentRide['customer_phone'], context),
+          )
         ],
       ),
       body: Stack(
@@ -3737,10 +3784,10 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: _driverLocation ?? pickupPoint, // استخدام موقع السائق أو نقطة الالتقاط
-              initialZoom: 14.0,
+              initialCenter: _driverLocation!,
+              initialZoom: 15.0,
               maxZoom: 18.0,
-              minZoom: 10.0,
+              minZoom: 5.0,
               backgroundColor: const Color(0xFFE5E5E5),
             ),
             children: [
@@ -3751,70 +3798,52 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
                   'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
                   'id': 'mapbox/streets-v12',
                 },
-                userAgentPackageName: 'com.beytei.taxi',
-                panBuffer: 2,
-                keepBuffer: 5,
               ),
-
               if (_routePoints.isNotEmpty)
-                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 6)]),
-
+                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 5.0)]),
               MarkerLayer(markers: [
-                Marker(point: pickupPoint, child: const Icon(Icons.location_on, color: Colors.green, size: 40)),
-
-                if (destinationPoint != null)
-                  Marker(point: destinationPoint, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
-
-                if (_driverLocation != null)
-                  Marker(
-                      point: _driverLocation!,
-                      width: 40,
-                      height: 40,
-                      child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing),
-                          duration: const Duration(milliseconds: 800),
-                          builder: (context, value, child) {
-                            return RotatingVehicleIcon(vehicleType: _currentRide['driver']?['vehicle_type'] ?? 'Car', bearing: value);
-                          }
-                      )
+                if(pLat != 0) Marker(point: pickupPoint, child: const Icon(Icons.location_on, color: Colors.green, size: 40)),
+                if(destPoint != null) Marker(point: destPoint, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
+                Marker(
+                  point: _driverLocation!,
+                  width: 50, height: 50,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: _previousDriverBearing, end: _driverBearing),
+                    duration: const Duration(milliseconds: 800),
+                    builder: (ctx, val, child) => RotatingVehicleIcon(vehicleType: 'Car', bearing: val),
                   ),
+                ),
               ]),
             ],
           ),
           Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
+            bottom: 0, left: 0, right: 0,
             child: Card(
               margin: const EdgeInsets.all(12),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (_currentRide['pickup_region'] != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8.0),
-                        child: Text("المنطقة: ${_currentRide['pickup_region']}", style: TextStyle(fontSize: 16, color: Colors.blueGrey)),
-                      ),
-                    Text('حالة الرحلة: $status', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    if (status == 'accepted') Text("المسافة إلى العميل: ${(_distanceToPickup / 1000).toStringAsFixed(2)} كم"),
-                    const Divider(),
-                    const SizedBox(height: 15),
+                    Text("حالة الرحلة: ${_currentRide['status']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    if(_currentRide['status'] == 'accepted')
+                      Text("المسافة للزبون: ${(_distanceToPickup/1000).toStringAsFixed(1)} كم"),
+                    const SizedBox(height: 10),
                     _buildActionButton(),
-                    if (status != 'completed' && status != 'cancelled') TextButton.icon(icon: const Icon(Icons.cancel, color: Colors.red), label: const Text('إلغاء الرحلة', style: TextStyle(color: Colors.red)), onPressed: _isLoading ? null : () => _updateStatus('cancelled'))
+                    if (_currentRide['status'] != 'completed' && _currentRide['status'] != 'cancelled')
+                      TextButton(onPressed: () => _updateStatus('cancelled'), child: const Text("إلغاء الرحلة", style: TextStyle(color: Colors.red)))
                   ],
                 ),
               ),
             ),
           ),
-          if (_isLoading) const Center(child: CircularProgressIndicator()),
+          if (_isLoading && _isMapReady)
+            Container(color: Colors.black26, child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
 }
-// =============================================================================
-
 
 
 
@@ -3839,7 +3868,6 @@ class QuickRideMapScreen extends StatefulWidget {
   @override
   State<QuickRideMapScreen> createState() => _QuickRideMapScreenState();
 }
-
 class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   Map<String, dynamic>? _activeRide;
@@ -3856,12 +3884,14 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   LatLng? _currentUserLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
 
+  // متغيرات تتبع السائق المعين
   LatLng? _assignedDriverLocation;
   Timer? _liveTrackingTimer;
   List<LatLng> _routeToCustomer = [];
   double _assignedDriverBearing = 0.0;
   double _previousAssignedDriverBearing = 0.0;
 
+  // متغيرات السائقين المحيطين (للعرض قبل الطلب)
   Map<String, dynamic> _driversData = {};
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<LatLng>> _animations = {};
@@ -3874,12 +3904,12 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     super.initState();
     _setupInitialLocation();
 
-    // تحديث السائقين المحيطين
+    // تحديث السائقين المحيطين كل دقيقة إذا لم يكن هناك طلب نشط
     _driversTimer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (_activeRide == null) _fetchActiveDrivers();
     });
 
-    // استماع للإشعارات للتحديث الفوري
+    // الاستماع للإشعارات لتحديث الحالة فوراً
     rideListRefreshNotifier.addListener(_onNotificationRefresh);
   }
 
@@ -3897,39 +3927,39 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     super.dispose();
   }
 
+  // 🔥 إصلاح 1: تحديث الحالة فوراً عند وصول إشعار
   void _onNotificationRefresh() {
+    debugPrint("🔔 إشعار وصل للزبون: جاري تحديث حالة الرحلة...");
+    // حتى لو كان activeRide موجوداً، نعيد جلبه للتأكد من الحالة الجديدة
     if (_activeRide != null) {
-      debugPrint("🔔 تحديث حالة الرحلة بناءً على الإشعار...");
       _fetchRideStatus();
     }
   }
 
-  // 🔥🔥🔥 دالة حساب السعر الجديدة 🔥🔥🔥
+  // دالة حساب السعر
   int _calculateSystemPrice(LatLng start, LatLng end) {
-    // 1. حساب المسافة بالكيلومتر
+    double basePrice = _selectedVehicleType == 'Tuktuk' ? 1000.0 : 2000.0;
+
+    if (start.latitude == 0.0 || start.longitude == 0.0 ||
+        end.latitude == 0.0 || end.longitude == 0.0) {
+      return basePrice.toInt();
+    }
+
     final distanceInMeters = geolocator.Geolocator.distanceBetween(
         start.latitude, start.longitude,
         end.latitude, end.longitude
     );
+
+    if (distanceInMeters > 50000) return basePrice.toInt();
+
     double distanceInKm = distanceInMeters / 1000;
+    double totalPrice = basePrice;
 
-    // 2. تحديد السعر الأساسي (لأول 3 كيلو)
-    double totalPrice = 0.0;
-
-    if (_selectedVehicleType == 'Tuktuk') {
-      totalPrice = 1000.0; // سعر التكتك لأول 3 كم
-    } else {
-      totalPrice = 2000.0; // سعر السيارة لأول 3 كم
-    }
-
-    // 3. إضافة التكلفة للمسافة الزائدة عن 3 كيلو
     if (distanceInKm > 3.0) {
       double extraDistance = distanceInKm - 3.0;
-      totalPrice += extraDistance * 500.0; // 500 دينار لكل كيلو إضافي
+      totalPrice += extraDistance * 500.0;
     }
 
-    // 4. تقريب السعر لأقرب 250 دينار (لسهولة الدفع)
-    // مثال: 2100 تصبح 2250
     return (totalPrice / 250).ceil() * 250;
   }
 
@@ -3937,10 +3967,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     setState(() => _isLoading = true);
     final hasPermission = await PermissionService.handleLocationPermission(context);
     if (!hasPermission) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يجب تفعيل إذن الموقع لاستخدام التطبيق')));
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
       return;
     }
     try {
@@ -3956,10 +3983,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
         _fetchActiveDrivers();
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع.')));
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
 
     const locationSettings = geolocator.LocationSettings(
@@ -3973,26 +3997,56 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     });
   }
 
+  // 🔥 إصلاح 2: دالة بدء التتبع المحسنة (تعمل فوراً)
   void _startLiveTracking(String rideId) {
     _liveTrackingTimer?.cancel();
-    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
-      if (_activeRide == null) {
+
+    // استدعاء فوري أول مرة لعدم انتظار المؤقت
+    debugPrint("🚀 بدء تتبع السائق فوراً للرحلة: $rideId");
+    _updateDriverLocationFromServer(rideId);
+
+    // ثم التكرار كل 10 ثواني
+    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (_activeRide == null || _activeRide!['status'] != 'accepted') {
         timer.cancel();
         return;
       }
+      _updateDriverLocationFromServer(rideId);
+    });
+  }
+
+  // 🔥 دالة مساعدة لجلب موقع السائق وتحديث الخريطة
+  Future<void> _updateDriverLocationFromServer(String rideId) async {
+    try {
       final newDriverLocation = await ApiService.getRideDriverLocation(widget.token, rideId);
+
       if (mounted && newDriverLocation != null) {
+        // حساب زاوية الدوران
         double newBearing = _assignedDriverBearing;
         if (_assignedDriverLocation != null) {
-          newBearing = calculateBearing(_assignedDriverLocation!, newDriverLocation);
+          final dist = geolocator.Geolocator.distanceBetween(
+              _assignedDriverLocation!.latitude, _assignedDriverLocation!.longitude,
+              newDriverLocation.latitude, newDriverLocation.longitude
+          );
+          if (dist > 2) {
+            newBearing = calculateBearing(_assignedDriverLocation!, newDriverLocation);
+          }
         }
+
+        // 🔥 رسم المسار من السائق إليك (مرة واحدة إذا لم يكن موجوداً)
+        if (_currentUserLocation != null && _routeToCustomer.isEmpty) {
+          _getRoute(newDriverLocation, _currentUserLocation!);
+        }
+
         setState(() {
           _previousAssignedDriverBearing = _assignedDriverBearing;
           _assignedDriverLocation = newDriverLocation;
           _assignedDriverBearing = newBearing;
         });
       }
-    });
+    } catch (e) {
+      debugPrint("Live Tracking Error: $e");
+    }
   }
 
   void _stopLiveTracking() {
@@ -4007,7 +4061,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   Future<void> _getRoute(LatLng start, LatLng end) async {
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
-    if (orsApiKey.length < 50) return;
     if (_routeToCustomer.isNotEmpty) return;
 
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
@@ -4056,7 +4109,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
 
   void _startStatusTimer() {
     _statusTimer?.cancel();
-    // ✅ تحديث كل 5 ثواني
     _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (!mounted || _activeRide == null) {
         timer.cancel();
@@ -4067,38 +4119,46 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
 
   Future<void> _fetchRideStatus() async {
+    // إذا لم يكن هناك activeRide محلياً، نحاول فحصه من السيرفر لمعرفة آخر طلب
+    // لكن هنا نفترض وجود ID. إذا لم يوجد، نخرج.
     if (_activeRide == null) return;
+
     try {
-      final response = await http.get(Uri.parse('${ApiService.baseUrl}/taxi/v2/rides/status?ride_id=${_activeRide!['id']}'), headers: {'Authorization': 'Bearer ${widget.token}'});
+      final response = await http.get(
+          Uri.parse('${ApiService.baseUrl}/taxi/v2/rides/status?ride_id=${_activeRide!['id']}'),
+          headers: {'Authorization': 'Bearer ${widget.token}'}
+      );
+
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
           final updatedRide = data['ride'];
-          final bool statusChanged = _activeRide?['status'] != updatedRide['status'];
-          final bool driverAssigned = _activeRide?['driver'] == null && updatedRide['driver'] != null;
+          final currentStatus = _activeRide?['status'];
+          final newStatus = updatedRide['status'];
 
-          if (statusChanged || driverAssigned) {
-            setState(() {
-              _activeRide = updatedRide;
-            });
-          }
+          // 🔥 التحديث الجذري للواجهة
+          setState(() {
+            _activeRide = updatedRide;
 
-          final List driverOffers = updatedRide['driver_offers'] ?? [];
-          if (updatedRide['status'] == 'pending') {
-            setState(() {
-              _pendingOffers = driverOffers.where((o) => o['status'] == 'pending').toList();
-            });
-          } else {
-            setState(() {
+            // تحديث العروض إذا كان الطلب معلقاً
+            if (newStatus == 'pending') {
+              _pendingOffers = (updatedRide['driver_offers'] as List? ?? [])
+                  .where((o) => o['status'] == 'pending').toList();
+            } else {
               _pendingOffers = [];
-            });
+            }
+          });
+
+          // 🔥 إذا تم القبول للتو، ابدأ التتبع فوراً
+          if (newStatus == 'accepted' && (currentStatus == 'pending' || _assignedDriverLocation == null)) {
+            debugPrint("✅ تم قبول الطلب! بدء تتبع السائق...");
+            _stopLiveTracking(); // إيقاف أي تتبع قديم
+            _startLiveTracking(updatedRide['id'].toString());
           }
 
-          if (updatedRide['status'] == 'accepted' && _assignedDriverLocation == null) {
-            _stopLiveTracking();
-            _startLiveTracking(updatedRide['id'].toString());
-          } else if (['completed', 'cancelled'].contains(updatedRide['status'])) {
-            if (updatedRide['status'] == 'completed' && updatedRide['is_rated'] == false) {
+          // التعامل مع انتهاء الرحلة
+          else if (['completed', 'cancelled'].contains(newStatus)) {
+            if (newStatus == 'completed' && updatedRide['is_rated'] == false) {
               _showRatingDialog(updatedRide['id'].toString(), 'quick_ride');
             }
             _resetBookingState();
@@ -4196,6 +4256,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     if (_currentUserLocation != null) {
       markers.add(Marker(width: 80, height: 80, point: _currentUserLocation!, child: const PulsingUserLocationMarker()));
     }
+
+    // حالة وجود رحلة نشطة (نعرض السائق المعين)
     if (_activeRide != null) {
       if (_assignedDriverLocation != null) {
         markers.add(Marker(width: 40, height: 40, point: _assignedDriverLocation!, child: TweenAnimationBuilder<double>(tween: Tween<double>(begin: _previousAssignedDriverBearing, end: _assignedDriverBearing), duration: const Duration(milliseconds: 800), builder: (context, value, child) {
@@ -4204,7 +4266,9 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       }
       final pickupLatLng = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
       markers.add(Marker(point: pickupLatLng, child: const Icon(Icons.location_on, color: Colors.green, size: 40)));
-    } else {
+    }
+    // حالة عدم وجود طلب (نعرض السائقين المحيطين)
+    else {
       _driversData.forEach((driverId, driver) {
         final animation = _animations[driverId];
         final segment = _driverAnimationSegments[driverId];
@@ -4436,7 +4500,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
 
   Widget _buildConfirmationSheet() {
-    // ✅ حساب السعر تلقائياً (بدلاً من إدخال الزبون)
     int systemPrice = 0;
     if (_pickupLocation != null && _destinationData != null) {
       systemPrice = _calculateSystemPrice(
@@ -4444,6 +4507,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           LatLng(_destinationData!['lat'], _destinationData!['lng'])
       );
     }
+    String priceText = "$systemPrice د.ع";
 
     return Card(
       margin: const EdgeInsets.all(12),
@@ -4458,7 +4522,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             Row(children: [const Icon(Icons.flag_outlined, color: Colors.red), const SizedBox(width: 8), Expanded(child: Text("إلى: ${_destinationData?['name'] ?? 'وجهة محددة'}", style: const TextStyle(fontWeight: FontWeight.bold)))]),
             const SizedBox(height: 15),
 
-            // ✅ عرض السعر المحسوب بدلاً من TextField
             Container(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
               decoration: BoxDecoration(
@@ -4472,8 +4535,12 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
                   const Icon(Icons.price_check, color: Colors.green),
                   const SizedBox(width: 10),
                   Text(
-                    "الكروة المقدرة: $systemPrice د.ع",
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green),
+                    priceText,
+                    style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green
+                    ),
                   ),
                 ],
               ),
@@ -4490,7 +4557,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
                 const SizedBox(width: 10),
                 Expanded(child: ElevatedButton(
                     onPressed: () {
-                      // ✅ تعيين السعر في الكنترولر ليتم إرساله للسيرفر
                       _priceController.text = systemPrice.toString();
                       _requestRide();
                     },
@@ -4504,6 +4570,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     );
   }
 }
+
+
 class ProvinceTaxiButton extends StatelessWidget {
   final VoidCallback onPressed;
   const ProvinceTaxiButton({super.key, required this.onPressed});
