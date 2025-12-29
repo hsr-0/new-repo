@@ -3549,7 +3549,6 @@ class RideInfoCard extends StatelessWidget {
     return Row(children: [Icon(icon, color: Colors.grey, size: 20), const SizedBox(width: 8), Text(label, style: const TextStyle(color: Colors.grey)), const SizedBox(width: 4), Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis))]);
   }
 }
-
 class DriverCurrentRideScreen extends StatefulWidget {
   final Map<String, dynamic> initialRide;
   final AuthResult authResult;
@@ -3568,8 +3567,8 @@ class DriverCurrentRideScreen extends StatefulWidget {
 
 class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   late Map<String, dynamic> _currentRide;
-  bool _isLoading = true; // نبدأ بـ true لمنع رسم الخريطة فوراً
-  bool _isMapReady = false; // متغير للتأكد من جاهزية البيانات للخريطة
+  bool _isLoading = true;
+  bool _isMapReady = false;
   final MapController _mapController = MapController();
   StreamSubscription<geolocator.Position>? _positionStream;
   LatLng? _driverLocation;
@@ -3590,12 +3589,23 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
     return 0.0;
   }
 
+  // ✅ دالة جديدة لاستخراج الإحداثيات بأمان تام (تمنع الشاشة البيضاء)
+  LatLng? _getLatLngFromObject(dynamic data) {
+    if (data == null || data is! Map) return null;
+    final lat = _safeParse(data['lat']);
+    final lng = _safeParse(data['lng']);
+    if (lat == 0.0 && lng == 0.0) return null;
+    return LatLng(lat, lng);
+  }
+
   @override
   void initState() {
     super.initState();
     _currentRide = widget.initialRide;
-    // استدعاء التهيئة فوراً
-    _initializeRide();
+    // التأكد من أن التهيئة تتم بعد بناء الواجهة
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeRide();
+    });
   }
 
   @override
@@ -3608,14 +3618,12 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
   // --- 1. تهيئة الرحلة ---
   Future<void> _initializeRide() async {
     try {
-      // 1. طلب الإذن أولاً
       final hasPermission = await PermissionService.handleLocationPermission(context);
       if (!mounted || !hasPermission) {
         setState(() => _isLoading = false);
         return;
       }
 
-      // 2. جلب موقع السائق الحالي
       geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
           desiredAccuracy: geolocator.LocationAccuracy.high
       );
@@ -3623,38 +3631,36 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
       if (!mounted) return;
 
       final driverPos = LatLng(position.latitude, position.longitude);
-      final pickupLat = _safeParse(_currentRide['pickup']['lat']);
-      final pickupLng = _safeParse(_currentRide['pickup']['lng']);
-      final pickupPoint = LatLng(pickupLat, pickupLng);
+
+      // 🔥 التصحيح هنا: استخدام الدالة الآمنة بدلاً من الوصول المباشر الذي يسبب الخطأ
+      final pickupPoint = _getLatLngFromObject(_currentRide['pickup']);
 
       setState(() {
         _driverLocation = driverPos;
-        _isMapReady = true; // الآن نسمح برسم الخريطة
+        _isMapReady = true;
         _isLoading = false;
       });
 
-      // 3. رسم المسار (نقوم به بعد تحديث الواجهة لضمان عدم التعليق)
-      if (pickupLat != 0 && pickupLng != 0) {
+      // رسم المسار فقط إذا كانت نقطة الالتقاط صالحة
+      if (pickupPoint != null) {
         _getRoute(driverPos, pickupPoint);
       }
 
-      // 4. بدء التتبع
       _startDriverLocationTracking();
 
     } catch (e) {
       debugPrint("Error initializing ride: $e");
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ في تحديد الموقع: $e")));
       }
     }
   }
 
-  // --- 2. رسم المسار (OpenRouteService) ---
+  // --- 2. رسم المسار ---
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // تأكد من أن الإحداثيات صالحة
     if (start.latitude == 0 || end.latitude == 0) return;
 
+    // 👇 مفتاح التوجيه (تأكد من أنه فعال)
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0=';
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
 
@@ -3666,8 +3672,6 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         setState(() {
           _routePoints = coordinates.map((c) => LatLng(c[1], c[0])).toList();
         });
-      } else {
-        debugPrint("Route Error: ${response.body}");
       }
     } catch (e) {
       debugPrint("Route Exception: $e");
@@ -3694,12 +3698,11 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         if (dist > 2) newBearing = calculateBearing(_driverLocation!, newLoc);
       }
 
-      // حساب المسافة لنقطة الالتقاط
-      final pLat = _safeParse(_currentRide['pickup']['lat']);
-      final pLng = _safeParse(_currentRide['pickup']['lng']);
+      // حساب المسافة لنقطة الالتقاط بأمان
+      final pickupPoint = _getLatLngFromObject(_currentRide['pickup']);
       double distToPickup = 0;
-      if(pLat != 0) {
-        distToPickup = geolocator.Geolocator.distanceBetween(newLoc.latitude, newLoc.longitude, pLat, pLng);
+      if(pickupPoint != null) {
+        distToPickup = geolocator.Geolocator.distanceBetween(newLoc.latitude, newLoc.longitude, pickupPoint.latitude, pickupPoint.longitude);
       }
 
       setState(() {
@@ -3709,7 +3712,6 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
         _distanceToPickup = distToPickup;
       });
 
-      // تحديث السيرفر
       ApiService.updateDriverLocation(widget.authResult.token, newLoc);
     });
   }
@@ -3729,11 +3731,10 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
             widget.onRideFinished();
           } else {
             setState(() => _currentRide = data['ride']);
-            // إعادة رسم المسار إذا تغيرت الحالة إلى ongoing (الذهاب للوجهة)
+            // إعادة رسم المسار للوجهة
             if (newStatus == 'ongoing' && _driverLocation != null) {
-              final dLat = _safeParse(_currentRide['destination']?['lat']);
-              final dLng = _safeParse(_currentRide['destination']?['lng']);
-              if(dLat != 0) _getRoute(_driverLocation!, LatLng(dLat, dLng));
+              final destPoint = _getLatLngFromObject(_currentRide['destination']);
+              if(destPoint != null) _getRoute(_driverLocation!, destPoint);
             }
           }
         }
@@ -3755,16 +3756,10 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // تحضير الإحداثيات للعرض
-    final pLat = _safeParse(_currentRide['pickup']['lat']);
-    final pLng = _safeParse(_currentRide['pickup']['lng']);
-    final pickupPoint = LatLng(pLat, pLng);
+    // 🔥 استخراج الإحداثيات بأمان تام لمنع الانهيار
+    final pickupPoint = _getLatLngFromObject(_currentRide['pickup']);
+    final destPoint = _getLatLngFromObject(_currentRide['destination']);
 
-    final dLat = _safeParse(_currentRide['destination']?['lat']);
-    final dLng = _safeParse(_currentRide['destination']?['lng']);
-    final destPoint = (dLat != 0) ? LatLng(dLat, dLng) : null;
-
-    // 🔥 الحماية من الشاشة البيضاء: إذا لم تكن الخريطة جاهزة، اعرض تحميل
     if (!_isMapReady || _driverLocation == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
@@ -3802,7 +3797,7 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
               if (_routePoints.isNotEmpty)
                 PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.blue, strokeWidth: 5.0)]),
               MarkerLayer(markers: [
-                if(pLat != 0) Marker(point: pickupPoint, child: const Icon(Icons.location_on, color: Colors.green, size: 40)),
+                if(pickupPoint != null) Marker(point: pickupPoint, child: const Icon(Icons.location_on, color: Colors.green, size: 40)),
                 if(destPoint != null) Marker(point: destPoint, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
                 Marker(
                   point: _driverLocation!,
@@ -3837,15 +3832,13 @@ class _DriverCurrentRideScreenState extends State<DriverCurrentRideScreen> {
               ),
             ),
           ),
-          if (_isLoading && _isMapReady)
+          if (_isLoading)
             Container(color: Colors.black26, child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
 }
-
-
 
 // =============================================================================
 // Customer Quick Ride Screen (Updated Pricing Logic)
@@ -3868,6 +3861,7 @@ class QuickRideMapScreen extends StatefulWidget {
   @override
   State<QuickRideMapScreen> createState() => _QuickRideMapScreenState();
 }
+
 class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   Map<String, dynamic>? _activeRide;
@@ -3879,7 +3873,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   Map<String, dynamic>? _destinationData;
   bool _isConfirmingRideDetails = false;
   List<dynamic> _pendingOffers = [];
-  String _selectedVehicleType = 'Car'; // القيمة الافتراضية
+  String _selectedVehicleType = 'Car';
 
   LatLng? _currentUserLocation;
   StreamSubscription<geolocator.Position>? _locationStream;
@@ -3909,13 +3903,19 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       if (_activeRide == null) _fetchActiveDrivers();
     });
 
-    // الاستماع للإشعارات لتحديث الحالة فوراً
+    // 1. الاستماع للإشعار العام لتحديث الحالة (Fallback)
     rideListRefreshNotifier.addListener(_onNotificationRefresh);
+
+    // 🔥🔥 2. الاستماع للبيانات الفورية عند قبول السائق (الحل الجذري للتأخير) 🔥🔥
+    acceptedRideNotifier.addListener(_onInstantRideUpdate);
   }
 
   @override
   void dispose() {
+    // إيقاف المستمعين
     rideListRefreshNotifier.removeListener(_onNotificationRefresh);
+    acceptedRideNotifier.removeListener(_onInstantRideUpdate);
+
     _statusTimer?.cancel();
     _driversTimer?.cancel();
     _liveTrackingTimer?.cancel();
@@ -3927,10 +3927,39 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     super.dispose();
   }
 
-  // 🔥 إصلاح 1: تحديث الحالة فوراً عند وصول إشعار
+  // 🔥 دالة التحديث الفوري عند وصول إشعار القبول
+  void _onInstantRideUpdate() {
+    final rideData = acceptedRideNotifier.value;
+
+    // التحقق من أن البيانات صالحة وأنها تخص الرحلة الحالية
+    if (rideData != null && _activeRide != null) {
+      if (rideData['id'].toString() == _activeRide!['id'].toString()) {
+
+        debugPrint("🚀 تحديث فوري: تم قبول الطلب وبيانات السائق وصلت!");
+
+        if (mounted) {
+          setState(() {
+            // 1. تحديث بيانات الرحلة بالكامل من الإشعار فوراً
+            _activeRide = rideData;
+
+            // 2. تحديث حالة العروض (إخفاء الانتظار)
+            _pendingOffers = [];
+          });
+
+          // 3. بدء تتبع السائق فوراً
+          _stopLiveTracking();
+          _startLiveTracking(rideData['id'].toString());
+        }
+
+        // تفريغ المتغير لعدم تكرار العملية
+        acceptedRideNotifier.value = null;
+      }
+    }
+  }
+
+  // تحديث الحالة عند وصول إشعار عام
   void _onNotificationRefresh() {
-    debugPrint("🔔 إشعار وصل للزبون: جاري تحديث حالة الرحلة...");
-    // حتى لو كان activeRide موجوداً، نعيد جلبه للتأكد من الحالة الجديدة
+    debugPrint("🔔 إشعار وصل للزبون: جاري التحقق من الحالة...");
     if (_activeRide != null) {
       _fetchRideStatus();
     }
@@ -3997,7 +4026,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     });
   }
 
-  // 🔥 إصلاح 2: دالة بدء التتبع المحسنة (تعمل فوراً)
+  // دالة بدء التتبع المحسنة
   void _startLiveTracking(String rideId) {
     _liveTrackingTimer?.cancel();
 
@@ -4015,13 +4044,11 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     });
   }
 
-  // 🔥 دالة مساعدة لجلب موقع السائق وتحديث الخريطة
   Future<void> _updateDriverLocationFromServer(String rideId) async {
     try {
       final newDriverLocation = await ApiService.getRideDriverLocation(widget.token, rideId);
 
       if (mounted && newDriverLocation != null) {
-        // حساب زاوية الدوران
         double newBearing = _assignedDriverBearing;
         if (_assignedDriverLocation != null) {
           final dist = geolocator.Geolocator.distanceBetween(
@@ -4033,7 +4060,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           }
         }
 
-        // 🔥 رسم المسار من السائق إليك (مرة واحدة إذا لم يكن موجوداً)
+        // رسم المسار من السائق إليك (مرة واحدة)
         if (_currentUserLocation != null && _routeToCustomer.isEmpty) {
           _getRoute(newDriverLocation, _currentUserLocation!);
         }
@@ -4119,8 +4146,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
   }
 
   Future<void> _fetchRideStatus() async {
-    // إذا لم يكن هناك activeRide محلياً، نحاول فحصه من السيرفر لمعرفة آخر طلب
-    // لكن هنا نفترض وجود ID. إذا لم يوجد، نخرج.
     if (_activeRide == null) return;
 
     try {
@@ -4136,11 +4161,8 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
           final currentStatus = _activeRide?['status'];
           final newStatus = updatedRide['status'];
 
-          // 🔥 التحديث الجذري للواجهة
           setState(() {
             _activeRide = updatedRide;
-
-            // تحديث العروض إذا كان الطلب معلقاً
             if (newStatus == 'pending') {
               _pendingOffers = (updatedRide['driver_offers'] as List? ?? [])
                   .where((o) => o['status'] == 'pending').toList();
@@ -4149,15 +4171,14 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             }
           });
 
-          // 🔥 إذا تم القبول للتو، ابدأ التتبع فوراً
+          // إذا تم القبول ولم يبدأ التتبع بعد
           if (newStatus == 'accepted' && (currentStatus == 'pending' || _assignedDriverLocation == null)) {
-            debugPrint("✅ تم قبول الطلب! بدء تتبع السائق...");
-            _stopLiveTracking(); // إيقاف أي تتبع قديم
+            debugPrint("✅ تم قبول الطلب (تحديث دوري)! بدء تتبع السائق...");
+            _stopLiveTracking();
             _startLiveTracking(updatedRide['id'].toString());
           }
 
-          // التعامل مع انتهاء الرحلة
-          else if (['completed', 'cancelled'].contains(newStatus)) {
+          if (['completed', 'cancelled'].contains(newStatus)) {
             if (newStatus == 'completed' && updatedRide['is_rated'] == false) {
               _showRatingDialog(updatedRide['id'].toString(), 'quick_ride');
             }
@@ -4257,7 +4278,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       markers.add(Marker(width: 80, height: 80, point: _currentUserLocation!, child: const PulsingUserLocationMarker()));
     }
 
-    // حالة وجود رحلة نشطة (نعرض السائق المعين)
     if (_activeRide != null) {
       if (_assignedDriverLocation != null) {
         markers.add(Marker(width: 40, height: 40, point: _assignedDriverLocation!, child: TweenAnimationBuilder<double>(tween: Tween<double>(begin: _previousAssignedDriverBearing, end: _assignedDriverBearing), duration: const Duration(milliseconds: 800), builder: (context, value, child) {
@@ -4267,7 +4287,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
       final pickupLatLng = LatLng(double.parse(_activeRide!['pickup']['lat']), double.parse(_activeRide!['pickup']['lng']));
       markers.add(Marker(point: pickupLatLng, child: const Icon(Icons.location_on, color: Colors.green, size: 40)));
     }
-    // حالة عدم وجود طلب (نعرض السائقين المحيطين)
     else {
       _driversData.forEach((driverId, driver) {
         final animation = _animations[driverId];
@@ -4382,6 +4401,7 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
             try {
               final response = await ApiService.customerRespondToOffer(widget.token, _activeRide!['id'].toString(), offer['driver_id'].toString(), 'accepted');
               if (mounted && response.statusCode == 200) {
+                // قد ننتظر الإشعار أو نجلب الحالة
                 _fetchRideStatus();
               } else if (mounted) {
                 final data = json.decode(response.body);
@@ -4570,7 +4590,6 @@ class _QuickRideMapScreenState extends State<QuickRideMapScreen> with TickerProv
     );
   }
 }
-
 
 class ProvinceTaxiButton extends StatelessWidget {
   final VoidCallback onPressed;
