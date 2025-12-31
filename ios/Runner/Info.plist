@@ -83,8 +83,7 @@
     <string>نحتاج إلى استخدام الكاميرا لمسح الباركود</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>نحتاج الوصول إلى مكتبة الصور</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>نستخدم الميكروفون داخل التطبيق</string>
+
     <key>NSUserNotificationUsageDescription</key>
     <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
     <key>NSLocationWhenInUseUsageDescription</key>

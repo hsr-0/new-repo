@@ -219,6 +219,9 @@ class CustomerProvider with ChangeNotifier {
   List<Restaurant> _allRestaurants = [];
   Map<int, List<FoodItem>> _menuItems = {};
 
+  // 🔥 إضافة جديدة: قائمة العروض النشطة
+  List<Offer> _activeOffers = [];
+
   int _lastLoadedAreaId = -1;
   bool _isLoadingHome = false;
   bool _isLoadingMenu = false;
@@ -229,10 +232,11 @@ class CustomerProvider with ChangeNotifier {
   List<Restaurant> get allRestaurants => _allRestaurants;
   Map<int, List<FoodItem>> get menuItems => _menuItems;
 
-  bool get isLoadingHome => _isLoadingHome;
-  // ✅ (إصلاح): إضافة Getter ليتوافق مع واجهة المطاعم
-  bool get isLoadingRestaurants => _isLoadingHome;
+  // 🔥 إضافة جديدة: Getter للعروض
+  List<Offer> get activeOffers => _activeOffers;
 
+  bool get isLoadingHome => _isLoadingHome;
+  bool get isLoadingRestaurants => _isLoadingHome; // للتوافق
   bool get isLoadingMenu => _isLoadingMenu;
   bool get hasError => _hasError;
 
@@ -241,9 +245,38 @@ class CustomerProvider with ChangeNotifier {
     _homeData = {};
     _allRestaurants = [];
     _menuItems = {};
+    _activeOffers = []; // 🔥 تصفير العروض
     _lastLoadedAreaId = -1;
     _hasError = false;
     notifyListeners();
+  }
+
+  // ============================================================
+  // 🔥 إضافة جديدة: دالة جلب العروض (On Sale Items)
+  // ============================================================
+  Future<void> fetchOffers(int areaId) async {
+    // هذه الدالة لا تستخدم الكاش حالياً لضمان تحديث العروض دائماً
+    try {
+      // نطلب من الـ ApiService جلب المنتجات التي عليها تخفيض
+      final response = await _apiService.getOnSaleItems();
+
+      // نحول الـ FoodItems القادمة إلى Offers
+      _activeOffers = response.map((item) => Offer(
+        id: item.id,
+        restaurantId: item.categoryId, // نفترض أن الـ categoryId هو رقم المطعم
+        title: item.name,
+        description: item.description,
+        imageUrl: item.imageUrl,
+        price: item.displayPrice, // السعر بعد الخصم
+      )).toList();
+
+      notifyListeners();
+      print("✅ تم جلب ${_activeOffers.length} عرض بنجاح.");
+    } catch (e) {
+      print("⚠️ خطأ في جلب العروض: $e");
+      _activeOffers = []; // في حال الخطأ نجعل القائمة فارغة
+      notifyListeners();
+    }
   }
 
   // ============================================================
@@ -265,7 +298,6 @@ class CustomerProvider with ChangeNotifier {
     }
 
     // ب) التحقق من صلاحية الكاش (Time-based Caching)
-    // إذا كانت البيانات موجودة ومر أقل من 5 دقائق، نكتفي بالكاش
     if (!isRefresh && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 1400)) {
       print("✅ استخدام الكاش للمطاعم (البيانات حديثة)");
       _isLoadingHome = false;
@@ -273,7 +305,7 @@ class CustomerProvider with ChangeNotifier {
       return;
     }
 
-    // ج) طلب البيانات الحديثة من السيرفر (في الخلفية)
+    // ج) طلب البيانات الحديثة من السيرفر
     try {
       final results = await Future.wait([
         _apiService.getRawDeliverableIds(areaId), // String JSON
@@ -291,7 +323,6 @@ class CustomerProvider with ChangeNotifier {
 
     } catch (e) {
       print("⚠️ فشل تحديث المطاعم من الشبكة: $e");
-      // إذا لم يكن لدينا بيانات قديمة (من الكاش)، نظهر رسالة خطأ
       if (_homeData.isEmpty) _hasError = true;
     } finally {
       _isLoadingHome = false;
@@ -299,7 +330,7 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // --- دالة لجلب كل المطاعم (تستخدم نفس منطق الرئيسية) ---
+  // --- دالة لجلب كل المطاعم ---
   Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
     await fetchHomeData(areaId, isRefresh: isRefresh);
   }
@@ -307,20 +338,16 @@ class CustomerProvider with ChangeNotifier {
   // --- دالة مساعدة: معالجة JSON المطاعم ---
   void _processAndSetHomeData(String deliverableJson, String restaurantsJson) {
     try {
-      // 1. تحليل IDs المطاعم التي توصل للمنطقة
       final deliverableList = json.decode(deliverableJson) as List;
       final Set<int> deliverableIds = deliverableList.map<int>((item) => item['id']).toSet();
 
-      // 2. تحليل قائمة المطاعم الكاملة
       final restaurantsList = json.decode(restaurantsJson) as List;
       List<Restaurant> parsedRestaurants = restaurantsList.map((json) => Restaurant.fromJson(json)).toList();
 
-      // 3. ضبط حالة التوصيل (isDeliverable)
       for (var r in parsedRestaurants) {
         r.isDeliverable = deliverableIds.contains(r.id);
       }
 
-      // 4. الحفظ في المتغيرات
       _allRestaurants = parsedRestaurants;
       _homeData['restaurants'] = parsedRestaurants;
 
@@ -339,7 +366,7 @@ class CustomerProvider with ChangeNotifier {
     if (deliverableJson != null && restaurantsJson != null) {
       try {
         _processAndSetHomeData(deliverableJson, restaurantsJson);
-        notifyListeners(); // تحديث الواجهة فوراً بالبيانات القديمة
+        notifyListeners();
         print("📂 تم تحميل المطاعم من الذاكرة المحلية.");
       } catch (e) {
         print("خطأ في قراءة كاش المطاعم: $e");
@@ -352,7 +379,6 @@ class CustomerProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_ids', deliverableJson);
     await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_list', restaurantsJson);
-    // حفظ وقت التحديث الحالي
     await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', DateTime.now().millisecondsSinceEpoch);
   }
 
@@ -363,7 +389,6 @@ class CustomerProvider with ChangeNotifier {
   Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
     _hasError = false;
 
-    // أ) التحميل من الكاش أولاً
     if (!isRefresh && !_menuItems.containsKey(restaurantId)) {
       await _loadMenuFromCache(restaurantId);
     }
@@ -373,7 +398,6 @@ class CustomerProvider with ChangeNotifier {
       notifyListeners();
     }
 
-    // ب) التحقق من صلاحية الكاش (مثلاً 10 دقائق للمنيو)
     if (!isRefresh && _menuItems.containsKey(restaurantId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', minutes: 600)) {
       print("✅ استخدام الكاش للمنيو (البيانات حديثة)");
       _isLoadingMenu = false;
@@ -381,19 +405,12 @@ class CustomerProvider with ChangeNotifier {
       return;
     }
 
-    // ج) طلب الشبكة
     try {
       final jsonStr = await _apiService.getRawMenu(restaurantId);
-
-      // 1. معالجة وتحديث
       _processAndSetMenu(restaurantId, jsonStr);
-
-      // 2. حفظ في الكاش
       await _saveMenuToCache(restaurantId, jsonStr);
-
     } catch (e) {
       print("⚠️ فشل تحديث المنيو من الشبكة: $e");
-      // إذا لم تكن هناك بيانات، نظهر الخطأ
       if (!_menuItems.containsKey(restaurantId)) {
         _hasError = true;
         _menuItems[restaurantId] = [];
@@ -410,13 +427,11 @@ class CustomerProvider with ChangeNotifier {
       final List<dynamic> decoded = json.decode(jsonStr);
       List<FoodItem> items = decoded.map((json) => FoodItem.fromJson(json)).toList();
 
-      // البحث عن المطعم الأب لتحديد حالته (مفتوح/مغلق) وتمريرها للمنتجات
       Restaurant? restaurant = _allRestaurants.firstWhere(
               (r) => r.id == restaurantId,
           orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '', autoCloseTime: '', latitude: 0, longitude: 0)
       );
 
-      // المنتج متاح فقط إذا كان المطعم يوصل للمنطقة + المطعم مفتوح
       bool isAvailable = restaurant.isDeliverable && restaurant.isOpen;
 
       for (var item in items) {
@@ -451,12 +466,9 @@ class CustomerProvider with ChangeNotifier {
     await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', DateTime.now().millisecondsSinceEpoch);
   }
 
-
   // ============================================================
   // 3. دوال مساعدة عامة
   // ============================================================
-
-  // التحقق من صلاحية الكاش بناءً على الوقت (بديلة لـ _lastFetchTime)
   Future<bool> _isCacheValid(String key, {required int minutes}) async {
     final prefs = await SharedPreferences.getInstance();
     final lastTime = prefs.getInt(key);
@@ -468,6 +480,8 @@ class CustomerProvider with ChangeNotifier {
     return minutesDiff < minutes;
   }
 }
+
+
 class DashboardProvider with ChangeNotifier {
   Map<String, List<Order>> _orders = {};
   RestaurantRatingsDashboard? _ratingsDashboard;
@@ -1283,8 +1297,162 @@ class OrderHistoryService {
     return [];
   }
 }
+// ==========================================
+// 1. موديل العرض (Offer Model)
+// ==========================================
+class Offer {
+  final int id;
+  final int restaurantId;
+  final String title;
+  final String description;
+  final String imageUrl;
+  final double price;
 
-// في ملف re.dart (تحت قسم WIDGETS)
+  Offer({
+    required this.id,
+    required this.restaurantId,
+    required this.title,
+    required this.description,
+    required this.imageUrl,
+    required this.price,
+  });
+
+  // لتحويل البيانات القادمة من السيرفر (منتج ووكومرس مميز)
+  factory Offer.fromJson(Map<String, dynamic> json) {
+    return Offer(
+      id: json['id'],
+      restaurantId: 0, // سيتم تحديده لاحقاً
+      title: json['name'],
+      description: json['short_description'] ?? '',
+      imageUrl: (json['images'] != null && json['images'].isNotEmpty)
+          ? json['images'][0]['src']
+          : 'https://via.placeholder.com/300',
+      price: double.tryParse(json['price'].toString()) ?? 0.0,
+    );
+  }
+}
+
+// ==========================================
+// 2. ويدجت بطاقة العرض العصرية (Modern Offer Card)
+// ==========================================
+class ModernOfferCard extends StatelessWidget {
+  final Offer offer;
+  final VoidCallback onTap;
+  final VoidCallback onOrderNow;
+
+  const ModernOfferCard({
+    Key? key,
+    required this.offer,
+    required this.onTap,
+    required this.onOrderNow,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        width: 300,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4))],
+          image: DecorationImage(
+            image: CachedNetworkImageProvider(offer.imageUrl),
+            fit: BoxFit.cover,
+          ),
+        ),
+        child: Stack(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(offer.title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text(
+                      offer.description.replaceAll(RegExp(r'<[^>]*>'), ''), // تنظيف HTML
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.grey[300], fontSize: 12)
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.amber)
+                        ),
+                        child: Text("${NumberFormat('#,###').format(offer.price)} د.ع", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                      ),
+                      ElevatedButton(
+                        onPressed: onOrderNow,
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                            minimumSize: const Size(80, 36)
+                        ),
+                        child: const Text("اطلب الآن", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      )
+                    ],
+                  )
+                ],
+              ),
+            ),
+            Positioned(
+              top: 12, right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)),
+                child: const Text("عرض نار 🔥", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class LoyaltyChallengeWidget extends StatefulWidget {
   const LoyaltyChallengeWidget({super.key});
@@ -2118,12 +2286,16 @@ class ApiService {
 
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
       _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
-
+// ✅ التعديل: إضافة zoneId كمعامل مطلوب
   Future<Order?> submitOrder({
-    required String name, required String phone, required String address,
-    required List<FoodItem> cartItems, String? couponCode,
+    required String name,
+    required String phone,
+    required String address,
+    required List<FoodItem> cartItems,
+    String? couponCode,
     geolocator.Position? position,
     double? deliveryFee,
+    required int zoneId, // 👈 1. إضافة هذا المعامل الجديد
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
@@ -2133,16 +2305,20 @@ class ApiService {
     String? fcmToken = await FirebaseMessaging.instance.getToken();
 
     Map<String, dynamic> bodyPayload = {
-      "payment_method": "cod", "payment_method_title": "الدفع عند الاستلام",
-      "billing": {"first_name": name, "last_name":".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001", "email": "customer@example.com"},
-      "shipping": {"first_name": name, "last_name":".", "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001"},
+      "payment_method": "cod",
+      "payment_method_title": "الدفع عند الاستلام",
+      "billing": {"first_name": name, "last_name": ".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode": "10001", "email": "customer@example.com"},
+      "shipping": {"first_name": name, "last_name": ".", "address_1": address, "country": "IQ", "city": "Default", "postcode": "10001"},
       "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
       "coupon_lines": couponLines,
       "shipping_lines": shippingLines,
       "meta_data": [
+        // 👈 2. إرسال رقم المنطقة كـ Meta Data ليستلمها كود الـ PHP
+        {"key": "zone_id", "value": zoneId.toString()},
+
         if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
-        if (position != null) {"key": "_customer_destination_lat", "value": position.latitude.toString()},
-        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()}
+        if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()}, // تم توحيد الاسم ليتوافق مع PHP
+        if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()}
       ],
     };
 
@@ -3301,247 +3477,257 @@ class OrderCard extends StatefulWidget {
 
 class _OrderCardState extends State<OrderCard> {
   final ApiService _apiService = ApiService();
-  bool _isUpdating = false;
+  bool _isRetrying = false; // متغير للتحكم في حالة تحميل زر الطوارئ
 
-  // 🔥 الحيلة الذكية: قبول + نقل للمكتملة + طلب تكسي (مع ضمان الاسم)
-  Future<void> _acceptAndAutoRequestTaxi() async {
-    setState(() => _isUpdating = true);
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-
+  // 🔥 زر الطوارئ: إرسال يدوي في حال فشل النظام الآلي أو تأخره
+  Future<void> _manualDispatchTaxi() async {
+    setState(() => _isRetrying = true);
     try {
-      // 1. نقل الطلب إلى "المكتملة" فوراً
-      final statusSuccess = await _apiService.updateOrderStatus(widget.order.id, 'completed');
-      if (!statusSuccess) throw Exception("فشل تحديث حالة الطلب");
-
-      // 2. تجهيز البيانات
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('jwt_token');
-      final rLat = prefs.getDouble('restaurant_lat');
-      final rLng = prefs.getDouble('restaurant_lng');
 
-      // ✅ [تعديل هام]: جلب الاسم مع التحقق الصارم
-      String rName = prefs.getString('restaurant_name') ?? '';
+      // استدعاء API الطوارئ لإعادة إرسال الطلب لسيرفر التكسي
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/manual-dispatch-taxi'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json'
+        },
+        body: json.encode({'order_id': widget.order.id}),
+      );
 
-      // إذا فشل جلب الاسم لأي سبب، نضع العبارة المطلوبة بدلاً من اسم افتراضي
-      if (rName.isEmpty || rName == 'null') {
-        rName = '⚠️ غير معروف - تواصل مع الدعم';
-      }
-
-      if (token != null && rLat != null && rLng != null) {
-
-        // تثبيت السعر عند 1000 أو حسب الفاتورة
-        String deliveryFee = "1000";
-        if (widget.order.shippingTotal != "0" && widget.order.shippingTotal.isNotEmpty) {
-          deliveryFee = widget.order.shippingTotal;
-        }
-
-        // إحداثيات الزبون
-        double destLat = 0.0;
-        double destLng = 0.0;
-        if (widget.order.destinationLat != null && widget.order.destinationLat!.isNotEmpty) {
-          destLat = double.tryParse(widget.order.destinationLat!) ?? 0.0;
-          destLng = double.tryParse(widget.order.destinationLng!) ?? 0.0;
-        }
-
-        // ملاحظات السائق
-        String notes = "توصيل طلب مطعم #${widget.order.id}";
-        if (destLat == 0) {
-          notes += "\n⚠️ تنبيه: الموقع غير محدد، اعتمد على العنوان النصي.";
-        }
-        // إضافة تنبيه للسائق في الملاحظات أيضاً إذا كان الاسم مفقوداً
-        if (rName.contains('تواصل مع الدعم')) {
-          notes += "\n🚨 تنبيه هام: اسم المطعم غير ظاهر، يرجى الاتصال بالدعم أو المطعم.";
-        }
-
-        // 3. إرسال طلب التكسي
-        await _apiService.createUnifiedDeliveryRequest(
-          token: token,
-          sourceType: 'restaurant',
-          sourceOrderId: widget.order.id.toString(),
-          pickupName: rName, // ✅ الاسم الصحيح أو رسالة الدعم
-          pickupLat: rLat,
-          pickupLng: rLng,
-          destinationAddress: widget.order.address,
-          destinationLat: destLat,
-          destinationLng: destLng,
-          deliveryFee: deliveryFee,
-          orderDescription: notes,
-          endCustomerPhone: widget.order.phone,
-        );
-
-        // 4. إظهار رسالة النجاح
+      if (response.statusCode == 200) {
         if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (ctx) => AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.check_circle, color: Colors.green, size: 60),
-                  const SizedBox(height: 10),
-                  const Text("تم القبول والنقل!", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  Text(
-                      "تم طلب المندوب باسم:\n($rName)\nوتم نقل الطلب للأرشيف ✅",
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 15, color: Colors.blueGrey)
-                  ),
-                ],
-              ),
-            ),
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('✅ تم إرسال إشارة الطوارئ لسيرفر التكسي بنجاح'),
+                backgroundColor: Colors.green,
+              )
           );
-
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && Navigator.canPop(context)) Navigator.pop(context);
-            widget.onStatusChanged();
-          });
         }
       } else {
-        widget.onStatusChanged();
-        scaffoldMessenger.showSnackBar(const SnackBar(content: Text('تم النقل للمكتملة (بيانات الموقع ناقصة لطلب التكسي)'), backgroundColor: Colors.orange));
+        throw Exception("فشل الإرسال اليدوي: كود ${response.statusCode}");
       }
-
     } catch (e) {
-      if (mounted) scaffoldMessenger.showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('فشل الاتصال بالسيرفر: $e'),
+              backgroundColor: Colors.red,
+            )
+        );
+      }
     } finally {
-      if (mounted) setState(() => _isUpdating = false);
+      if (mounted) setState(() => _isRetrying = false);
     }
   }
 
+  // وظيفة الاتصال بالزبون
   Future<void> _makePhoneCall(String phoneNumber) async {
     final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(launchUri)) await launchUrl(launchUri);
-  }
-
-  Future<void> _launchMaps(String? lat, String? lng) async {
-    if (lat == null || lat == "0") return;
-    Navigator.push(context, MaterialPageRoute(builder: (_) => InAppMapScreen(latitude: double.parse(lat), longitude: double.parse(lng!), title: 'موقع الزبون')));
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    // تنسيق التاريخ
     final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
     final formattedDate = formatter.format(widget.order.dateCreated.toLocal());
 
-    Color statusColor = Colors.grey;
-    if (widget.order.status == 'pending') statusColor = Colors.orange;
-    if (widget.order.status == 'processing') statusColor = Colors.blue;
-    if (widget.order.status == 'completed') statusColor = Colors.green;
+    // تحديد الحالة المنطقية للعرض
+    bool isProcessing = widget.order.status == 'processing' || widget.order.status == 'pending';
+    bool driverAssigned = widget.order.status == 'driver-assigned' || widget.order.status == 'out-for-delivery';
+
+    // تحديد لون الشارة (Badge) بناءً على الحالة
+    Color chipColor = Colors.grey;
+    if (isProcessing) chipColor = Colors.orange;
+    else if (driverAssigned) chipColor = Colors.blue;
+    else if (widget.isCompleted) chipColor = Colors.green;
 
     return Card(
       elevation: 4,
-      color: Colors.white,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(12.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
           children: [
+            // --- 1. رأس البطاقة (رقم الطلب والتاريخ) ---
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Chip(
-                  label: Text("#${widget.order.id}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  backgroundColor: statusColor,
+                  label: Text(
+                      "#${widget.order.id}",
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
+                  ),
+                  backgroundColor: chipColor,
                 ),
-                Text(formattedDate, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                Text(
+                    formattedDate,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey)
+                ),
               ],
             ),
-            const Divider(),
-            _infoRow(Icons.person, widget.order.customerName),
-            const SizedBox(height: 5),
-            _infoRow(Icons.location_on, widget.order.address),
 
-            if (widget.order.destinationLat != null && widget.order.destinationLat != "0" && widget.order.destinationLat != "0.0")
-              TextButton.icon(
-                onPressed: () => _launchMaps(widget.order.destinationLat, widget.order.destinationLng),
-                icon: const Icon(Icons.map, size: 16),
-                label: const Text("موقع الزبون على الخريطة"),
-                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              )
-            else
-              const Padding(
-                padding: EdgeInsets.only(top: 5),
-                child: Text("⚠️ الموقع غير محدد (الاعتماد على العنوان)", style: TextStyle(fontSize: 11, color: Colors.orange)),
+            const Divider(),
+
+            // --- 2. تفاصيل الزبون ---
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(
+                backgroundColor: Colors.teal,
+                child: Icon(Icons.person, color: Colors.white, size: 20),
               ),
-
-            const SizedBox(height: 5),
-            _infoRow(Icons.phone, widget.order.phone),
-            const Divider(),
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text("${widget.order.total} د.ع", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green)),
-                IconButton(
-                  icon: const Icon(Icons.call, color: Colors.green),
-                  onPressed: () => _makePhoneCall(widget.order.phone),
-                )
-              ],
+              title: Text(
+                  widget.order.customerName,
+                  style: const TextStyle(fontWeight: FontWeight.bold)
+              ),
+              subtitle: Text(widget.order.address),
+              trailing: IconButton(
+                icon: const Icon(Icons.call, color: Colors.green),
+                onPressed: () => _makePhoneCall(widget.order.phone),
+              ),
             ),
 
+            // --- 3. تفاصيل المنتجات ---
             Container(
-              margin: const EdgeInsets.symmetric(vertical: 8),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)),
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade200)
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: widget.order.lineItems.map((item) =>
-                    Text("• ${item.quantity} x ${item.name}", style: const TextStyle(fontSize: 14))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4.0),
+                      child: Text(
+                          "• ${item.quantity} x ${item.name}",
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)
+                      ),
+                    )
                 ).toList(),
               ),
             ),
 
-            if (!widget.isCompleted && widget.order.status != 'out-for-delivery')
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.check_circle_outline, size: 18),
-                      onPressed: _isUpdating ? null : _acceptAndAutoRequestTaxi,
-                      label: const Text("قبول وتجهيز"),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                      onPressed: _isUpdating ? null : () async {
-                        setState(() => _isUpdating = true);
-                        await _apiService.updateOrderStatus(widget.order.id, 'cancelled');
-                        widget.onStatusChanged();
-                      },
-                      child: const Text("رفض"),
-                    ),
-                  ),
-                ],
-              ),
+            const SizedBox(height: 10),
 
-            if (widget.order.status == 'out-for-delivery' || (widget.isCompleted && widget.pickupCode != null))
+            // --- 4. السعر الإجمالي ---
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("الإجمالي (مع التوصيل):", style: TextStyle(fontWeight: FontWeight.bold)),
+                Text(
+                    "${widget.order.total} د.ع",
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green)
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 15),
+
+            // --- 5. 🔥 المنطقة الذكية (حالة الأتمتة) 🔥 ---
+
+            if (!widget.isCompleted) ...[
+
+              // أ) حالة المعالجة والبحث عن سائق
+              if (isProcessing) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.amber.shade200)
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange)
+                          ),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "تم طلب التكسي تلقائياً.. جاري البحث عن سائق 🚕",
+                              style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // زر الطوارئ (إرسال يدوي)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _isRetrying ? null : _manualDispatchTaxi,
+                          icon: const Icon(Icons.bolt, size: 18, color: Colors.red),
+                          label: Text(
+                              _isRetrying ? "جاري الإرسال..." : "زر الطوارئ: إعادة طلب التكسي",
+                              style: const TextStyle(color: Colors.red, fontSize: 12)
+                          ),
+                          style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              backgroundColor: Colors.red.withOpacity(0.05)
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ]
+
+              // ب) حالة تم تعيين السائق
+              else if (driverAssigned) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.blue.shade200)
+                  ),
+                  child: Column(
+                    children: const [
+                      Icon(Icons.check_circle, color: Colors.blue, size: 30),
+                      SizedBox(height: 5),
+                      Text(
+                          "✅ تم تعيين السائق وهو في الطريق",
+                          style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)
+                      ),
+                    ],
+                  ),
+                )
+              ]
+
+            ] else ...[
+              // ج) الطلبات المكتملة (الأرشيف)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(8),
-                color: Colors.green.shade50,
-                child: const Center(child: Text("✅ الطلب مكتمل / تم إرسال المندوب", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
+                decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8)
+                ),
+                child: const Center(
+                    child: Text(
+                        "تم تسليم الطلب بنجاح ✅",
+                        style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)
+                    )
+                ),
               )
+            ]
           ],
         ),
       ),
-    );
-  }
-
-  Widget _infoRow(IconData icon, String text) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.grey),
-        const SizedBox(width: 8),
-        Expanded(child: Text(text, style: const TextStyle(fontSize: 14))),
-      ],
     );
   }
 }
@@ -3706,12 +3892,12 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
   bool _isLoading = false;
   final ApiService _apiService = ApiService();
 
-  // عرض التفاصيل
+  // عرض التفاصيل (كما هي)
   void _showOrderDetails(BuildContext context) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
-      isScrollControlled: true, // يسمح بالتحكم في الارتفاع
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
         return DraggableScrollableSheet(
@@ -3756,7 +3942,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
                 _buildSummaryRow("الإجمالي الكلي:", widget.order.orderTotal + widget.order.deliveryFee, isBold: true, color: Colors.green),
                 const SizedBox(height: 20),
 
-                // ✨ إضافة معلومات السائق في التفاصيل أيضاً
+                // معلومات السائق في التفاصيل
                 if (widget.order.driverName != null) ...[
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -3789,30 +3975,32 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     ]);
   }
 
-  Future<void> _interveneAndRequestTaxi() async {
+  // 🔥 زر الطوارئ للتيم ليدر (إعادة الإرسال اليدوي)
+  Future<void> _emergencyDispatch() async {
     setState(() => _isLoading = true);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
-      final statusSuccess = await _apiService.updateOrderStatus(widget.order.id, 'completed');
-      if (!statusSuccess) throw Exception("فشل تحديث حالة الطلب");
-
-      await _apiService.createUnifiedDeliveryRequest(
-        token: widget.token,
-        sourceType: widget.order.sourceType,
-        sourceOrderId: widget.order.id.toString(),
-        pickupName: widget.order.pickupName,
-        pickupLat: double.tryParse(widget.order.pickupLat) ?? 0.0,
-        pickupLng: double.tryParse(widget.order.pickupLng) ?? 0.0,
-        destinationAddress: widget.order.destinationAddress,
-        destinationLat: double.tryParse(widget.order.destLat) ?? 0.0,
-        destinationLng: double.tryParse(widget.order.destLng) ?? 0.0,
-        deliveryFee: widget.order.deliveryFee.toStringAsFixed(0),
-        orderDescription: "تم القبول بواسطة التيم ليدر 👮\n${widget.order.description}",
-        endCustomerPhone: widget.order.customerPhone,
+      // نستخدم نفس Endpoint الطوارئ الموجود في السيرفر
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/manual-dispatch-taxi'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}', // نستخدم توكن الليدر
+          'Content-Type': 'application/json'
+        },
+        body: json.encode({'order_id': widget.order.id}),
       );
-      if (mounted) {
-        showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text("تم الإنقاذ بنجاح! 👮‍♂️"), content: const Text("تم قبول الطلب وطلب المندوب."), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))]));
-        widget.onActionComplete();
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          showDialog(context: context, builder: (ctx) => AlertDialog(
+            title: const Text("تم الإرسال 👮‍♂️"),
+            content: const Text("تم إرسال إشارة الطوارئ لسيرفر التكسي بنجاح."),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))],
+          ));
+          widget.onActionComplete();
+        }
+      } else {
+        throw Exception("فشل الإرسال اليدوي");
       }
     } catch (e) {
       if (mounted) scaffoldMessenger.showSnackBar(SnackBar(content: Text("خطأ: $e"), backgroundColor: Colors.red));
@@ -3835,9 +4023,13 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     else if (widget.order.sourceType == 'market') { color = Colors.purple; icon = Icons.shopping_basket; }
 
     bool isActive = !['completed', 'cancelled', 'refunded', 'failed', 'trash', 'out-for-delivery'].contains(widget.order.status);
+
+    // في النظام الآلي، completed تعني أن الطلب تم استلامه من المطعم وبانتظار السائق
+    // driver-assigned تعني السائق استلم
+
     double grandTotal = widget.order.orderTotal + widget.order.deliveryFee;
 
-    // ✨ تحويل التاريخ
+    // تحويل التاريخ
     final DateTime date = DateTime.fromMillisecondsSinceEpoch(widget.order.dateCreated * 1000);
     final String formattedDate = DateFormat('yyyy-MM-dd', 'ar').format(date);
     final String formattedTime = DateFormat('hh:mm a', 'ar').format(date);
@@ -3850,7 +4042,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
         padding: const EdgeInsets.all(12.0),
         child: Column(
           children: [
-            // ✨ 1. صف التاريخ والوقت (جديد)
+            // 1. صف التاريخ والوقت
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -3889,7 +4081,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
               trailing: IconButton(icon: const Icon(Icons.phone, color: Colors.green), onPressed: () => _makePhoneCall(widget.order.customerPhone)),
             ),
 
-            // ✨ 4. عرض معلومات المندوب (جديد) - يظهر إذا كان الاسم موجوداً
+            // 4. عرض معلومات المندوب (إذا وجد)
             if (widget.order.driverName != null && widget.order.driverName!.isNotEmpty)
               Container(
                 margin: const EdgeInsets.symmetric(vertical: 8),
@@ -3920,37 +4112,69 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
 
             const SizedBox(height: 10),
 
-            // 🔥 5. أزرار التحكم (معدلة)
-            Row(
+            // 🔥🔥🔥 5. منطقة التحكم الآلي للتيم ليدر 🔥🔥🔥
+            // استبدلنا الأزرار القديمة بهذا القسم
+
+            Column(
               children: [
-                // زر التفاصيل (دائماً ظاهر)
-                Expanded(
-                  flex: 1,
+                // زر التفاصيل (دائماً موجود)
+                SizedBox(
+                  width: double.infinity,
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.list_alt, size: 18),
-                    label: const Text("التفاصيل"),
-                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12), side: BorderSide(color: Colors.grey.shade300), foregroundColor: Colors.black87),
+                    label: const Text("عرض التفاصيل"),
+                    style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        side: BorderSide(color: Colors.grey.shade300),
+                        foregroundColor: Colors.black87
+                    ),
                     onPressed: () => _showOrderDetails(context),
                   ),
                 ),
-                const SizedBox(width: 8),
 
-                // الجزء المتغير (زر القبول أو حالة الطلب)
-                Expanded(
-                  flex: 2,
-                  child: isActive
-                      ? ElevatedButton.icon(
-                    icon: const Icon(Icons.flash_on, size: 18),
-                    label: const Text("قبول (نيابة)"),
-                    style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12), backgroundColor: Colors.redAccent.shade700, foregroundColor: Colors.white, elevation: 0),
-                    onPressed: _isLoading ? null : _interveneAndRequestTaxi,
-                  )
-                      : Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(30), border: Border.all(color: Colors.green.shade200)),
-                    child: const Center(
-                      child: Text("✅ مكتمل / جاري التوصيل", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-                    ),
+                const SizedBox(height: 8),
+
+                // شريط الحالة الآلي
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300)
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.smart_toy, color: Colors.purple), // أيقونة النظام الآلي
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text("حالة النظام الآلي:", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                            Text(
+                                widget.order.driverName != null
+                                    ? "✅ السائق في الطريق"
+                                    : "⏳ جاري البحث عن سائق...", // يظهر هذا تلقائياً لأن الطلب Processing
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: widget.order.driverName != null ? Colors.green : Colors.orange
+                                )
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // زر التدخل (طوارئ) - يظهر فقط إذا لم يكن هناك سائق بعد
+                      if (widget.order.driverName == null && isActive)
+                        IconButton(
+                          icon: _isLoading
+                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.refresh, color: Colors.orange),
+                          tooltip: "إعادة إرسال الطلب (طوارئ)",
+                          onPressed: _isLoading ? null : _emergencyDispatch,
+                        )
+                    ],
                   ),
                 ),
               ],
@@ -3961,8 +4185,6 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     );
   }
 }
-
-
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
@@ -4919,7 +5141,6 @@ class HomeScreen extends StatefulWidget {
   @override
   State<HomeScreen> createState() => HomeScreenState();
 }
-
 class HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
 
@@ -4949,8 +5170,13 @@ class HomeScreenState extends State<HomeScreen> {
 
     // جلب بيانات الصفحة الرئيسية بناءً على المنطقة
     if (_selectedAreaId != null) {
-      Provider.of<CustomerProvider>(context, listen: false)
-          .fetchHomeData(_selectedAreaId!, isRefresh: false);
+      final provider = Provider.of<CustomerProvider>(context, listen: false);
+
+      // 1. جلب المطاعم
+      provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
+
+      // 2. 🔥 إضافة: جلب العروض النشطة لهذه المنطقة
+      provider.fetchOffers(_selectedAreaId!);
     }
     setState(() {});
   }
@@ -4984,8 +5210,9 @@ class HomeScreenState extends State<HomeScreen> {
               _selectedAreaName = prefs.getString('selectedAreaName');
               setState(() {});
               if (_selectedAreaId != null) {
-                Provider.of<CustomerProvider>(context, listen: false)
-                    .fetchHomeData(_selectedAreaId!, isRefresh: true);
+                final provider = Provider.of<CustomerProvider>(context, listen: false);
+                provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
+                provider.fetchOffers(_selectedAreaId!); // تحديث العروض عند تغيير المنطقة
               }
             }
           },
@@ -4997,7 +5224,7 @@ class HomeScreenState extends State<HomeScreen> {
         ),
         centerTitle: true,
 
-        // ✨✨✨ المنطقة الذكية للأزرار (الحل الجذري) ✨✨✨
+        // ✨✨✨ المنطقة الذكية للأزرار ✨✨✨
         actions: [
           Consumer<AuthProvider>(
             builder: (context, auth, child) {
@@ -5031,12 +5258,11 @@ class HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.dashboard_customize, color: Colors.amber, size: 28),
                   tooltip: "لوحة المراقبة (Team Leader)",
                   onPressed: () {
-                    // ✅ التعديل: الانتقال المباشر للوحة التحكم (بدون اختيار منطقة)
                     if (auth.token != null) {
                       Navigator.of(context).push(
                           MaterialPageRoute(builder: (_) => RegionDashboardScreen(
                             token: auth.token!,
-                            areaId: 0, // نرسل صفر، والسيرفر يعرف المنطقة من حساب التيم ليدر
+                            areaId: 0,
                             areaName: "منطقتك المسؤولة",
                           ))
                       );
@@ -5059,7 +5285,7 @@ class HomeScreenState extends State<HomeScreen> {
         ],
       ),
 
-      // --- جسم الصفحة (عرض المطاعم للجميع) ---
+      // --- جسم الصفحة (عرض المطاعم للعروض والجميع) ---
       body: Consumer<CustomerProvider>(
         builder: (context, provider, child) {
           if (_selectedAreaId == null) {
@@ -5069,25 +5295,73 @@ class HomeScreenState extends State<HomeScreen> {
           if (provider.hasError && provider.homeData.isEmpty) {
             return NetworkErrorWidget(
                 message: 'تحقق من اتصال الانترنيت .',
-                onRetry: () => provider.fetchHomeData(_selectedAreaId!,
-                    isRefresh: true));
+                onRetry: () => provider.fetchHomeData(_selectedAreaId!, isRefresh: true));
           }
 
           // تجهيز البيانات
-          final restaurants =
-          (provider.homeData['restaurants'] as List<dynamic>? ?? [])
-              .cast<Restaurant>();
+          final restaurants = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
 
           return RefreshIndicator(
-            onRefresh: () =>
-                provider.fetchHomeData(_selectedAreaId!, isRefresh: true),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            onRefresh: () async {
+              provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
+              provider.fetchOffers(_selectedAreaId!);
+            },
+            child: ListView( // ⚠️ تغيير من Column إلى ListView للسماح بالتمرير الكامل للصفحة
+              physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 const LoyaltyChallengeWidget(),
+
                 Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20.0),
                     child: _buildSearchBar()),
+
+                // 🔥🔥🔥 بداية قسم العروض (الكروت الدوارة) 🔥🔥🔥
+                if (provider.activeOffers.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                    child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  ),
+                  SizedBox(
+                    height: 230, // ارتفاع البطاقة
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      itemCount: provider.activeOffers.length,
+                      itemBuilder: (context, index) {
+                        final offer = provider.activeOffers[index];
+                        return ModernOfferCard(
+                          offer: offer,
+                          onTap: () {
+                            // عند الضغط على العرض: ابحث عن المطعم وافتح المنيو
+                            try {
+                              final restaurant = provider.allRestaurants.firstWhere(
+                                      (r) => r.id == offer.restaurantId,
+                                  orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '', autoCloseTime: '', latitude: 0, longitude: 0)
+                              );
+
+                              if (restaurant.id != 0) {
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("المطعم غير متاح حالياً")));
+                              }
+                            } catch (e) {
+                              print("خطأ في التنقل للعرض: $e");
+                            }
+                          },
+                          onOrderNow: () {
+                            // نفس وظيفة الضغط (الذهاب للمطعم)
+                            try {
+                              final restaurant = provider.allRestaurants.firstWhere((r) => r.id == offer.restaurantId);
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
+                            } catch(e) {}
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+                // 🔥🔥🔥 نهاية قسم العروض 🔥🔥🔥
+
                 _buildBannerSlider(),
 
                 const Padding(
@@ -5097,21 +5371,27 @@ class HomeScreenState extends State<HomeScreen> {
                       TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 ),
 
-                Expanded(
-                  child: () {
-                    // حالة التحميل الأولي
+                // عرض شبكة المطاعم (داخل ListView)
+                Builder(
+                  builder: (context) {
                     if (provider.isLoadingHome && restaurants.isEmpty) {
-                      return _buildRestaurantGridShimmer();
+                      return SizedBox(
+                          height: 400, // ارتفاع تقريبي للشبكة
+                          child: _buildRestaurantGridShimmer()
+                      );
                     }
-                    // حالة لا توجد بيانات
                     if (!provider.isLoadingHome && restaurants.isEmpty) {
-                      return const Center(
-                          child: Text("لا توجد مطاعم متاحة حالياً في هذه المنطقة"));
+                      return const Padding(
+                        padding: EdgeInsets.all(50.0),
+                        child: Center(child: Text("لا توجد مطاعم متاحة حالياً في هذه المنطقة")),
+                      );
                     }
 
-                    // عرض المطاعم
                     return GridView.builder(
                       padding: const EdgeInsets.all(8),
+                      // تعطيل التمرير الداخلي للشبكة لأننا نستخدم ListView للصفحة كاملة
+                      physics: const NeverScrollableScrollPhysics(),
+                      shrinkWrap: true,
                       gridDelegate:
                       const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 2,
@@ -5119,14 +5399,16 @@ class HomeScreenState extends State<HomeScreen> {
                         crossAxisSpacing: 8,
                         mainAxisSpacing: 8,
                       ),
-                      physics: const BouncingScrollPhysics(),
                       itemCount: restaurants.length,
                       itemBuilder: (context, index) {
                         return RestaurantCard(restaurant: restaurants[index]);
                       },
                     );
-                  }(),
+                  },
                 ),
+
+                // مسافة إضافية في الأسفل
+                const SizedBox(height: 20),
               ],
             ),
           );
@@ -5212,6 +5494,8 @@ class HomeScreenState extends State<HomeScreen> {
       baseColor: Colors.grey[300]!,
       highlightColor: Colors.grey[100]!,
       child: GridView.builder(
+        physics: const NeverScrollableScrollPhysics(), // تعطيل السكرول للشيمر
+        shrinkWrap: true,
         padding: const EdgeInsets.all(10),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
@@ -5227,7 +5511,6 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 }
-
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
   const SelectLocationScreen({super.key, this.isCancellable = false});
@@ -5858,7 +6141,6 @@ class _CartScreenState extends State<CartScreen> {
         return StatefulBuilder(builder: (context, setDialogState) {
 
           // --- دالة جلب الموقع فقط (بدون تغيير السعر) ---
-          // سنحتفظ بجلب الموقع لأغراض توجيه السائق، لكن لن يؤثر على السعر
           Future<void> fetchLocationForDriver() async {
             try {
               bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -5880,7 +6162,7 @@ class _CartScreenState extends State<CartScreen> {
                 }
               }
             } catch (e) {
-              // تجاهل الأخطاء، السعر ثابت ولا يتأثر
+              // تجاهل الأخطاء
             }
           }
 
@@ -5925,7 +6207,6 @@ class _CartScreenState extends State<CartScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
-                              // عرض السعر الثابت مباشرة
                               Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
                             ],
                           ),
@@ -5948,7 +6229,6 @@ class _CartScreenState extends State<CartScreen> {
                       setDialogState(() {});
                     }))),
                     const Divider(height: 30),
-                    // تمرير false دائماً لأننا لا نحسب السعر
                     _buildPriceSummary(cart, _deliveryFee, false, ""),
                   ],
                 ),
@@ -5956,6 +6236,8 @@ class _CartScreenState extends State<CartScreen> {
             ),
             actions: <Widget>[
               TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
+
+              // ✅✅✅ هذا هو الزر المعدل ✅✅✅
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
                 onPressed: isSubmitting
@@ -5965,14 +6247,24 @@ class _CartScreenState extends State<CartScreen> {
 
                   setDialogState(() => isSubmitting = true);
                   try {
+                    // 1. 👇 جلب رقم المنطقة المحفوظ في الذاكرة
+                    final prefs = await SharedPreferences.getInstance();
+                    final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
+
+                    // إذا لم يتم تحديد منطقة (حالة نادرة جداً)
+                    if (currentZoneId == 0) {
+                      throw Exception("يرجى تحديد المنطقة من الصفحة الرئيسية أولاً");
+                    }
+
                     final createdOrder = await _apiService.submitOrder(
                         name: _nameController.text,
                         phone: _phoneController.text,
                         address: _addressController.text,
                         cartItems: cart.items,
                         couponCode: cart.appliedCoupon,
-                        position: _capturedPosition, // نرسل الموقع إذا تم جلبه بنجاح
-                        deliveryFee: _deliveryFee // السعر الثابت (1000)
+                        position: _capturedPosition,
+                        deliveryFee: _deliveryFee,
+                        zoneId: currentZoneId // 👈 2. تمرير رقم المنطقة هنا
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -6013,7 +6305,9 @@ class _CartScreenState extends State<CartScreen> {
                     }
                   } catch (e) {
                     if (cartScreenContext.mounted) {
-                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red));
+                      // تنظيف رسالة الخطأ لتظهر بشكل لائق
+                      String errorMsg = e.toString().replaceAll("Exception: ", "");
+                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $errorMsg'), backgroundColor: Colors.red));
                     }
                   } finally {
                     if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
@@ -6028,7 +6322,9 @@ class _CartScreenState extends State<CartScreen> {
         });
       },
     );
-  }  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
+  }
+
+  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
     return Card(margin: const EdgeInsets.only(bottom: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Padding(padding: const EdgeInsets.all(10.0), child: Row(children: [
       ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: item.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
       const SizedBox(width: 15),
@@ -6873,7 +7169,6 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================
 // استبدل كلاس ProductManagementTab بهذا الكود
-
 class ProductManagementTab extends StatefulWidget {
   const ProductManagementTab({super.key});
 
@@ -6883,6 +7178,9 @@ class ProductManagementTab extends StatefulWidget {
 
 class _ProductManagementTabState extends State<ProductManagementTab> {
   final TextEditingController _searchController = TextEditingController();
+
+  // 🔥 متغير جديد للتحكم في عرض العروض فقط
+  bool _showOffersOnly = false;
 
   @override
   void dispose() {
@@ -6920,7 +7218,7 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     final bool? result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AddProductScreen( // شاشة جديدة سننشئها بالأسفل
+        builder: (_) => AddProductScreen(
           productProvider: productProvider,
           authProvider: authProvider,
         ),
@@ -6940,13 +7238,21 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
 
     return Consumer<RestaurantProductsProvider>(
       builder: (context, provider, child) {
+
+        // 🔥 منطق الفلترة: تحديد القائمة المعروضة
+        List<FoodItem> displayedProducts = provider.products;
+        if (_showOffersOnly) {
+          // عرض فقط المنتجات التي لها سعر خصم (Sale Price)
+          displayedProducts = provider.products.where((p) => p.salePrice != null && p.salePrice! > 0).toList();
+        }
+
         return Scaffold(
           // ✅ تحديد موقع الزر العائم ليكون في اليسار
           floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
 
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _navigateToAddScreen,
-            label: const Text("إضافة منتج"),
+            label: const Text("إضافة منتج / عرض"),
             icon: const Icon(Icons.add),
             backgroundColor: Theme.of(context).primaryColor,
             foregroundColor: Colors.white,
@@ -6961,9 +7267,24 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
               ),
               onChanged: (query) => provider.search(query),
             ),
+            // 🔥 إضافة أزرار الفلترة في أسفل الـ AppBar
             bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(1.0),
-              child: provider.isLoading ? const LinearProgressIndicator() : const SizedBox.shrink(),
+              preferredSize: const Size.fromHeight(60.0),
+              child: Column(
+                children: [
+                  if (provider.isLoading) const LinearProgressIndicator(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                    child: Row(
+                      children: [
+                        _buildFilterChip("الكل", !_showOffersOnly, () => setState(() => _showOffersOnly = false)),
+                        const SizedBox(width: 10),
+                        _buildFilterChip("العروض النشطة 🔥", _showOffersOnly, () => setState(() => _showOffersOnly = true)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           body: RefreshIndicator(
@@ -6975,31 +7296,91 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
               if (provider.errorMessage != null && provider.products.isEmpty) {
                 return NetworkErrorWidget(message: provider.errorMessage!, onRetry: () => provider.fetchProducts(auth.token));
               }
-              if (provider.products.isEmpty) {
-                return const Center(child: Text("لم يتم العثور على منتجات. أضف منتجك الأول!"));
+
+              // حالة القائمة الفارغة (مع رسالة مخصصة حسب الفلتر)
+              if (displayedProducts.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                          _showOffersOnly ? Icons.local_fire_department_outlined : Icons.fastfood_outlined,
+                          size: 60, color: Colors.grey
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        _showOffersOnly
+                            ? "لا توجد عروض نشطة حالياً.\nأضف خصماً لأي منتج ليظهر هنا."
+                            : "لم يتم العثور على منتجات. أضف منتجك الأول!",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                );
               }
 
               return ListView.builder(
-                padding: const EdgeInsets.only(bottom: 80), // مسافة للزر العائم
-                itemCount: provider.products.length,
+                padding: const EdgeInsets.only(bottom: 80, top: 10), // مسافة للزر العائم
+                itemCount: displayedProducts.length,
                 itemBuilder: (context, index) {
-                  final product = provider.products[index];
+                  final product = displayedProducts[index];
+
+                  // التحقق هل هذا المنتج يعتبر عرضاً؟
+                  final bool isOffer = product.salePrice != null && product.salePrice! > 0;
+
                   return Card(
                     margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    elevation: isOffer ? 3 : 1, // ظل أكبر للعروض
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      // حدود ذهبية للعروض لتمييزها
+                      side: isOffer ? const BorderSide(color: Colors.amber, width: 1) : BorderSide.none,
+                    ),
                     child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       leading: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: CachedNetworkImage(
                           imageUrl: product.imageUrl,
-                          width: 50,
-                          height: 50,
+                          width: 60,
+                          height: 60,
                           fit: BoxFit.cover,
-                          errorWidget: (c, u, e) => Container(color: Colors.grey, child: const Icon(Icons.fastfood)),
+                          errorWidget: (c, u, e) => Container(color: Colors.grey[200], child: const Icon(Icons.fastfood, color: Colors.grey)),
                         ),
                       ),
-                      title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text("السعر: ${product.formattedPrice}", style: TextStyle(color: product.salePrice != null ? Colors.red : Colors.black)),
-                      trailing: const Icon(Icons.edit_outlined, color: Colors.blue),
+                      title: Row(
+                        children: [
+                          Expanded(child: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold))),
+                          // شارة العرض
+                          if (isOffer)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4)),
+                              child: const Text("عرض", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                            )
+                        ],
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 4),
+                          // عرض السعر بذكاء (إذا كان عرض يظهر السعر القديم مشطوب)
+                          isOffer
+                              ? Row(
+                            children: [
+                              Text("${NumberFormat('#,###').format(product.price)} د.ع", style: const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey, fontSize: 12)),
+                              const SizedBox(width: 8),
+                              Text("${NumberFormat('#,###').format(product.salePrice)} د.ع", style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 14)),
+                            ],
+                          )
+                              : Text("السعر: ${NumberFormat('#,###').format(product.price)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                        ],
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.edit_outlined, color: Colors.blue),
+                        onPressed: () => _navigateToEditScreen(product),
+                      ),
                       onTap: () => _navigateToEditScreen(product),
                     ),
                   );
@@ -7011,9 +7392,29 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
       },
     );
   }
+
+  // --- ويدجت مساعد لأزرار الفلترة ---
+  Widget _buildFilterChip(String label, bool isSelected, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.amber : Colors.grey[200],
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: isSelected ? Colors.amber.shade700 : Colors.transparent),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.black : Colors.grey[700],
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
 }
-
-
 
 
 // =======================================================================

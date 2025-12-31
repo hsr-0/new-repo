@@ -2196,7 +2196,6 @@ class _DriverPendingScreenState extends State<DriverPendingScreen> {
     );
   }
 }
-
 class DriverMainScreen extends StatefulWidget {
   final AuthResult authResult;
   final VoidCallback onLogout;
@@ -2204,14 +2203,13 @@ class DriverMainScreen extends StatefulWidget {
   @override
   State<DriverMainScreen> createState() => _DriverMainScreenState();
 }
-// ============== ✂️✂️✂️  ابدأ النسخ من هنا ✂️✂️✂️ ==============
 
 class _DriverMainScreenState extends State<DriverMainScreen> {
   int _selectedIndex = 0;
   bool _isDriverActive = true;
   StreamSubscription<geolocator.Position>? _positionStream;
 
-  // State management for current jobs
+  // إدارة حالة الطلبات الحالية
   Map<String, dynamic>? _currentQuickRide;
   Map<String, dynamic>? _currentDelivery;
 
@@ -2222,13 +2220,15 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   void initState() {
     super.initState();
     _checkLocationPermission();
+
+    // 1. الاستماع للروابط العميقة (الإشعارات)
     deepLinkNotifier.addListener(_handleDeepLink);
 
-    // ربط مستمع الإشعارات للرحلات المقبولة
+    // 2. الاستماع للرحلات المقبولة فورياً
     acceptedRideNotifier.addListener(_handleAcceptedRide);
 
     _fetchLiveStats();
-    // تحديث الإحصائيات كل 45 ثانية (بدلاً من وقت قصير)
+    // تحديث الإحصائيات كل 45 ثانية
     _statsTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
       if (mounted) _fetchLiveStats();
     });
@@ -2242,11 +2242,11 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     acceptedRideNotifier.removeListener(_handleAcceptedRide);
     _positionStream?.cancel();
     _statsTimer?.cancel();
+    // عند الخروج، نوقف حالة النشاط في السيرفر
     if (_isDriverActive) ApiService.setDriverActiveStatus(widget.authResult.token, false);
     super.dispose();
   }
 
-  // دالة تستجيب للإشعار وتستلم بيانات الرحلة مباشرة
   void _handleAcceptedRide() {
     final rideData = acceptedRideNotifier.value;
     if (rideData != null) {
@@ -2266,6 +2266,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   void _onRideAccepted(Map<String, dynamic> ride) {
     setState(() {
       _currentQuickRide = ride;
+      _selectedIndex = 0; // الذهاب لتبويب الطلبات السريعة
     });
   }
 
@@ -2278,7 +2279,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   void _onDeliveryAccepted(Map<String, dynamic> delivery) {
     setState(() {
       _currentDelivery = delivery;
-      _selectedIndex = 2; // الانتقال لتبويب التوصيل
+      _selectedIndex = 2; // ✅ الانتقال لتبويب التوصيل فوراً
     });
   }
 
@@ -2297,6 +2298,8 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     }
   }
 
+  // 🔥 تعديل هام: معالجة التوجيه عند الضغط على الإشعار
+// استبدل الدالة القديمة _handleDeepLink بهذه:
   void _handleDeepLink() {
     final linkData = deepLinkNotifier.value;
     if (linkData['userType'] == 'driver') {
@@ -2305,10 +2308,17 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       } else if (linkData['targetScreen'] == 'quick_rides') {
         _changeTab(0);
       }
+      // 🔥 التعديل الجديد: التوجيه لتبويب التوصيل
+      else if (linkData['targetScreen'] == 'delivery' || linkData['targetScreen'] == 'deliveries') {
+        setState(() {
+          _selectedIndex = 2; // الانتقال لتبويب التوصيل
+        });
+        // إجبار القائمة على التحديث فوراً
+        rideListRefreshNotifier.value = !rideListRefreshNotifier.value;
+      }
       deepLinkNotifier.value = {};
     }
   }
-
   void _changeTab(int index) {
     setState(() {
       _selectedIndex = index;
@@ -2319,20 +2329,18 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     if (mounted) await PermissionService.handleLocationPermission(context);
   }
 
-  // 🔥🔥🔥 التعديل الاقتصادي هنا 🔥🔥🔥
+  // نظام التتبع الاقتصادي
   void _toggleActiveStatus(bool isActive) {
     setState(() => _isDriverActive = isActive);
     ApiService.setDriverActiveStatus(widget.authResult.token, isActive);
 
     if (isActive) {
-      // إعدادات الموقع الموفرة للطاقة والسيرفر
       const locationSettings = geolocator.LocationSettings(
-        accuracy: geolocator.LocationAccuracy.high, // دقة عالية (وليست قصوى) لتقليل البطارية
-        distanceFilter: 150, // تحديث السيرفر فقط كل 150 متر (توفير هائل للطلبات)
+        accuracy: geolocator.LocationAccuracy.high,
+        distanceFilter: 150, // تحديث السيرفر كل 150 متر فقط
       );
 
       _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((geolocator.Position position) {
-        // نستخدم دالة التحديث الذكية في ApiService
         ApiService.updateDriverLocation(widget.authResult.token, LatLng(position.latitude, position.longitude));
       });
     } else {
@@ -2343,7 +2351,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // Tab 0: الطلبات (Quick Rides)
+      // Tab 0: الطلبات السريعة
       _currentQuickRide == null
           ? DriverAvailableRidesScreen(authResult: widget.authResult, onRideAccepted: _onRideAccepted)
           : DriverCurrentRideScreen(initialRide: _currentQuickRide!, authResult: widget.authResult, onRideFinished: _onRideFinished),
@@ -2351,7 +2359,7 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
       // Tab 1: طلبات الخصوصي
       DriverPrivateRequestsScreen(authResult: widget.authResult),
 
-      // Tab 2: توصيل (Delivery)
+      // Tab 2: توصيل (Delivery) - هنا يتم عرض الشاشة المناسبة
       _currentDelivery == null
           ? DriverAvailableDeliveriesScreen(authResult: widget.authResult, onDeliveryAccepted: _onDeliveryAccepted)
           : DriverCurrentDeliveryScreen(
@@ -2412,9 +2420,14 @@ class _DriverMainScreenState extends State<DriverMainScreen> {
     );
   }
 }
+
 // =============================================================================
 // NEW SCREEN: DriverAvailableDeliveriesScreen
 // =============================================================================
+// =============================================================================
+// SCREEN: DriverAvailableDeliveriesScreen (Updated for Automation)
+// =============================================================================
+
 class DriverAvailableDeliveriesScreen extends StatefulWidget {
   final AuthResult authResult;
   final Function(Map<String, dynamic>) onDeliveryAccepted;
@@ -2423,6 +2436,7 @@ class DriverAvailableDeliveriesScreen extends StatefulWidget {
   @override
   State<DriverAvailableDeliveriesScreen> createState() => _DriverAvailableDeliveriesScreenState();
 }
+
 class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliveriesScreen> {
   Future<List<dynamic>>? _deliveriesFuture;
   Timer? _refreshTimer;
@@ -2432,13 +2446,19 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
   void initState() {
     super.initState();
     _loadDeliveries();
+
+    // التحديث الدوري كل 25 ثانية
     _refreshTimer = Timer.periodic(const Duration(seconds: 25), (timer) {
       if (mounted) _loadDeliveries();
     });
+
+    // 🔥 الاستماع للإشعار الفوري لتحديث القائمة (عندما يطلب المطعم تكسي)
+    rideListRefreshNotifier.addListener(_loadDeliveries);
   }
 
   @override
   void dispose() {
+    rideListRefreshNotifier.removeListener(_loadDeliveries);
     _refreshTimer?.cancel();
     super.dispose();
   }
@@ -2464,21 +2484,22 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
-        _loadDeliveries();
+        _loadDeliveries(); // تحديث القائمة ربما أخذها سائق آخر
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- دالة جديدة لعرض تفاصيل الطلب ---
+  // --- نافذة عرض التفاصيل المحسنة ---
   void _showOrderDetails(Map<String, dynamic> order) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         title: Row(
           children: [
-            const Icon(Icons.info_outline, color: Colors.blue),
+            const Icon(Icons.receipt_long, color: Colors.blue),
             const SizedBox(width: 8),
             const Text("تفاصيل الطلب"),
           ],
@@ -2488,15 +2509,28 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
             children: [
               _buildDetailRow("رقم الطلب:", "#${order['id']}"),
               const Divider(),
-              _buildDetailRow("اسم المتجر/الصيدلية:", order['pickup_location_name'] ?? 'غير محدد'),
-              const SizedBox(height: 8),
-              _buildDetailRow("الملاحظات:", order['notes'] ?? 'لا توجد ملاحظات', isLongText: true),
-              const SizedBox(height: 8),
-              _buildDetailRow("العناصر:", order['items_description'] ?? 'حزمة توصيل', isLongText: true),
+              _buildDetailRow("المصدر:", order['pickup_location_name'] ?? 'غير محدد', isBold: true),
+              const SizedBox(height: 10),
+
+              const Text("📦 المحتويات:", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              Container(
+                margin: const EdgeInsets.only(top: 5),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+                child: Text(
+                  order['items_description'] ?? 'تفاصيل غير متوفرة',
+                  style: const TextStyle(fontSize: 14, height: 1.5, color: Colors.black87),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+              if (order['notes'] != null && order['notes'].toString().isNotEmpty && order['notes'] != order['items_description'])
+                _buildDetailRow("ملاحظات إضافية:", order['notes'], isLongText: true),
+
               const Divider(),
-              _buildDetailRow("عنوان التسليم:", order['destination_address'] ?? 'غير محدد', isLongText: true),
+              _buildDetailRow("عنوان الزبون:", order['destination_address'] ?? 'غير محدد', isLongText: true),
               const SizedBox(height: 8),
-              _buildDetailRow("أجرة التوصيل:", "${order['delivery_fee']} د.ع", isBold: true),
+              _buildDetailRow("أجرة التوصيل:", "${order['delivery_fee']} د.ع", isBold: true, color: Colors.green),
             ],
           ),
         ),
@@ -2518,15 +2552,15 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
     );
   }
 
-  Widget _buildDetailRow(String label, String value, {bool isLongText = false, bool isBold = false}) {
+  Widget _buildDetailRow(String label, String value, {bool isLongText = false, bool isBold = false, Color? color}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
         if (isLongText)
-          Text(value, style: TextStyle(fontSize: 14, fontWeight: isBold ? FontWeight.bold : FontWeight.normal))
+          Text(value, style: TextStyle(fontSize: 14, fontWeight: isBold ? FontWeight.bold : FontWeight.normal, color: color))
         else
-          Text(value, style: TextStyle(fontSize: 14, fontWeight: isBold ? FontWeight.bold : FontWeight.normal)),
+          Text(value, style: TextStyle(fontSize: 14, fontWeight: isBold ? FontWeight.bold : FontWeight.normal, color: color)),
       ],
     );
   }
@@ -2553,12 +2587,32 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
                     message: 'لا توجد طلبات توصيل متاحة حالياً في منطقتك.',
                   );
                 }
+
                 final orders = snapshot.data!;
                 return ListView.builder(
                   padding: const EdgeInsets.all(12),
                   itemCount: orders.length,
                   itemBuilder: (context, index) {
                     final order = orders[index];
+
+                    // تحديد نوع الطلب لتغيير الأيقونة واللون
+                    bool isRestaurant = order['source_type'] == 'restaurant';
+                    bool isMarket = order['source_type'] == 'market';
+
+                    IconData sourceIcon = Icons.inventory_2_outlined; // افتراضي
+                    Color sourceColor = Colors.blue;
+                    String sourceLabel = "طلب توصيل";
+
+                    if (isRestaurant) {
+                      sourceIcon = Icons.restaurant;
+                      sourceColor = Colors.orange;
+                      sourceLabel = "طلب مطعم 🍔";
+                    } else if (isMarket) {
+                      sourceIcon = Icons.shopping_cart;
+                      sourceColor = Colors.purple;
+                      sourceLabel = "طلب مسواك 🛒";
+                    }
+
                     return Card(
                       margin: const EdgeInsets.only(bottom: 12),
                       elevation: 3,
@@ -2568,23 +2622,29 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // رأس البطاقة
+                            // 1. الرأس: النوع والسعر
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
+                                Row(
+                                  children: [
+                                    Icon(sourceIcon, color: sourceColor),
+                                    const SizedBox(width: 8),
+                                    Text(sourceLabel, style: TextStyle(fontWeight: FontWeight.bold, color: sourceColor)),
+                                  ],
+                                ),
                                 Chip(
                                   label: Text('${order['delivery_fee']} د.ع', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
                                   backgroundColor: Colors.green,
                                 ),
-                                Text("#${order['id']}", style: const TextStyle(color: Colors.grey)),
                               ],
                             ),
-                            const SizedBox(height: 8),
+                            const Divider(),
 
-                            // تفاصيل مختصرة
+                            // 2. تفاصيل الموقع
                             Row(
                               children: [
-                                const Icon(Icons.store, size: 20, color: Colors.blue),
+                                const Icon(Icons.store, size: 20, color: Colors.grey),
                                 const SizedBox(width: 8),
                                 Expanded(child: Text("من: ${order['pickup_location_name']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
                               ],
@@ -2597,9 +2657,25 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
                                 Expanded(child: Text("إلى: ${order['destination_address']}", style: const TextStyle(fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis)),
                               ],
                             ),
+
+                            // 3. عرض مقتطف من العناصر (الجديد)
+                            if (order['items_description'] != null && order['items_description'].toString().isNotEmpty)
+                              Container(
+                                margin: const EdgeInsets.symmetric(vertical: 10),
+                                padding: const EdgeInsets.all(8),
+                                width: double.infinity,
+                                decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade200)),
+                                child: Text(
+                                  "📦 المحتوى: ${order['items_description']}",
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12, color: Colors.black87),
+                                ),
+                              ),
+
                             const Divider(height: 20),
 
-                            // الأزرار
+                            // 4. الأزرار
                             Row(
                               children: [
                                 Expanded(
@@ -2613,7 +2689,7 @@ class _DriverAvailableDeliveriesScreenState extends State<DriverAvailableDeliver
                                 Expanded(
                                   child: ElevatedButton(
                                     onPressed: () => _acceptDelivery(order['id'].toString()),
-                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
+                                    style: ElevatedButton.styleFrom(backgroundColor: sourceColor, foregroundColor: Colors.white),
                                     child: const Text('قبول'),
                                   ),
                                 ),
@@ -2686,28 +2762,34 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     super.dispose();
   }
 
-  // 1. تحديد الهدف الحالي (مطعم أم زبون؟)
+  // 🔥 1. المنطق الذكي لتحديد الهدف (مطعم أم زبون؟)
   LatLng? _getTargetPoint() {
     final status = _currentDelivery['order_status'];
     String? latStr, lngStr;
 
-    if (status == 'accepted' || status == 'at_store') {
-      // الهدف: المطعم
+    // المرحلة الأولى: الذهاب للمطعم
+    if (status == 'accepted' || status == 'at_store' || status == 'pending') {
       latStr = _currentDelivery['pickup_lat'];
       lngStr = _currentDelivery['pickup_lng'];
-    } else if (status == 'picked_up') {
-      // الهدف: الزبون
+    }
+    // المرحلة الثانية: الذهاب للزبون
+    else if (status == 'picked_up') {
       latStr = _currentDelivery['destination_lat'];
       lngStr = _currentDelivery['destination_lng'];
     }
 
+    // التحقق من صحة البيانات
     if (latStr != null && lngStr != null && latStr != "0" && lngStr != "0") {
-      return LatLng(double.parse(latStr), double.parse(lngStr));
+      try {
+        return LatLng(double.parse(latStr), double.parse(lngStr));
+      } catch (e) {
+        return null;
+      }
     }
     return null;
   }
 
-  // 2. تهيئة الرحلة
+  // 2. تهيئة الرحلة لأول مرة
   Future<void> _initializeDeliveryTrip() async {
     setState(() => _isLoading = true);
 
@@ -2730,6 +2812,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
 
       _mapController.move(driverPos, 15.0);
 
+      // رسم المسار للهدف الحالي (مطعم أو زبون)
       final target = _getTargetPoint();
       if (target != null) {
         await _getRoute(driverPos, target);
@@ -2744,9 +2827,9 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     }
   }
 
-  // 3. رسم المسار (تأكد من وضع المفتاح الجديد هنا)
+  // 3. رسم المسار باستخدام OpenRouteService
   Future<void> _getRoute(LatLng start, LatLng end) async {
-    // 👇👇👇 ضع مفتاحك الجديد هنا 👇👇👇
+    // 👇 مفتاح التوجيه
     const String orsApiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjVhMDU5ODAxNDA5Y2E5MzIyNDQwOTYxMWQxY2ZhYmQ5NGQ3YTA5ZmI1ZjQ5ZWRlNjcxNGRlMTUzIiwiaCI6Im11cm11cjY0In0';
 
     final url = 'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$orsApiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
@@ -2766,7 +2849,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     }
   }
 
-  // 4. التتبع المباشر
+  // 4. التتبع المباشر وتحديث المسافة
   void _startLiveTracking() {
     const locationSettings = geolocator.LocationSettings(
       accuracy: geolocator.LocationAccuracy.high,
@@ -2778,6 +2861,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
 
       final newLoc = LatLng(pos.latitude, pos.longitude);
 
+      // حساب زاوية دوران السيارة
       double newBearing = _driverBearing;
       if (_driverLocation != null) {
         final dist = geolocator.Geolocator.distanceBetween(
@@ -2789,6 +2873,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
         }
       }
 
+      // تحديث المسافة للهدف الحالي
       final target = _getTargetPoint();
       String distString = "...";
       if (target != null) {
@@ -2807,11 +2892,12 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
         _distanceToTargetString = distString;
       });
 
+      // إرسال الموقع للسيرفر
       ApiService.updateDriverLocation(widget.authResult.token, newLoc);
     });
   }
 
-  // 5. تحديث حالة الطلب
+  // 5. تحديث الحالة + 🔥 تحديث المسار تلقائياً
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
@@ -2823,18 +2909,23 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       final data = json.decode(response.body);
 
       if (mounted && response.statusCode == 200 && data['success'] == true) {
+        // إذا انتهت الرحلة أو ألغيت
         if (newStatus == 'delivered' || newStatus == 'cancelled') {
           widget.onDeliveryFinished();
         } else {
+          // تحديث بيانات الرحلة المحلية
           setState(() {
             _currentDelivery = data['delivery_order'];
           });
-          widget.onDataChanged();
+          widget.onDataChanged(); // تحديث القائمة الخارجية
 
-          if (newStatus == 'picked_up' && _driverLocation != null) {
-            final customerLocation = _getTargetPoint();
-            if (customerLocation != null) {
-              await _getRoute(_driverLocation!, customerLocation);
+          // 🔥 اللحظة الحاسمة: إعادة رسم المسار عند تغير الحالة
+          // إذا استلم الطلب (picked_up) -> الهدف سيصبح الزبون تلقائياً عبر _getTargetPoint
+          if (_driverLocation != null) {
+            final newTarget = _getTargetPoint();
+            if (newTarget != null) {
+              await _getRoute(_driverLocation!, newTarget); // رسم المسار الجديد
+              _mapController.move(_driverLocation!, 14.0); // ضبط الكاميرا
             }
           }
         }
@@ -2848,7 +2939,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     }
   }
 
-  // ✅ دالة جديدة لعرض تفاصيل الطلب (المنتجات) للسائق أثناء الرحلة
+  // ✅ نافذة تفاصيل الطلب
   void _showOrderDetailsDialog() {
     showDialog(
       context: context,
@@ -2857,14 +2948,19 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
         content: SingleChildScrollView(
           child: ListBody(
             children: [
-              Text("المتجر: ${_currentDelivery['pickup_location_name'] ?? ''}", style: const TextStyle(fontWeight: FontWeight.bold)),
+              _infoRow("المصدر:", _currentDelivery['pickup_location_name'] ?? 'غير محدد'),
               const Divider(),
-              const Text("المواد المطلوبة:", style: TextStyle(color: Colors.grey)),
+              const Text("📦 المحتويات:", style: TextStyle(color: Colors.grey, fontSize: 12)),
               const SizedBox(height: 5),
-              Text(_currentDelivery['items_description'] ?? 'لا توجد تفاصيل', style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 10),
-              const Text("ملاحظات:", style: TextStyle(color: Colors.grey)),
-              Text(_currentDelivery['notes'] ?? 'لا توجد ملاحظات'),
+              Text(
+                  _currentDelivery['items_description'] ?? 'لا توجد تفاصيل',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)
+              ),
+              const SizedBox(height: 15),
+              _infoRow("ملاحظات:", _currentDelivery['notes'] ?? 'لا توجد'),
+              const Divider(),
+              _infoRow("اسم الزبون:", _currentDelivery['customer_name'] ?? 'زبون'),
+              _infoRow("السعر المطلوب:", "${_currentDelivery['total_to_collect'] ?? 0} د.ع", isPrice: true),
             ],
           ),
         ),
@@ -2875,6 +2971,21 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     );
   }
 
+  Widget _infoRow(String label, String value, {bool isPrice = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey)),
+          const SizedBox(width: 8),
+          Expanded(child: Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: isPrice ? Colors.green : Colors.black))),
+        ],
+      ),
+    );
+  }
+
+  // زر الإجراء الرئيسي المتغير حسب الحالة
   Widget _buildActionButton() {
     final status = _currentDelivery['order_status'];
     switch (status) {
@@ -2893,6 +3004,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     List<Marker> markers = [];
     final status = _currentDelivery['order_status'];
 
+    // 1. ماركر السائق
     if (_driverLocation != null) {
       markers.add(Marker(
         point: _driverLocation!,
@@ -2905,14 +3017,20 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
       ));
     }
 
+    // 2. ماركر المطعم (يظهر إذا كنا لم نستلم الطلب بعد)
     if (status == 'accepted' || status == 'at_store') {
-      final pickup = LatLng(double.parse(_currentDelivery['pickup_lat']), double.parse(_currentDelivery['pickup_lng']));
-      markers.add(Marker(point: pickup, child: const Icon(Icons.store, color: Colors.blue, size: 40)));
+      final pickupPoint = _getTargetPoint();
+      if(pickupPoint != null) {
+        markers.add(Marker(point: pickupPoint, width: 45, height: 45, child: const Icon(Icons.store, color: Colors.blue, size: 45)));
+      }
     }
 
-    if (_currentDelivery['destination_lat'] != null) {
-      final dest = LatLng(double.parse(_currentDelivery['destination_lat']), double.parse(_currentDelivery['destination_lng']));
-      markers.add(Marker(point: dest, child: const Icon(Icons.person_pin_circle, color: Colors.red, size: 40)));
+    // 3. ماركر الزبون (يظهر إذا استلمنا الطلب)
+    if (status == 'picked_up') {
+      final destPoint = _getTargetPoint();
+      if(destPoint != null) {
+        markers.add(Marker(point: destPoint, width: 45, height: 45, child: const Icon(Icons.person_pin_circle, color: Colors.red, size: 45)));
+      }
     }
 
     return markers;
@@ -2928,10 +3046,11 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('توصيل: $statusText'),
+        title: Text(statusText, style: const TextStyle(fontSize: 16)),
         actions: [
           IconButton(
             icon: const Icon(Icons.call, color: Colors.green),
+            // الاتصال بالزبون
             onPressed: () => makePhoneCall(_currentDelivery['end_customer_phone'], context),
           )
         ],
@@ -2955,13 +3074,14 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
                   'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
                   'id': 'mapbox/streets-v12',
                 },
+                userAgentPackageName: 'com.beytei.taxi',
               ),
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _routePoints,
-                      color: Colors.blue,
+                      color: status == 'picked_up' ? Colors.red : Colors.blue, // لون أحمر للزبون، أزرق للمطعم
                       strokeWidth: 5.0,
                     ),
                   ],
@@ -2970,6 +3090,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
             ],
           ),
 
+          // البطاقة السفلية
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: Card(
@@ -2985,16 +3106,18 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text("المسافة: $_distanceToTargetString", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        // ✅ زر جديد لعرض التفاصيل
+                        // ✅ زر عرض التفاصيل
                         TextButton.icon(
                           onPressed: _showOrderDetailsDialog,
                           icon: const Icon(Icons.list_alt),
-                          label: const Text("عرض الطلب"),
+                          label: const Text("محتوى الطلب"),
                         ),
                       ],
                     ),
                     const Divider(),
                     _buildActionButton(),
+                    if (_currentDelivery['order_status'] != 'delivered' && _currentDelivery['order_status'] != 'cancelled')
+                      TextButton(onPressed: () => _updateStatus('cancelled'), child: const Text("إلغاء الرحلة", style: TextStyle(color: Colors.red)))
                   ],
                 ),
               ),
@@ -3007,8 +3130,6 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     );
   }
 }
-
-
 // =============================================================================
 // Modern Info Dialog & Driver Stats Bar
 // =============================================================================
