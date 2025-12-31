@@ -22,9 +22,9 @@
        <string>ar</string>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.6.5</string>
+    <string>1.6.6</string>
     <key>CFBundleVersion</key>
-    <string>61</string>
+    <string>62</string>
     <key>CFBundleSignature</key>
     <string>????</string>
 
@@ -84,6 +84,11 @@
     <key>NSPhotoLibraryUsageDescription</key>
     <string>نحتاج الوصول إلى مكتبة الصور</string>
 
+<key>NSMicrophoneUsageDescription</key>
+    <string>نحتاج الوصول للميكروفون لتسجيل الصوت أو الفيديو عند الحاجة.</string>
+
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>نحتاج للوصول لحفظ الصور في البوم الكاميرا.</string>
     <key>NSUserNotificationUsageDescription</key>
     <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
     <key>NSLocationWhenInUseUsageDescription</key>
