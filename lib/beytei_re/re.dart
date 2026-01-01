@@ -1047,7 +1047,11 @@ class Order {
   final List<LineItem> lineItems;
   final String? destinationLat;
   final String? destinationLng;
-  final String shippingTotal; // ✨ جديد: سعر التوصيل
+  final String shippingTotal;
+
+  // 🔥 الحقول الجديدة للسائق
+  final String? driverName;
+  final String? driverPhone;
 
   Order({
     required this.id,
@@ -1060,7 +1064,10 @@ class Order {
     required this.lineItems,
     this.destinationLat,
     this.destinationLng,
-    required this.shippingTotal, // ✨
+    required this.shippingTotal,
+    // 🔥
+    this.driverName,
+    this.driverPhone,
   });
 
   Map<String, dynamic> toJson() => {
@@ -1088,28 +1095,26 @@ class Order {
       lineItems: (json['line_items'] as List).map((i) => LineItem.fromJson(i)).toList(),
       destinationLat: json['destination_lat'],
       destinationLng: json['destination_lng'],
-      // ✨ قراءة سعر التوصيل التلقائي
       shippingTotal: json['shipping_total'] ?? '0',
+
+      // 🔥 قراءة بيانات السائق من السيرفر
+      driverName: json['driver_name'],
+      driverPhone: json['driver_phone'],
     );
   }
 
   Map<String, dynamic> get statusDisplay {
+    // (نفس الكود القديم هنا...)
     switch (status) {
-      case 'processing':
-        return {'text': 'جاري تحضير الطلب', 'icon': Icons.soup_kitchen_outlined, 'color': Colors.blue};
-      case 'out-for-delivery':
-      // ✨ تغيير النص
-        return {'text': 'المندوب قادم إليك 🛵', 'icon': Icons.delivery_dining, 'color': Colors.orange.shade700};
-      case 'completed':
-        return {'text': 'تم توصيل الطلب', 'icon': Icons.check_circle, 'color': Colors.green};
-      case 'cancelled':
-        return {'text': 'تم إلغاء الطلب', 'icon': Icons.cancel, 'color': Colors.red};
-      case 'pending':
-      default:
-        return {'text': 'تم استلام الطلب', 'icon': Icons.receipt_long, 'color': Colors.grey.shade700};
+      case 'processing': return {'text': 'جاري تحضير الطلب', 'icon': Icons.soup_kitchen_outlined, 'color': Colors.blue};
+      case 'out-for-delivery': return {'text': 'المندوب قادم إليك 🛵', 'icon': Icons.delivery_dining, 'color': Colors.orange.shade700};
+      case 'completed': return {'text': 'تم توصيل الطلب', 'icon': Icons.check_circle, 'color': Colors.green};
+      case 'cancelled': return {'text': 'تم إلغاء الطلب', 'icon': Icons.cancel, 'color': Colors.red};
+      case 'pending': default: return {'text': 'تم استلام الطلب', 'icon': Icons.receipt_long, 'color': Colors.grey.shade700};
     }
   }
 }
+
 class LineItem {
   final String name;
   final int quantity;
@@ -3682,75 +3687,51 @@ class OrderCard extends StatefulWidget {
 }
 
 class _OrderCardState extends State<OrderCard> {
-  final ApiService _apiService = ApiService();
-  bool _isRetrying = false; // متغير للتحكم في حالة تحميل زر الطوارئ
+  bool _isRetrying = false; // للتحميل
 
-  // 🔥 زر الطوارئ: إرسال يدوي في حال فشل النظام الآلي أو تأخره
+  // دالة الطوارئ (نفس الدالة الموجودة لديك)
   Future<void> _manualDispatchTaxi() async {
     setState(() => _isRetrying = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('jwt_token');
-
-      // استدعاء API الطوارئ لإعادة إرسال الطلب لسيرفر التكسي
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/manual-dispatch-taxi'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json'
-        },
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({'order_id': widget.order.id}),
       );
-
       if (response.statusCode == 200) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('✅ تم إرسال إشارة الطوارئ لسيرفر التكسي بنجاح'),
-                backgroundColor: Colors.green,
-              )
-          );
-        }
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ تم إرسال إشارة الطوارئ'), backgroundColor: Colors.green));
+        widget.onStatusChanged();
       } else {
-        throw Exception("فشل الإرسال اليدوي: كود ${response.statusCode}");
+        throw Exception("فشل الإرسال");
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('فشل الاتصال بالسيرفر: $e'),
-              backgroundColor: Colors.red,
-            )
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _isRetrying = false);
     }
   }
 
-  // وظيفة الاتصال بالزبون
+  // دالة الاتصال (نفس الموجودة)
   Future<void> _makePhoneCall(String phoneNumber) async {
     final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
-    }
+    if (await canLaunchUrl(launchUri)) await launchUrl(launchUri);
   }
 
   @override
   Widget build(BuildContext context) {
-    // تنسيق التاريخ
     final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
     final formattedDate = formatter.format(widget.order.dateCreated.toLocal());
 
-    // تحديد الحالة المنطقية للعرض
-    bool isProcessing = widget.order.status == 'processing' || widget.order.status == 'pending';
-    bool driverAssigned = widget.order.status == 'driver-assigned' || widget.order.status == 'out-for-delivery';
+    // 🔥 1. هل الطلب منتهي؟
+    bool isFinished = ['completed', 'cancelled', 'refunded', 'failed', 'trash'].contains(widget.order.status);
 
-    // تحديد لون الشارة (Badge) بناءً على الحالة
-    Color chipColor = Colors.grey;
-    if (isProcessing) chipColor = Colors.orange;
-    else if (driverAssigned) chipColor = Colors.blue;
-    else if (widget.isCompleted) chipColor = Colors.green;
+    // 🔥 2. هل يوجد سائق؟
+    bool hasDriver = widget.order.driverName != null && widget.order.driverName!.isNotEmpty;
+
+    // 🔥 3. شرط ظهور زر الطوارئ (نشط + لا يوجد سائق)
+    bool showEmergencyBtn = !isFinished && !hasDriver;
 
     return Card(
       elevation: 4,
@@ -3760,177 +3741,81 @@ class _OrderCardState extends State<OrderCard> {
         padding: const EdgeInsets.all(12.0),
         child: Column(
           children: [
-            // --- 1. رأس البطاقة (رقم الطلب والتاريخ) ---
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Chip(
-                  label: Text(
-                      "#${widget.order.id}",
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
-                  ),
-                  backgroundColor: chipColor,
-                ),
-                Text(
-                    formattedDate,
-                    style: const TextStyle(fontSize: 12, color: Colors.grey)
-                ),
-              ],
-            ),
-
+            // الرأس
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Chip(label: Text("#${widget.order.id}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), backgroundColor: isFinished ? Colors.green : Colors.orange),
+              Text(formattedDate, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ]),
             const Divider(),
 
-            // --- 2. تفاصيل الزبون ---
+            // تفاصيل الزبون
             ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(
-                backgroundColor: Colors.teal,
-                child: Icon(Icons.person, color: Colors.white, size: 20),
-              ),
-              title: Text(
-                  widget.order.customerName,
-                  style: const TextStyle(fontWeight: FontWeight.bold)
-              ),
+              leading: const CircleAvatar(backgroundColor: Colors.teal, child: Icon(Icons.person, color: Colors.white, size: 20)),
+              title: Text(widget.order.customerName, style: const TextStyle(fontWeight: FontWeight.bold)),
               subtitle: Text(widget.order.address),
-              trailing: IconButton(
-                icon: const Icon(Icons.call, color: Colors.green),
-                onPressed: () => _makePhoneCall(widget.order.phone),
-              ),
+              trailing: IconButton(icon: const Icon(Icons.call, color: Colors.green), onPressed: () => _makePhoneCall(widget.order.phone)),
             ),
 
-            // --- 3. تفاصيل المنتجات ---
+            // المنتجات والسعر
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade200)
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: widget.order.lineItems.map((item) =>
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Text(
-                          "• ${item.quantity} x ${item.name}",
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)
-                      ),
-                    )
-                ).toList(),
-              ),
+                width: double.infinity, padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widget.order.lineItems.map((item) => Text("• ${item.quantity} x ${item.name}")).toList())
             ),
-
             const SizedBox(height: 10),
-
-            // --- 4. السعر الإجمالي ---
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("الإجمالي (مع التوصيل):", style: TextStyle(fontWeight: FontWeight.bold)),
-                Text(
-                    "${widget.order.total} د.ع",
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green)
-                ),
-              ],
-            ),
-
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              const Text("الإجمالي:", style: TextStyle(fontWeight: FontWeight.bold)),
+              Text("${widget.order.total} د.ع", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green)),
+            ]),
             const SizedBox(height: 15),
 
-            // --- 5. 🔥 المنطقة الذكية (حالة الأتمتة) 🔥 ---
-
-            if (!widget.isCompleted) ...[
-
-              // أ) حالة المعالجة والبحث عن سائق
-              if (isProcessing) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                      color: Colors.amber.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.amber.shade200)
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange)
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              "تم طلب التكسي تلقائياً.. جاري البحث عن سائق 🚕",
-                              style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // زر الطوارئ (إرسال يدوي)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: _isRetrying ? null : _manualDispatchTaxi,
-                          icon: const Icon(Icons.bolt, size: 18, color: Colors.red),
-                          label: Text(
-                              _isRetrying ? "جاري الإرسال..." : "زر الطوارئ: إعادة طلب التكسي",
-                              style: const TextStyle(color: Colors.red, fontSize: 12)
-                          ),
-                          style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              backgroundColor: Colors.red.withOpacity(0.05)
+            // 🔥 المنطقة الذكية (حالة السائق + الطوارئ)
+            if (!isFinished)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                    color: hasDriver ? Colors.green.shade50 : Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: hasDriver ? Colors.green.shade200 : Colors.orange.shade200)
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(hasDriver ? Icons.check_circle : Icons.sync, color: hasDriver ? Colors.green : Colors.orange),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            hasDriver
+                                ? "المندوب: ${widget.order.driverName} في الطريق 🛵"
+                                : "جاري البحث عن سائق تلقائياً...",
+                            style: TextStyle(fontWeight: FontWeight.bold, color: hasDriver ? Colors.green.shade800 : Colors.orange.shade800),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ]
+                      ],
+                    ),
 
-              // ب) حالة تم تعيين السائق
-              else if (driverAssigned) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.blue.shade200)
-                  ),
-                  child: Column(
-                    children: const [
-                      Icon(Icons.check_circle, color: Colors.blue, size: 30),
-                      SizedBox(height: 5),
-                      Text(
-                          "✅ تم تعيين السائق وهو في الطريق",
-                          style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)
-                      ),
-                    ],
-                  ),
-                )
-              ]
+                    // زر الطوارئ يظهر فقط إذا لم يكن هناك سائق
+                    if (showEmergencyBtn) ...[
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _isRetrying ? null : _manualDispatchTaxi,
+                          icon: const Icon(Icons.bolt, color: Colors.white),
+                          label: Text(_isRetrying ? "جاري الإرسال..." : "زر الطوارئ: إعادة طلب سائق"),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                        ),
+                      )
+                    ]
+                  ],
+                ),
+              ),
 
-            ] else ...[
-              // ج) الطلبات المكتملة (الأرشيف)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(8)
-                ),
-                child: const Center(
-                    child: Text(
-                        "تم تسليم الطلب بنجاح ✅",
-                        style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)
-                    )
-                ),
-              )
-            ]
+            // كود التسليم (إذا وجد)
+            if (widget.pickupCode != null && !isFinished)
+              Container(margin: const EdgeInsets.only(top: 10), padding: const EdgeInsets.all(8), color: Colors.grey.shade200, child: Text("كود التسليم: ${widget.pickupCode}", style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2))),
           ],
         ),
       ),
@@ -6263,10 +6148,6 @@ class CartScreen extends StatefulWidget {
   State<CartScreen> createState() => _CartScreenState();
 }
 
-// (في ملف re.dart)
-// (استبدل الكلاس القديم بالكامل بهذا الكلاس المحدث V18)
-
-// --- ✨ [ الخطوة 2هـ: استبدال كلاس _CartScreenState بالكامل ] ---
 class _CartScreenState extends State<CartScreen> {
   final _apiService = ApiService();
   final _nameController = TextEditingController();
@@ -6314,6 +6195,7 @@ class _CartScreenState extends State<CartScreen> {
 
   // --- نافذة إتمام الطلب مع الحساب الذكي ---
   void _showCheckoutDialog(BuildContext context, CartProvider cart) {
+    // نحتفظ بـ Context الشاشة الرئيسية لاستخدامه بعد إغلاق الديالوج
     final BuildContext cartScreenContext = context;
 
     _nameController.clear();
@@ -6465,11 +6347,37 @@ class _CartScreenState extends State<CartScreen> {
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
 
                     await cart._recordSuccessfulOrder();
+
+                    // 1. إغلاق نافذة الإدخال (الديالوج الحالي)
                     Navigator.of(dialogContext).pop();
+
+                    // 2. تنظيف السلة
                     cart.clearCart();
 
+                    // 🔥🔥🔥 3. تحديث قائمة الطلبات فوراً 🔥🔥🔥
+                    // هذا السطر يجبر شاشة OrdersHistoryScreen على التحديث
+                    Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
+
+                    // 4. إظهار رسالة النجاح والانتقال للطلبات
                     if (cartScreenContext.mounted) {
-                      showDialog(context: cartScreenContext, barrierDismissible: false, builder: (ctx) => AlertDialog(content: const Text("تم استلام الطلب بنجاح!"), actions: [ElevatedButton(onPressed: (){Navigator.pop(ctx); Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);}, child: const Text("موافق"))]));
+                      showDialog(
+                          context: cartScreenContext,
+                          barrierDismissible: false,
+                          builder: (ctx) => AlertDialog(
+                              title: const Text("تم بنجاح! 🎉"),
+                              content: const Text("تم استلام طلبك. يمكنك متابعة حالته الآن في صفحة طلباتي."),
+                              actions: [
+                                ElevatedButton(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    // 🔥 الانتقال لتبويب "طلباتي" (index 2)
+                                    Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
+                                  },
+                                  child: const Text("متابعة الطلب"),
+                                )
+                              ]
+                          )
+                      );
                     }
                   } catch (e) {
                     if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
@@ -6526,10 +6434,9 @@ class _CartScreenState extends State<CartScreen> {
     ]));
   }
 }
-
-
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
+
   @override
   State<OrdersHistoryScreen> createState() => _OrdersHistoryScreenState();
 }
@@ -6541,24 +6448,36 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
   void initState() {
     super.initState();
     _loadOrders();
-    // Listen for notifications to refresh the list
+
+    // 🔥 1. الاستماع لتنبيهات التحديث (من السلة أو الإشعارات)
+    // هذا يضمن ظهور الطلب فوراً بعد إتمامه
     Provider.of<NotificationProvider>(context, listen: false).addListener(_refreshOrders);
   }
 
   @override
   void dispose() {
-    Provider.of<NotificationProvider>(context, listen: false).removeListener(_refreshOrders);
+    // 🔥 2. إزالة المستمع عند إغلاق الشاشة لتجنب أخطاء الذاكرة
+    try {
+      Provider.of<NotificationProvider>(context, listen: false).removeListener(_refreshOrders);
+    } catch (e) {
+      // تجاهل الخطأ في حال كان الـ Provider غير متاح
+    }
     super.dispose();
   }
 
+  // دالة المساعدة لتحديث الواجهة
   void _refreshOrders() {
-    // This will trigger the FutureBuilder to re-fetch
-    setState(() {
+    if (mounted) {
       _loadOrders();
-    });
+    }
   }
 
-  void _loadOrders() => setState(() => _ordersFuture = OrderHistoryService().getOrders());
+  // دالة جلب البيانات من الذاكرة المحلية
+  void _loadOrders() {
+    setState(() {
+      _ordersFuture = OrderHistoryService().getOrders();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -6569,19 +6488,57 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
         child: FutureBuilder<List<Order>>(
           future: _ordersFuture,
           builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-            if (snapshot.hasError) return Center(child: Text('حدث خطأ: ${snapshot.error}'));
-            if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.history_toggle_off, size: 80, color: Colors.grey), SizedBox(height: 20), Text('لا يوجد لديك طلبات سابقة', style: TextStyle(fontSize: 18, color: Colors.grey))]));
 
-            final orders = snapshot.data!;
-            return ListView.builder(padding: const EdgeInsets.all(8), itemCount: orders.length, itemBuilder: (context, index) => OrderHistoryCard(order: orders[index]));
+            // الحالة 1: الانتظار
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            // الحالة 2: وجود خطأ
+            if (snapshot.hasError) {
+              // نستخدم ListView لكي يعمل الـ RefreshIndicator حتى مع الخطأ
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.4),
+                  Center(child: Text('حدث خطأ: ${snapshot.error}')),
+                ],
+              );
+            }
+
+            final orders = snapshot.data;
+
+            // الحالة 3: القائمة فارغة
+            if (orders == null || orders.isEmpty) {
+              return ListView(
+                // ✅ ضروري جداً: يسمح بالسحب للتحديث حتى لو القائمة فارغة
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                  const Icon(Icons.history_toggle_off, size: 80, color: Colors.grey),
+                  const SizedBox(height: 20),
+                  const Center(
+                    child: Text(
+                      'لا يوجد لديك طلبات سابقة',
+                      style: TextStyle(fontSize: 18, color: Colors.grey),
+                    ),
+                  )
+                ],
+              );
+            }
+
+            // الحالة 4: عرض البيانات
+            return ListView.builder(
+              padding: const EdgeInsets.all(8),
+              itemCount: orders.length,
+              itemBuilder: (context, index) => OrderHistoryCard(order: orders[index]),
+            );
           },
         ),
       ),
     );
   }
 }
-
 class RestaurantLoginScreen extends StatefulWidget {
   const RestaurantLoginScreen({super.key});
   @override
