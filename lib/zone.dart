@@ -180,7 +180,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
       if (mounted) _showWinnerDialog();
     });
   }
-
   void _showWinnerDialog() {
     setState(() => _isResultShown = true);
 
@@ -188,33 +187,84 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
       context: context,
       barrierDismissible: false,
       barrierLabel: "Winner",
-      transitionDuration: const Duration(milliseconds: 600),
+      transitionDuration: const Duration(milliseconds: 800), // زيادة الوقت قليلاً لجمالية الـ Elastic
       pageBuilder: (ctx, anim1, anim2) {
+        return Container(); // صفحة فارغة لأننا نعتمد على transitionBuilder
+      },
+      transitionBuilder: (ctx, anim1, anim2, child) {
+        // ✅ التصحيح هنا: استخدام CurvedAnimation بدلاً من التحويل اليدوي
+        final curvedValue = CurvedAnimation(parent: anim1, curve: Curves.elasticOut);
+
         return ScaleTransition(
-          scale: Curves.elasticOut.transform(anim1.value) as Animation<double>,
-          child: AlertDialog(
-            backgroundColor: Colors.transparent,
-            content: Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)]),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.amber, width: 4),
-                boxShadow: [const BoxShadow(color: Colors.black54, blurRadius: 20)],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.celebration, color: Colors.amber, size: 60),
-                  const SizedBox(height: 10),
-                  const Text("🎉 مبروووك للفائز 🎉", style: TextStyle(color: Colors.white, fontSize: 18)),
-                  const SizedBox(height: 10),
-                  Text(
-                    _currentWinnerName ?? "...",
-                    style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
+          scale: curvedValue,
+          child: FadeTransition(
+            opacity: anim1,
+            child: AlertDialog(
+              backgroundColor: Colors.transparent,
+              contentPadding: EdgeInsets.zero, // إزالة الحواف الافتراضية
+              content: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF6A11CB), Color(0xFF2575FC)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
-                ],
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.amber, width: 4),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black45, blurRadius: 20, spreadRadius: 5)
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // تأثير لمعان بسيط (اختياري)
+                    const Icon(Icons.celebration, color: Colors.amber, size: 70),
+                    const SizedBox(height: 15),
+                    const Text(
+                      "🎉 مبروووك للفائز 🎉",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Cairo', // تأكد من دعم الخط
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        _currentWinnerName ?? "...",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: () {
+                        // إغلاق النافذة وإعادة تعيين الحالة إذا رغبت
+                        Navigator.of(context).pop();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.deepPurple,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                      child: const Text("موافق", style: TextStyle(fontWeight: FontWeight.bold)),
+                    )
+                  ],
+                ),
               ),
             ),
           ),
@@ -222,7 +272,6 @@ class _BeyteiZoneScreenState extends State<BeyteiZoneScreen> with SingleTickerPr
       },
     );
   }
-
   void _startCountdown() {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       final now = DateTime.now();
