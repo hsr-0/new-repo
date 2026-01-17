@@ -12,7 +12,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:carousel_slider/carousel_slider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -212,6 +211,7 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
   }
 }
+
 class CustomerProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -219,7 +219,7 @@ class CustomerProvider with ChangeNotifier {
   List<Restaurant> _allRestaurants = [];
   Map<int, List<FoodItem>> _menuItems = {};
 
-  // 🔥 إضافة جديدة: قائمة العروض النشطة
+  // قائمة العروض النشطة
   List<Offer> _activeOffers = [];
 
   int _lastLoadedAreaId = -1;
@@ -231,12 +231,10 @@ class CustomerProvider with ChangeNotifier {
   Map<String, List<dynamic>> get homeData => _homeData;
   List<Restaurant> get allRestaurants => _allRestaurants;
   Map<int, List<FoodItem>> get menuItems => _menuItems;
-
-  // 🔥 إضافة جديدة: Getter للعروض
   List<Offer> get activeOffers => _activeOffers;
 
   bool get isLoadingHome => _isLoadingHome;
-  bool get isLoadingRestaurants => _isLoadingHome; // للتوافق
+  bool get isLoadingRestaurants => _isLoadingHome;
   bool get isLoadingMenu => _isLoadingMenu;
   bool get hasError => _hasError;
 
@@ -245,46 +243,36 @@ class CustomerProvider with ChangeNotifier {
     _homeData = {};
     _allRestaurants = [];
     _menuItems = {};
-    _activeOffers = []; // 🔥 تصفير العروض
+    _activeOffers = [];
     _lastLoadedAreaId = -1;
     _hasError = false;
     notifyListeners();
   }
 
-// ============================================================
-  // 🔥 دالة جلب العروض (On Sale Items) - النسخة المعدلة والنهائية
+  // ============================================================
+  // 🔥 دالة جلب العروض (On Sale Items)
   // ============================================================
   Future<void> fetchOffers(int areaId) async {
-    // هذه الدالة لا تستخدم الكاش حالياً لضمان تحديث العروض دائماً
     try {
       print("🔄 جاري جلب العروض وتصفيتها حسب المنطقة: $areaId...");
 
-      // 1. نطلب من الـ ApiService جلب كل المنتجات التي عليها تخفيض (من السيرفر)
       final rawItems = await _apiService.getOnSaleItems();
-
-      // 2. 🔥 الخطوة الحاسمة: جلب أرقام المطاعم التي توصل لهذه المنطقة فقط
       final Set<int> deliverableRestaurantIds = await _apiService.getDeliverableRestaurantIds(areaId);
 
-      // 3. 🔥 الفلترة: نحتفظ فقط بالعروض التي ينتمي مطعمها للمنطقة المحددة
-      // (categoryId في FoodItem يمثل رقم المطعم)
       final filteredItems = rawItems.where((item) {
         final isAllowed = deliverableRestaurantIds.contains(item.categoryId);
         return isAllowed;
       }).toList();
 
-      // 4. نحول الـ FoodItems المصفاة إلى Offers
       _activeOffers = filteredItems.map((item) {
-        // تنظيف الوصف من أي أكواد HTML زائدة
         String cleanDesc = item.description.replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim();
-
         return Offer(
           id: item.id,
           restaurantId: item.categoryId,
           title: item.name,
-          // إذا كان الوصف فارغاً، نضع نصاً تشويقياً افتراضياً
           description: cleanDesc.isNotEmpty ? cleanDesc : '🔥 عرض مميز لفترة محدودة!',
           imageUrl: item.imageUrl,
-          price: item.displayPrice, // السعر بعد الخصم
+          price: item.displayPrice,
         );
       }).toList();
 
@@ -293,50 +281,54 @@ class CustomerProvider with ChangeNotifier {
 
     } catch (e) {
       print("⚠️ خطأ في جلب العروض: $e");
-      _activeOffers = []; // في حال الخطأ نجعل القائمة فارغة
+      _activeOffers = [];
       notifyListeners();
     }
   }
+
   // ============================================================
-  // 1. جلب بيانات الصفحة الرئيسية (المطاعم) - نظام الكاش الذكي
+  // 1. جلب بيانات الصفحة الرئيسية (المطاعم) - 🔥 النظام الهجين الذكي
   // ============================================================
   Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
     _lastLoadedAreaId = areaId;
     _hasError = false;
 
-    // أ) محاولة التحميل من الكاش أولاً (للعرض الفوري)
-    if (!isRefresh && _homeData.isEmpty) {
-      await _loadHomeFromCache(areaId);
+    // 🔥 أ) محاولة العرض الفوري من الكاش (حتى لو كان قديماً)
+    if (!isRefresh) {
+      // هنا نستخدم مدة طويلة (24 ساعة) لأننا سنحدث الحالة في الخلفية
+      bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 1440);
+
+      if (isCacheAvailable) {
+        await _loadHomeFromCache(areaId);
+
+        if (_allRestaurants.isNotEmpty) {
+          print("🚀 عرض فوري للبيانات من الكاش (مع فحص خلفي للحالة)");
+          _isLoadingHome = false;
+          notifyListeners(); // إظهار البيانات للزبون فوراً
+
+          // 🔥 إطلاق الفحص الخلفي السريع (لتحديث حالة الفتح/الإغلاق)
+          _updateStatusesInBackground();
+          return;
+        }
+      }
     }
 
-    // إذا كانت البيانات فارغة حتى بعد محاولة الكاش، نُظهر التحميل
+    // ب) إذا لم يوجد كاش أو طلبنا تحديث، نسحب من السيرفر كالمعتاد
     if (_homeData.isEmpty) {
       _isLoadingHome = true;
       notifyListeners();
     }
 
-    // ب) التحقق من صلاحية الكاش (Time-based Caching)
-    if (!isRefresh && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 1400)) {
-      print("✅ استخدام الكاش للمطاعم (البيانات حديثة)");
-      _isLoadingHome = false;
-      notifyListeners();
-      return;
-    }
-
-    // ج) طلب البيانات الحديثة من السيرفر
     try {
       final results = await Future.wait([
-        _apiService.getRawDeliverableIds(areaId), // String JSON
-        _apiService.getRawRestaurants(areaId),    // String JSON
+        _apiService.getRawDeliverableIds(areaId),
+        _apiService.getRawRestaurants(areaId),
       ]);
 
       final deliverableJson = results[0];
       final restaurantsJson = results[1];
 
-      // 1. معالجة البيانات وتحديث الواجهة
       _processAndSetHomeData(deliverableJson, restaurantsJson);
-
-      // 2. حفظ النسخة الجديدة في الكاش
       await _saveHomeToCache(areaId, deliverableJson, restaurantsJson);
 
     } catch (e) {
@@ -348,12 +340,110 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
+  // ============================================================
+  // 🔥🔥🔥 دالة الفحص الخلفي الذكية (تحديث الحالة دون إزعاج الزبون) 🔥🔥🔥
+  // ============================================================
+  Future<void> _updateStatusesInBackground() async {
+    if (_allRestaurants.isEmpty) return;
+
+    try {
+      print("🕵️ [Background Check] فحص حالة المطاعم في الخلفية...");
+
+      // 1. جمع أرقام المطاعم المعروضة حالياً
+      List<int> ids = _allRestaurants.map((r) => r.id).toList();
+
+      // 2. طلب الحالة الخفيفة من السيرفر
+      final statuses = await _apiService.checkRestaurantsStatusLight(ids);
+
+      bool somethingChanged = false;
+
+      for (var status in statuses) {
+        final int id = status['id'];
+        final bool serverIsOpen = status['is_open'] == true;
+        final String newAutoOpen = status['auto_open'] ?? '09:00';
+        final String newAutoClose = status['auto_close'] ?? '22:00';
+
+        // البحث عن المطعم محلياً
+        final index = _allRestaurants.indexWhere((r) => r.id == id);
+
+        if (index != -1) {
+          // مقارنة الحالة الحالية بالحالة الجديدة
+          if (_allRestaurants[index].isOpen != serverIsOpen) {
+
+            print("🔄 تحديث حالة المطعم ${_allRestaurants[index].name}: من ${_allRestaurants[index].isOpen} إلى $serverIsOpen");
+
+            // إنشاء نسخة جديدة من المطعم مع الحالة المحدثة
+            _allRestaurants[index] = Restaurant(
+              id: _allRestaurants[index].id,
+              name: _allRestaurants[index].name,
+              imageUrl: _allRestaurants[index].imageUrl,
+              isDeliverable: _allRestaurants[index].isDeliverable,
+              averageRating: _allRestaurants[index].averageRating,
+              ratingCount: _allRestaurants[index].ratingCount,
+              latitude: _allRestaurants[index].latitude,
+              longitude: _allRestaurants[index].longitude,
+
+              // 🔥 تحديث البيانات الحساسة
+              isOpen: serverIsOpen,
+              autoOpenTime: newAutoOpen,
+              autoCloseTime: newAutoClose,
+            );
+
+            somethingChanged = true;
+          }
+        }
+      }
+
+      // 3. إذا تغيرت أي حالة، نحدث الواجهة فوراً
+      if (somethingChanged) {
+        _homeData['restaurants'] = _allRestaurants;
+        notifyListeners(); // سيتم تلوين المطعم أو تعتيمه فوراً أمام الزبون
+      }
+
+    } catch (e) {
+      print("⚠️ فشل الفحص الخلفي (غير مؤثر على العرض): $e");
+    }
+  }
+
+  // ============================================================
+  // 🔥 [NEW] دالة تحديث حالة مطعم واحد (تستخدم للفحص الفوري)
+  // ============================================================
+  void updateSingleRestaurantStatus(int id, bool isOpen, String? autoOpen, String? autoClose) {
+    // 1. البحث عن المطعم في القائمة
+    final index = _allRestaurants.indexWhere((r) => r.id == id);
+
+    if (index != -1) {
+      // 2. إنشاء نسخة جديدة من المطعم مع الحالة المحدثة
+      _allRestaurants[index] = Restaurant(
+        id: _allRestaurants[index].id,
+        name: _allRestaurants[index].name,
+        imageUrl: _allRestaurants[index].imageUrl,
+        isDeliverable: _allRestaurants[index].isDeliverable,
+        averageRating: _allRestaurants[index].averageRating,
+        ratingCount: _allRestaurants[index].ratingCount,
+        latitude: _allRestaurants[index].latitude,
+        longitude: _allRestaurants[index].longitude,
+
+        // ⬇️ هنا التحديث الجديد
+        isOpen: isOpen,
+        autoOpenTime: autoOpen ?? _allRestaurants[index].autoOpenTime,
+        autoCloseTime: autoClose ?? _allRestaurants[index].autoCloseTime,
+      );
+
+      // 3. تحديث خريطة البيانات الرئيسية
+      _homeData['restaurants'] = _allRestaurants;
+
+      // 4. إبلاغ الواجهة بالتغيير
+      notifyListeners();
+    }
+  }
+
   // --- دالة لجلب كل المطاعم ---
   Future<void> fetchAllRestaurants(int areaId, {bool isRefresh = false}) async {
     await fetchHomeData(areaId, isRefresh: isRefresh);
   }
 
-  // --- دالة مساعدة: معالجة JSON المطاعم ---
+  // --- معالجة JSON المطاعم ---
   void _processAndSetHomeData(String deliverableJson, String restaurantsJson) {
     try {
       final deliverableList = json.decode(deliverableJson) as List;
@@ -375,7 +465,7 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // --- دالة مساعدة: تحميل المطاعم من الكاش ---
+  // --- تحميل المطاعم من الكاش ---
   Future<void> _loadHomeFromCache(int areaId) async {
     final prefs = await SharedPreferences.getInstance();
     final deliverableJson = prefs.getString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_ids');
@@ -385,14 +475,13 @@ class CustomerProvider with ChangeNotifier {
       try {
         _processAndSetHomeData(deliverableJson, restaurantsJson);
         notifyListeners();
-        print("📂 تم تحميل المطاعم من الذاكرة المحلية.");
       } catch (e) {
         print("خطأ في قراءة كاش المطاعم: $e");
       }
     }
   }
 
-  // --- دالة مساعدة: حفظ المطاعم في الكاش ---
+  // --- حفظ المطاعم في الكاش ---
   Future<void> _saveHomeToCache(int areaId, String deliverableJson, String restaurantsJson) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_ids', deliverableJson);
@@ -400,9 +489,8 @@ class CustomerProvider with ChangeNotifier {
     await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', DateTime.now().millisecondsSinceEpoch);
   }
 
-
   // ============================================================
-  // 2. جلب قائمة الطعام (المنيو) - نظام الكاش الذكي
+  // 2. جلب قائمة الطعام (المنيو)
   // ============================================================
   Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
     _hasError = false;
@@ -416,6 +504,7 @@ class CustomerProvider with ChangeNotifier {
       notifyListeners();
     }
 
+    // كاش المنيو يبقى كما هو (10 ساعات مثلاً)
     if (!isRefresh && _menuItems.containsKey(restaurantId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', minutes: 600)) {
       print("✅ استخدام الكاش للمنيو (البيانات حديثة)");
       _isLoadingMenu = false;
@@ -439,7 +528,6 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // --- دالة مساعدة: معالجة JSON المنيو ---
   void _processAndSetMenu(int restaurantId, String jsonStr) {
     try {
       final List<dynamic> decoded = json.decode(jsonStr);
@@ -463,7 +551,6 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // --- دالة مساعدة: تحميل المنيو من الكاش ---
   Future<void> _loadMenuFromCache(int restaurantId) async {
     final prefs = await SharedPreferences.getInstance();
     final jsonStr = prefs.getString('${AppConstants.CACHE_KEY_MENU_PREFIX}$restaurantId');
@@ -477,7 +564,6 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // --- دالة مساعدة: حفظ المنيو في الكاش ---
   Future<void> _saveMenuToCache(int restaurantId, String jsonStr) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('${AppConstants.CACHE_KEY_MENU_PREFIX}$restaurantId', jsonStr);
@@ -498,8 +584,6 @@ class CustomerProvider with ChangeNotifier {
     return minutesDiff < minutes;
   }
 }
-
-
 class DashboardProvider with ChangeNotifier {
   Map<String, List<Order>> _orders = {};
   RestaurantRatingsDashboard? _ratingsDashboard;
@@ -1741,33 +1825,29 @@ class CartProvider with ChangeNotifier {
   List<FoodItem> get items => _items;
   int get cartCount => _items.fold(0, (sum, item) => sum + item.quantity);
   double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.displayPrice * item.quantity));
+
   String? _appliedCoupon;
   double _discountPercentage = 0.0;
   double _discountAmount = 0.0;
   String _discountType = '';
 
-// ✨ NEW: تتبع حالة المروج والخصم
+  // تتبع حالة المروج والخصم
   String? _promoterCode;
-  int _usageCount = 0; // عدد مرات الاستخدام المكتملة
+  int _usageCount = 0;
   double _loyaltyDiscountPercentage = 0.0;
 
-  String? get appliedCoupon => _appliedCoupon; // الحفاظ على Getter القديم
+  String? get appliedCoupon => _appliedCoupon;
   String? get promoterCode => _promoterCode;
   int get usageCount => _usageCount;
 
-// ✨ Getter معدل لحساب الخصم الكلي
   double get totalDiscountAmount {
     double couponDiscount = 0.0;
-    // حساب خصم الكوبون العادي
     if (_discountType == 'fixed_cart') {
       couponDiscount = _discountAmount;
     } else if (_discountType == 'percent') {
       couponDiscount = totalPrice * (_discountPercentage / 100);
     }
-
     double loyaltyDiscount = totalPrice * (_loyaltyDiscountPercentage / 100);
-
-    // نستخدم أكبر خصم متاح (إما خصم الكوبون أو خصم الولاء 50%)
     return max(couponDiscount, loyaltyDiscount);
   }
 
@@ -1775,37 +1855,30 @@ class CartProvider with ChangeNotifier {
     return (totalPrice - totalDiscountAmount).clamp(0, double.infinity);
   }
 
-// ✨ وظيفة لقراءة عدد الاستخدامات من الذاكرة المحلية
   Future<int> _loadUsageCount(String code) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('promoter_usage_$code') ?? 0;
   }
 
-// ✨ وظيفة لتسجيل الاستخدام بعد إتمام الطلب بنجاح (يجب استدعاؤها بعد إنشاء الطلب)
   Future<void> _recordSuccessfulOrder() async {
     final prefs = await SharedPreferences.getInstance();
     if (_promoterCode != null) {
       int currentCount = await _loadUsageCount(_promoterCode!);
       if (currentCount < 3) {
-        // زيادة العدد بعد طلب ناجح
         await prefs.setInt('promoter_usage_$_promoterCode', currentCount + 1);
       } else {
-        // إعادة تعيين العداد إلى 0 بعد استخدام خصم 50%
         await prefs.setInt('promoter_usage_$_promoterCode', 0);
       }
     }
   }
 
-// ✨ دالة مساعدة لحساب رسالة التحدي الحالية (مطلوبة للـ Widget الجديد)
   Map<String, dynamic> get getLoyaltyChallengeStatus {
     if (_promoterCode == null) {
       return {'show': false, 'message': 'لا يوجد رمز مروج مفعل.'};
     }
-
     if (_usageCount == 3) {
       return {'show': true, 'message': '🎉 تهانينا! خصم الـ 50% متاح الآن على سلتك!'};
     }
-
     final remaining = 3 - _usageCount;
     return {
       'show': true,
@@ -1813,16 +1886,11 @@ class CartProvider with ChangeNotifier {
     };
   }
 
-
   Future<Map<String, dynamic>> applyCoupon(String code) async {
     final result = await ApiService().validateCoupon(code);
-
     if (result['is_promoter'] == true) {
       _promoterCode = code.toUpperCase();
-
-      // جلب عدد الاستخدامات وحساب الخصم
       _usageCount = await _loadUsageCount(_promoterCode!);
-
       if (_usageCount == 3) {
         _loyaltyDiscountPercentage = 50.0;
         _discountType = 'loyalty_discount';
@@ -1833,57 +1901,98 @@ class CartProvider with ChangeNotifier {
         final remaining = 3 - _usageCount;
         result['message'] = "تم تفعيل رمز المروج. تبقى ${remaining} طلب للحصول على خصم ٥٠٪!";
       }
-
       _appliedCoupon = null;
       _discountAmount = 0.0;
       _discountPercentage = 0.0;
-
       notifyListeners();
       return result;
-
     } else if (result['valid'] == true) {
-      // منطق كوبون ووكومرس العادي
       _appliedCoupon = code.toUpperCase();
       _discountType = result['discount_type'];
       _discountAmount = double.tryParse(result['amount'].toString()) ?? 0.0;
       if (_discountType == 'percent') _discountPercentage = _discountAmount;
-
-      // تصفير حقول الولاء عند استخدام كوبون عادي
       _promoterCode = null;
       _loyaltyDiscountPercentage = 0.0;
-
       notifyListeners();
       return result;
     }
     return result;
   }
+
   void removeCoupon() {
     _appliedCoupon = null;
     _discountPercentage = 0.0;
     _discountAmount = 0.0;
     _discountType = '';
-
-    // تصفير حقول الولاء
     _promoterCode = null;
     _loyaltyDiscountPercentage = 0.0;
-
     notifyListeners();
   }
 
-  // ✨ --- [ هذا هو الإصلاح ] --- ✨
-  // (استبدل الدالة القديمة بهذه)
+  // ============================================================
+  // 🔥🔥🔥 دالة الإضافة للسلة (المعدلة والمصححة) 🔥🔥🔥
+  // ============================================================
   void addToCart(FoodItem foodItem, BuildContext context) {
-    // 1. التحقق من توفر المنتج
-    if (!foodItem.isDeliverable) {
-      _showItemUnavailableDialog(context, foodItem);
-      return;
+    // 1. الوصول لبيانات المطاعم من CustomerProvider
+    final customerProvider = Provider.of<CustomerProvider>(context, listen: false);
+
+    // 2. البحث عن المطعم الأب للتحقق من حالته (Open/Closed)
+    Restaurant? parentRestaurant;
+    try {
+      parentRestaurant = customerProvider.allRestaurants.firstWhere((r) => r.id == foodItem.categoryId);
+    } catch (e) {
+      parentRestaurant = null;
     }
 
+    // 3. التحقق الصارم: هل المطعم مغلق الآن؟
+    bool isRestaurantClosed = false;
+
+    if (parentRestaurant != null) {
+      // نعتمد على الحالة المحدثة للمطعم الأب
+      if (!parentRestaurant.isOpen) {
+        isRestaurantClosed = true;
+      }
+    } else {
+      // احتياطي: نعتمد على حالة المنتج القديمة
+      if (!foodItem.isDeliverable) {
+        isRestaurantClosed = true;
+      }
+    }
+
+    // 4. منع الإضافة إذا كان مغلقاً
+    if (isRestaurantClosed) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: Row(
+            children: [
+              Icon(Icons.store_mall_directory, color: Colors.red.shade700),
+              const SizedBox(width: 10),
+              const Text("المطعم أغلق للتو 🛑"),
+            ],
+          ),
+          content: Text(
+            "عذراً، انتهى وقت عمل ${parentRestaurant?.name ?? 'المطعم'}.\n"
+                "يفتح تلقائياً في: ${parentRestaurant?.autoOpenTime ?? 'الصباح'}",
+            style: const TextStyle(fontSize: 16),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text("حسناً"),
+            ),
+          ],
+        ),
+      );
+      return; // ⛔ توقف هنا ولا تضف للسلة
+    }
+
+    // 5. إذا كان مفتوحاً، أكمل العملية كالمعتاد
     final existingIndex = _items.indexWhere((item) => item.id == foodItem.id);
     if (existingIndex != -1) {
       _items[existingIndex].quantity++;
     } else {
-      // 2. إضافة المنتج للسلة مع نسخ الإحداثيات
       _items.add(FoodItem(
         id: foodItem.id,
         name: foodItem.name,
@@ -1893,8 +2002,7 @@ class CartProvider with ChangeNotifier {
         imageUrl: foodItem.imageUrl,
         quantity: 1,
         categoryId: foodItem.categoryId,
-        isDeliverable: foodItem.isDeliverable,
-        // ✅✅✅ هنا الإصلاح: نقل الإحداثيات من المنتج الأصلي إلى السلة ✅✅✅
+        isDeliverable: true,
         restaurantLat: foodItem.restaurantLat,
         restaurantLng: foodItem.restaurantLng,
       ));
@@ -1902,20 +2010,6 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
     _showAddToCartDialog(context, foodItem);
   }
-  // ✨ --- [ أضف هذه الدالة المساعدة الجديدة ] ---
-  void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("عذراً، المنتج غير متاح"),
-        content: Text("لا يمكن إضافة '${item.name}' إلى السلة لأن المطعم الخاص به مغلق حالياً."),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً")),
-        ],
-      ),
-    );
-  }
-  // --- [ نهاية الإضافة ] ---
 
   void incrementQuantity(FoodItem foodItem) {
     final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
@@ -2007,6 +2101,45 @@ class ApiService {
       }
     });
   }
+
+
+
+
+
+  // ============================================================
+  // 🔥 دالة الفحص الخلفي الخفيف (Light Check)
+  // هذه الدالة ترسل أرقام المطاعم وتستقبل حالتها فقط (مفتوح/مغلق)
+  // ============================================================
+  Future<List<dynamic>> checkRestaurantsStatusLight(List<int> ids) async {
+    // إذا لم تكن القائمة تحتوي على أرقام، لا داعي للاتصال
+    if (ids.isEmpty) return [];
+
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/check-statuses-light'),
+        headers: {
+          'Content-Type': 'application/json',
+          // لا نحتاج لتوكن هنا لأن النقطة عامة (__return_true)
+        },
+        body: json.encode({'ids': ids}),
+      );
+
+      if (response.statusCode == 200) {
+        // نرجع قائمة النتائج
+        return json.decode(response.body);
+      }
+
+      // في حال حدوث أي خطأ، نرجع قائمة فارغة لكي لا يتوقف التطبيق
+      return [];
+    });
+  }
+
+
+
+
+
+
+
   // =================================================================
   // 🔥🔥🔥 دالة التنفيذ الذكي المعدلة (Exponential Backoff) 🔥🔥🔥
   // =================================================================
@@ -5453,8 +5586,6 @@ class HomeScreenState extends State<HomeScreen> {
                 ],
                 // 🔥🔥🔥 نهاية قسم العروض 🔥🔥🔥
 
-                _buildBannerSlider(),
-
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 5),
                   child: Text("المطاعم المتاحة",
@@ -5517,31 +5648,6 @@ class HomeScreenState extends State<HomeScreen> {
       child: Stack(
         alignment: Alignment.bottomCenter,
         children: [
-          CarouselSlider(
-            items: bannerImages
-                .map((imageUrl) => Builder(
-                builder: (ctx) => Container(
-                  width: MediaQuery.of(ctx).size.width,
-                  margin: const EdgeInsets.symmetric(horizontal: 5.0),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(15),
-                    image: DecorationImage(
-                      image: CachedNetworkImageProvider(imageUrl),
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                )))
-                .toList(),
-            options: CarouselOptions(
-              height: 150.0,
-              autoPlay: true,
-              enlargeCenterPage: true,
-              aspectRatio: 16 / 9,
-              viewportFraction: 0.9,
-              onPageChanged: (index, _) =>
-                  setState(() => _currentBannerIndex = index),
-            ),
-          ),
           Positioned(
             bottom: 10,
             child: Row(
@@ -5828,9 +5934,80 @@ class _MenuScreenState extends State<MenuScreen> {
   @override
   void initState() {
     super.initState();
+    // نستخدم postFrameCallback لضمان أن الواجهة قد تم بناؤها قبل استدعاء البروفايدر
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<CustomerProvider>(context, listen: false).fetchMenuForRestaurant(widget.restaurant.id);
+      final provider = Provider.of<CustomerProvider>(context, listen: false);
+
+      // 1. 🚀 العرض الفوري: جلب المنيو (سيأتي من الكاش فوراً إذا كان موجوداً)
+      provider.fetchMenuForRestaurant(widget.restaurant.id);
+
+      // 2. 🕵️ الفحص الخلفي: التحقق من حالة المطعم الآن (دون تعطيل العرض)
+      _checkRestaurantStatusNow();
     });
+  }
+
+  // 🔥 دالة الفحص الفوري (تعمل في الخلفية)
+  Future<void> _checkRestaurantStatusNow() async {
+    final provider = Provider.of<CustomerProvider>(context, listen: false);
+    final api = ApiService();
+
+    // طلب خفيف جداً للسيرفر للتحقق من هذا المطعم فقط
+    try {
+      final statusList = await api.checkRestaurantsStatusLight([widget.restaurant.id]);
+
+      if (statusList.isNotEmpty && mounted) {
+        final status = statusList.first;
+        bool serverIsOpen = status['is_open'] == true;
+
+        // 🛑 المصيدة: إذا اكتشفنا أن المطعم مغلق (بينما التطبيق يظنه مفتوحاً)
+        if (!serverIsOpen) {
+
+          // 1. تحديث الحالة في الذاكرة لكي يظهر مغلقاً في كل مكان
+          // (تأكد أنك أضفت دالة updateSingleRestaurantStatus في CustomerProvider كما اتفقنا)
+          provider.updateSingleRestaurantStatus(
+              widget.restaurant.id,
+              false,
+              status['auto_open'],
+              status['auto_close']
+          );
+
+          // 2. إظهار تنبيه وإخراج الزبون
+          if (mounted) {
+            showDialog(
+              context: context,
+              barrierDismissible: false, // لا يمكن إغلاقه بالضغط خارجاً
+              builder: (ctx) => AlertDialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                title: Row(
+                  children: [
+                    Icon(Icons.store_mall_directory, color: Colors.red.shade700),
+                    const SizedBox(width: 10),
+                    const Text("تنبيه 🛑", style: TextStyle(fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                content: const Text(
+                  "عذراً، هذا المطعم أغلق للتو ولا يمكن استقبال طلبات جديدة حالياً.",
+                  style: TextStyle(fontSize: 16),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx); // إغلاق التنبيه
+                      Navigator.pop(context); // 🚀 طرد الزبون (العودة للرئيسية)
+                    },
+                    child: const Text("حسناً", style: TextStyle(fontWeight: FontWeight.bold)),
+                  )
+                ],
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print("Error checking status in background: $e");
+      // لا نفعل شيئاً عند الخطأ، نترك الزبون يتصفح (الأولوية للسرعة)
+      // وسيتم منعه لاحقاً في السلة إذا حاول الطلب
+    }
   }
 
   @override
@@ -5854,7 +6031,13 @@ class _MenuScreenState extends State<MenuScreen> {
 
           // --- 2. حالة القائمة الفارغة أو المطعم المغلق ---
           if (menu.isEmpty) {
-            if (!widget.restaurant.isOpen) {
+            // نتحقق من الحالة المحدثة (التي قد تكون تغيرت للتو)
+            Restaurant currentRest = provider.allRestaurants.firstWhere(
+                    (r) => r.id == widget.restaurant.id,
+                orElse: () => widget.restaurant
+            );
+
+            if (!currentRest.isOpen) {
               return Center(child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -5863,7 +6046,7 @@ class _MenuScreenState extends State<MenuScreen> {
                   const Text("المطعم مغلق حالياً", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Text(
-                    "يفتح تلقائياً في: ${widget.restaurant.autoOpenTime}",
+                    "يفتح تلقائياً في: ${currentRest.autoOpenTime}",
                     style: TextStyle(fontSize: 16, color: Colors.grey.shade700),
                   ),
                 ],
@@ -5873,7 +6056,6 @@ class _MenuScreenState extends State<MenuScreen> {
           }
 
           // --- 3. تقسيم البيانات (عروض vs عادي) ---
-          // العروض هي أي منتج لديه salePrice أكبر من 0
           final List<FoodItem> offersList = menu.where((item) => item.salePrice != null && item.salePrice! > 0).toList();
           final List<FoodItem> regularList = menu.where((item) => item.salePrice == null || item.salePrice == 0).toList();
 
@@ -5881,7 +6063,6 @@ class _MenuScreenState extends State<MenuScreen> {
             onRefresh: () => provider.fetchMenuForRestaurant(widget.restaurant.id, isRefresh: true),
             child: CustomScrollView(
               slivers: [
-
                 // === القسم الأول: العروض (بانرات أفقية) ===
                 if (offersList.isNotEmpty) ...[
                   SliverToBoxAdapter(
@@ -5898,14 +6079,13 @@ class _MenuScreenState extends State<MenuScreen> {
                   ),
                   SliverToBoxAdapter(
                     child: SizedBox(
-                      height: 240, // ارتفاع منطقة العروض (البانر)
+                      height: 240,
                       child: ListView.builder(
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 10),
                         itemCount: offersList.length,
                         itemBuilder: (context, index) {
                           final item = offersList[index];
-
                           // تحويل FoodItem إلى Offer لاستخدام ModernOfferCard
                           final offer = Offer(
                             id: item.id,
@@ -5925,7 +6105,6 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     ),
                   ),
-                  // فاصل جمالي
                   const SliverToBoxAdapter(child: Divider(height: 30, thickness: 1, indent: 20, endIndent: 20)),
                 ],
 
@@ -5948,7 +6127,7 @@ class _MenuScreenState extends State<MenuScreen> {
                       crossAxisCount: 2,
                       crossAxisSpacing: 15,
                       mainAxisSpacing: 15,
-                      childAspectRatio: 0.75, // نسبة العرض للارتفاع لبطاقة الطعام
+                      childAspectRatio: 0.75,
                     ),
                     delegate: SliverChildBuilderDelegate(
                           (context, index) {
@@ -5959,7 +6138,6 @@ class _MenuScreenState extends State<MenuScreen> {
                   ),
                 ),
 
-                // مسافة فارغة في الأسفل لضمان عدم تغطية آخر العناصر
                 const SliverToBoxAdapter(child: SizedBox(height: 50)),
               ],
             ),
@@ -5968,8 +6146,7 @@ class _MenuScreenState extends State<MenuScreen> {
       ),
     );
   }
-}
-class SearchScreen extends StatefulWidget {
+}class SearchScreen extends StatefulWidget {
   final String searchQuery;
   final int selectedAreaId;
   const SearchScreen({super.key, required this.searchQuery, required this.selectedAreaId});
