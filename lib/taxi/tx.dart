@@ -2780,68 +2780,106 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     super.dispose();
   }
 
-  // 🔥 1. المنطق الذكي لتحديد الهدف (للمسافة ولـ Waze)
-  LatLng? _getTargetPoint() {
-    final status = _currentDelivery['order_status'];
-    String? latStr, lngStr;
-
-    // المرحلة 1: الذهاب للمطعم
-    if (status == 'accepted' || status == 'at_store' || status == 'pending') {
-      latStr = _currentDelivery['pickup_lat']?.toString();
-      lngStr = _currentDelivery['pickup_lng']?.toString();
-    }
-    // المرحلة 2: الذهاب للزبون
-    else if (status == 'picked_up') {
-      latStr = _currentDelivery['destination_lat']?.toString();
-      lngStr = _currentDelivery['destination_lng']?.toString();
-    }
-
-    if (latStr != null && lngStr != null && latStr != "0" && lngStr != "0") {
-      try {
-        return LatLng(double.parse(latStr), double.parse(lngStr));
-      } catch (e) {
-        return null;
-      }
+  // ✅ دالة مساعدة جديدة: تحويل آمن للأرقام (يمنع الكراش)
+  double? _safeParseDouble(dynamic value) {
+    if (value == null) return null;
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    if (value is String) {
+      if (value.trim().isEmpty || value == "null") return null;
+      return double.tryParse(value);
     }
     return null;
   }
 
-  // 🔥 2. زر Waze الذكي
-  Future<void> _launchWaze() async {
-    final target = _getTargetPoint();
-    if (target == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الوجهة غير محددة")));
-      return;
+  // 🔥 1. المنطق الذكي لتحديد الهدف (تم تحديثها)
+  LatLng? _getTargetPoint() {
+    final status = _currentDelivery['order_status'];
+    double? lat, lng;
+
+    // المرحلة 1: الذهاب للمطعم
+    if (status == 'accepted' || status == 'at_store' || status == 'pending') {
+      lat = _safeParseDouble(_currentDelivery['pickup_lat']);
+      lng = _safeParseDouble(_currentDelivery['pickup_lng']);
+    }
+    // المرحلة 2: الذهاب للزبون
+    else if (status == 'picked_up') {
+      lat = _safeParseDouble(_currentDelivery['destination_lat']);
+      lng = _safeParseDouble(_currentDelivery['destination_lng']);
     }
 
-    final lat = target.latitude;
-    final lng = target.longitude;
+    // إذا كانت الإحداثيات موجودة وليست أصفاراً
+    if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
+      return LatLng(lat, lng);
+    }
+    return null; // لا توجد إحداثيات صالحة (سنستخدم العنوان بدلاً منها)
+  }
 
-    // روابط فتح التطبيقات الخارجية
-    final Uri wazeUri = Uri.parse("https://waze.com/ul?ll=$lat,$lng&navigate=yes");
-    final Uri googleMapsUri = Uri.parse("google.navigation:q=$lat,$lng");
+  // 🔥 2. زر Waze الذكي (تم التحديث للبحث بالعنوان عند فقدان الإحداثيات)
+  Future<void> _launchWaze() async {
+    final target = _getTargetPoint();
 
-    try {
-      if (await canLaunchUrl(wazeUri)) {
-        await launchUrl(wazeUri, mode: LaunchMode.externalApplication);
-      } else if (await canLaunchUrl(googleMapsUri)) {
-        await launchUrl(googleMapsUri, mode: LaunchMode.externalApplication);
-      } else {
-        await launchUrl(Uri.parse("http://googleusercontent.com/maps.google.com/"), mode: LaunchMode.externalApplication);
+    // السيناريو أ: لدينا إحداثيات دقيقة (GPS)
+    if (target != null) {
+      final lat = target.latitude;
+      final lng = target.longitude;
+
+      final Uri wazeUri = Uri.parse("https://waze.com/ul?ll=$lat,$lng&navigate=yes");
+      final Uri googleMapsUri = Uri.parse("google.navigation:q=$lat,$lng");
+
+      try {
+        if (await canLaunchUrl(wazeUri)) {
+          await launchUrl(wazeUri, mode: LaunchMode.externalApplication);
+        } else if (await canLaunchUrl(googleMapsUri)) {
+          await launchUrl(googleMapsUri, mode: LaunchMode.externalApplication);
+        } else {
+          await launchUrl(Uri.parse("http://googleusercontent.com/maps.google.com/"), mode: LaunchMode.externalApplication);
+        }
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح تطبيق الخرائط")));
       }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا يمكن فتح تطبيق الخرائط")));
+    }
+    // السيناريو ب: الإحداثيات مفقودة أو صفر (نبحث باسم المكان/العنوان)
+    else {
+      String addressToSearch = "";
+      final status = _currentDelivery['order_status'];
+
+      if (status == 'picked_up') {
+        // نبحث عن عنوان الزبون
+        addressToSearch = _currentDelivery['destination_address'] ?? "";
+      } else {
+        // نبحث عن اسم المطعم
+        addressToSearch = _currentDelivery['pickup_location_name'] ?? "";
+      }
+
+      if (addressToSearch.isNotEmpty) {
+        // روابط البحث النصي
+        final Uri wazeSearchUri = Uri.parse("https://waze.com/ul?q=${Uri.encodeComponent(addressToSearch)}");
+        final Uri googleSearchUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(addressToSearch)}");
+
+        try {
+          if (await canLaunchUrl(wazeSearchUri)) {
+            await launchUrl(wazeSearchUri, mode: LaunchMode.externalApplication);
+          } else {
+            await launchUrl(googleSearchUri, mode: LaunchMode.externalApplication);
+          }
+        } catch (e) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل البحث عن العنوان")));
+        }
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لا توجد إحداثيات ولا عنوان واضح للبحث!")));
+      }
     }
   }
 
-  // 3. التتبع (لحساب المسافة وتحديث السيرفر فقط)
+  // 3. التتبع (تم التحديث لاستخدام _getTargetPoint الآمنة)
   Future<void> _startLiveTracking() async {
     final hasPermission = await PermissionService.handleLocationPermission(context);
     if (!hasPermission) return;
 
     const locationSettings = geolocator.LocationSettings(
       accuracy: geolocator.LocationAccuracy.high,
-      distanceFilter: 20, // تحديث كل 20 متر
+      distanceFilter: 20,
     );
 
     _positionStream = geolocator.Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
@@ -2860,18 +2898,20 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
         distString = distMeters < 1000
             ? "${distMeters.round()} متر"
             : "${(distMeters / 1000).toStringAsFixed(1)} كم";
+      } else {
+        distString = "العنوان نصي"; // إشارة للسائق أن الموقع ليس GPS دقيق
       }
 
       setState(() {
         _distanceToTargetString = distString;
       });
 
-      // إرسال الموقع للسيرفر (ضروري لكي يراك الزبون)
+      // إرسال الموقع للسيرفر
       ApiService.updateDriverLocation(widget.authResult.token, newLoc);
     });
   }
 
-  // 4. تحديث الحالة
+  // 4. تحديث الحالة (لم تتغير، لكنها ضرورية للكلاس)
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);
     try {
@@ -2950,7 +2990,6 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
   Widget _buildActionButton() {
     final status = _currentDelivery['order_status'];
 
-    // تصميم موحد للأزرار الكبيرة
     final buttonStyle = ElevatedButton.styleFrom(
       padding: const EdgeInsets.symmetric(vertical: 18),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2974,7 +3013,6 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
   Widget build(BuildContext context) {
     final status = _currentDelivery['order_status'] ?? 'pending';
 
-    // تخصيص الواجهة حسب الحالة
     IconData stateIcon = Icons.local_shipping;
     String stateTitle = "جارِ التوصيل";
     Color stateColor = Colors.blue;
@@ -3052,9 +3090,9 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
               ),
             ),
 
-            const SizedBox(height: 40), // مسافة فاصلة
+            const SizedBox(height: 40),
 
-            // 3. زر فتح الخريطة الخارجية
+            // 3. زر فتح الخريطة الخارجية (تم تحديثه ليدعم البحث بالاسم)
             SizedBox(
               width: double.infinity,
               height: 55,
@@ -3072,7 +3110,7 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
 
             const SizedBox(height: 16),
 
-            // 4. زر تغيير الحالة (الإجراء الرئيسي)
+            // 4. زر تغيير الحالة
             _buildActionButton(),
 
             const SizedBox(height: 20),
@@ -3089,6 +3127,8 @@ class _DriverCurrentDeliveryScreenState extends State<DriverCurrentDeliveryScree
     );
   }
 }
+
+
 // =============================================================================
 // Modern Info Dialog & Driver Stats Bar
 // =============================================================================

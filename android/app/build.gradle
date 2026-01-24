@@ -3,7 +3,7 @@ plugins {
     id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
     id "com.google.gms.google-services"
-    id 'com.google.firebase.firebase-perf' // Firebase services لو تحتاج
+    id 'com.google.firebase.firebase-perf'
 }
 
 def localProperties = new Properties()
@@ -25,16 +25,17 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "co.median.android.wqwnby"
-    compileSdk = 35
+    compileSdk = 36
+    ndkVersion = "29.0.14033849"
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
         coreLibraryDesugaringEnabled true
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_1_8
+        jvmTarget = "11"
     }
 
     sourceSets {
@@ -43,18 +44,29 @@ android {
 
     defaultConfig {
         applicationId = "co.median.android.wqwnby"
-        minSdkVersion = flutter.minSdkVersion
-        targetSdk = 35
-        versionCode = 53
-        versionName = "1.5.3"
+        minSdk = flutter.minSdkVersion
+        targetSdk = 36
+        versionCode = 54
+        versionName = "1.5.4"
     }
+
+    // --- هذا هو الجزء المطلوب حله للمشكلة ---
+    packagingOptions {
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
+        pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        pickFirst 'lib/x86_64/libc++_shared.so'
+        pickFirst 'lib/x86/libc++_shared.so'
+    }
+    // ---------------------------------------
 
     signingConfigs {
         release {
-            keyAlias keystoreProperties['keyAlias']
-            keyPassword keystoreProperties['keyPassword']
-            storeFile file(keystoreProperties['storeFile'])
-            storePassword keystoreProperties['storePassword']
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
         }
     }
 
@@ -76,8 +88,8 @@ flutter {
 }
 
 dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22"
-    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.3'
     implementation platform('com.google.firebase:firebase-bom:32.1.1')
     implementation 'com.google.firebase:firebase-messaging'
 }

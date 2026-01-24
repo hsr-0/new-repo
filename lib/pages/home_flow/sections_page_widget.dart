@@ -21,6 +21,7 @@ import 'package:facebook_app_events/facebook_app_events.dart';
 
 // تأكد من صحة مسار هذه الملفات في مشروعك
 import '../../doctore/medical_home_screen.dart';
+import '../../taxi/lib/main.dart';
 import '../../zone.dart';
 import '../webview_flow/webview_page.dart';
 
@@ -525,7 +526,12 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       title: 'تكسي بيتي ',
                       imagePath: 'assets/images/taxi.png',
                       onTap: () {
-                        GoRouter.of(context).push('/trb-store');
+                        // الانتقال إلى تطبيق التكسي المدمج
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => const TaxiAppEntry()),
+                        );
                       },
                     ),
                     _buildGridCard(

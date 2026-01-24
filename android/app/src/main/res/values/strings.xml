@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Beytei</string>
+
+    <string name="mapbox_access_token">pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ</string>
+
     <string name="facebook_app_id">2645834165619797</string>
     <string name="facebook_client_token">5a2f1db768f600b7bcf16dd88c93375f</string>
 </resources>

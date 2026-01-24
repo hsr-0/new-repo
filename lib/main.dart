@@ -1,5 +1,4 @@
-// --- START: FCM HANDLER IMPORTS ---
-// الخطوة 1: أضف هذه الاستيرادات في بداية الملف
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -213,7 +212,7 @@ class _MyAppState extends State<MyApp> {
 
   List<String> getRouteStack() =>
       _router.routerDelegate.currentConfiguration.matches
-          .map((e) => getRoute(e))
+          .map((e) => getRoute(e as dynamic))
           .toList();
 
   @override

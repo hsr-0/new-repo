@@ -4869,6 +4869,7 @@ class RestaurantModule extends StatefulWidget {
   @override
   State<RestaurantModule> createState() => _RestaurantModuleState();
 }
+
 class _RestaurantModuleState extends State<RestaurantModule> {
   @override
   void initState() {
@@ -4877,27 +4878,56 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   }
 
   Future<void> _initializeServices() async {
+    // تهيئة خدمة الإشعارات المحلية
     await NotificationService.initialize();
 
     // 🔥 الاستماع للإشعارات القادمة والتطبيق مفتوح (Foreground) 🔥
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      // 1. عرض التنبيه (صوت + إشعار منبثق)
-      NotificationService.display(message);
 
-      // 2. تحديث البيانات باستخدام "التحديث الذكي"
+      // -----------------------------------------------------------
+      // 1. عرض التنبيه المرئي (صوت + نافذة) إذا وجد محتوى
+      // -----------------------------------------------------------
+      if (message.notification != null) {
+        NotificationService.display(message);
+      }
+
+      // -----------------------------------------------------------
+      // 2. منطق الزبون: التحديث الصامت لحالة المطاعم (Silent Refresh)
+      // -----------------------------------------------------------
+      if (message.data['type'] == 'refresh_status') {
+        print("⚡ [Customer] وصل أمر تحديث حالة المطاعم من السيرفر!");
+
+        if (mounted) {
+          // جلب المنطقة الحالية للزبون لتحديث بياناتها
+          SharedPreferences.getInstance().then((prefs) {
+            final int? areaId = prefs.getInt('selectedAreaId');
+
+            if (areaId != null) {
+              final customerProvider = Provider.of<CustomerProvider>(context, listen: false);
+
+              // تحديث قائمة المطاعم (يغير اللون من مغلق لمفتوح والعكس)
+              customerProvider.fetchHomeData(areaId, isRefresh: true);
+
+              // تحديث العروض أيضاً
+              customerProvider.fetchOffers(areaId);
+            }
+          });
+        }
+      }
+
+      // -----------------------------------------------------------
+      // 3. منطق صاحب المطعم/التيم ليدر: تحديث لوحة التحكم
+      // -----------------------------------------------------------
       if (mounted) {
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
+        // نتحقق إذا كان المستخدم مسجل دخول (صاحب مطعم أو ليدر)
         if (authProvider.isLoggedIn && authProvider.token != null) {
-          print("🔔 إشعار جديد وصل! تفعيل التحديث الذكي (Smart Refresh)...");
+          print("🔔 [Dashboard] إشعار جديد! تفعيل التحديث الذكي للطلبات...");
 
-          // ✨✨✨ التعديل الجوهري هنا ✨✨✨
-          // استخدام triggerSmartRefresh لتجميع الطلبات المتتالية في طلب واحد للسيرفر
+          // استخدام triggerSmartRefresh لتجميع الطلبات المتتالية
           Provider.of<DashboardProvider>(context, listen: false)
               .triggerSmartRefresh(authProvider.token!);
-
-          // 💡 ملاحظة: تم إيقاف تحديث الإعدادات (Settings) مع كل إشعار لتخفيف الضغط،
-          // لأن الإعدادات لا تتغير عادةً عند وصول طلب جديد.
         }
       }
     });
@@ -4907,7 +4937,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Providers الأساسية
+        // --- Providers الأساسية المستقلة ---
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
@@ -4916,26 +4946,25 @@ class _RestaurantModuleState extends State<RestaurantModule> {
         ChangeNotifierProvider(create: (_) => RestaurantSettingsProvider()),
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
 
-        // Providers المعتمدة على AuthProvider (Proxy)
+        // --- Proxy Providers (تعتمد على AuthProvider) ---
 
-        // 1. ربط DashboardProvider
+        // 1. ربط DashboardProvider (للطلبات)
         ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
           create: (_) => DashboardProvider(),
           update: (_, auth, dashboard) {
-            if(auth.isLoggedIn && dashboard != null && auth.token != null) {
-              // عند بدء التطبيق، نعتمد على التحديث الذكي أو اليدوي
-              // تم إيقاف startAutoRefresh الدورية لتخفيف الحمل
+            if (auth.isLoggedIn && dashboard != null && auth.token != null) {
+              // عند بدء التطبيق، جلب البيانات بصمت
               dashboard.fetchDashboardData(auth.token!, silent: true);
             }
             return dashboard!;
           },
         ),
 
-        // 2. ربط RestaurantSettingsProvider
+        // 2. ربط RestaurantSettingsProvider (لإعدادات المطعم)
         ChangeNotifierProxyProvider<AuthProvider, RestaurantSettingsProvider>(
           create: (_) => RestaurantSettingsProvider(),
           update: (_, auth, settings) {
-            if(settings != null && auth.isLoggedIn && auth.token != null) {
+            if (settings != null && auth.isLoggedIn && auth.token != null) {
               settings.fetchSettings(auth.token);
             } else if (settings != null && !auth.isLoggedIn) {
               settings.clearData();
@@ -4944,7 +4973,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
           },
         ),
 
-        // 3. ربط RestaurantProductsProvider
+        // 3. ربط RestaurantProductsProvider (لإدارة المنتجات)
         ChangeNotifierProxyProvider<AuthProvider, RestaurantProductsProvider>(
           create: (_) => RestaurantProductsProvider(),
           update: (_, auth, products) {
@@ -4967,15 +4996,25 @@ class _RestaurantModuleState extends State<RestaurantModule> {
                 backgroundColor: Colors.white,
                 elevation: 0.5,
                 iconTheme: IconThemeData(color: Colors.black),
-                titleTextStyle: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'Tajawal')
+                titleTextStyle: TextStyle(
+                    color: Colors.black,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'Tajawal'
+                )
             )
         ),
         debugShowCheckedModeBanner: false,
+        // نقطة البداية: تفحص هل المستخدم اختار منطقة أم لا
         home: const AuthWrapper(),
       ),
     );
   }
-}// ✨ NEW: Restaurant Settings Screen
+}
+
+
+
+
 class RestaurantSettingsScreen extends StatefulWidget {
   const RestaurantSettingsScreen({super.key});
 
@@ -5182,24 +5221,44 @@ class LocationCheckWrapper extends StatefulWidget {
 }
 
 class _LocationCheckWrapperState extends State<LocationCheckWrapper> {
-  Future<int?> _checkLocation() async {
+  Future<int?> _checkLocationAndSubscribe() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('selectedAreaId');
+    final int? areaId = prefs.getInt('selectedAreaId');
+
+    // 🔥 التعديل الجوهري: إذا وجدنا منطقة محفوظة، نعيد الاشتراك فوراً
+    if (areaId != null) {
+      // لا ننتظر النتيجة (await) لكي لا نعطل فتح التطبيق، نتركها تعمل في الخلفية
+      FirebaseMessaging.instance.subscribeToTopic('area_$areaId').then((_) {
+        print("✅ [Auto-Subscribe] تم إعادة الاشتراك تلقائياً في: area_$areaId");
+      }).catchError((e) {
+        print("⚠️ [Auto-Subscribe] فشل الاشتراك: $e");
+      });
+    }
+
+    return areaId;
   }
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<int?>(
-      future: _checkLocation(),
+      future: _checkLocationAndSubscribe(), // نستخدم الدالة المعدلة
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) return const SplashScreen();
-        if (snapshot.hasData && snapshot.data != null) return const MainScreen();
+        // حالة الانتظار
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SplashScreen();
+        }
+
+        // إذا وجدنا بيانات منطقة -> الصفحة الرئيسية
+        if (snapshot.hasData && snapshot.data != null) {
+          return const MainScreen();
+        }
+
+        // إذا لم نجد -> شاشة الترحيب واختيار المنطقة
         return const WelcomeScreen();
       },
     );
   }
 }
-
 // =======================================================================
 // --- SCREENS ---
 // =======================================================================
@@ -5737,10 +5796,18 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
   }
 
   Future<void> _loadAreas() async {
-    setState(() { _isLoading = true; _hasError = false; });
+    setState(() {
+      _isLoading = true;
+      _hasError = false;
+    });
     try {
       final areas = await _apiService.getAreas();
-      if (mounted) setState(() { _allAreas = areas; _filteredAreas = areas; });
+      if (mounted) {
+        setState(() {
+          _allAreas = areas;
+          _filteredAreas = areas;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _hasError = true);
     } finally {
@@ -5750,71 +5817,109 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
 
   void _filterAreas() {
     final query = _searchController.text.toLowerCase();
-    setState(() => _filteredAreas = _allAreas.where((area) => area.name.toLowerCase().contains(query)).toList());
+    setState(() => _filteredAreas = _allAreas
+        .where((area) => area.name.toLowerCase().contains(query))
+        .toList());
   }
 
-// داخل _SelectLocationScreenState
-
+  // 🔥🔥🔥 الدالة المعدلة والمصححة 🔥🔥🔥
   Future<void> _saveSelection(int areaId, String areaName) async {
-    // إظهار مؤشر تحميل بسيط فوق الزر أو منع النقر المتكرر (اختياري)
-    // لكننا نريد الانتقال فوراً
-
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. حفظ البيانات محلياً (عملية سريعة جداً - أجزاء من الثانية)
+    // 1. ✅ خطوة هامة: جلب المنطقة القديمة *قبل* حفظ المنطقة الجديدة
+    // لكي نتمكن من إلغاء الاشتراك منها
+    int? oldAreaId = prefs.getInt('selectedAreaId');
+
+    // 2. إلغاء الاشتراك من القناة القديمة (لتجنب استلام تحديثات منطقة لم تعد فيها)
+    if (oldAreaId != null && oldAreaId != areaId) {
+      await FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
+      print("🔕 تم إلغاء الاشتراك من area_$oldAreaId");
+    }
+
+    // 3. الاشتراك في القناة الجديدة (لاستلام تحديثات فتح/غلق المطاعم)
+    await FirebaseMessaging.instance.subscribeToTopic('area_$areaId');
+    print("🔔 تم الاشتراك في area_$areaId");
+
+    // 4. حفظ البيانات الجديدة محلياً
     await prefs.setInt('selectedAreaId', areaId);
     await prefs.setString('selectedAreaName', areaName);
 
-    // 2. 🔥 الحل السحري: تشغيل تسجيل الجهاز في الخلفية (بدون await)
-    // لا ننتظر اكتمال هذه العملية للانتقال للصفحة التالية
+    // 5. تسجيل التوكن في الباك إند (Fire and Forget - لا ننتظره)
     AuthService().registerDeviceToken(areaId: areaId).then((_) {
-      print("✅ تم تسجيل الجهاز في الخلفية بنجاح");
+      print("✅ تم تحديث المنطقة في السيرفر");
     }).catchError((e) {
-      print("⚠️ فشل تسجيل الجهاز في الخلفية (غير مؤثر على تجربة المستخدم): $e");
+      print("⚠️ تنبيه: فشل تحديث المنطقة في السيرفر (غير مؤثر): $e");
     });
 
-    // إلغاء الاشتراك القديم أيضاً في الخلفية
-    int? oldAreaId = prefs.getInt('selectedAreaId');
-    if (oldAreaId != null && oldAreaId != areaId) {
-      FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
-    }
-
-    // 3. الانتقال فوراً للصفحة التالية
+    // 6. الانتقال للصفحة التالية فوراً
     if (mounted) {
       if (widget.isCancellable) {
         Navigator.of(context).pop(true);
       } else {
         Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (_) => const LocationCheckWrapper()),
-                (route) => false
-        );
+                (route) => false);
       }
     }
   }
+
   @override
   Widget build(BuildContext context) {
+    // تجميع المحافظات (الأب = 0)
     final governorates = _filteredAreas.where((a) => a.parentId == 0).toList();
+
     return Scaffold(
-      appBar: AppBar(title: const Text('اختر منطقة التوصيل'), automaticallyImplyLeading: widget.isCancellable),
+      appBar: AppBar(
+        title: const Text('اختر منطقة التوصيل'),
+        automaticallyImplyLeading: widget.isCancellable,
+      ),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: TextField(controller: _searchController, decoration: InputDecoration(hintText: 'ابحث عن مدينتك...', prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade200)),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'ابحث عن مدينتك...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(30),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: Colors.grey.shade200,
+              ),
+            ),
           ),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _hasError
-                ? NetworkErrorWidget(message: "فشل تحميل المناطق", onRetry: _loadAreas)
+                ? NetworkErrorWidget(
+              message: "فشل تحميل المناطق",
+              onRetry: _loadAreas,
+            )
                 : ListView.builder(
               itemCount: governorates.length,
               itemBuilder: (context, index) {
                 final governorate = governorates[index];
-                final cities = _filteredAreas.where((a) => a.parentId == governorate.id).toList();
+                // جلب المدن التابعة لهذه المحافظة
+                final cities = _filteredAreas
+                    .where((a) => a.parentId == governorate.id)
+                    .toList();
+
                 return ExpansionTile(
-                  title: Text(governorate.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  children: cities.map((city) => ListTile(title: Text(city.name), onTap: () => _saveSelection(city.id, city.name))).toList(),
+                  title: Text(
+                    governorate.name,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  children: cities
+                      .map((city) => ListTile(
+                    title: Text(city.name),
+                    onTap: () => _saveSelection(city.id, city.name),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                  ))
+                      .toList(),
                 );
               },
             ),
@@ -5824,7 +5929,6 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
     );
   }
 }
-
 class RestaurantsScreen extends StatefulWidget {
   const RestaurantsScreen({super.key});
   @override
