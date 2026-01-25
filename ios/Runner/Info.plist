@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>ar</string>
     <key>CFBundleDisplayName</key>
     <string>منصة بيتي</string>
     <key>CFBundleExecutable</key>
@@ -11,25 +11,49 @@
     <key>CFBundleIdentifier</key>
     <string>co.median.ios.wqwnby</string>
     <key>CFBundleInfoDictionaryVersion</key>
-    <string>12.0</string>
+    <string>6.0</string>
     <key>CFBundleName</key>
     <string>Beytei</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>CFBundleLocalizations</key>
-    <array>
-       <string>en</string>
-       <string>ar</string>
-    </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.7.3</string>
+    <string>1.7.4</string>
     <key>CFBundleVersion</key>
-    <string>69</string>
+    <string>70</string>
     <key>CFBundleSignature</key>
     <string>????</string>
 
     <key>MBXAccessToken</key>
     <string>pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ</string>
+
+    <key>MGLMapboxAccessToken</key>
+    <string>pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ</string>
+
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>نحتاج إلى الوصول لموقعك للعثور على السائقين والخدمات القريبة منك وضمان دقة نقطة الانطلاق.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>نحتاج إلى الوصول لموقعك لتحديث مسار الرحلة وتوجيه السائق بدقة.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>نحتاج إلى تتبع موقعك في الخلفية لضمان استمرار الرحلة وتحديث الموقع للسائق.</string>
+
+    <key>NSCameraUsageDescription</key>
+    <string>نحتاج إلى استخدام الكاميرا لالتقاط صورة الملف الشخصي، التحقق من الهوية، وتصوير المستندات المتعلقة بالرحلات.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>نحتاج الوصول إلى معرض الصور لرفع المستندات والصور الشخصية.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>نحتاج إذن لحفظ الصور والمستندات المتعلقة برحلاتك في جهازك.</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>نحتاج الوصول للميكروفون لإجراء المكالمات الصوتية مع السائق أو الدعم الفني أثناء الرحلة.</string>
+
+    <key>NSUserNotificationUsageDescription</key>
+    <string>نرسل لك إشعارات لتنبيهك بحالة الطلب، وصول السائق، والعروض الجديدة.</string>
+
+    <key>UIBackgroundModes</key>
+    <array>
+       <string>remote-notification</string>
+       <string>location</string>
+    </array>
 
     <key>CFBundleURLTypes</key>
     <array>
@@ -81,33 +105,10 @@
     <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
-
     <key>FirebaseAppDelegateProxyEnabled</key>
     <false/>
-
-    <key>NSCameraUsageDescription</key>
-    <string>نحتاج إلى استخدام الكاميرا لمسح الباركود والتقاط الصور الشخصية</string>
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>نحتاج الوصول إلى مكتبة الصور لرفع المستندات والصور</string>
-    <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>نحتاج للوصول لحفظ الصور في البوم الكاميرا.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>نحتاج الوصول للميكروفون لتسجيل الصوت أو الفيديو عند الحاجة.</string>
-    <key>NSUserNotificationUsageDescription</key>
-    <string>نرسل لك إشعارات لتبقى على اطلاع بالتحديثات والعروض</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك للعثور على الخدمات القريبة.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك لتحديث الرحلات والخدمات بدقة.</string>
-    <key>NSLocationAlwaysUsageDescription</key>
-    <string>نحتاج إلى الوصول لموقعك في الخلفية لتحديث موقعك.</string>
-
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-    <key>UIBackgroundModes</key>
-    <array>
-       <string>remote-notification</string>
-    </array>
 
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
@@ -128,7 +129,6 @@
        <string>UIInterfaceOrientationLandscapeLeft</string>
        <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
 </dict>
