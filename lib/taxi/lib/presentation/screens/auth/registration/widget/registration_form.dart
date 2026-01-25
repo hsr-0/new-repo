@@ -32,6 +32,7 @@ class _RegistrationFormState extends State<RegistrationForm> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // --- 1. First Name ---
               CustomTextField(
                 hintText: MyStrings.firstName.tr,
                 controller: controller.fNameController,
@@ -58,12 +59,14 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 },
               ),
               const SizedBox(height: Dimensions.space20),
+
+              // --- 2. Last Name ---
               CustomTextField(
                 hintText: MyStrings.lastName.tr,
                 controller: controller.lNameController,
                 focusNode: controller.lastNameFocusNode,
                 textInputType: TextInputType.text,
-                nextFocus: controller.emailFocusNode,
+                nextFocus: controller.mobileFocusNode, // ينتقل للهاتف
                 prefixIcon: Padding(
                   padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
                   child: CustomSvgPicture(
@@ -84,28 +87,28 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 },
               ),
               const SizedBox(height: Dimensions.space20),
+
+              // --- 3. Phone Number (ADDED & Email REMOVED) ---
               CustomTextField(
-                hintText: MyStrings.email.tr,
-                controller: controller.emailController,
-                focusNode: controller.emailFocusNode,
+                hintText: "Phone Number".tr, // تأكد من إضافة هذا النص في ملف الترجمة أو استخدم نصاً ثابتاً
+                controller: controller.mobileController, // يجب إضافته في الكنترولر
+                focusNode: controller.mobileFocusNode,   // يجب إضافته في الكنترولر
                 nextFocus: controller.passwordFocusNode,
-                textInputType: TextInputType.emailAddress,
+                textInputType: TextInputType.phone, // لوحة مفاتيح أرقام
                 inputAction: TextInputAction.next,
                 prefixIcon: Padding(
                   padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
-                  child: CustomSvgPicture(
-                    image: MyIcons.email,
+                  child: Icon(
+                    Icons.phone, // أيقونة الهاتف
                     color: MyColor.primaryColor,
-                    height: Dimensions.space30,
+                    size: Dimensions.space30,
                   ),
                 ),
                 validator: (value) {
                   if (value != null && value.isEmpty) {
-                    return MyStrings.enterYourEmail.tr;
-                  } else if (!MyStrings.emailValidatorRegExp.hasMatch(
-                    value ?? '',
-                  )) {
-                    return MyStrings.invalidEmailMsg.tr;
+                    return "Please enter your phone number".tr;
+                  } else if (value!.length < 10) { // تحقق بسيط من الطول
+                    return "Invalid phone number".tr;
                   } else {
                     return null;
                   }
@@ -115,6 +118,8 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 },
               ),
               const SizedBox(height: Dimensions.space20),
+
+              // --- 4. Password ---
               Focus(
                 onFocusChange: (hasFocus) {
                   controller.changePasswordFocus(hasFocus);
@@ -152,11 +157,13 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 ),
               ),
               const SizedBox(height: Dimensions.space20),
+
+              // --- 5. Confirm Password ---
               CustomTextField(
                 hintText: MyStrings.confirmPassword.tr,
                 controller: controller.cPasswordController,
                 focusNode: controller.confirmPasswordFocusNode,
-                nextFocus: controller.referNameFocusNode,
+                nextFocus: null, // آخر حقل
                 inputAction: TextInputAction.done,
                 isShowSuffixIcon: true,
                 isPassword: true,
@@ -178,6 +185,8 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 },
               ),
               const SizedBox(height: Dimensions.space25),
+
+              // --- Terms & Conditions ---
               Visibility(
                 visible: controller.needAgree,
                 child: Row(
@@ -195,7 +204,7 @@ class _RegistrationFormState extends State<RegistrationForm> {
                         checkColor: MyColor.colorWhite,
                         value: controller.agreeTC,
                         side: WidgetStateBorderSide.resolveWith(
-                          (states) => BorderSide(
+                              (states) => BorderSide(
                             width: 2.0,
                             color: controller.agreeTC ? MyColor.getTextFieldEnableBorder() : MyColor.getTextFieldDisableBorder(),
                           ),
@@ -245,6 +254,8 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 ),
               ),
               const SizedBox(height: Dimensions.space30),
+
+              // --- Submit Button ---
               RoundedButton(
                 isLoading: controller.submitLoading,
                 text: MyStrings.register.tr,
@@ -255,6 +266,8 @@ class _RegistrationFormState extends State<RegistrationForm> {
                 },
               ),
               const SizedBox(height: Dimensions.space30),
+
+              // --- Login Link ---
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisAlignment: MainAxisAlignment.center,

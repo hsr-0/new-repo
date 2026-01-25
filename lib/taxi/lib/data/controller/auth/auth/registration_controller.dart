@@ -1,19 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:cosmetic_store/taxi/lib/core/helper/string_format_helper.dart';
-import 'package:cosmetic_store/taxi/lib/core/route/route_middleware.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cosmetic_store/taxi/lib/core/helper/shared_preference_helper.dart';
-import 'package:cosmetic_store/taxi/lib/core/route/route.dart';
-import 'package:cosmetic_store/taxi/lib/core/utils/my_strings.dart';
-import 'package:cosmetic_store/taxi/lib/data/model/auth/sign_up_model/registration_response_model.dart';
-import 'package:cosmetic_store/taxi/lib/data/model/auth/sign_up_model/sign_up_model.dart';
-import 'package:cosmetic_store/taxi/lib/data/model/general_setting/general_setting_response_model.dart';
-import 'package:cosmetic_store/taxi/lib/data/model/global/response_model/response_model.dart';
-import 'package:cosmetic_store/taxi/lib/data/model/model/error_model.dart';
-import 'package:cosmetic_store/taxi/lib/data/repo/auth/general_setting_repo.dart';
-import 'package:cosmetic_store/taxi/lib/data/repo/auth/signup_repo.dart';
-import 'package:cosmetic_store/taxi/lib/presentation/components/snack_bar/show_custom_snackbar.dart';
+
+import '../../../../core/helper/shared_preference_helper.dart';
+import '../../../../core/helper/string_format_helper.dart';
+import '../../../../core/route/route.dart';
+import '../../../../core/route/route_middleware.dart';
+import '../../../../core/utils/my_strings.dart';
+import '../../../../presentation/components/snack_bar/show_custom_snackbar.dart';
+import '../../../model/auth/sign_up_model/registration_response_model.dart';
+import '../../../model/auth/sign_up_model/sign_up_model.dart';
+import '../../../model/general_setting/general_setting_response_model.dart';
+import '../../../model/global/response_model/response_model.dart';
+import '../../../model/model/error_model.dart';
+import '../../../repo/auth/general_setting_repo.dart';
+import '../../../repo/auth/signup_repo.dart';
 
 class RegistrationController extends GetxController {
   RegistrationRepo registrationRepo;
@@ -120,8 +121,8 @@ class RegistrationController extends GetxController {
       email: emailController.text.toString(),
       agree: generalSettingRepo.apiClient.isAgreePolicyEnabled()
           ? agreeTC
-              ? true
-              : false
+          ? true
+          : false
           : false,
       username: '',
       fName: fNameController.text,
@@ -171,8 +172,8 @@ class RegistrationController extends GetxController {
     bool isProfileCompleteEnable = responseModel.data?.user?.profileComplete.toString() == '0'
         ? true
         : responseModel.data?.user?.profileComplete.toString() == 'null'
-            ? true
-            : false;
+        ? true
+        : false;
     printX(
       'responseModel.data?.user?.profileCompleted ${responseModel.data?.user?.loginBy}',
     );
