@@ -31,14 +31,9 @@ class ApiClient extends LocalStorageService {
   }
 
   static Future<void> init() async {
-    // Initialize SharedPreferences
     final sharedPreferences = await SharedPreferences.getInstance();
-
-    // Initialize and register API client (which extends LocalStorageService)
     final apiClient = ApiClient(sharedPreferences: sharedPreferences);
     Get.put<ApiClient>(apiClient, permanent: true);
-
-    // Also register it as LocalStorageService for any code that expects that type
     Get.put<LocalStorageService>(apiClient, permanent: true);
   }
 
@@ -55,12 +50,12 @@ class ApiClient extends LocalStorageService {
         initToken();
       }
 
-      // ✅ [تعديل هام] معالجة الرابط بذكاء (ليدعم Mapbox وسيرفرك معاً)
+      // معالجة الرابط (يدعم الروابط الخارجية مثل Mapbox والداخلية مثل السيرفر)
       String requestUrl;
       if (uri.startsWith('http')) {
-        requestUrl = uri; // استخدام الرابط الخارجي كما هو
+        requestUrl = uri;
       } else {
-        requestUrl = '${Environment.baseUrl}$uri'; // إضافة الدومين للروابط الداخلية
+        requestUrl = '${Environment.baseUrl}$uri';
       }
 
       dioX.Response response;
@@ -88,13 +83,14 @@ class ApiClient extends LocalStorageService {
           break;
       }
 
-      printX('url--------------$requestUrl');
-      // printX('params-----------${params.toString()}');
-      // // printX('status-----------${response.statusCode}');
-      // printX('body-------------${response.data.toString()}');
-      printX('token------------$token');
+      // ✅ تم تفعيل السجلات هنا لترى ماذا يرسل التطبيق وماذا يستقبل
+      printX('---------------- API REQUEST ----------------');
+      printX('URL: $requestUrl');
+      printX('PARAMS SENT: ${params.toString()}'); // راقب هذا السطر لتتأكد من الهاتف
+      printX('STATUS: ${response.statusCode}');
+      printX('RESPONSE: ${response.data.toString()}');
+      printX('---------------------------------------------');
 
-      // Process response
       if (response.statusCode == 200) {
         if (response.data == null || (response.data is String && response.data.isEmpty)) {
           Get.offAllNamed(RouteHelper.loginScreen);
@@ -102,14 +98,12 @@ class ApiClient extends LocalStorageService {
         }
 
         try {
-          // Handle different response types
           AuthorizationResponseModel model = AuthorizationResponseModel.fromJson(response.data);
 
           if (model.remark == 'profile_incomplete') {
             Get.toNamed(RouteHelper.profileCompleteScreen);
           } else if (model.remark == 'unverified') {
             UnVerifiedUserResponseModel model = UnVerifiedUserResponseModel.fromJson(response.data);
-            printD("unverified ${model.data?.user?.toJson()}");
             RouteMiddleware.checkNGotoNext(user: model.data?.user);
           } else if (model.remark == 'unauthenticated') {
             setRememberMe(false);
@@ -117,8 +111,7 @@ class ApiClient extends LocalStorageService {
             Get.offAllNamed(RouteHelper.loginScreen);
           }
         } catch (e) {
-          // printX("Response parsing error: ${e.toString()}");
-          // يتم تجاهل الخطأ هنا لأن بعض الاستجابات (مثل Mapbox) لا تتبع هيكل AuthorizationResponseModel
+          // يتم تجاهل الخطأ لأن بعض الاستجابات ليست من نوع Auth Model
         }
 
         return ResponseModel(true, 'success', 200, response.data);
@@ -153,11 +146,9 @@ class ApiClient extends LocalStorageService {
     try {
       if (passHeader) {
         initToken();
-        printE(token);
         _dio.options.headers["Authorization"] = "$tokenType $token";
       }
 
-      // ✅ [تعديل هام] تطبيق نفس منطق العناوين هنا أيضاً
       String requestUrl;
       if (uri.startsWith('http')) {
         requestUrl = uri;
@@ -167,16 +158,14 @@ class ApiClient extends LocalStorageService {
 
       final formData = dioX.FormData();
 
-      // Add text fields
       fields?.forEach((key, value) {
         formData.fields.add(MapEntry(key, value.toString()));
       });
 
-      // Add files with dynamic keys
       files.forEach((fieldKey, file) async {
         formData.files.add(
           MapEntry(
-            fieldKey, // Dynamic key for each file
+            fieldKey,
             await dioX.MultipartFile.fromFile(
               file.path,
               filename: file.path.split('/').last,
@@ -197,9 +186,12 @@ class ApiClient extends LocalStorageService {
           return ResponseModel(false, 'Unsupported method', 405, '');
       }
 
-      printX('url--------------$requestUrl');
-      printX('status-----------${response.statusCode}');
-      printX('body-------------${response.data.toString()}');
+      printX('---------------- MULTIPART REQUEST ----------------');
+      printX('URL: $requestUrl');
+      printX('FIELDS: ${fields.toString()}');
+      printX('STATUS: ${response.statusCode}');
+      printX('RESPONSE: ${response.data.toString()}');
+      printX('---------------------------------------------------');
 
       if (response.statusCode == 200) {
         return ResponseModel(true, 'success', 200, response.data);
@@ -225,7 +217,6 @@ class ApiClient extends LocalStorageService {
     tokenType = getTokenType();
   }
 
-  // Method to handle unverified user
   void checkAndGotoVerificationScreen(UnVerifiedUserResponseModel model) {
     var data = model.data;
     bool needProfileComplete = data?.user?.profileComplete == "0" ? true : false;

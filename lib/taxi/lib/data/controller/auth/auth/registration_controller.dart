@@ -74,10 +74,26 @@ class RegistrationController extends GetxController {
       return;
     }
 
+    // ✅ فحص القيم وطباعتها في الكونسول للتأكد (Debugging)
+    print("🔥🔥🔥 DEBUG: STARTING SIGNUP 🔥🔥🔥");
+    print("👤 Name: ${fNameController.text} ${lNameController.text}");
+    print("📱 Phone Input: '${mobileController.text}'");
+    print("📧 Email: ${emailController.text}");
+
+    if(mobileController.text.trim().isEmpty){
+      print("❌ ERROR: Mobile field is empty!");
+      CustomSnackBar.error(errorList: ["يرجى إدخال رقم الهاتف"]);
+      return;
+    }
+
     submitLoading = true;
     update();
 
     SignUpModel model = getUserData();
+
+    // طباعة الموديل النهائي قبل الإرسال
+    print("📦 Model to Send: mobile=${model.mobile}, code=${model.mobileCode}, country=${model.countryCode}");
+
     final responseModel = await registrationRepo.registerUser(model);
     try {
       if (responseModel.status?.toLowerCase() == MyStrings.success.toLowerCase()) {
@@ -128,9 +144,12 @@ class RegistrationController extends GetxController {
       fName: fNameController.text,
       lName: lNameController.text,
       password: passwordController.text.toString(),
-      country: '',
-      mobileCode: "",
-      countryCode: '',
+
+      // ✅ تعديل هام جداً: تثبيت بيانات العراق
+      // هذا يضمن أن السيرفر يستلم كود الدولة 964 حتى لو كانت القائمة مخفية
+      country: 'Iraq',
+      mobileCode: "964",
+      countryCode: 'IQ',
     );
 
     return model;
@@ -167,19 +186,12 @@ class RegistrationController extends GetxController {
       responseModel.data?.user?.mobile ?? '',
     );
 
-    //attention: await registrationRepo.sendUserToken();
-
     bool isProfileCompleteEnable = responseModel.data?.user?.profileComplete.toString() == '0'
         ? true
         : responseModel.data?.user?.profileComplete.toString() == 'null'
         ? true
         : false;
-    printX(
-      'responseModel.data?.user?.profileCompleted ${responseModel.data?.user?.loginBy}',
-    );
-    printX(
-      'responseModel.data?.user?.profileCompleted ${responseModel.data?.user?.profileComplete}',
-    );
+
     bool isTwoFactorEnable = false;
 
     if (needEmailVerification == false && needSmsVerification == false) {
@@ -231,7 +243,6 @@ class RegistrationController extends GetxController {
   void initData() async {
     isLoading = true;
     update();
-    //   await getCountryData();
 
     ResponseModel response = await generalSettingRepo.getGeneralSetting();
     if (response.statusCode == 200) {

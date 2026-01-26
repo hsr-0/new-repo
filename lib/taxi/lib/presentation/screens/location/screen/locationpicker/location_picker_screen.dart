@@ -1,7 +1,9 @@
+import 'dart:async'; // ✅ للتايمر (Debounce)
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+// ✅ حل تعارض الأسماء: سمينا مكتبة المواقع geo
+import 'package:geolocator/geolocator.dart' as geo;
 import 'package:get/get.dart';
-// ✅ مكتبة Mapbox الرسمية
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/debouncer.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
@@ -15,8 +17,6 @@ import 'package:cosmetic_store/taxi/lib/presentation/components/divider/custom_s
 import 'package:cosmetic_store/taxi/lib/presentation/components/image/custom_svg_picture.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/text-form-field/location_pick_text_field.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/text/label_text.dart';
-
-// ✅ استيراد ملف الراوت لنستخدمه عند النقر
 import 'package:cosmetic_store/taxi/lib/core/route/route.dart';
 import '../../../../../core/utils/dimensions.dart';
 import '../../../../../core/utils/helper.dart';
@@ -34,11 +34,14 @@ class LocationPickerScreen extends StatefulWidget {
 }
 
 class _LocationPickerScreenState extends State<LocationPickerScreen> {
-  // ✅ متحكمات Mapbox
+  // متغيرات Mapbox
   MapboxMap? mapboxMap;
   PointAnnotationManager? pointAnnotationManager;
 
-  // متغيرات لحفظ IDs الخاصة بالدبابيس لتمييزها عند النقر
+  // ✅ أدوات الحماية من الكراش والتكرار
+  Timer? _debounceTimer;
+  bool isMapReady = false;
+
   String? pickupAnnotationId;
   String? destinationAnnotationId;
 
@@ -47,30 +50,27 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   TextEditingController searchLocationController = TextEditingController(text: '');
   int index = 0;
 
-  // صور الدبابيس
   Uint8List? pickUpIcon;
   Uint8List? destinationIcon;
 
   bool isSearching = false;
   bool isFirsTime = true;
 
-  // لمنع تكرار البحث (Debouncer)
   final myDeBouncer = MyDeBouncer(delay: const Duration(milliseconds: 600));
 
   @override
   void initState() {
     index = widget.pickupLocationForIndex;
     super.initState();
-    print("🟢 [InitState] تم بدء تشغيل شاشة اختيار الموقع.");
+    print("🟢 [InitState] Start Location Picker Screen");
 
-    // حقن الريبو والكنترولر
+    // إعداد الكنترولر
     Get.put(LocationSearchRepo(apiClient: Get.find()));
     var controller = Get.put(
       SelectLocationController(locationSearchRepo: Get.find(), selectedLocationIndex: index),
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      print("🟡 [UI] جاري حساب أبعاد الشاشة...");
       final RenderBox box = _secondContainerKey.currentContext?.findRenderObject() as RenderBox;
       final double height = box.size.height;
       setState(() => _secondContainerHeight = height);
@@ -80,81 +80,124 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     });
   }
 
-  // ✅ تحميل الصور مع طباعة الأخطاء
+  @override
+  void dispose() {
+    // ✅ تنظيف التايمر عند الخروج لمنع تسريب الذاكرة
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> loadMarkerImages() async {
     try {
-      print("🟡 [Markers] جاري تحميل صور الدبابيس من Assets...");
       searchLocationController.text = '';
-      // حجم الأيقونة 120 مناسب للأداء
       pickUpIcon = await Helper.getBytesFromAsset(MyIcons.mapMarkerPickUpIcon, 120);
       destinationIcon = await Helper.getBytesFromAsset(MyIcons.mapMarkerIcon, 120);
-      print("🟢 [Markers] تم تحميل الصور بنجاح.");
       setState(() {});
     } catch (e) {
-      print("🔴 [Error] خطأ في تحميل صور الدبابيس: $e");
+      print("🔴 [Error] Failed to load marker images: $e");
     }
   }
 
-  // ✅ إنشاء الخريطة وإعداد النقر
-  _onMapCreated(MapboxMap mapboxMap) async {
-    print("🟢 [Map] تم إنشاء الخريطة بنجاح.");
+  // ✅ يتم الاستدعاء عند إنشاء الخريطة
+  _onMapCreated(MapboxMap mapboxMap) {
     this.mapboxMap = mapboxMap;
-
-    // ربط الخريطة بالكنترولر (مهم جداً للتحكم بها لاحقاً)
     Get.find<SelectLocationController>().setMapController(mapboxMap);
+  }
+
+  // ✅ يتم الاستدعاء عندما يكتمل تحميل الستايل (الخريطة جاهزة)
+  _onStyleLoaded(StyleLoadedEventData data) async {
+    print("🟢 [Map] Style Loaded - Map Ready");
+    isMapReady = true;
 
     try {
-      // 1. إنشاء مدير العلامات
-      pointAnnotationManager = await mapboxMap.annotations.createPointAnnotationManager();
-      print("🟢 [Map] تم إنشاء مدير العلامات (Annotation Manager).");
+      pointAnnotationManager = await mapboxMap!.annotations.createPointAnnotationManager();
 
-      // 2. تفعيل الاستماع للنقر
+      // إعداد النقر على الدبابيس
       pointAnnotationManager?.addOnPointAnnotationClickListener(AnnotationClickListener(
         onAnnotationClick: (annotation) {
-          print("👆 [Click] تم الضغط على الدبوس ID: ${annotation.id}");
-
           if (annotation.id == pickupAnnotationId) {
-            print("🚀 [Nav] الانتقال لتعديل نقطة الانطلاق.");
-            // الانتقال للشاشة التي عدلناها قبل قليل (EditLocationPickerScreen)
             Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
           } else if (annotation.id == destinationAnnotationId) {
-            print("🚀 [Nav] الانتقال لتعديل الوجهة.");
             Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
-          } else {
-            print("🟡 [Click] تم ضغط دبوس غير معروف.");
           }
         },
       ));
 
-      // 3. رسم الدبابيس الأولية
+      // 📍 أهم خطوة: جلب موقع المستخدم الحقيقي في الخلفية
+      await _getCurrentLocation();
+
+      // تحديث الدبابيس (إذا كانت موجودة مسبقاً)
       _updateMapMarkers(Get.find<SelectLocationController>());
 
     } catch (e) {
-      print("🔴 [Error] خطأ أثناء إعداد الخريطة: $e");
+      print("🔴 [Error] Annotation Manager Error: $e");
     }
   }
 
-  // ✅ تحديث الدبابيس على الخريطة
+  // ✅ دالة جلب الموقع الحقيقي (GPS)
+  Future<void> _getCurrentLocation() async {
+    try {
+      // 1. التحقق من الصلاحيات
+      geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+      }
+
+      if (permission == geo.LocationPermission.whileInUse || permission == geo.LocationPermission.always) {
+        // 2. جلب الموقع بدقة عالية
+        geo.Position position = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
+
+        print("📍 [GPS] Found Location: ${position.latitude}, ${position.longitude}");
+
+        // 3. تحريك الكاميرا لموقع المستخدم
+        if (mapboxMap != null) {
+          mapboxMap!.flyTo(
+            CameraOptions(
+              // نستخدم Position الخاصة بـ Mapbox هنا
+              center: Point(coordinates: Position(position.longitude, position.latitude)),
+              zoom: 15.0,
+            ),
+            MapAnimationOptions(duration: 1000), // أنيميشن سلس لمدة ثانية
+          );
+        }
+      }
+    } catch (e) {
+      print("❌ Error getting GPS location: $e");
+    }
+  }
+
+  // ✅ مستمع حركة الكاميرا (Debounce لمنع التكرار والكراش)
+  _onCameraChangeListener(CameraChangedEventData data) {
+    // إلغاء التايمر القديم إذا تحركت الكاميرا مرة أخرى
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+
+    // انتظار نصف ثانية بعد توقف الحركة
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if(isMapReady) {
+        // تحديث الدبابيس فقط عندما يتوقف المستخدم
+        _updateMapMarkers(Get.find<SelectLocationController>());
+      }
+    });
+  }
+
+  // ✅ دالة تحديث الدبابيس (محمية)
   Future<void> _updateMapMarkers(SelectLocationController controller) async {
-    if (pointAnnotationManager == null || mapboxMap == null) {
-      print("🟡 [Markers] الخريطة غير جاهزة بعد، تم تخطي التحديث.");
+    // شرط الحماية: لا تفعل شيئاً إذا لم تكن الخريطة جاهزة
+    if (!isMapReady || pointAnnotationManager == null || mapboxMap == null) {
       return;
     }
 
     try {
-      // حذف الدبابيس القديمة
       await pointAnnotationManager!.deleteAll();
       pickupAnnotationId = null;
       destinationAnnotationId = null;
-      print("🗑️ [Markers] تم حذف الدبابيس القديمة.");
 
-      // 1. رسم دبوس الانطلاق (Pickup)
+      // رسم دبوس الانطلاق
       if (controller.pickupLatlong.latitude != 0 && pickUpIcon != null) {
-        print("📍 [Markers] جاري رسم دبوس الانطلاق...");
         var options = PointAnnotationOptions(
           geometry: Point(coordinates: Position(
-            controller.pickupLatlong.longitude, // Longitude
-            controller.pickupLatlong.latitude,  // Latitude
+            controller.pickupLatlong.longitude,
+            controller.pickupLatlong.latitude,
           )),
           image: pickUpIcon!,
           iconSize: 1.0,
@@ -163,9 +206,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         pickupAnnotationId = annotation.id;
       }
 
-      // 2. رسم دبوس الوجهة (Destination)
+      // رسم دبوس الوجهة
       if (controller.destinationLatlong.latitude != 0 && destinationIcon != null) {
-        print("📍 [Markers] جاري رسم دبوس الوجهة...");
         var options = PointAnnotationOptions(
           geometry: Point(coordinates: Position(
             controller.destinationLatlong.longitude,
@@ -177,16 +219,13 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         var annotation = await pointAnnotationManager!.create(options);
         destinationAnnotationId = annotation.id;
       }
-
     } catch (e) {
-      print("🔴 [Error] خطأ أثناء تحديث الدبابيس: $e");
+      print("🔴 [Markers Error] $e");
     }
   }
 
-  // ✅ تحريك الكاميرا (FlyTo)
   void _moveCameraTo(double lat, double lng) {
-    if (mapboxMap != null) {
-      print("📷 [Camera] تحريك الكاميرا إلى: $lat, $lng");
+    if (mapboxMap != null && isMapReady) {
       mapboxMap!.flyTo(
         CameraOptions(
           center: Point(coordinates: Position(lng, lat)),
@@ -194,8 +233,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         ),
         MapAnimationOptions(duration: 800),
       );
-    } else {
-      print("🔴 [Error] متحكم الخريطة فارغ (null)!");
     }
   }
 
@@ -206,9 +243,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       child: GetBuilder<SelectLocationController>(
         builder: (controller) {
 
-          // تحديث العلامات عند تغير حالة الكنترولر (مثل اختيار موقع جديد)
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            _updateMapMarkers(controller);
+            if(isMapReady) _updateMapMarkers(controller);
           });
 
           return Scaffold(
@@ -226,17 +262,17 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                     children: [
                       SizedBox(
                         height: context.height - (_secondContainerHeight ?? 0),
-                        // ✅ الخريطة الرسمية
                         child: MapWidget(
                           styleUri: MapboxStyles.MAPBOX_STREETS,
                           cameraOptions: CameraOptions(
-                            center: Point(coordinates: Position(
-                              controller.pickupLatlong.longitude != 0 ? controller.pickupLatlong.longitude : 45.8219,
-                              controller.pickupLatlong.latitude != 0 ? controller.pickupLatlong.latitude : 32.5029,
-                            )),
-                            zoom: 14.0,
+                            // ⚠️ موقع افتراضي أولي فقط (بغداد) حتى يعمل الـ GPS
+                            center: Point(coordinates: Position(44.361488, 33.312805)),
+                            zoom: 10.0,
                           ),
                           onMapCreated: _onMapCreated,
+                          // ✅ تمرير المستمعين هنا لمنع الكراش
+                          onStyleLoadedListener: _onStyleLoaded,
+                          onCameraChangeListener: _onCameraChangeListener,
                         ),
                       ),
                     ],
@@ -275,7 +311,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     );
   }
 
-  // ✅ بناء الـ Bottom Sheet (حقول البحث والقائمة)
   Widget buildConfirmDestination(SelectLocationController controller) {
     return AnimatedContainer(
       key: _secondContainerKey,
@@ -321,9 +356,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                       children: [
                         LabelText(text: MyStrings.pickUpLocation),
                         spaceDown(Dimensions.space5),
-                        // -------------------------
-                        // ✅ حقل نقطة الانطلاق
-                        // -------------------------
                         LocationPickTextField(
                           fillColor: controller.selectedLocationIndex == 0 ? MyColor.colorWhite : MyColor.textFieldBgColor,
                           shadowColor: controller.selectedLocationIndex == 0 ? MyColor.primaryColor.withOpacity(0.2) : MyColor.colorGrey.withOpacity(0.1),
@@ -342,12 +374,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                           ),
                           onSubmit: () {},
                           onChanged: (text) {
-                            print("🔎 [Search] البحث عن الانطلاق: $text");
                             if (isFirsTime == true) {
                               isFirsTime = false;
                               setState(() {});
                             }
-                            // ✅ الاستدعاء الضروري لعمل البحث
                             myDeBouncer.run(() {
                               controller.searchYourAddress(locationName: text);
                             });
@@ -368,9 +398,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                         spaceDown(Dimensions.space15),
                         LabelText(text: MyStrings.destination),
                         spaceDown(Dimensions.space5),
-                        // -------------------------
-                        // ✅ حقل الوجهة
-                        // -------------------------
                         LocationPickTextField(
                           fillColor: controller.selectedLocationIndex == 1 ? MyColor.colorWhite : MyColor.textFieldBgColor,
                           shadowColor: controller.selectedLocationIndex == 1 ? MyColor.primaryColor.withOpacity(0.2) : MyColor.colorGrey.withOpacity(0.1),
@@ -381,12 +408,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                             controller.changeIndex(1);
                           },
                           onChanged: (text) {
-                            print("🔎 [Search] البحث عن الوجهة: $text");
                             if (isFirsTime == true) {
                               isFirsTime = false;
                               setState(() {});
                             }
-                            // ✅ الاستدعاء الضروري لعمل البحث
                             myDeBouncer.run(() {
                               controller.searchYourAddress(locationName: text);
                             });
@@ -417,7 +442,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                 },
               ),
             ),
-            // عرض قائمة النتائج إذا كان هناك بحث
             controller.isSearched && controller.allPredictions.isEmpty
                 ? const CustomLoader(isPagination: true)
                 : GestureDetector(
@@ -433,14 +457,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                     return InkWell(
                       radius: Dimensions.defaultRadius,
                       onTap: () async {
-                        print("👆 [List] تم اختيار الموقع: ${item.description}");
-
-                        // جلب الإحداثيات وحفظها
                         await controller.getLangAndLatFromMap(item).whenComplete(() {
                           controller.pickLocation();
                           controller.updateSelectedAddressFromSearch(item.description ?? '');
 
-                          // تحريك الكاميرا إلى الموقع المختار
                           double lat = controller.selectedLocationIndex == 0
                               ? controller.pickupLatlong.latitude
                               : controller.destinationLatlong.latitude;
@@ -487,7 +507,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
             RoundedButton(
               text: MyStrings.confirmLocation,
               press: () {
-                print("✅ [Button] تم تأكيد الموقع.");
                 Get.back(result: 'true');
               },
               isOutlined: false,
@@ -499,7 +518,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 }
 
-// ✅ كلاس المستمع للنقر (ضروري جداً لكي يعمل النقر على الدبوس)
 class AnnotationClickListener extends OnPointAnnotationClickListener {
   final Function(PointAnnotation) onAnnotationClick;
   AnnotationClickListener({required this.onAnnotationClick});

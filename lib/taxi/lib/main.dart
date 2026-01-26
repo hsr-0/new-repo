@@ -26,27 +26,29 @@ class TaxiAppEntry extends StatefulWidget {
 }
 
 class _TaxiAppEntryState extends State<TaxiAppEntry> {
-  // ✅ ميزة التسريع: جعلنا المتغيرات static لكي تحتفظ بقيمتها في الذاكرة
-  // هذا يعني أن التهيئة ستحدث مرة واحدة فقط، والمرات القادمة ستكون فورية
-  static Map<String, Map<String, String>>? _cachedLanguages;
-  static bool _isServicesInitialized = false;
+  // ❌ أزلنا static: لكي يتم تصفير المتغيرات عند كل دخول جديد
+  Map<String, Map<String, String>>? _languages;
+
+  // متغير بسيط للتحكم في شاشة التحميل الحالية
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    // ✅ التحقق: إذا كانت الخدمات مهيأة سابقاً، لا نعيد تحميلها
-    if (!_isServicesInitialized) {
-      _initTaxiServices();
-    }
+    // ✅ دائماً نستدعي دالة التهيئة عند الدخول (بدون شروط)
+    _initTaxiServices();
   }
 
   Future<void> _initTaxiServices() async {
     try {
-      // Initialize the API client
-      await ApiClient.init();
+      // 1. تهيئة الـ API Client (نتأكد من عدم وجوده أولاً لتجنب التكرار)
+      if (!Get.isRegistered<ApiClient>()) {
+        await ApiClient.init();
+      }
 
-      // Load localization
-      Map<String, Map<String, String>> languages = await di_service.init();
+      // 2. تحميل اللغات وحقن الـ Controllers (هذا هو السطر الذي يمنع الانهيار)
+      // سيقوم هذا السطر بإعادة إنشاء LocalizationController المفقود
+      _languages = await di_service.init();
 
       // UI Config
       MyUtils.allScreen();
@@ -55,7 +57,9 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
 
       // Setup Notifications
       try {
-        PushNotificationService(apiClient: Get.find()).setupInteractedMessage();
+        if (Get.isRegistered<ApiClient>()) {
+          PushNotificationService(apiClient: Get.find()).setupInteractedMessage();
+        }
       } catch (e) {
         printX("Notification Error: $e");
       }
@@ -69,29 +73,31 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
       // Timezones
       tz.initializeTimeZones();
 
-      // ✅ حفظ البيانات في المتغيرات الثابتة (الكاش)
-      _cachedLanguages = languages;
-      _isServicesInitialized = true;
-
-      // تحديث الواجهة فقط إذا كانت الصفحة ما زالت معروضة
+      // ✅ تم التحميل: نخفي شاشة التحميل ونعرض التطبيق
       if (mounted) {
-        setState(() {});
+        setState(() {
+          _isLoading = false;
+        });
       }
     } catch (e) {
       printX("Error initializing Taxi services: $e");
-      // في حالة الخطأ، نعتبره مهيأً لتجنب التعليق
-      if (mounted) setState(() => _isServicesInitialized = true);
+      // في حالة الخطأ، نفتح التطبيق لتجنب التعليق
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ الفحص السريع: إذا كانت البيانات موجودة في الكاش، اعرض التطبيق فوراً
-    if (_isServicesInitialized && _cachedLanguages != null) {
-      return OvoApp(languages: _cachedLanguages!);
+    // ✅ إذا انتهى التحميل والبيانات موجودة، اعرض التطبيق
+    if (!_isLoading && _languages != null) {
+      return OvoApp(languages: _languages!);
     }
 
-    // شاشة التحميل تظهر فقط في المرة الأولى أبداً (لأول ثواني فقط)
+    // شاشة التحميل (CircularProgressIndicator) كما طلبت تماماً
     return const Scaffold(
       body: Center(
         child: CircularProgressIndicator(color: Colors.deepPurple),
@@ -138,13 +144,13 @@ class _OvoAppState extends State<OvoApp> {
       builder: (localizeController) => ToastificationWrapper(
         config: ToastificationConfig(maxToastLimit: 10),
         child: GetMaterialApp(
-          // ✅ مفتاح الملاحة: يضمن عدم تداخل الصفحات
           // key: GlobalKey(debugLabel: 'TaxiAppKey'),
           title: Environment.appName,
           debugShowCheckedModeBanner: false,
           theme: lightThemeData,
           defaultTransition: Transition.fadeIn,
           transitionDuration: const Duration(milliseconds: 300),
+          // ✅ سيبدأ دائماً من شاشة السبلاش (كأول مرة)
           initialRoute: RouteHelper.splashScreen,
           getPages: RouteHelper().routes,
           locale: localizeController.locale,
@@ -153,7 +159,7 @@ class _OvoAppState extends State<OvoApp> {
             localizeController.locale.languageCode,
             localizeController.locale.countryCode,
           ),
-          // ✅ يمنع الخروج الكامل من التطبيق عند الرجوع
+          // يمنع الخروج الكامل من التطبيق عند الرجوع
           popGesture: true,
         ),
       ),

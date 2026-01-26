@@ -121,9 +121,13 @@ class ProfileCompleteController extends GetxController {
       mobile: mobileNoController.text,
       email: '',
       username: userNameController.text,
-      countryCode: selectedCountryData.countryCode.toString(),
-      country: selectedCountryData.country.toString(),
-      mobileCode: selectedCountryData.dialCode.toString(),
+
+      // ✅ التعديل: تثبيت بيانات العراق هنا أيضاً لمنع الأخطاء
+      // بدلاً من الاعتماد على selectedCountryData التي قد تكون خاطئة
+      countryCode: 'IQ',
+      country: 'Iraq',
+      mobileCode: '964',
+
       address: address,
       state: state,
       zip: zip,
