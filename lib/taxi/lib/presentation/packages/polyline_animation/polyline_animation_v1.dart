@@ -1,108 +1,181 @@
 import 'dart:async';
+import 'dart:io'; // ✅ لتحديد نوع النظام
+
 import 'package:flutter/material.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'; // ✅ مكتبة Mapbox
-import 'package:latlong2/latlong.dart'; // ✅ للإبقاء على توافق البيانات
+
+// ✅ استيراد المكتبات بأسماء مستعارة لتجنب تضارب الأسماء (Polyline)
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
+import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
+
+import 'package:latlong2/latlong.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_color.dart';
 
 class PolylineAnimator {
   final Map<String, Timer> _polylinesTimers = {};
 
-  // تخزين مراجع الخطوط النشطة
-  final Map<String, PolylineAnnotation> _activeAnnotations = {};
+  // تخزين مراجع الخطوط النشطة للأندرويد
+  final Map<String, mb.PolylineAnnotation> _activeAnnotations = {};
 
+  /// دالة التحريك الموحدة
   void animatePolyline(
       List<LatLng> points,
       String id,
       Color color,
       Color backgroundColor,
-      PolylineAnnotationManager? annotationManager,
-      ) async {
-    if (annotationManager == null || points.isEmpty) return;
+      mb.PolylineAnnotationManager? annotationManager, {
+        // ✅ معامل جديد اختياري خاص بالآيفون لتحديث الواجهة
+        Function(Set<ap.Polyline>)? onUpdateApple,
+      }) async {
 
+    // إلغاء أي مؤقت سابق لنفس المسار
     _polylinesTimers[id]?.cancel();
 
-    // ✅ تصحيح 1: تحويل النقاط إلى List<Position> مباشرة
-    // لأن LineString يحتاج Position وليس Point
-    List<Position> allMapboxPositions = points.map((e) {
-      return Position(e.longitude, e.latitude); // Longitude, Latitude
+    if (points.isEmpty) return;
+
+    // -------------------------------------------------------------------------
+    // 🍎 iOS Implementation (Apple Maps)
+    // -------------------------------------------------------------------------
+    if (Platform.isIOS) {
+      if (onUpdateApple == null) return; // لا يمكن التحريك بدون دالة التحديث
+
+      // تحويل النقاط لنسق أبل
+      List<ap.LatLng> allApplePoints = points.map((e) => ap.LatLng(e.latitude, e.longitude)).toList();
+
+      int forwardIndex = 0;
+      int backwardIndex = -1;
+      List<ap.LatLng> currentPoints = [];
+
+      Timer timer = Timer.periodic(const Duration(milliseconds: 50), (Timer timer) {
+
+        // 1. منطق تحريك النقاط (نفس المنطق)
+        if (forwardIndex < allApplePoints.length) {
+          currentPoints.add(allApplePoints[forwardIndex]);
+          forwardIndex++;
+        }
+
+        if (forwardIndex > allApplePoints.length / 2 && backwardIndex < forwardIndex - 1) {
+          backwardIndex = (backwardIndex == -1) ? 0 : backwardIndex;
+          if (backwardIndex < forwardIndex) {
+            if (currentPoints.isNotEmpty) currentPoints.removeAt(0);
+            backwardIndex++;
+          }
+        }
+
+        if (backwardIndex >= forwardIndex - 1) {
+          forwardIndex = 0;
+          backwardIndex = -1;
+          currentPoints.clear();
+        }
+
+        // 2. إنشاء مجموعة الخطوط (Border + Main + Animation)
+        Set<ap.Polyline> polylines = {};
+
+        // الخلفية الثابتة (الطريق كاملاً)
+        polylines.add(ap.Polyline(
+          polylineId: ap.PolylineId('${id}_bg'),
+          points: allApplePoints,
+          color: backgroundColor.withOpacity(0.5),
+          width: 6,
+        ));
+
+        // الخط المتحرك
+        if (currentPoints.isNotEmpty) {
+          polylines.add(ap.Polyline(
+            polylineId: ap.PolylineId('${id}_moving'),
+            points: List.from(currentPoints), // نسخة جديدة
+            color: color,
+            width: 6,
+            jointType: ap.JointType.round,
+          ));
+        }
+
+        // 3. إرسال التحديث للشاشة
+        onUpdateApple(polylines);
+      });
+
+      _polylinesTimers[id] = timer;
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // 🤖 Android Implementation (Mapbox)
+    // -------------------------------------------------------------------------
+    if (annotationManager == null) return;
+
+    // تحويل النقاط لنسق Mapbox (Positions)
+    List<mb.Position> allMapboxPositions = points.map((e) {
+      return mb.Position(e.longitude, e.latitude);
     }).toList();
 
-    String borderId = '${id}_border';
-    String backgroundId = '${id}_background';
     String foregroundId = '${id}_foreground';
 
-    // --- 1. رسم الحدود (Border) ---
-    var borderOptions = PolylineAnnotationOptions(
-      geometry: LineString(coordinates: allMapboxPositions), // ✅ الآن يقبلها لأنها Positions
+    // 1. رسم الحدود (Border)
+    var borderOptions = mb.PolylineAnnotationOptions(
+      geometry: mb.LineString(coordinates: allMapboxPositions),
       lineColor: MyColor.primaryColor.value,
       lineWidth: 5.0,
       lineOpacity: 1.0,
     );
     await annotationManager.create(borderOptions);
 
-    // --- 2. رسم الخلفية (Background) ---
-    var backgroundOptions = PolylineAnnotationOptions(
-      geometry: LineString(coordinates: allMapboxPositions),
+    // 2. رسم الخلفية (Background)
+    var backgroundOptions = mb.PolylineAnnotationOptions(
+      geometry: mb.LineString(coordinates: allMapboxPositions),
       lineColor: backgroundColor.value,
       lineWidth: 4.0,
       lineOpacity: 1.0,
     );
     await annotationManager.create(backgroundOptions);
 
-    // --- 3. الخط المتحرك (Animation) ---
-    var movingOptions = PolylineAnnotationOptions(
-      geometry: LineString(coordinates: []), // يبدأ فارغاً
+    // 3. الخط المتحرك (البداية فارغة)
+    var movingOptions = mb.PolylineAnnotationOptions(
+      geometry: mb.LineString(coordinates: []),
       lineColor: color.value,
       lineWidth: 4.0,
       lineOpacity: 1.0,
     );
 
-    PolylineAnnotation movingAnnotation = await annotationManager.create(movingOptions);
+    mb.PolylineAnnotation movingAnnotation = await annotationManager.create(movingOptions);
     _activeAnnotations[foregroundId] = movingAnnotation;
 
-    // --- المؤقت (Timer) ---
+    // المؤقت
     int forwardIndex = 0;
     int backwardIndex = -1;
-
-    // ✅ تصحيح 2: القائمة المستخدمة للرسم يجب أن تكون Positions
-    List<Position> currentPositions = [];
+    List<mb.Position> currentPositions = [];
 
     Timer timer = Timer.periodic(const Duration(milliseconds: 50), (Timer timer) async {
-      if (_activeAnnotations[foregroundId] == null) {
-        timer.cancel();
-        return;
-      }
+      // التحقق من أن الخط لا يزال موجوداً
+      /* ملاحظة: Mapbox أحياناً يفقد المرجع عند إعادة البناء السريع،
+         لذا نتحقق فقط من المؤقت */
+      if (!timer.isActive) return;
 
-      // إضافة نقطة جديدة
       if (forwardIndex < allMapboxPositions.length) {
         currentPositions.add(allMapboxPositions[forwardIndex]);
         forwardIndex++;
       }
 
-      // حذف من الخلف (تأثير الذيل)
       if (forwardIndex > allMapboxPositions.length / 2 && backwardIndex < forwardIndex - 1) {
         backwardIndex = (backwardIndex == -1) ? 0 : backwardIndex;
         if (backwardIndex < forwardIndex) {
-          if (currentPositions.isNotEmpty) {
-            currentPositions.removeAt(0);
-          }
+          if (currentPositions.isNotEmpty) currentPositions.removeAt(0);
           backwardIndex++;
         }
       }
 
-      // إعادة التكرار
       if (backwardIndex >= forwardIndex - 1) {
         forwardIndex = 0;
         backwardIndex = -1;
         currentPositions.clear();
       }
 
-      // 🔥 تحديث الرسم
-      // ✅ تصحيح 3: إسناد LineString مباشرة (بدون .toJson)
-      movingAnnotation.geometry = LineString(coordinates: currentPositions);
-
-      await annotationManager.update(movingAnnotation);
-
+      // تحديث الرسم
+      movingAnnotation.geometry = mb.LineString(coordinates: currentPositions);
+      try {
+        await annotationManager.update(movingAnnotation);
+      } catch (e) {
+        // تجاهل الخطأ في حال تم حذف المانجر أثناء الأنيميشن
+        timer.cancel();
+      }
     });
 
     _polylinesTimers[id] = timer;

@@ -1,7 +1,12 @@
+import 'dart:io'; // ✅ لتحديد نوع النظام
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:geolocator/geolocator.dart' as geo; // لتجنب تضارب الأسماء
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart' as geo;
+
+// --- مكتبات الخرائط ---
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
+import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
+
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/style.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/annotated_region/annotated_region_widget.dart';
@@ -22,52 +27,101 @@ class EditLocationPickerScreen extends StatefulWidget {
 }
 
 class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
-  MapboxMap? mapboxMap;
+  // متغيرات الخرائط
+  mb.MapboxMap? mapboxMap;
+  ap.AppleMapController? appleController;
+
   bool isDragging = false;
   int selectedIndex = 0;
 
+  // الإحداثيات المبدئية (للحفظ المؤقت أثناء السحب)
+  double currentLat = 0.0;
+  double currentLng = 0.0;
+
   @override
   void initState() {
-    selectedIndex = Get.arguments ?? 0;
+    selectedIndex = Get.arguments ?? widget.selectedIndex;
     super.initState();
-    // تأخير بسيط لضمان تهيئة الكونترولر
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       Get.find<SelectLocationController>().changeIndex(selectedIndex);
     });
   }
 
-  void _onMapCreated(MapboxMap mapboxMap) {
+  // ==========================================
+  // 🤖 Android: Mapbox Logic
+  // ==========================================
+  void _onMapboxCreated(mb.MapboxMap mapboxMap) {
     this.mapboxMap = mapboxMap;
   }
 
-  // عند بدء تحريك الخريطة
-  void _onCameraChangeListener(CameraChangedEventData event) {
-    if (!isDragging) {
-      setState(() {
-        isDragging = true; // تكبير الأيقونة
-      });
-    }
+  void _onMapboxCameraChange(mb.CameraChangedEventData event) {
+    if (!isDragging) setState(() => isDragging = true);
   }
 
-  // ✅ اللحظة الحاسمة: عند توقف الخريطة عن الحركة
-  Future<void> _onMapIdleListener(MapIdleEventData event) async {
-    setState(() {
-      isDragging = false; // تصغير الأيقونة
-    });
-
+  Future<void> _onMapboxIdle(mb.MapIdleEventData event) async {
+    setState(() => isDragging = false);
     if (mapboxMap != null) {
       final cameraState = await mapboxMap!.getCameraState();
       final point = cameraState.center;
-
-      // تحديث الإحداثيات في الكونترولر
-      Get.find<SelectLocationController>().changeCurrentLatLongBasedOnCameraMove(
-          point.coordinates.lat.toDouble(),
-          point.coordinates.lng.toDouble()
-      );
-
-      // ✅ استدعاء دالة جلب العنوان من سيرفرك
-      Get.find<SelectLocationController>().pickLocation();
+      _updateLocation(point.coordinates.lat.toDouble(), point.coordinates.lng.toDouble());
     }
+  }
+
+  // ==========================================
+  // 🍎 iOS: Apple Maps Logic
+  // ==========================================
+  void _onAppleMapCreated(ap.AppleMapController controller) {
+    appleController = controller;
+  }
+
+  void _onAppleCameraMove(ap.CameraPosition position) {
+    if (!isDragging) setState(() => isDragging = true);
+    // تحديث الإحداثيات الحالية أثناء الحركة (اختياري)
+    currentLat = position.target.latitude;
+    currentLng = position.target.longitude;
+  }
+
+  void _onAppleCameraIdle() async {
+    setState(() => isDragging = false);
+    if (appleController != null) {
+      // للأسف AppleMapController لا يعطي المركز مباشرة عند التوقف في النسخ القديمة
+      // نعتمد على آخر إحداثيات تم تسجيلها في onCameraMove
+      _updateLocation(currentLat, currentLng);
+    }
+  }
+
+  // ==========================================
+  // 📍 Shared Logic
+  // ==========================================
+  void _updateLocation(double lat, double lng) {
+    if(lat == 0 || lng == 0) return;
+
+    currentLat = lat;
+    currentLng = lng;
+
+    final controller = Get.find<SelectLocationController>();
+    controller.changeCurrentLatLongBasedOnCameraMove(lat, lng);
+
+    // استدعاء دالة جلب العنوان (Reverse Geocoding)
+    controller.pickLocation();
+  }
+
+  Future<void> _goToMyLocation() async {
+    final controller = Get.find<SelectLocationController>();
+    await controller.getCurrentPosition(pickupLocationForIndex: -1, isFromEdit: true);
+
+    try {
+      geo.Position position = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
+
+      if (Platform.isIOS && appleController != null) {
+        appleController!.animateCamera(ap.CameraUpdate.newLatLng(ap.LatLng(position.latitude, position.longitude)));
+      } else if (mapboxMap != null) {
+        mapboxMap!.flyTo(
+            mb.CameraOptions(center: mb.Point(coordinates: mb.Position(position.longitude, position.latitude)), zoom: 16.0),
+            mb.MapAnimationOptions(duration: 1000)
+        );
+      }
+    } catch (e) { print("Error: $e"); }
   }
 
   @override
@@ -75,14 +129,17 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     return AnnotatedRegionWidget(
       child: GetBuilder<SelectLocationController>(builder: (controller) {
 
-        // إحداثيات افتراضية (واسط) في حال لم يكن هناك موقع سابق
+        // تحديد الموقع الافتراضي
         double initialLat = 32.5029;
         double initialLng = 45.8219;
-
         final savedLocation = controller.homeController.getSelectedLocationInfoAtIndex(selectedIndex);
         if (savedLocation != null && savedLocation.latitude != null) {
           initialLat = double.tryParse(savedLocation.latitude.toString()) ?? 32.5029;
           initialLng = double.tryParse(savedLocation.longitude.toString()) ?? 45.8219;
+
+          // تحديث مبدئي للمتغيرات المحلية
+          currentLat = initialLat;
+          currentLng = initialLng;
         }
 
         return Scaffold(
@@ -98,22 +155,28 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                   Expanded(
                     child: Stack(
                       children: [
-                        // 🗺️ الخريطة
-                        MapWidget(
-                          styleUri: MapboxStyles.MAPBOX_STREETS, // تأكد من أن الـ Token صحيح لظهور الخريطة
-                          cameraOptions: CameraOptions(
-                            center: Point(coordinates: Position(initialLng, initialLat)),
-                            zoom: 16.0,
-                          ),
-                          onMapCreated: _onMapCreated,
-                          onCameraChangeListener: _onCameraChangeListener,
-                          onMapIdleListener: _onMapIdleListener,
+                        // 🗺️ تبديل الخريطة حسب النظام
+                        Platform.isIOS
+                            ? ap.AppleMap(
+                          initialCameraPosition: ap.CameraPosition(target: ap.LatLng(initialLat, initialLng), zoom: 16),
+                          onMapCreated: _onAppleMapCreated,
+                          onCameraMove: _onAppleCameraMove,
+                          onCameraIdle: _onAppleCameraIdle,
+                          myLocationEnabled: true,
+                          myLocationButtonEnabled: false,
+                        )
+                            : mb.MapWidget(
+                          styleUri: mb.MapboxStyles.MAPBOX_STREETS,
+                          cameraOptions: mb.CameraOptions(center: mb.Point(coordinates: mb.Position(initialLng, initialLat)), zoom: 16.0),
+                          onMapCreated: _onMapboxCreated,
+                          onCameraChangeListener: _onMapboxCameraChange,
+                          onMapIdleListener: _onMapboxIdle,
                         ),
 
-                        // 📍 الدبوس الثابت في المنتصف
+                        // 📍 الدبوس الثابت (Overlay)
                         Center(
                           child: Padding(
-                            padding: const EdgeInsets.only(bottom: 40), // رفعه قليلاً ليكون رأس الدبوس في المنتصف
+                            padding: const EdgeInsets.only(bottom: 35), // لرفع الدبوس ليكون رأسه في المركز
                             child: AnimatedScale(
                               scale: isDragging ? 1.1 : 1.0,
                               duration: const Duration(milliseconds: 100),
@@ -124,7 +187,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                                 width: 45,
                                 height: 45,
                                 errorBuilder: (context, error, stackTrace) {
-                                  // أيقونة احتياطية في حال لم تكن الصورة موجودة
                                   return Icon(
                                       Icons.location_on,
                                       size: 50,
@@ -139,7 +201,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                     ),
                   ),
 
-                  // مربع العنوان وتأكيد الموقع
+                  // مربع التأكيد
                   buildConfirmDestination()
                 ],
               ),
@@ -150,11 +212,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 child: controller.isLoading
                     ? Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      boxShadow: const [BoxShadow(blurRadius: 10, color: Colors.black12)]
-                  ),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), boxShadow: const [BoxShadow(blurRadius: 10, color: Colors.black12)]),
                   child: const CircularProgressIndicator(strokeWidth: 3, color: MyColor.primaryColor),
                 )
                     : const SizedBox.shrink(),
@@ -162,8 +220,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
               // زر الرجوع
               Positioned(
-                top: 0,
-                left: 0,
+                top: 0, left: 0,
                 child: SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.all(Dimensions.space12),
@@ -180,8 +237,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
               // زر "موقعي الحالي"
               Positioned(
-                top: 0,
-                right: 0,
+                top: 0, right: 0,
                 child: SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.all(Dimensions.space12),
@@ -189,26 +245,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                       backgroundColor: MyColor.colorWhite,
                       child: IconButton(
                         icon: const Icon(Icons.my_location, color: MyColor.colorBlack),
-                        onPressed: () async {
-                          // تفعيل اللودينق في الكونترولر
-                          await controller.getCurrentPosition(pickupLocationForIndex: -1, isFromEdit: true);
-
-                          try {
-                            geo.Position position = await geo.Geolocator.getCurrentPosition(
-                                desiredAccuracy: geo.LocationAccuracy.high
-                            );
-
-                            // تحريك الكاميرا لموقع المستخدم
-                            if(mapboxMap != null){
-                              mapboxMap!.flyTo(CameraOptions(
-                                center: Point(coordinates: Position(position.longitude, position.latitude)),
-                                zoom: 16.0,
-                              ), MapAnimationOptions(duration: 1000));
-                            }
-                          } catch (e) {
-                            print("Error getting location: $e");
-                          }
-                        },
+                        onPressed: _goToMyLocation,
                       ),
                     ),
                   ),
@@ -221,7 +258,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     );
   }
 
-  // ودجت عرض العنوان وزر التأكيد
   Widget buildConfirmDestination() {
     return GetBuilder<SelectLocationController>(
       builder: (controller) {
@@ -231,26 +267,16 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           decoration: BoxDecoration(
               color: MyColor.colorWhite,
               borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              boxShadow: [BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 10,
-                  spreadRadius: 2
-              )]
+              boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10, spreadRadius: 2)]
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: Dimensions.space10),
-              Text(
-                MyStrings.setYourLocationPerfectly.tr,
-                style: boldDefault.copyWith(fontSize: 18),
-              ),
+              Text(MyStrings.setYourLocationPerfectly.tr, style: boldDefault.copyWith(fontSize: 18)),
               const SizedBox(height: 5),
-              Text(
-                MyStrings.zoomInToSetExactLocation.tr,
-                style: lightDefault.copyWith(color: MyColor.bodyTextColor, fontSize: 12),
-              ),
+              Text(MyStrings.zoomInToSetExactLocation.tr, style: lightDefault.copyWith(color: MyColor.bodyTextColor, fontSize: 12)),
               const SizedBox(height: Dimensions.space20),
 
               InnerShadowContainer(
@@ -265,13 +291,9 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 padding: const EdgeInsets.all(Dimensions.space12),
                 child: Row(
                   children: [
-                    CustomSvgPicture(
-                      image: selectedIndex == 0 ? MyIcons.currentLocation : MyIcons.location,
-                      color: MyColor.primaryColor,
-                    ),
+                    CustomSvgPicture(image: selectedIndex == 0 ? MyIcons.currentLocation : MyIcons.location, color: MyColor.primaryColor),
                     const SizedBox(width: Dimensions.space10),
                     Expanded(
-                      // عرض العنوان القادم من سيرفرنا
                       child: Text(
                         controller.currentAddress.value.isNotEmpty
                             ? controller.currentAddress.value
@@ -288,9 +310,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
               const SizedBox(height: Dimensions.space20),
               RoundedButton(
                 text: MyStrings.confirm,
-                press: () {
-                  Get.back(); // العودة للشاشة الرئيسية مع الموقع الجديد
-                },
+                press: () => Get.back(),
                 isOutlined: false,
               ),
             ],

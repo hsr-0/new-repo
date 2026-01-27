@@ -1,7 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io'; // ✅ لتحديد نوع النظام
 import 'package:flutter/material.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+
+// --- مكتبات الخرائط ---
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
+import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
+
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
@@ -25,17 +30,34 @@ class SelectLocationController extends GetxController {
   });
 
   // ===========================================================================
-  // 🆕 متغيرات جديدة لحفظ المسافة والوقت (مهم جداً لحساب السعر)
+  // 🆕 متغيرات حفظ المسافة والوقت
   // ===========================================================================
   double tripDistance = 0.0; // بالكيلومتر
   double tripDuration = 0.0; // بالدقائق
 
-  MapboxMap? mapboxMap;
-  PolylineAnnotationManager? polylineAnnotationManager;
+  // ===========================================================================
+  // 🤖 متغيرات Android (Mapbox)
+  // ===========================================================================
+  mb.MapboxMap? mapboxMap;
+  mb.PolylineAnnotationManager? polylineAnnotationManager;
 
-  Future<void> setMapController(MapboxMap map) async {
+  // ===========================================================================
+  // 🍎 متغيرات iOS (Apple Maps)
+  // ===========================================================================
+  ap.AppleMapController? appleController;
+  Set<ap.Polyline> applePolylines = {};
+
+  // ---------------------------------------------------------------------------
+
+  // إعداد Mapbox (Android)
+  Future<void> setMapController(mb.MapboxMap map) async {
     mapboxMap = map;
     polylineAnnotationManager = await mapboxMap?.annotations.createPolylineAnnotationManager();
+  }
+
+  // إعداد Apple Maps (iOS) - يتم استدعاؤها من الشاشة
+  void setAppleController(ap.AppleMapController controller) {
+    appleController = controller;
   }
 
   void changeIndex(int i) {
@@ -239,28 +261,62 @@ class SelectLocationController extends GetxController {
   }
 
   // ===========================================================================
-  // 🗺️ وظائف رسم المسار + حساب السعر
+  // 🗺️ وظائف رسم المسار + حساب السعر (الهجين)
   // ===========================================================================
   Future<void> _generateRoutePolyline() async {
     if (pickupLatlong.latitude == 0 || destinationLatlong.latitude == 0) return;
 
     print("🛣️ [Route] بدء طلب رسم المسار...");
-    final points = await getPolylinePoints();
+    final points = await getPolylinePoints(); // جلب النقاط من Mapbox API
     polylineCoordinates = points;
 
-    if (mapboxMap != null && polylineAnnotationManager == null) {
+    // تهيئة المدير للأندرويد إذا لم يكن موجوداً
+    if (!Platform.isIOS && mapboxMap != null && polylineAnnotationManager == null) {
       polylineAnnotationManager = await mapboxMap!.annotations.createPolylineAnnotationManager();
     }
 
-    generatePolyLineFromPoints(points);
-    fitPolylineBounds(points);
-
-    if (polylineAnnotationManager != null) {
-      animator.animatePolyline(points, 'poly_anim', MyColor.colorYellow, MyColor.primaryColor, polylineAnnotationManager);
-    }
+    _drawPolylineUnified(points); // رسم المسار حسب النظام
+    fitPolylineBounds(points);    // ضبط الكاميرا
   }
 
-  // 🔴🔴🔴 التعديل الأهم هنا 🔴🔴🔴
+  // رسم المسار (Unified)
+  void _drawPolylineUnified(List<LatLng> coordinates) async {
+    if (coordinates.isEmpty) return;
+
+    // --- iOS Logic ---
+    if (Platform.isIOS) {
+      applePolylines.clear();
+      applePolylines.add(ap.Polyline(
+        polylineId: ap.PolylineId('route'), // ✅ بدون const
+        points: coordinates.map((e) => ap.LatLng(e.latitude, e.longitude)).toList(),
+        color: MyColor.getPrimaryColor(),
+        width: 5,
+        jointType: ap.JointType.round,
+      ));
+      update(); // تحديث الواجهة
+      return;
+    }
+
+    // --- Android Logic ---
+    if (polylineAnnotationManager == null) return;
+    try {
+      await polylineAnnotationManager!.deleteAll();
+      List<mb.Position> routePositions = coordinates.map((e) => mb.Position(e.longitude, e.latitude)).toList();
+      var options = mb.PolylineAnnotationOptions(
+        geometry: mb.LineString(coordinates: routePositions),
+        lineColor: MyColor.getPrimaryColor().value,
+        lineWidth: 5.0,
+        lineOpacity: 0.6,
+        lineJoin: mb.LineJoin.ROUND,
+      );
+      await polylineAnnotationManager!.create(options);
+
+      // الأنيميشن (اختياري للأندرويد)
+      // animator.animatePolyline(...) // يمكنك إعادة تفعيله إذا أردت
+    } catch (e) { print("🔴 Draw Error: $e"); }
+  }
+
+  // جلب النقاط من API (مشترك)
   Future<List<LatLng>> getPolylinePoints() async {
     List<LatLng> points = [];
     String mapboxAccessToken = Environment.mapKey;
@@ -271,32 +327,21 @@ class SelectLocationController extends GetxController {
           '${destinationLatlong.longitude},${destinationLatlong.latitude}'
           '?geometries=geojson&overview=full&steps=true&access_token=$mapboxAccessToken';
 
-      print("🚀 [Mapbox API] الرابط: $url");
-
       final response = await http.get(Uri.parse(url));
-
-      print("📡 [Mapbox API] كود الاستجابة: ${response.statusCode}");
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        // 1. استخراج النقاط
         final List coordinates = data['routes'][0]['geometry']['coordinates'];
         points = coordinates.map((coord) => LatLng(coord[1].toDouble(), coord[0].toDouble())).toList();
 
-        // 2. ✅ استخراج المسافة وحفظها (بالمتر -> كيلو)
         double meters = double.tryParse(data['routes'][0]['distance'].toString()) ?? 0.0;
         tripDistance = meters / 1000;
 
-        // 3. ✅ استخراج الوقت وحفظه (بالثواني -> دقائق)
         double seconds = double.tryParse(data['routes'][0]['duration'].toString()) ?? 0.0;
         tripDuration = seconds / 60;
 
-        print("🏁 [نتائج الرحلة] -----------------------");
-        print("📏 المسافة: $tripDistance كيلومتر");
-        print("⏱️ الوقت المتوقع: $tripDuration دقيقة");
-        print("📍 عدد نقاط الرسم: ${points.length}");
-        print("----------------------------------------");
+        print("🏁 [نتائج الرحلة] المسافة: $tripDistance كم | الوقت: $tripDuration دقيقة");
 
       } else {
         print("🔥 [Mapbox Error] Response: ${response.body}");
@@ -307,26 +352,37 @@ class SelectLocationController extends GetxController {
     return points;
   }
 
-  void generatePolyLineFromPoints(List<LatLng> coordinates) async {
-    if (coordinates.isEmpty || polylineAnnotationManager == null) return;
-    try {
-      List<Position> routePositions = coordinates.map((e) => Position(e.longitude, e.latitude)).toList();
-      var options = PolylineAnnotationOptions(
-        geometry: LineString(coordinates: routePositions),
-        lineColor: MyColor.getPrimaryColor().value,
-        lineWidth: 5.0,
-        lineOpacity: 0.5,
-      );
-      await polylineAnnotationManager!.create(options);
-    } catch (e) { print("🔴 Draw Error: $e"); }
-  }
-
+  // ضبط حدود الكاميرا (Unified)
   void fitPolylineBounds(List<LatLng> coords) {
-    if (coords.isEmpty || mapboxMap == null) return;
-    List<Point> points = coords.map((e) => Point(coordinates: Position(e.longitude, e.latitude))).toList();
-    mapboxMap!.cameraForCoordinates(points, MbxEdgeInsets(top: 100, left: 50, bottom: 300, right: 50), null, null).then((cameraOptions) {
-      mapboxMap!.flyTo(cameraOptions, MapAnimationOptions(duration: 1000));
-    });
+    if (coords.isEmpty) return;
+
+    // --- iOS Logic ---
+    if (Platform.isIOS && appleController != null) {
+      double minLat = 90.0; double maxLat = -90.0;
+      double minLng = 180.0; double maxLng = -180.0;
+
+      for (var point in coords) {
+        if (point.latitude < minLat) minLat = point.latitude;
+        if (point.latitude > maxLat) maxLat = point.latitude;
+        if (point.longitude < minLng) minLng = point.longitude;
+        if (point.longitude > maxLng) maxLng = point.longitude;
+      }
+
+      appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
+        ap.LatLngBounds(
+          southwest: ap.LatLng(minLat, minLng),
+          northeast: ap.LatLng(maxLat, maxLng),
+        ),
+        50.0, // padding
+      ));
+    }
+    // --- Android Logic ---
+    else if (mapboxMap != null) {
+      List<mb.Point> points = coords.map((e) => mb.Point(coordinates: mb.Position(e.longitude, e.latitude))).toList();
+      mapboxMap!.cameraForCoordinates(points, mb.MbxEdgeInsets(top: 100, left: 50, bottom: 300, right: 50), null, null).then((cameraOptions) {
+        mapboxMap!.flyTo(cameraOptions, mb.MapAnimationOptions(duration: 1000));
+      });
+    }
   }
 
   Future<bool> handleLocationPermission() async {
@@ -366,9 +422,16 @@ class SelectLocationController extends GetxController {
     update();
   }
 
+  // تحريك الكاميرا (Unified)
   void animateMapCameraPosition({bool isFromEdit = false}) {
-    if (mapboxMap != null && selectedLatitude != 0) {
-      mapboxMap!.flyTo(CameraOptions(center: Point(coordinates: Position(selectedLongitude, selectedLatitude)), zoom: 16.0), MapAnimationOptions(duration: 1000));
+    if (selectedLatitude == 0) return;
+
+    if (Platform.isIOS && appleController != null) {
+      appleController!.animateCamera(ap.CameraUpdate.newLatLng(
+          ap.LatLng(selectedLatitude, selectedLongitude)
+      ));
+    } else if (mapboxMap != null) {
+      mapboxMap!.flyTo(mb.CameraOptions(center: mb.Point(coordinates: mb.Position(selectedLongitude, selectedLatitude)), zoom: 16.0), mb.MapAnimationOptions(duration: 1000));
     }
   }
 
