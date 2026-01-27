@@ -102,8 +102,9 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     final controller = Get.find<SelectLocationController>();
     controller.changeCurrentLatLongBasedOnCameraMove(lat, lng);
 
-    // استدعاء دالة جلب العنوان (Reverse Geocoding)
-    controller.pickLocation();
+    // ✅✅ التعديل الأهم: نمرر isMapDrag: true لمنع الحلقة اللانهائية ✅✅
+    // هذا يخبر الكونترولر بأن التحديث جاء من سحب يدوي، فلا داعي لإعادة تحريك الكاميرا
+    controller.pickLocation(isMapDrag: true);
   }
 
   Future<void> _goToMyLocation() async {

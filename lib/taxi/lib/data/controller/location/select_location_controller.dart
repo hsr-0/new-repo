@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io'; // ✅ لتحديد نوع النظام
+import 'dart:io';
 import 'package:flutter/material.dart';
 
 // --- مكتبات الخرائط ---
@@ -134,9 +134,6 @@ class SelectLocationController extends GetxController {
     required String locationName,
     void Function()? onSuccessCallback,
   }) async {
-
-    print("🚀 [Controller] جاري البحث عن: $locationName");
-
     if (locationName.trim().isEmpty) {
       allPredictions.clear();
       update();
@@ -184,13 +181,11 @@ class SelectLocationController extends GetxController {
         }
       }
 
-      print("✅ [Controller] عدد النتائج: ${finalResults.length}");
       allPredictions = finalResults;
       if (onSuccessCallback != null) onSuccessCallback();
 
-    } catch (e, stacktrace) {
-      print('🔴 [Controller] خطأ البحث: $e');
-      print(stacktrace);
+    } catch (e) {
+      print('🔴 Search Error: $e');
     } finally {
       isSearched = false;
       update();
@@ -199,8 +194,9 @@ class SelectLocationController extends GetxController {
 
   // ===========================================================================
   // ✅ دالة فتح الخريطة (Reverse Geocoding)
+  // [تعديل 1]: إضافة معامل isMapDrag
   // ===========================================================================
-  Future<void> openMap(double latitude, double longitude) async {
+  Future<void> openMap(double latitude, double longitude, {bool isMapDrag = false}) async {
     try {
       isLoading = true;
       update();
@@ -228,7 +224,8 @@ class SelectLocationController extends GetxController {
       );
 
       if (pickupLatlong.latitude != 0 && destinationLatlong.latitude != 0) {
-        await _generateRoutePolyline();
+        // [تعديل 2]: تمرير عكس isMapDrag لمنع إعادة ضبط الكاميرا أثناء السحب
+        await _generateRoutePolyline(fitBounds: !isMapDrag);
       }
     } catch (e) {
       print("🔴 Error in openMap: $e");
@@ -256,6 +253,7 @@ class SelectLocationController extends GetxController {
       if (lat == 0.0 || lng == 0.0) return null;
 
       changeCurrentLatLongBasedOnCameraMove(lat, lng);
+      // هنا نحرك الكاميرا لأن المستخدم اختار من البحث (وليس سحباً)
       animateMapCameraPosition();
 
       allPredictions = [];
@@ -268,16 +266,15 @@ class SelectLocationController extends GetxController {
   }
 
   // ===========================================================================
-  // 🗺️ وظائف رسم المسار + حساب السعر (الهجين)
+  // 🗺️ وظائف رسم المسار
+  // [تعديل 3]: إضافة معامل fitBounds للتحكم في الكاميرا
   // ===========================================================================
-  Future<void> _generateRoutePolyline() async {
+  Future<void> _generateRoutePolyline({bool fitBounds = true}) async {
     if (pickupLatlong.latitude == 0 || destinationLatlong.latitude == 0) return;
 
-    print("🛣️ [Route] بدء طلب رسم المسار...");
     final points = await getPolylinePoints();
     polylineCoordinates = points;
 
-    // ✅ تصحيح: تهيئة المدير للأندرويد فقط
     if (!Platform.isIOS && mapboxMap != null && polylineAnnotationManager == null) {
       try {
         polylineAnnotationManager = await mapboxMap!.annotations.createPolylineAnnotationManager();
@@ -287,7 +284,11 @@ class SelectLocationController extends GetxController {
     }
 
     _drawPolylineUnified(points);
-    fitPolylineBounds(points);
+
+    // [تعديل 4]: التحقق من fitBounds قبل تحريك الكاميرا
+    if (fitBounds) {
+      fitPolylineBounds(points);
+    }
   }
 
   // رسم المسار (Unified)
@@ -298,7 +299,7 @@ class SelectLocationController extends GetxController {
     if (Platform.isIOS) {
       applePolylines.clear();
       applePolylines.add(ap.Polyline(
-        polylineId: ap.PolylineId('route'), // لا مشكلة هنا
+        polylineId: ap.PolylineId('route'),
         points: coordinates.map((e) => ap.LatLng(e.latitude, e.longitude)).toList(),
         color: MyColor.getPrimaryColor(),
         width: 5,
@@ -309,7 +310,6 @@ class SelectLocationController extends GetxController {
     }
 
     // --- Android Logic ---
-    // لا تنفذ كود Mapbox إذا كنت على iOS
     if (Platform.isIOS) return;
 
     if (polylineAnnotationManager == null) return;
@@ -352,8 +352,6 @@ class SelectLocationController extends GetxController {
         double seconds = double.tryParse(data['routes'][0]['duration'].toString()) ?? 0.0;
         tripDuration = seconds / 60;
 
-        print("🏁 [نتائج الرحلة] المسافة: $tripDistance كم | الوقت: $tripDuration دقيقة");
-
       } else {
         print("🔥 [Mapbox Error] Response: ${response.body}");
       }
@@ -385,10 +383,10 @@ class SelectLocationController extends GetxController {
             southwest: ap.LatLng(minLat, minLng),
             northeast: ap.LatLng(maxLat, maxLng),
           ),
-          50.0,
+          50.0, // padding
         ));
       }
-      return; // ⛔ توقف هنا إذا كان iOS
+      return;
     }
 
     // --- Android Logic ---
@@ -425,7 +423,7 @@ class SelectLocationController extends GetxController {
     if (currentPosition != null) {
       changeCurrentLatLongBasedOnCameraMove(currentPosition!.latitude, currentPosition!.longitude);
 
-      // ✅ الحماية هنا: تمرير الباراميتر بشكل آمن
+      // نحرك الكاميرا لأن هذا تحديد تلقائي للموقع (ليس سحباً)
       animateMapCameraPosition(isFromEdit: isFromEdit);
     }
     _endLoading();
@@ -433,7 +431,10 @@ class SelectLocationController extends GetxController {
 
   void _endLoading() { isLoading = false; isLoadingFirstTime = false; update(); }
 
-  Future<void> pickLocation() async { await openMap(selectedLatitude, selectedLongitude); }
+  // [تعديل 5]: دالة الواجهة الرئيسية (pickLocation) تستقبل isMapDrag
+  Future<void> pickLocation({bool isMapDrag = false}) async {
+    await openMap(selectedLatitude, selectedLongitude, isMapDrag: isMapDrag);
+  }
 
   void changeCurrentLatLongBasedOnCameraMove(double latitude, double longitude) {
     selectedLatitude = latitude;
@@ -441,7 +442,6 @@ class SelectLocationController extends GetxController {
     update();
   }
 
-  // ✅ تحريك الكاميرا (Unified & Safe)
   void animateMapCameraPosition({bool isFromEdit = false}) {
     if (selectedLatitude == 0) return;
 
@@ -452,7 +452,7 @@ class SelectLocationController extends GetxController {
             ap.LatLng(selectedLatitude, selectedLongitude)
         ));
       }
-      return; // ⛔ توقف هنا، لا تكمل للأندرويد
+      return;
     }
 
     // --- Android Logic ---
