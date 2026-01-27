@@ -1,24 +1,34 @@
 import UIKit
 import Flutter
 import Firebase
-import GoogleMaps // إذا كنت لا تزال تستخدم خدمات جوجل في مكان ما
+import CoreLocation // ✅ إضافة مكتبة الموقع لضمان الاستقرار
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
-  override func application(
-    _ application: UIApplication,
-    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-  ) -> Bool {
 
-    FirebaseApp.configure()
+    // ✅ تعريف مدير الموقع لضمان تهيئة الخدمة قبل طلب الخريطة لها
+    let locationManager = CLLocationManager()
 
-    GeneratedPluginRegistrant.register(with: self)
+    override func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
 
-    if #available(iOS 10.0, *) {
-      UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
+        // 1. تهيئة Firebase أولاً
+        FirebaseApp.configure()
+
+        // 2. طلب إذن الموقع بشكل مبدئي لتهيئة النظام وتجنب كراش Mapbox المفاجئ
+        locationManager.requestWhenInUseAuthorization()
+
+        // 3. تسجيل الإضافات (Plugins)
+        GeneratedPluginRegistrant.register(with: self)
+
+        // 4. إعدادات الإشعارات
+        if #available(iOS 10.0, *) {
+            UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
+        }
+        application.registerForRemoteNotifications()
+
+        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
-    application.registerForRemoteNotifications()
-
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-  }
 }
