@@ -1,22 +1,132 @@
 import 'dart:io';
+import 'dart:ui'; // ضروري لالتقاط الأخطاء العميقة
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:toastification/toastification.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'; // مكتبة ماب بوكس
+
+// --- Import your project files ---
 import 'package:cosmetic_store/taxi/lib/core/helper/string_format_helper.dart';
 import 'package:cosmetic_store/taxi/lib/core/theme/light/light.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/audio_utils.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_images.dart';
-
 import 'package:cosmetic_store/taxi/lib/core/utils/util.dart';
-import 'package:flutter/material.dart';
-import 'package:get/get.dart';
 import 'package:cosmetic_store/taxi/lib/data/services/running_ride_service.dart';
 import 'package:cosmetic_store/taxi/lib/environment.dart';
 import 'package:cosmetic_store/taxi/lib/data/services/push_notification_service.dart';
 import 'package:cosmetic_store/taxi/lib/core/route/route.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/messages.dart';
 import 'package:cosmetic_store/taxi/lib/data/controller/localization/localization_controller.dart';
-import 'package:toastification/toastification.dart';
 import 'core/di_service/di_services.dart' as di_service;
 import 'data/services/api_client.dart';
-import 'package:timezone/data/latest.dart' as tz;
+
+// =============================================================================
+// 🛠️ أداة كشف الأخطاء (Debug Console) - مدمجة هنا للسهولة
+// =============================================================================
+final ValueNotifier<List<String>> _globalErrorLogs = ValueNotifier([]);
+
+void _addDebugError(String error, [String? stack]) {
+  final timestamp = DateTime.now().toIso8601String().split('T').last.substring(0, 8);
+  String fullLog = "⏰ $timestamp\n🔴 ERROR: $error";
+  if (stack != null) {
+    fullLog += "\n📍 STACK: ${stack.split('\n').take(3).join('\n')}...";
+  }
+  _globalErrorLogs.value = [fullLog, ..._globalErrorLogs.value];
+  debugPrint(fullLog); // طباعة في التيرمينال أيضاً
+}
+
+class _DebugConsoleOverlay extends StatefulWidget {
+  final Widget child;
+  const _DebugConsoleOverlay({required this.child});
+
+  @override
+  State<_DebugConsoleOverlay> createState() => _DebugConsoleOverlayState();
+}
+
+class _DebugConsoleOverlayState extends State<_DebugConsoleOverlay> {
+  bool _isVisible = false; // ابدأ مخفياً لتجنب الإزعاج
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        widget.child,
+        // زر الإظهار/الإخفاء (يظهر في Debug و Release)
+        Positioned(
+          bottom: 100,
+          left: 20,
+          child: Material(
+            color: Colors.transparent,
+            child: FloatingActionButton(
+              heroTag: "debug_btn",
+              mini: true,
+              backgroundColor: Colors.red.withOpacity(0.8),
+              child: Icon(_isVisible ? Icons.close : Icons.bug_report, size: 20),
+              onPressed: () => setState(() => _isVisible = !_isVisible),
+            ),
+          ),
+        ),
+        // شاشة الأخطاء
+        if (_isVisible)
+          Positioned(
+            top: 50,
+            left: 20,
+            right: 20,
+            height: 300,
+            child: Material(
+              color: Colors.black.withOpacity(0.85),
+              borderRadius: BorderRadius.circular(10),
+              child: ValueListenableBuilder<List<String>>(
+                valueListenable: _globalErrorLogs,
+                builder: (context, logs, _) {
+                  return Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.red[900],
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text("⚠️ سجل الأخطاء", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            InkWell(
+                              onTap: () => _globalErrorLogs.value = [],
+                              child: const Icon(Icons.delete, color: Colors.white, size: 20),
+                            )
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: logs.isEmpty
+                            ? const Center(child: Text("لا توجد أخطاء ✅", style: TextStyle(color: Colors.green)))
+                            : ListView.separated(
+                          padding: const EdgeInsets.all(8),
+                          itemCount: logs.length,
+                          separatorBuilder: (_, __) => const Divider(color: Colors.grey),
+                          itemBuilder: (context, index) => SelectableText(
+                            logs[index],
+                            style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontFamily: 'Courier'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// =============================================================================
+// 🚕 نقطة الدخول الرئيسية (Taxi Entry)
+// =============================================================================
 
 class TaxiAppEntry extends StatefulWidget {
   const TaxiAppEntry({super.key});
@@ -32,17 +142,42 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
   @override
   void initState() {
     super.initState();
+    _setupErrorHandling(); // تفعيل صائد الأخطاء
     _initTaxiServices();
   }
 
+  // 1. إعداد صائد الأخطاء ليعرضها على الشاشة
+  void _setupErrorHandling() {
+    FlutterError.onError = (FlutterErrorDetails details) {
+      FlutterError.presentError(details);
+      _addDebugError(details.exception.toString(), details.stack.toString());
+    };
+
+    PlatformDispatcher.instance.onError = (error, stack) {
+      _addDebugError(error.toString(), stack.toString());
+      return true;
+    };
+  }
+
+  // 2. تهيئة الخدمات مع حماية Mapbox
   Future<void> _initTaxiServices() async {
     try {
       if (!Get.isRegistered<ApiClient>()) {
         await ApiClient.init();
       }
 
-      // تهيئة الخدمات (تأكد أن di_service لا يقوم بتهيئة Mapbox بدون شرط الأندرويد)
       _languages = await di_service.init();
+
+      // ✅✅✅ الحماية القصوى: تفعيل Mapbox للأندرويد فقط هنا ✅✅✅
+      if (Platform.isAndroid) {
+        try {
+          MapboxOptions.setAccessToken(Environment.mapKey);
+          print("✅ Mapbox Initialized for Android");
+        } catch (e) {
+          _addDebugError("Mapbox Init Failed: $e");
+        }
+      }
+      // ⛔ لن يتم تشغيل أي كود Mapbox على iOS هنا
 
       MyUtils.allScreen();
       MyUtils().stopLandscape();
@@ -53,10 +188,9 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
           PushNotificationService(apiClient: Get.find()).setupInteractedMessage();
         }
       } catch (e) {
-        printX("Notification Error: $e");
+        _addDebugError("Notification Error: $e");
       }
 
-      // تجاوز شهادات SSL (يفضل إزالته في الإنتاج Production)
       HttpOverrides.global = MyHttpOverrides();
       RunningRideService.instance.setIsRunning(false);
       tz.initializeTimeZones();
@@ -66,8 +200,8 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
           _isLoading = false;
         });
       }
-    } catch (e) {
-      printX("Error initializing Taxi services: $e");
+    } catch (e, stack) {
+      _addDebugError("Fatal Init Error: $e", stack.toString());
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -79,12 +213,18 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
   @override
   Widget build(BuildContext context) {
     if (!_isLoading && _languages != null) {
-      return OvoApp(languages: _languages!);
+      // تغليف التطبيق بـ DebugConsoleOverlay
+      return _DebugConsoleOverlay(
+        child: OvoApp(languages: _languages!),
+      );
     }
 
-    return const Scaffold(
-      body: Center(
-        child: CircularProgressIndicator(color: Colors.deepPurple),
+    // شاشة التحميل (مع عرض الأخطاء أيضاً في حال الفشل)
+    return _DebugConsoleOverlay(
+      child: const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(color: Colors.deepPurple),
+        ),
       ),
     );
   }
