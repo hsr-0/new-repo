@@ -49,13 +49,20 @@ class SelectLocationController extends GetxController {
 
   // ---------------------------------------------------------------------------
 
-  // إعداد Mapbox (Android)
+  // إعداد Mapbox (Android Only)
   Future<void> setMapController(mb.MapboxMap map) async {
+    // حماية إضافية: لا تقم بتهيئة Mapbox إذا كنا على iOS
+    if (Platform.isIOS) return;
+
     mapboxMap = map;
-    polylineAnnotationManager = await mapboxMap?.annotations.createPolylineAnnotationManager();
+    try {
+      polylineAnnotationManager = await mapboxMap?.annotations.createPolylineAnnotationManager();
+    } catch (e) {
+      print("⚠️ Error creating PolylineManager on Android: $e");
+    }
   }
 
-  // إعداد Apple Maps (iOS) - يتم استدعاؤها من الشاشة
+  // إعداد Apple Maps (iOS Only)
   void setAppleController(ap.AppleMapController controller) {
     appleController = controller;
   }
@@ -267,16 +274,20 @@ class SelectLocationController extends GetxController {
     if (pickupLatlong.latitude == 0 || destinationLatlong.latitude == 0) return;
 
     print("🛣️ [Route] بدء طلب رسم المسار...");
-    final points = await getPolylinePoints(); // جلب النقاط من Mapbox API
+    final points = await getPolylinePoints();
     polylineCoordinates = points;
 
-    // تهيئة المدير للأندرويد إذا لم يكن موجوداً
+    // ✅ تصحيح: تهيئة المدير للأندرويد فقط
     if (!Platform.isIOS && mapboxMap != null && polylineAnnotationManager == null) {
-      polylineAnnotationManager = await mapboxMap!.annotations.createPolylineAnnotationManager();
+      try {
+        polylineAnnotationManager = await mapboxMap!.annotations.createPolylineAnnotationManager();
+      } catch (e) {
+        print("⚠️ Failed to create polyline manager on Android: $e");
+      }
     }
 
-    _drawPolylineUnified(points); // رسم المسار حسب النظام
-    fitPolylineBounds(points);    // ضبط الكاميرا
+    _drawPolylineUnified(points);
+    fitPolylineBounds(points);
   }
 
   // رسم المسار (Unified)
@@ -287,7 +298,7 @@ class SelectLocationController extends GetxController {
     if (Platform.isIOS) {
       applePolylines.clear();
       applePolylines.add(ap.Polyline(
-        polylineId: ap.PolylineId('route'), // ✅ بدون const
+        polylineId: ap.PolylineId('route'), // لا مشكلة هنا
         points: coordinates.map((e) => ap.LatLng(e.latitude, e.longitude)).toList(),
         color: MyColor.getPrimaryColor(),
         width: 5,
@@ -298,6 +309,9 @@ class SelectLocationController extends GetxController {
     }
 
     // --- Android Logic ---
+    // لا تنفذ كود Mapbox إذا كنت على iOS
+    if (Platform.isIOS) return;
+
     if (polylineAnnotationManager == null) return;
     try {
       await polylineAnnotationManager!.deleteAll();
@@ -310,9 +324,6 @@ class SelectLocationController extends GetxController {
         lineJoin: mb.LineJoin.ROUND,
       );
       await polylineAnnotationManager!.create(options);
-
-      // الأنيميشن (اختياري للأندرويد)
-      // animator.animatePolyline(...) // يمكنك إعادة تفعيله إذا أردت
     } catch (e) { print("🔴 Draw Error: $e"); }
   }
 
@@ -357,27 +368,31 @@ class SelectLocationController extends GetxController {
     if (coords.isEmpty) return;
 
     // --- iOS Logic ---
-    if (Platform.isIOS && appleController != null) {
-      double minLat = 90.0; double maxLat = -90.0;
-      double minLng = 180.0; double maxLng = -180.0;
+    if (Platform.isIOS) {
+      if (appleController != null) {
+        double minLat = 90.0; double maxLat = -90.0;
+        double minLng = 180.0; double maxLng = -180.0;
 
-      for (var point in coords) {
-        if (point.latitude < minLat) minLat = point.latitude;
-        if (point.latitude > maxLat) maxLat = point.latitude;
-        if (point.longitude < minLng) minLng = point.longitude;
-        if (point.longitude > maxLng) maxLng = point.longitude;
+        for (var point in coords) {
+          if (point.latitude < minLat) minLat = point.latitude;
+          if (point.latitude > maxLat) maxLat = point.latitude;
+          if (point.longitude < minLng) minLng = point.longitude;
+          if (point.longitude > maxLng) maxLng = point.longitude;
+        }
+
+        appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
+          ap.LatLngBounds(
+            southwest: ap.LatLng(minLat, minLng),
+            northeast: ap.LatLng(maxLat, maxLng),
+          ),
+          50.0,
+        ));
       }
-
-      appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
-        ap.LatLngBounds(
-          southwest: ap.LatLng(minLat, minLng),
-          northeast: ap.LatLng(maxLat, maxLng),
-        ),
-        50.0, // padding
-      ));
+      return; // ⛔ توقف هنا إذا كان iOS
     }
+
     // --- Android Logic ---
-    else if (mapboxMap != null) {
+    if (mapboxMap != null) {
       List<mb.Point> points = coords.map((e) => mb.Point(coordinates: mb.Position(e.longitude, e.latitude))).toList();
       mapboxMap!.cameraForCoordinates(points, mb.MbxEdgeInsets(top: 100, left: 50, bottom: 300, right: 50), null, null).then((cameraOptions) {
         mapboxMap!.flyTo(cameraOptions, mb.MapAnimationOptions(duration: 1000));
@@ -404,9 +419,13 @@ class SelectLocationController extends GetxController {
     update();
     final hasPermission = await handleLocationPermission();
     if (!hasPermission) { _endLoading(); return; }
+
     currentPosition = await geo.Geolocator.getCurrentPosition(locationSettings: geo.AndroidSettings(accuracy: geo.LocationAccuracy.high));
+
     if (currentPosition != null) {
       changeCurrentLatLongBasedOnCameraMove(currentPosition!.latitude, currentPosition!.longitude);
+
+      // ✅ الحماية هنا: تمرير الباراميتر بشكل آمن
       animateMapCameraPosition(isFromEdit: isFromEdit);
     }
     _endLoading();
@@ -422,16 +441,26 @@ class SelectLocationController extends GetxController {
     update();
   }
 
-  // تحريك الكاميرا (Unified)
+  // ✅ تحريك الكاميرا (Unified & Safe)
   void animateMapCameraPosition({bool isFromEdit = false}) {
     if (selectedLatitude == 0) return;
 
-    if (Platform.isIOS && appleController != null) {
-      appleController!.animateCamera(ap.CameraUpdate.newLatLng(
-          ap.LatLng(selectedLatitude, selectedLongitude)
-      ));
-    } else if (mapboxMap != null) {
-      mapboxMap!.flyTo(mb.CameraOptions(center: mb.Point(coordinates: mb.Position(selectedLongitude, selectedLatitude)), zoom: 16.0), mb.MapAnimationOptions(duration: 1000));
+    // --- iOS Logic ---
+    if (Platform.isIOS) {
+      if (appleController != null) {
+        appleController!.animateCamera(ap.CameraUpdate.newLatLng(
+            ap.LatLng(selectedLatitude, selectedLongitude)
+        ));
+      }
+      return; // ⛔ توقف هنا، لا تكمل للأندرويد
+    }
+
+    // --- Android Logic ---
+    if (mapboxMap != null) {
+      mapboxMap!.flyTo(
+          mb.CameraOptions(center: mb.Point(coordinates: mb.Position(selectedLongitude, selectedLatitude)), zoom: 16.0),
+          mb.MapAnimationOptions(duration: 1000)
+      );
     }
   }
 

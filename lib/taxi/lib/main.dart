@@ -41,6 +41,7 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
         await ApiClient.init();
       }
 
+      // تهيئة الخدمات (تأكد أن di_service لا يقوم بتهيئة Mapbox بدون شرط الأندرويد)
       _languages = await di_service.init();
 
       MyUtils.allScreen();
@@ -55,6 +56,7 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
         printX("Notification Error: $e");
       }
 
+      // تجاوز شهادات SSL (يفضل إزالته في الإنتاج Production)
       HttpOverrides.global = MyHttpOverrides();
       RunningRideService.instance.setIsRunning(false);
       tz.initializeTimeZones();
