@@ -26,36 +26,27 @@ class TaxiAppEntry extends StatefulWidget {
 }
 
 class _TaxiAppEntryState extends State<TaxiAppEntry> {
-  // ❌ أزلنا static: لكي يتم تصفير المتغيرات عند كل دخول جديد
   Map<String, Map<String, String>>? _languages;
-
-  // متغير بسيط للتحكم في شاشة التحميل الحالية
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    // ✅ دائماً نستدعي دالة التهيئة عند الدخول (بدون شروط)
     _initTaxiServices();
   }
 
   Future<void> _initTaxiServices() async {
     try {
-      // 1. تهيئة الـ API Client (نتأكد من عدم وجوده أولاً لتجنب التكرار)
       if (!Get.isRegistered<ApiClient>()) {
         await ApiClient.init();
       }
 
-      // 2. تحميل اللغات وحقن الـ Controllers (هذا هو السطر الذي يمنع الانهيار)
-      // سيقوم هذا السطر بإعادة إنشاء LocalizationController المفقود
       _languages = await di_service.init();
 
-      // UI Config
       MyUtils.allScreen();
       MyUtils().stopLandscape();
       AudioUtils();
 
-      // Setup Notifications
       try {
         if (Get.isRegistered<ApiClient>()) {
           PushNotificationService(apiClient: Get.find()).setupInteractedMessage();
@@ -64,16 +55,10 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
         printX("Notification Error: $e");
       }
 
-      // HTTP Overrides
       HttpOverrides.global = MyHttpOverrides();
-
-      // Reset ride status
       RunningRideService.instance.setIsRunning(false);
-
-      // Timezones
       tz.initializeTimeZones();
 
-      // ✅ تم التحميل: نخفي شاشة التحميل ونعرض التطبيق
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -81,7 +66,6 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
       }
     } catch (e) {
       printX("Error initializing Taxi services: $e");
-      // في حالة الخطأ، نفتح التطبيق لتجنب التعليق
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -92,12 +76,10 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ إذا انتهى التحميل والبيانات موجودة، اعرض التطبيق
     if (!_isLoading && _languages != null) {
       return OvoApp(languages: _languages!);
     }
 
-    // شاشة التحميل (CircularProgressIndicator) كما طلبت تماماً
     return const Scaffold(
       body: Center(
         child: CircularProgressIndicator(color: Colors.deepPurple),
@@ -124,6 +106,9 @@ class OvoApp extends StatefulWidget {
 }
 
 class _OvoAppState extends State<OvoApp> {
+  // مفتاح للتحكم في الملاحة الداخلية لتطبيق التكسي
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -138,29 +123,69 @@ class _OvoAppState extends State<OvoApp> {
     }
   }
 
+  // دالة لإظهار حوار تأكيد الخروج
+  Future<bool> _showExitConfirmationDialog() async {
+    return await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تأكيد الخروج'),
+        content: const Text('هل تريد الخروج من قسم التكسي والعودة  الى الرئيسية؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false), // لا تخرج
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true), // نعم اخرج
+            child: const Text('خروج', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return GetBuilder<LocalizationController>(
       builder: (localizeController) => ToastificationWrapper(
         config: ToastificationConfig(maxToastLimit: 10),
-        child: GetMaterialApp(
-          // key: GlobalKey(debugLabel: 'TaxiAppKey'),
-          title: Environment.appName,
-          debugShowCheckedModeBanner: false,
-          theme: lightThemeData,
-          defaultTransition: Transition.fadeIn,
-          transitionDuration: const Duration(milliseconds: 300),
-          // ✅ سيبدأ دائماً من شاشة السبلاش (كأول مرة)
-          initialRoute: RouteHelper.splashScreen,
-          getPages: RouteHelper().routes,
-          locale: localizeController.locale,
-          translations: Messages(languages: widget.languages),
-          fallbackLocale: Locale(
-            localizeController.locale.languageCode,
-            localizeController.locale.countryCode,
+        // ✅ PopScope للتحكم في زر الرجوع
+        child: PopScope(
+          canPop: false, // نمنع الخروج التلقائي لنتحكم فيه يدوياً
+          onPopInvoked: (didPop) async {
+            if (didPop) return;
+
+            // 1. محاولة الرجوع خطوة للوراء داخل تطبيق التكسي
+            final NavigatorState? navigator = _navigatorKey.currentState;
+            if (navigator != null && navigator.canPop()) {
+              navigator.pop();
+              return;
+            }
+
+            // 2. إذا لم يعد هناك صفحات للرجوع (وصلنا للبداية)، نسأل المستخدم
+            final bool shouldExit = await _showExitConfirmationDialog();
+            if (shouldExit && context.mounted) {
+              // الخروج النهائي من قسم التكسي
+              Navigator.of(context).pop();
+            }
+          },
+          child: GetMaterialApp(
+            // ✅ ربط مفتاح الملاحة هنا
+            navigatorKey: _navigatorKey,
+            title: Environment.appName,
+            debugShowCheckedModeBanner: false,
+            theme: lightThemeData,
+            defaultTransition: Transition.fadeIn,
+            transitionDuration: const Duration(milliseconds: 300),
+            initialRoute: RouteHelper.splashScreen,
+            getPages: RouteHelper().routes,
+            locale: localizeController.locale,
+            translations: Messages(languages: widget.languages),
+            fallbackLocale: Locale(
+              localizeController.locale.languageCode,
+              localizeController.locale.countryCode,
+            ),
           ),
-          // يمنع الخروج الكامل من التطبيق عند الرجوع
-          popGesture: true,
         ),
       ),
     );
