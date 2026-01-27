@@ -216,9 +216,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         // نقطة الانطلاق
         if (controller.pickupLatlong.latitude != 0) {
           appleAnnotations.add(ap.Annotation(
-            annotationId: ap.AnnotationId('pickup'), // ✅ تم حذف const
+            annotationId: ap.AnnotationId('pickup'),
             position: ap.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
-            // ✅ استخدام defaultAnnotation
             icon: pickUpIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
             onTap: () => _handleMarkerClick(0),
           ));
@@ -227,9 +226,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         // نقطة الوصول
         if (controller.destinationLatlong.latitude != 0) {
           appleAnnotations.add(ap.Annotation(
-            annotationId: ap.AnnotationId('destination'), // ✅ تم حذف const
+            annotationId: ap.AnnotationId('destination'),
             position: ap.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
-            // ✅ استخدام defaultAnnotation
             icon: destinationIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
             onTap: () => _handleMarkerClick(1),
           ));
@@ -282,8 +280,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       child: GetBuilder<SelectLocationController>(
         builder: (controller) {
 
-          // تأكد من تحديث الدبابيس عند تغيير الحالة
-          if(isMapReady) _updateMapMarkers(controller);
+          // ✅ تم حذف سطر التحديث من هنا لإصلاح الـ Crash
 
           return Scaffold(
             extendBody: true,
@@ -353,9 +350,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       onMapCreated: _onAppleMapCreated,
       annotations: appleAnnotations,
       myLocationEnabled: true,
-      myLocationButtonEnabled: false, // نستخدم زر مخصص إذا أردنا
+      myLocationButtonEnabled: false,
       onCameraIdle: () {
-        // عند توقف الحركة في آيفون (للجلب العكسي للعنوان إذا كنت مفعله)
+        // ✅ لا يوجد كود هنا - تم إلغاء تحديث العنوان عند التوقف
       },
     );
   }
@@ -371,12 +368,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       onMapCreated: _onMapboxCreated,
       onStyleLoadedListener: _onMapboxStyleLoaded,
       onCameraChangeListener: (mb.CameraChangedEventData data) {
-        if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-        _debounceTimer = Timer(const Duration(milliseconds: 500), () {
-          if(isMapReady) {
-            // تحديث المنطق عند توقف الكاميرا
-          }
-        });
+        // ✅ لا يوجد كود هنا - تم إلغاء تحديث العنوان عند التحريك
       },
     );
   }
@@ -543,9 +535,11 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                               ? controller.pickupLatlong.longitude
                               : controller.destinationLatlong.longitude;
 
-                          // 4. تحريك الكاميرا (Unified Method)
+                          // 4. تحريك الكاميرا
                           if (lat != 0 && lng != 0) {
                             _moveCameraTo(lat, lng);
+                            // ✅ تحديث الدبوس هنا بعد اكتمال التحريك وتحديد الموقع
+                            _updateMapMarkers(controller);
                           }
                         });
                         MyUtils.closeKeyboard();
