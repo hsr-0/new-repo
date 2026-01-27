@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io'; // لتحديد نوع النظام
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -46,23 +46,25 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   mb.PointAnnotationManager? pointAnnotationManager; // أندرويد
   Set<ap.Annotation> appleAnnotations = {}; // آيفون
 
-  // --- متغيرات عامة ---
-  Timer? _debounceTimer;
-  bool isMapReady = false;
+  // --- 🛡️ متغيرات الحماية الذكية (Smart Guard) ---
+  Timer? _debounceTimer; // مؤقت لمنع التكرار
+  bool _isMapBusy = false; // هل الخريطة مشغولة؟
+  DateTime _lastUpdate = DateTime.now(); // آخر وقت تحديث
 
   // معرفات الدبابيس (لأندرويد)
   String? pickupAnnotationId;
   String? destinationAnnotationId;
 
+  // متغيرات الواجهة
   final GlobalKey _secondContainerKey = GlobalKey();
   double? _secondContainerHeight;
   TextEditingController searchLocationController = TextEditingController(text: '');
   int index = 0;
+  bool isMapReady = false;
 
   // الصور
   Uint8List? pickUpIcon; // بايت (أندرويد)
   ap.BitmapDescriptor? pickUpIconApple; // صورة (آيفون)
-
   Uint8List? destinationIcon; // بايت (أندرويد)
   ap.BitmapDescriptor? destinationIconApple; // صورة (آيفون)
 
@@ -83,14 +85,15 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final RenderBox box = _secondContainerKey.currentContext?.findRenderObject() as RenderBox;
-      final double height = box.size.height;
-      setState(() => _secondContainerHeight = height);
+      final RenderBox? box = _secondContainerKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box != null) {
+        setState(() => _secondContainerHeight = box.size.height);
+      }
 
       await loadMarkerImages();
       controller.initialize();
 
-      // إذا كان آيفون، الخريطة تجهز أسرع، نطلب الموقع مباشرة
+      // إذا كان آيفون، نطلب الموقع مباشرة
       if (Platform.isIOS) {
         _getCurrentLocation();
       }
@@ -99,6 +102,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
   @override
   void dispose() {
+    print("🛑 [Dispose] Closing Screen - Cancelling Timers");
     _debounceTimer?.cancel();
     super.dispose();
   }
@@ -117,16 +121,36 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       destinationIconApple = await ap.BitmapDescriptor.fromAssetImage(
           const ImageConfiguration(size: Size(40, 40)), MyIcons.mapMarkerIcon);
 
-      setState(() {});
+      if (mounted) setState(() {});
     } catch (e) {
       print("🔴 [Error] Failed to load marker images: $e");
     }
   }
 
   // ==========================================
-  // 🗺️ قسم Mapbox (Android Only)
+  // 🧠 المنطق الذكي (Safe Logic)
   // ==========================================
 
+  // هذه الدالة تضمن عدم تحديث الخريطة بشكل متكرر مما يسبب الانجماد
+  void _onCameraIdleSafe() {
+    if (!mounted || _isMapBusy) return;
+
+    // منع التحديث إذا مر وقت قصير جداً (أقل من 800 جزء من الثانية)
+    if (DateTime.now().difference(_lastUpdate).inMilliseconds < 800) {
+      return;
+    }
+    _lastUpdate = DateTime.now();
+
+    // هنا يمكنك وضع أي كود تريده عند توقف الخريطة مستقبلاً
+    // حالياً نتركه فارغاً للحفاظ على الأداء
+    print("📍 [Map Idle] Camera stopped moving (Safe Mode)");
+  }
+
+  // ==========================================
+  // 🗺️ إعدادات الخرائط
+  // ==========================================
+
+  // --- Mapbox (Android) ---
   _onMapboxCreated(mb.MapboxMap mapboxMap) {
     this.mapboxMap = mapboxMap;
     Get.find<SelectLocationController>().setMapController(mapboxMap);
@@ -149,10 +173,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     }
   }
 
-  // ==========================================
-  // 🍎 قسم Apple Maps (iOS Only)
-  // ==========================================
-
+  // --- Apple Maps (iOS) ---
   _onAppleMapCreated(ap.AppleMapController controller) {
     print("🟢 [Apple Map] Created");
     appleController = controller;
@@ -161,11 +182,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 
   // ==========================================
-  // 📍 المنطق المشترك (Unified Logic)
+  // 📍 تحديث الدبابيس والكاميرا
   // ==========================================
 
   void _handleMarkerClick(int type) {
-    // 0: Pickup, 1: Destination
     Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: type);
   }
 
@@ -178,8 +198,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
       if (permission == geo.LocationPermission.whileInUse || permission == geo.LocationPermission.always) {
         geo.Position position = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
-
-        print("📍 [GPS] Found: ${position.latitude}, ${position.longitude}");
         _moveCameraTo(position.latitude, position.longitude);
       }
     } catch (e) {
@@ -187,7 +205,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     }
   }
 
-  // دالة موحدة لتحريك الكاميرا
   void _moveCameraTo(double lat, double lng) {
     if (Platform.isIOS && appleController != null) {
       appleController!.animateCamera(
@@ -204,7 +221,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     }
   }
 
-  // ✅ الدالة المصححة لتحديث الدبابيس
   Future<void> _updateMapMarkers(SelectLocationController controller) async {
     if (!isMapReady) return;
 
@@ -212,8 +228,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     if (Platform.isIOS) {
       setState(() {
         appleAnnotations.clear();
-
-        // نقطة الانطلاق
         if (controller.pickupLatlong.latitude != 0) {
           appleAnnotations.add(ap.Annotation(
             annotationId: ap.AnnotationId('pickup'),
@@ -222,8 +236,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
             onTap: () => _handleMarkerClick(0),
           ));
         }
-
-        // نقطة الوصول
         if (controller.destinationLatlong.latitude != 0) {
           appleAnnotations.add(ap.Annotation(
             annotationId: ap.AnnotationId('destination'),
@@ -246,9 +258,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       if (controller.pickupLatlong.latitude != 0 && pickUpIcon != null) {
         var options = mb.PointAnnotationOptions(
           geometry: mb.Point(coordinates: mb.Position(
-            controller.pickupLatlong.longitude,
-            controller.pickupLatlong.latitude,
-          )),
+              controller.pickupLatlong.longitude, controller.pickupLatlong.latitude)),
           image: pickUpIcon!,
           iconSize: 1.0,
         );
@@ -259,9 +269,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       if (controller.destinationLatlong.latitude != 0 && destinationIcon != null) {
         var options = mb.PointAnnotationOptions(
           geometry: mb.Point(coordinates: mb.Position(
-            controller.destinationLatlong.longitude,
-            controller.destinationLatlong.latitude,
-          )),
+              controller.destinationLatlong.longitude, controller.destinationLatlong.latitude)),
           image: destinationIcon!,
           iconSize: 1.0,
         );
@@ -273,15 +281,16 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     }
   }
 
+  // ==========================================
+  // 📱 بناء الواجهة
+  // ==========================================
+
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegionWidget(
       statusBarColor: MyColor.transparentColor,
       child: GetBuilder<SelectLocationController>(
         builder: (controller) {
-
-          // ✅ تم حذف سطر التحديث من هنا لإصلاح الـ Crash
-
           return Scaffold(
             extendBody: true,
             extendBodyBehindAppBar: true,
@@ -297,7 +306,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                     children: [
                       SizedBox(
                         height: context.height - (_secondContainerHeight ?? 0),
-                        // 🔥 هنا يتم التبديل بين الخرائط حسب النظام
                         child: Platform.isIOS
                             ? _buildAppleMapWidget()
                             : _buildMapboxWidget(),
@@ -340,24 +348,26 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     );
   }
 
-  // --- Widget for iOS ---
   Widget _buildAppleMapWidget() {
     return ap.AppleMap(
       initialCameraPosition: const ap.CameraPosition(
-        target: ap.LatLng(33.312805, 44.361488), // بغداد افتراضياً
+        target: ap.LatLng(33.312805, 44.361488),
         zoom: 12,
       ),
       onMapCreated: _onAppleMapCreated,
       annotations: appleAnnotations,
       myLocationEnabled: true,
       myLocationButtonEnabled: false,
+      // ✅ الحماية: استخدام Timer لتأخير التنفيذ
       onCameraIdle: () {
-        // ✅ لا يوجد كود هنا - تم إلغاء تحديث العنوان عند التوقف
+        _debounceTimer?.cancel();
+        _debounceTimer = Timer(const Duration(milliseconds: 800), () {
+          _onCameraIdleSafe();
+        });
       },
     );
   }
 
-  // --- Widget for Android ---
   Widget _buildMapboxWidget() {
     return mb.MapWidget(
       styleUri: mb.MapboxStyles.MAPBOX_STREETS,
@@ -367,8 +377,12 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       ),
       onMapCreated: _onMapboxCreated,
       onStyleLoadedListener: _onMapboxStyleLoaded,
+      // ✅ الحماية: إعادة ضبط المؤقت مع الحركة
       onCameraChangeListener: (mb.CameraChangedEventData data) {
-        // ✅ لا يوجد كود هنا - تم إلغاء تحديث العنوان عند التحريك
+        _debounceTimer?.cancel();
+        _debounceTimer = Timer(const Duration(milliseconds: 800), () {
+          _onCameraIdleSafe();
+        });
       },
     );
   }
@@ -505,7 +519,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
               ),
             ),
 
-            // --- قائمة نتائج البحث (Local Search) ---
+            // --- قائمة نتائج البحث ---
             controller.isSearched && controller.allPredictions.isEmpty
                 ? const CustomLoader(isPagination: true)
                 : GestureDetector(
@@ -535,10 +549,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                               ? controller.pickupLatlong.longitude
                               : controller.destinationLatlong.longitude;
 
-                          // 4. تحريك الكاميرا
+                          // 4. تحريك الكاميرا وتحديث الدبوس بأمان
                           if (lat != 0 && lng != 0) {
                             _moveCameraTo(lat, lng);
-                            // ✅ تحديث الدبوس هنا بعد اكتمال التحريك وتحديد الموقع
+                            // هنا لا بأس من التحديث المباشر لأن المستخدم هو من نقر
                             _updateMapMarkers(controller);
                           }
                         });
@@ -588,7 +602,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 }
 
-// كلاس مساعد للنقر على الدبابيس في أندرويد
 class AnnotationClickListener extends mb.OnPointAnnotationClickListener {
   final Function(mb.PointAnnotation) onAnnotationClick;
   AnnotationClickListener({required this.onAnnotationClick});
