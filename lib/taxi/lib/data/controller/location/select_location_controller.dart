@@ -194,7 +194,6 @@ class SelectLocationController extends GetxController {
 
   // ===========================================================================
   // ✅ دالة فتح الخريطة (Reverse Geocoding)
-  // [تعديل 1]: إضافة معامل isMapDrag
   // ===========================================================================
   Future<void> openMap(double latitude, double longitude, {bool isMapDrag = false}) async {
     try {
@@ -224,7 +223,7 @@ class SelectLocationController extends GetxController {
       );
 
       if (pickupLatlong.latitude != 0 && destinationLatlong.latitude != 0) {
-        // [تعديل 2]: تمرير عكس isMapDrag لمنع إعادة ضبط الكاميرا أثناء السحب
+        // نمرر عكس isMapDrag لمنع إعادة ضبط الكاميرا أثناء السحب
         await _generateRoutePolyline(fitBounds: !isMapDrag);
       }
     } catch (e) {
@@ -267,7 +266,6 @@ class SelectLocationController extends GetxController {
 
   // ===========================================================================
   // 🗺️ وظائف رسم المسار
-  // [تعديل 3]: إضافة معامل fitBounds للتحكم في الكاميرا
   // ===========================================================================
   Future<void> _generateRoutePolyline({bool fitBounds = true}) async {
     if (pickupLatlong.latitude == 0 || destinationLatlong.latitude == 0) return;
@@ -285,7 +283,7 @@ class SelectLocationController extends GetxController {
 
     _drawPolylineUnified(points);
 
-    // [تعديل 4]: التحقق من fitBounds قبل تحريك الكاميرا
+    // التحقق من fitBounds قبل تحريك الكاميرا
     if (fitBounds) {
       fitPolylineBounds(points);
     }
@@ -389,12 +387,16 @@ class SelectLocationController extends GetxController {
       return;
     }
 
-    // --- Android Logic ---
+    // --- Android Logic (مع حماية Try-Catch) ---
     if (mapboxMap != null) {
-      List<mb.Point> points = coords.map((e) => mb.Point(coordinates: mb.Position(e.longitude, e.latitude))).toList();
-      mapboxMap!.cameraForCoordinates(points, mb.MbxEdgeInsets(top: 100, left: 50, bottom: 300, right: 50), null, null).then((cameraOptions) {
-        mapboxMap!.flyTo(cameraOptions, mb.MapAnimationOptions(duration: 1000));
-      });
+      try {
+        List<mb.Point> points = coords.map((e) => mb.Point(coordinates: mb.Position(e.longitude, e.latitude))).toList();
+        mapboxMap!.cameraForCoordinates(points, mb.MbxEdgeInsets(top: 100, left: 50, bottom: 300, right: 50), null, null).then((cameraOptions) {
+          mapboxMap!.flyTo(cameraOptions, mb.MapAnimationOptions(duration: 1000));
+        });
+      } catch (e) {
+        print("⚠️ Mapbox FitBounds Error (Ignored): $e");
+      }
     }
   }
 
@@ -431,7 +433,7 @@ class SelectLocationController extends GetxController {
 
   void _endLoading() { isLoading = false; isLoadingFirstTime = false; update(); }
 
-  // [تعديل 5]: دالة الواجهة الرئيسية (pickLocation) تستقبل isMapDrag
+  // دالة الواجهة الرئيسية (pickLocation) تستقبل isMapDrag
   Future<void> pickLocation({bool isMapDrag = false}) async {
     await openMap(selectedLatitude, selectedLongitude, isMapDrag: isMapDrag);
   }
@@ -442,6 +444,7 @@ class SelectLocationController extends GetxController {
     update();
   }
 
+  // ✅✅ التعديل الأهم: إضافة Try-Catch هنا لمنع الانهيار ✅✅
   void animateMapCameraPosition({bool isFromEdit = false}) {
     if (selectedLatitude == 0) return;
 
@@ -455,12 +458,17 @@ class SelectLocationController extends GetxController {
       return;
     }
 
-    // --- Android Logic ---
+    // --- Android Logic (With Crash Protection) ---
     if (mapboxMap != null) {
-      mapboxMap!.flyTo(
-          mb.CameraOptions(center: mb.Point(coordinates: mb.Position(selectedLongitude, selectedLatitude)), zoom: 16.0),
-          mb.MapAnimationOptions(duration: 1000)
-      );
+      try {
+        mapboxMap!.flyTo(
+            mb.CameraOptions(center: mb.Point(coordinates: mb.Position(selectedLongitude, selectedLatitude)), zoom: 16.0),
+            mb.MapAnimationOptions(duration: 1000)
+        );
+      } catch (e) {
+        // هذا هو الذي يمنع التطبيق من الانهيار إذا كانت القناة غير جاهزة
+        print("⚠️ Mapbox Animation Error (Ignored): $e");
+      }
     }
   }
 
