@@ -1,6 +1,7 @@
 import UIKit
 import Flutter
-import Firebase // ⭐ تأكد من استيراد Firebase
+import Firebase
+import GoogleMaps // إذا كنت لا تزال تستخدم خدمات جوجل في مكان ما
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
@@ -9,17 +10,13 @@ import Firebase // ⭐ تأكد من استيراد Firebase
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
 
-    // ⭐ الخطوة 1: تهيئة Firebase
     FirebaseApp.configure()
 
     GeneratedPluginRegistrant.register(with: self)
 
-    // ⭐ الخطوة 2: تسجيل التطبيق لاستقبال الإشعارات ومعالجة الإشعارات في الواجهة
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
     }
-
-    // [مهم] هذا السطر يسجل التطبيق لدى خدمة إشعارات Apple
     application.registerForRemoteNotifications()
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
