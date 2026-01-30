@@ -534,6 +534,17 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                         );
                       },
                     ),
+
+                    _buildGridCard(
+                      context: context,
+                      title: 'مسواك بيتي ',
+                      imagePath: 'assets/images/ms.jpg',
+                      onTap: () {
+                        GoRouter.of(context).push('/miswak-store');
+                      },
+                    ),
+
+
                     _buildGridCard(
                       context: context,
                       title: 'استشارة بيتي ',
@@ -562,14 +573,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                         );
                       },
                     ),
-                    _buildGridCard(
-                      context: context,
-                      title: 'مسواك بيتي ',
-                      imagePath: 'assets/images/ms.jpg',
-                      onTap: () {
-                        GoRouter.of(context).push('/miswak-store');
-                      },
-                    ),
+
                     _buildGridCard(
                       context: context,
                       title: 'سجل بيتي الطبي ',

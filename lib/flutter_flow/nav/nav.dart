@@ -6,7 +6,7 @@ import 'package:page_transition/page_transition.dart';
 import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
 import '../../beytei_re/re.dart'as re;
-import '../../chat/chat.dart';
+import '../../chat/chat.dart' hide HomeScreen;
 import '../../doctoe_beyte/do.dart';
 import '../../lab/lab.dart';
 import '../../ph/ph.dart' hide LocationCheckWrapper;

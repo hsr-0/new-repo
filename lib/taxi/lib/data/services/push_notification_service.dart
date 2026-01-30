@@ -14,6 +14,8 @@ import 'package:cosmetic_store/taxi/lib/data/services/api_client.dart';
 import 'package:cosmetic_store/taxi/lib/firebase_options.dart';
 import 'package:path_provider/path_provider.dart';
 
+// ✅ التعديل هنا: إضافة هذا السطر لضمان عمل الدالة في الخلفية بعد بناء التطبيق
+@pragma('vm:entry-point')
 Future<void> _messageHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 }
@@ -77,7 +79,7 @@ class PushNotificationService {
           if (payloadString != null && payloadString.isNotEmpty) {
             Map<dynamic, dynamic> payloadMap = jsonDecode(payloadString);
             Map<String, String> payload = payloadMap.map(
-              (key, value) => MapEntry(key.toString(), value.toString()),
+                  (key, value) => MapEntry(key.toString(), value.toString()),
             );
 
             printX('remarkNotification ${payload['for_app']}');
@@ -158,14 +160,14 @@ class PushNotificationService {
   }
 
   AndroidNotificationChannel androidNotificationChannel() => const AndroidNotificationChannel(
-        'high_importance_channel', // id
-        'High Importance Notifications', // title
-        description: 'This channel is used for important notifications.',
-        playSound: true,
-        enableVibration: true,
-        enableLights: true,
-        importance: Importance.high,
-      );
+    'high_importance_channel', // id
+    'High Importance Notifications', // title
+    description: 'This channel is used for important notifications.',
+    playSound: true,
+    enableVibration: true,
+    enableLights: true,
+    importance: Importance.high,
+  );
 
   Future<void> _requestPermissions() async {
     final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
@@ -195,8 +197,8 @@ class PushNotificationService {
       SharedPreferenceHelper.fcmDeviceKey,
     )) {
       deviceToken = apiClient.sharedPreferences.getString(
-            SharedPreferenceHelper.fcmDeviceKey,
-          ) ??
+        SharedPreferenceHelper.fcmDeviceKey,
+      ) ??
           '';
     } else {
       deviceToken = '';

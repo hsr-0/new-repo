@@ -1,4 +1,4 @@
-import 'package:latlong2/latlong.dart'; // ✅ تم التعديل: استخدام مكتبة الإحداثيات الموحدة
+import 'package:latlong2/latlong.dart';
 import 'package:cosmetic_store/taxi/lib/core/helper/shared_preference_helper.dart';
 import 'package:cosmetic_store/taxi/lib/core/helper/string_format_helper.dart';
 import 'dart:convert';
@@ -94,9 +94,15 @@ class PusherRideController extends GetxController {
         _handleCashPayment(event);
         break;
 
+    // ✅ التعديل الجوهري هنا: أضفنا ride_accepted
+      case 'ride_accepted':
+      case 'ride_active':
+        _handleInstantAccept(event);
+        break;
+
       case 'pick_up':
       case 'ride_end':
-      case 'bid_accept':
+      case 'bid_accept': // أبقينا عليه للدعم القديم
         _updateRideIfAvailable(event);
         break;
 
@@ -107,6 +113,36 @@ class PusherRideController extends GetxController {
   }
 
   /// Handlers for each event type
+
+  // 🔥 الدالة الجديدة للتعامل مع القبول الفوري
+  void _handleInstantAccept(PusherResponseModel event) {
+    // 1. تحديث بيانات الرحلة (ستتحول الحالة إلى ACTIVE)
+    _updateRideIfAvailable(event);
+
+    // 2. تشغيل التنبيهات (صوت + هزاز)
+    AudioUtils.playAudio(apiClient.getNotificationAudio());
+    if (rideDetailsController.repo.apiClient.isNotificationAudioEnable()) {
+      MyUtils.vibrate();
+    }
+
+    // 3. الخدعة: إغلاق أي ديالوج (مثل ديالوج البحث أو العروض) إذا كان مفتوحاً
+    if (Get.isDialogOpen ?? false) {
+      Get.back();
+    }
+
+    // 4. الانتقال الإجباري لصفحة التفاصيل إذا لم يكن المستخدم فيها
+    // هذا يضمن خروج المستخدم من شاشة "جاري البحث" فوراً
+    if (Get.currentRoute != RouteHelper.rideDetailsScreen) {
+      // نستخدم ID القادم من الحدث أو الـ ID المحفوظ
+      String targetRideId = event.data?.ride?.id ?? rideID;
+      printX('🚀 Force navigating to Ride Details for ride: $targetRideId');
+
+      Get.offNamed(
+          RouteHelper.rideDetailsScreen,
+          arguments: targetRideId
+      );
+    }
+  }
 
   void _handleOnlinePayment(PusherResponseModel event) {
     printX('Online payment received for ride: ${event.data?.rideId}');
@@ -141,7 +177,6 @@ class PusherRideController extends GetxController {
       final lat = StringConverter.formatDouble(eventResponse.data?.driverLatitude ?? '0', precision: 10);
       final lng = StringConverter.formatDouble(eventResponse.data?.driverLongitude ?? '0', precision: 10);
 
-      // ✅ الآن LatLng المستخدم هنا هو نفسه الموجود في الخريطة، ولن يحدث خطأ
       rideDetailsController.mapController.updateDriverLocation(
         latLng: LatLng(lat, lng),
         isRunning: false,
@@ -150,6 +185,11 @@ class PusherRideController extends GetxController {
   }
 
   void _handleNewBid(PusherResponseModel eventResponse) {
+    // 🛑 حماية إضافية: إذا كانت الرحلة قد قبلت بالفعل، تجاهل أي عروض متأخرة
+    if (rideDetailsController.ride.status == AppStatus.RIDE_ACTIVE.toString()) {
+      return;
+    }
+
     if (eventResponse.data!.bid != null && eventResponse.data!.bid!.rideId != rideID) {
       printX('Message for different ride: ${eventResponse.data!.bid!.rideId}, current ride: $rideID');
       return;
