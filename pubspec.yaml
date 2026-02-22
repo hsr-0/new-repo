@@ -104,6 +104,7 @@ dependencies:
   flutter_callkit_incoming: ^2.0.2 # لشاشة الرنين والاهتزاز
 
 
+  google_fonts: ^6.1.0
 
 
 
