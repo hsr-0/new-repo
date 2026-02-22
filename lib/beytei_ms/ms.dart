@@ -140,6 +140,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // إذا لم يكن مكالمة، سيتم عرضه كإشعار عادي
   await NotificationService.display(message);
 }
+
+
+
 // =======================================================================
 // --- PROVIDERS ---
 // =======================================================================
