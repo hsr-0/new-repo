@@ -1,14 +1,14 @@
 import 'dart:async';
-import 'dart:io'; // ✅ لتحديد النظام
+import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui; // ✅ لتصغير الصور للأندرويد
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
-// --- مكتبات الخرائط ---
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
+// ✅ استبدال Mapbox بـ MapLibre
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
 
 import '../../../../core/utils/my_color.dart';
@@ -23,17 +23,14 @@ class PolyLineMapScreen extends StatefulWidget {
 }
 
 class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
-  // --- Android (Mapbox) Variables ---
-  mb.MapboxMap? mapboxMap;
-  mb.PolylineAnnotationManager? polylineAnnotationManager;
-  mb.PointAnnotationManager? pointAnnotationManager;
+  // --- Android (MapLibre) Variables ---
+  ml.MaplibreMapController? maplibreController;
 
   // --- iOS (Apple Maps) Variables ---
   ap.AppleMapController? appleController;
   Set<ap.Annotation> appleAnnotations = {};
   Set<ap.Polyline> applePolylines = {};
 
-  // صور الآيفون
   ap.BitmapDescriptor? pickupIconApple;
   ap.BitmapDescriptor? destIconApple;
 
@@ -42,12 +39,11 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
   @override
   void initState() {
     super.initState();
-    if(Platform.isIOS) {
+    if (Platform.isIOS) {
       _loadAppleIcons();
     }
   }
 
-  // تحميل أيقونات أبل
   Future<void> _loadAppleIcons() async {
     pickupIconApple = await ap.BitmapDescriptor.fromAssetImage(
         const ImageConfiguration(size: Size(40, 40)), MyIcons.mapMarkerPickUpIcon);
@@ -57,24 +53,19 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
   }
 
   // ==========================================
-  // 🤖 Android Mapbox Logic
+  // 🤖 Android MapLibre Logic
   // ==========================================
-  _onMapboxCreated(mb.MapboxMap mapboxMap) async {
-    this.mapboxMap = mapboxMap;
-    try {
-      polylineAnnotationManager = await mapboxMap.annotations.createPolylineAnnotationManager();
-      pointAnnotationManager = await mapboxMap.annotations.createPointAnnotationManager();
-      setState(() => isMapReady = true);
-      _updateMapUI(Get.find<RideMapController>());
-    } catch (e) {
-      print("🔴 Error creating annotation managers: $e");
-    }
+  void _onMapLibreCreated(ml.MaplibreMapController controller) {
+    maplibreController = controller;
+    setState(() => isMapReady = true);
+    // تحديث الواجهة فور الجاهزية
+    _updateMapUI(Get.find<RideMapController>());
   }
 
   // ==========================================
   // 🍎 iOS Apple Maps Logic
   // ==========================================
-  _onAppleMapCreated(ap.AppleMapController controller) {
+  void _onAppleMapCreated(ap.AppleMapController controller) {
     appleController = controller;
     setState(() => isMapReady = true);
     _updateMapUI(Get.find<RideMapController>());
@@ -86,40 +77,40 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
   Future<void> _updateMapUI(RideMapController controller) async {
     if (!isMapReady) return;
 
-    // --- iOS Update ---
     if (Platform.isIOS) {
       _updateAppleUI(controller);
       return;
     }
 
-    // --- Android Update ---
-    if (mapboxMap == null) return;
+    // --- Android (MapLibre) Update ---
+    if (maplibreController == null) return;
     try {
-      await polylineAnnotationManager?.deleteAll();
-      await pointAnnotationManager?.deleteAll();
+      // تنظيف الخريطة
+      await maplibreController!.clearLines();
+      await maplibreController!.clearSymbols();
 
-      // 1. رسم المسار
+      // 1. رسم المسار (Polyline)
       if (controller.polylineCoordinates.isNotEmpty) {
-        List<mb.Position> routePositions = controller.polylineCoordinates.map((e) {
-          return mb.Position(e.longitude, e.latitude);
-        }).toList();
+        List<ml.LatLng> routePoints = controller.polylineCoordinates
+            .map((e) => ml.LatLng(e.latitude, e.longitude))
+            .toList();
 
-        var polylineOptions = mb.PolylineAnnotationOptions(
-          geometry: mb.LineString(coordinates: routePositions),
-          lineColor: MyColor.primaryColor.value,
-          lineWidth: 5.0,
-          lineOpacity: 1.0,
+        await maplibreController!.addLine(
+          ml.LineOptions(
+            geometry: routePoints,
+            lineColor: "#${MyColor.primaryColor.value.toRadixString(16).substring(2)}",
+            lineWidth: 5.0,
+            lineOpacity: 1.0,
+          ),
         );
-        await polylineAnnotationManager?.create(polylineOptions);
-
-        // ضبط الكاميرا
         _fitCameraToBoundsUnified(controller.polylineCoordinates);
       }
 
-      // 2. رسم الدبابيس
-      await _drawMapboxMarkers(controller);
-
-    } catch (e) { print("🔴 Error updating map UI: $e"); }
+      // 2. رسم الدبابيس (Symbols)
+      await _drawMapLibreMarkers(controller);
+    } catch (e) {
+      debugPrint("🔴 Error updating MapLibre UI: $e");
+    }
   }
 
   void _updateAppleUI(RideMapController controller) {
@@ -127,7 +118,6 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
       applePolylines.clear();
       appleAnnotations.clear();
 
-      // 1. رسم المسار
       if (controller.polylineCoordinates.isNotEmpty) {
         applePolylines.add(ap.Polyline(
           polylineId: ap.PolylineId('route'),
@@ -138,7 +128,6 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
         _fitCameraToBoundsUnified(controller.polylineCoordinates);
       }
 
-      // 2. رسم الدبابيس
       if (controller.pickupLatLng.latitude != 0 && pickupIconApple != null) {
         appleAnnotations.add(ap.Annotation(
           annotationId: ap.AnnotationId('pickup'),
@@ -157,77 +146,60 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
     });
   }
 
-  // رسم دبابيس أندرويد (مع التصغير)
-  Future<void> _drawMapboxMarkers(RideMapController controller) async {
-    List<mb.PointAnnotationOptions> markers = [];
-
+  Future<void> _drawMapLibreMarkers(RideMapController controller) async {
+    // رسم نقطة البداية
     if (controller.pickupLatLng.latitude != 0) {
-      final icon = await _resizeImage(MyIcons.mapMarkerPickUpIcon, 120);
-      markers.add(mb.PointAnnotationOptions(
-        geometry: mb.Point(coordinates: mb.Position(controller.pickupLatLng.longitude, controller.pickupLatLng.latitude)),
-        image: icon,
+      await maplibreController!.addSymbol(ml.SymbolOptions(
+        geometry: ml.LatLng(controller.pickupLatLng.latitude, controller.pickupLatLng.longitude),
+        iconImage: "pickup_marker", // يجب أن تكون الصور محملة في الستايل أو كـ Assets
         iconSize: 1.0,
-        iconAnchor: mb.IconAnchor.BOTTOM,
       ));
     }
-
+    // رسم نقطة النهاية
     if (controller.destinationLatLng.latitude != 0) {
-      final icon = await _resizeImage(MyIcons.mapMarkerIcon, 120);
-      markers.add(mb.PointAnnotationOptions(
-        geometry: mb.Point(coordinates: mb.Position(controller.destinationLatLng.longitude, controller.destinationLatLng.latitude)),
-        image: icon,
+      await maplibreController!.addSymbol(ml.SymbolOptions(
+        geometry: ml.LatLng(controller.destinationLatLng.latitude, controller.destinationLatLng.longitude),
+        iconImage: "dest_marker",
         iconSize: 1.0,
-        iconAnchor: mb.IconAnchor.BOTTOM,
       ));
     }
-
-    if (markers.isNotEmpty && pointAnnotationManager != null) {
-      await pointAnnotationManager!.createMulti(markers);
-    }
   }
 
-  // دالة تصغير الصور للأندرويد
-  Future<Uint8List> _resizeImage(String path, int width) async {
-    try {
-      ByteData data = await rootBundle.load(path);
-      ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: width);
-      ui.FrameInfo fi = await codec.getNextFrame();
-      return (await fi.image.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
-    } catch (e) {
-      final ByteData bytes = await rootBundle.load(path);
-      return bytes.buffer.asUint8List();
-    }
-  }
-
-  // ضبط حدود الكاميرا (Unified)
   void _fitCameraToBoundsUnified(List points) {
     if (points.isEmpty) return;
 
     if (Platform.isIOS && appleController != null) {
-      // حساب الحدود للآيفون
       double minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
       for (var p in points) {
-        // التعامل مع LatLng الخاص بـ Controller
-        double lat = p.latitude;
-        double lng = p.longitude;
-        if (lat < minLat) minLat = lat;
-        if (lat > maxLat) maxLat = lat;
-        if (lng < minLng) minLng = lng;
-        if (lng > maxLng) maxLng = lng;
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
       }
       appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
           ap.LatLngBounds(southwest: ap.LatLng(minLat, minLng), northeast: ap.LatLng(maxLat, maxLng)),
-          50.0
+          50.0));
+    } else if (maplibreController != null) {
+      // ضبط الكاميرا في MapLibre
+      List<ml.LatLng> mlPoints = points.map((e) => ml.LatLng(e.latitude, e.longitude)).toList();
+
+      // حساب الحدود يدوياً أو استخدام الكاميرا لعمل احتواء
+      maplibreController!.animateCamera(ml.CameraUpdate.newLatLngBounds(
+        _computeBounds(mlPoints),
+        top: 100, left: 50, bottom: 100, right: 50,
       ));
     }
-    else if (mapboxMap != null) {
-      // حساب الحدود للأندرويد
-      List<mb.Point> mapboxPoints = points.map((e) => mb.Point(coordinates: mb.Position(e.longitude, e.latitude))).toList();
-      mb.MbxEdgeInsets padding = mb.MbxEdgeInsets(top: 100, left: 50, bottom: 100, right: 50);
-      mapboxMap!.cameraForCoordinates(mapboxPoints, padding, null, null).then((cameraOptions) {
-        mapboxMap!.flyTo(cameraOptions, mb.MapAnimationOptions(duration: 1000));
-      });
+  }
+
+  ml.LatLngBounds _computeBounds(List<ml.LatLng> points) {
+    double minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
+    for (var p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
     }
+    return ml.LatLngBounds(southwest: ml.LatLng(minLat, minLng), northeast: ml.LatLng(maxLat, maxLng));
   }
 
   @override
@@ -238,15 +210,8 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
           final initialLat = (controller.pickupLatLng.latitude == 0) ? 32.5029 : controller.pickupLatLng.latitude;
           final initialLng = (controller.pickupLatLng.longitude == 0) ? 45.8219 : controller.pickupLatLng.longitude;
 
-          if (isMapReady) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _updateMapUI(controller);
-            });
-          }
-
           return Stack(
             children: [
-              // 🗺️ تبديل الخريطة
               Platform.isIOS
                   ? ap.AppleMap(
                 initialCameraPosition: ap.CameraPosition(target: ap.LatLng(initialLat, initialLng), zoom: 14),
@@ -254,18 +219,15 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
                 annotations: appleAnnotations,
                 polylines: applePolylines,
                 myLocationEnabled: true,
-                myLocationButtonEnabled: false,
               )
-                  : mb.MapWidget(
-                styleUri: mb.MapboxStyles.MAPBOX_STREETS,
-                cameraOptions: mb.CameraOptions(
-                  center: mb.Point(coordinates: mb.Position(initialLng, initialLat)),
-                  zoom: 14.0,
-                ),
-                onMapCreated: _onMapboxCreated,
+                  : ml.MaplibreMap(
+                styleString: "https://maps.beytei.com/styles/iraq-taxi-style/style.json",
+                initialCameraPosition: ml.CameraPosition(target: ml.LatLng(initialLat, initialLng), zoom: 14.0),
+                onMapCreated: _onMapLibreCreated,
+                myLocationEnabled: true,
               ),
 
-              // زر إعادة توسيط الكاميرا
+              // زر إعادة التركيز
               Positioned(
                 bottom: 20,
                 right: 20,
@@ -273,7 +235,7 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
                   backgroundColor: Colors.white,
                   child: const Icon(Icons.center_focus_strong, color: Colors.black),
                   onPressed: () {
-                    if(controller.polylineCoordinates.isNotEmpty && isMapReady) {
+                    if (controller.polylineCoordinates.isNotEmpty && isMapReady) {
                       _fitCameraToBoundsUnified(controller.polylineCoordinates);
                     }
                   },

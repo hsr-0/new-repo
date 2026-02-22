@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_callkit_incoming/entities/call_event.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'dart:math'; // 👈 تأكد من وجود هذا السطر ضروري جداً
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart'; // مطلوب للاهتزاز
@@ -23,6 +25,7 @@ import 'package:shimmer/shimmer.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
+import '../main.dart';
 import '../taxi/cash.dart';
 
 // =======================================================================
@@ -47,7 +50,8 @@ class AppConstants {
   static const String CACHE_KEY_MENU_PREFIX = 'cache_menu_restaurant_';
   static const String CACHE_TIMESTAMP_PREFIX = 'cache_time_';
 }
-
+// 🔥 أضف هذا السطر في البداية لتعريف المفتاح عالمياً
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // =======================================================================
 // --- معالج رسائل الخلفية ---
@@ -1295,128 +1299,99 @@ class RestaurantLocation {
   RestaurantLocation(this.lat, this.lng);
 }
 
+// =======================================================================
+// --- Delivery Provider (Server-Side Calculation) ---
+// =======================================================================
 class DeliveryProvider with ChangeNotifier {
-  // --- الإعدادات الافتراضية (شبكة الأمان) ---
-  double _baseFee = 1000.0;
-  double _baseDistance = 5.0;
-  double _extraKmFee = 500.0;
-  double _maxFee = 25000.0;
+  // المتغيرات التي ستظهر في الواجهة
+  double _deliveryFee = 0.0;
+  String _message = "";
+  bool _isLoading = false;
+  bool _hasError = false;
 
-  // خريطة المواقع: Key = ID, Value = Location
-  final Map<int, RestaurantLocation> _restaurantsLocations = {};
+  // Getters
+  double get deliveryFee => _deliveryFee;
+  String get message => _message;
+  bool get isLoading => _isLoading;
+  bool get hasError => _hasError;
 
-  bool _isLoaded = false;
-  bool get isLoaded => _isLoaded;
+  // دالة التهيئة (لم نعد نحتاج لجلب ملف ضخم)
+  Future<void> init() async {}
 
-  // مفاتيح التخزين
-  static const String KEY_DATA = 'delivery_full_config_v1';
-  static const String KEY_DATE = 'delivery_last_update_v1';
-  static const int CACHE_DAYS = 3;
+  /// 🔥 دالة حساب السعر (تتصل بالسيرفر فقط)
+  Future<void> calculateDeliveryFee({
+    required int restaurantId,
+    required double userLat,
+    required double userLng,
+  }) async {
+    _isLoading = true;
+    _hasError = false;
+    _message = "جاري حساب التكلفة...";
+    notifyListeners();
 
-  // --- 1. التهيئة (عند فتح التطبيق) ---
-  Future<void> init() async {
-    if (_isLoaded) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    final lastUpdate = prefs.getInt(KEY_DATE) ?? 0;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    // هل البيانات قديمة؟
-    final diffDays = (now - lastUpdate) / (1000 * 60 * 60 * 24);
-
-    if (diffDays > CACHE_DAYS || !prefs.containsKey(KEY_DATA)) {
-      print("🌐 جلب ملف التوصيل من السيرفر...");
-      await _fetchFromNetwork(prefs);
-    } else {
-      print("💾 تحميل ملف التوصيل من الهاتف.");
-      _loadFromCache(prefs);
-    }
-  }
-
-  // --- 2. جلب من السيرفر ---
-  Future<void> _fetchFromNetwork(SharedPreferences prefs) async {
     try {
-      final response = await http.get(
-          Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/delivery-config-full')
+      print("🚀 [Delivery] Asking Server for Price... RestID: $restaurantId");
+
+      final response = await http.post(
+        Uri.parse('https://re.beytei.com/wp-json/restaurant-app/v1/calculate-delivery-fee'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'restaurant_id': restaurantId,
+          'lat': userLat,
+          'lng': userLng
+        }),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        await prefs.setString(KEY_DATA, response.body);
-        await prefs.setInt(KEY_DATE, DateTime.now().millisecondsSinceEpoch);
-        _parseJson(response.body);
-      } else {
-        _loadFromCache(prefs);
-      }
-    } catch (e) {
-      print("⚠️ خطأ تحديث التوصيل: $e");
-      _loadFromCache(prefs);
-    }
-  }
+        final data = jsonDecode(response.body);
 
-  // --- 3. تحميل من الكاش ---
-  void _loadFromCache(SharedPreferences prefs) {
-    final jsonStr = prefs.getString(KEY_DATA);
-    if (jsonStr != null) _parseJson(jsonStr);
-  }
+        // قراءة السعر
+        _deliveryFee = (data['price'] as num).toDouble();
 
-  // --- 4. تحليل البيانات ---
-  void _parseJson(String jsonString) {
-    try {
-      final data = json.decode(jsonString);
+        // تحليل الرسالة حسب الطريقة
+        String method = data['method'] ?? 'unknown';
 
-      final pricing = data['pricing'];
-      if (pricing != null) {
-        _baseFee = (pricing['base_fee'] as num).toDouble();
-        _baseDistance = (pricing['base_distance_km'] as num).toDouble();
-        _extraKmFee = (pricing['extra_km_fee'] as num).toDouble();
-        _maxFee = (pricing['max_fee'] as num).toDouble();
-      }
-
-      final List locations = data['locations'] ?? [];
-      _restaurantsLocations.clear();
-      for (var item in locations) {
-        final id = int.tryParse(item['id'].toString());
-        final lat = double.tryParse(item['lat'].toString());
-        final lng = double.tryParse(item['lng'].toString());
-        if (id != null && lat != null && lng != null) {
-          _restaurantsLocations[id] = RestaurantLocation(lat, lng);
+        if (method == 'zone_fixed') {
+          String zoneName = data['zone_name'] ?? 'منطقة محددة';
+          _message = "✅ موقعك ضمن ($zoneName). أجرة ثابتة.";
+        } else if (method == 'distance_calc') {
+          var distance = data['distance'];
+          if (_deliveryFee == 2000 && (distance is num && distance > 10)) {
+            _message = "مسافة بعيدة ($distance كم) - تم تطبيق الحد الأقصى للسعر.";
+          } else {
+            _message = "📏 المسافة من المطعم: $distance كم.";
+          }
+        } else {
+          _message = "تم تحديد التكلفة.";
         }
+
+        print("✅ Success: $_deliveryFee IQD - $_message");
+
+      } else {
+        print("❌ Server Error: ${response.body}");
+        _hasError = true;
+        _deliveryFee = 0.0;
+        _message = "تعذر حساب السعر (خطأ خادم).";
       }
-      _isLoaded = true;
-      notifyListeners();
+
     } catch (e) {
-      print("Error parsing delivery config: $e");
+      print("❌ Connection Error: $e");
+      _hasError = true;
+      _deliveryFee = 0.0;
+      _message = "تحقق من اتصال الإنترنت.";
     }
+
+    _isLoading = false;
+    notifyListeners();
   }
 
-  // --- 5. 🔥 الحساب المحلي (Offline) ---
-  double calculateFeeForRestaurant(int restaurantId, double userLat, double userLng) {
-    final restLoc = _restaurantsLocations[restaurantId];
-
-    // إذا لم نجد المطعم في الملف أو لا يوجد GPS -> سعر ثابت
-    if (restLoc == null || userLat == 0 || userLng == 0) {
-      return _baseFee;
-    }
-
-    final distMeters = Geolocator.distanceBetween(userLat, userLng, restLoc.lat, restLoc.lng);
-    final distKm = distMeters / 1000;
-
-    double fee = _baseFee;
-
-    if (distKm > _baseDistance) {
-      final extra = distKm - _baseDistance;
-      fee += (extra * _extraKmFee);
-    }
-
-    if (fee > _maxFee && _maxFee > 0) fee = _maxFee;
-
-    // تقريب لأقرب 250 دينار
-    fee = (fee / 250).ceil() * 250.0;
-
-    return fee;
+  void reset() {
+    _deliveryFee = 0.0;
+    _message = "";
+    _hasError = false;
+    notifyListeners();
   }
 }
-
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
@@ -2631,6 +2606,7 @@ class ApiService {
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
       _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
 // ✅ التعديل: إضافة zoneId كمعامل مطلوب
+  // ✅ التعديل: دالة إرسال الطلب مع تحسين منطق التوكن
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -2639,29 +2615,59 @@ class ApiService {
     String? couponCode,
     geolocator.Position? position,
     double? deliveryFee,
-    required int zoneId, // 👈 1. إضافة هذا المعامل الجديد
+    required int zoneId,
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
 
-    String? fcmToken = await FirebaseMessaging.instance.getToken();
+    // 🔥 1. منطق الحصول على التوكن (كما طلبت)
+    final prefs = await SharedPreferences.getInstance();
+    String? fcmToken = prefs.getString('fcm_token');
+
+    // إذا لم يكن موجوداً في الذاكرة، اطلبه من الفايربيس واحفظه
+    if (fcmToken == null) {
+      fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken != null) {
+        await prefs.setString('fcm_token', fcmToken);
+      }
+    }
 
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
       "payment_method_title": "الدفع عند الاستلام",
-      "billing": {"first_name": name, "last_name": ".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode": "10001", "email": "customer@example.com"},
-      "shipping": {"first_name": name, "last_name": ".", "address_1": address, "country": "IQ", "city": "Default", "postcode": "10001"},
+      "billing": {
+        "first_name": name,
+        "last_name": ".",
+        "phone": phone,
+        "address_1": address,
+        "country": "IQ",
+        "city": "Default",
+        "postcode": "10001",
+        "email": "customer@example.com"
+      },
+      "shipping": {
+        "first_name": name,
+        "last_name": ".",
+        "address_1": address,
+        "country": "IQ",
+        "city": "Default",
+        "postcode": "10001"
+      },
       "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
       "coupon_lines": couponLines,
       "shipping_lines": shippingLines,
       "meta_data": [
-        // 👈 2. إرسال رقم المنطقة كـ Meta Data ليستلمها كود الـ PHP
+        // 👈 إرسال رقم المنطقة
         {"key": "zone_id", "value": zoneId.toString()},
 
-        if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
-        if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()}, // تم توحيد الاسم ليتوافق مع PHP
+        // 🔥 إرسال التوكن بطريقتين لضمان التقاطه من قبل الباك إند
+        {"key": "_customer_fcm_token", "value": fcmToken ?? ''}, // الطريقة القياسية
+        {"key": "fcm_token", "value": fcmToken ?? ''},          // الاسم الذي طلبته
+
+        // إرسال الإحداثيات
+        if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()}
       ],
     };
@@ -4875,6 +4881,33 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   void initState() {
     super.initState();
     _initializeServices();
+
+    // 🔥 1. تشغيل مستمع المكالمات (للرد الفوري عند الضغط على قبول)
+    _setupCallKitListener();
+  }
+
+  // 🔥 2. دالة الاستماع لأزرار CallKit
+  void _setupCallKitListener() {
+    FlutterCallkitIncoming.onEvent.listen((CallEvent? event) {
+      if (event == null) return;
+
+      if (event.event == Event.actionCallAccept) {
+        // 📞 الزبون ضغط "قبول" من شاشة القفل أو الإشعار
+        final data = event.body['extra'];
+        final channelName = data['channelName'];
+        final driverName = data['driverName'] ?? 'الكابتن';
+
+        // استخدام navigatorKey للانتقال لصفحة الاتصال فوراً
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (_) => CustomerCallPage(
+              channelName: channelName,
+              driverName: driverName,
+            ),
+          ),
+        );
+      }
+    });
   }
 
   Future<void> _initializeServices() async {
@@ -4885,14 +4918,23 @@ class _RestaurantModuleState extends State<RestaurantModule> {
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
 
       // -----------------------------------------------------------
-      // 1. عرض التنبيه المرئي (صوت + نافذة) إذا وجد محتوى
+      // أ. فحص المكالمة الواردة (وخاصة إذا كان التطبيق مفتوحاً)
+      // -----------------------------------------------------------
+      if (message.data['type'] == 'voip_call') {
+        // نستدعي نفس دالة الخلفية لإظهار شاشة الرنين
+        _firebaseMessagingBackgroundHandler(message);
+        return;
+      }
+
+      // -----------------------------------------------------------
+      // ب. عرض التنبيه المرئي (صوت + نافذة) إذا وجد محتوى
       // -----------------------------------------------------------
       if (message.notification != null) {
         NotificationService.display(message);
       }
 
       // -----------------------------------------------------------
-      // 2. منطق الزبون: التحديث الصامت لحالة المطاعم (Silent Refresh)
+      // ج. منطق الزبون: التحديث الصامت لحالة المطاعم (Silent Refresh)
       // -----------------------------------------------------------
       if (message.data['type'] == 'refresh_status') {
         print("⚡ [Customer] وصل أمر تحديث حالة المطاعم من السيرفر!");
@@ -4916,7 +4958,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
       }
 
       // -----------------------------------------------------------
-      // 3. منطق صاحب المطعم/التيم ليدر: تحديث لوحة التحكم
+      // د. منطق صاحب المطعم/التيم ليدر: تحديث لوحة التحكم
       // -----------------------------------------------------------
       if (mounted) {
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -4987,6 +5029,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
         ),
       ],
       child: MaterialApp(
+        navigatorKey: navigatorKey, // 🔥 مهم جداً لكي يعمل التوجيه من الخلفية
         title: 'Beytei Restaurants',
         theme: ThemeData(
             primarySwatch: Colors.teal,
@@ -5011,8 +5054,6 @@ class _RestaurantModuleState extends State<RestaurantModule> {
     );
   }
 }
-
-
 
 
 class RestaurantSettingsScreen extends StatefulWidget {
@@ -6487,9 +6528,12 @@ class _CartScreenState extends State<CartScreen> {
 
     // متغيرات العرض
     geolocator.Position? _capturedPosition;
-    double _deliveryFee = 1000.0; // افتراضي
-    String _locationMessage = "جاري حساب التكلفة...";
+    double _deliveryFee = 0.0; // نبدأ بـ 0 حتى يتم الحساب
+    String _locationMessage = "جاري تحديد الموقع وحساب التكلفة...";
     bool _isCalcFinished = false;
+
+    // 🔥 إضافة علم (Flag) لمنع التكرار نهائياً وحل مشكلة التأخير والتعليق
+    bool _hasStartedCalculation = false;
 
     showDialog(
       context: cartScreenContext,
@@ -6497,59 +6541,78 @@ class _CartScreenState extends State<CartScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
 
-          // تشغيل الحساب عند فتح النافذة
-          if (!_isCalcFinished) {
+          // ✅ التعديل الجوهري: الحساب يبدأ فقط إذا لم يبدأ من قبل (مرة واحدة فقط)
+          if (!_hasStartedCalculation) {
+            _hasStartedCalculation = true; // قفل الباب فوراً لمنع التكرار مع كل build
+
             Future.delayed(Duration.zero, () async {
               try {
-                // 1. الموقع
-                bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+                // 1. تحديد الموقع
+                bool serviceEnabled =
+                await geolocator.Geolocator.isLocationServiceEnabled();
                 if (serviceEnabled) {
-                  geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+                  geolocator.LocationPermission permission =
+                  await geolocator.Geolocator.checkPermission();
                   if (permission == geolocator.LocationPermission.denied) {
                     permission = await geolocator.Geolocator.requestPermission();
                   }
                   if (permission == geolocator.LocationPermission.whileInUse ||
                       permission == geolocator.LocationPermission.always) {
-
-                    _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
+                    _capturedPosition =
+                    await geolocator.Geolocator.getCurrentPosition(
                         desiredAccuracy: geolocator.LocationAccuracy.high,
-                        timeLimit: const Duration(seconds: 5)
-                    );
+                        timeLimit: const Duration(seconds: 5));
                   }
                 }
 
-                // 2. الحساب المحلي (بدون انترنت)
+                // 2. 🔥 الاتصال بالسيرفر للحساب (تنفيذ مرة واحدة)
                 if (_capturedPosition != null && cart.items.isNotEmpty) {
                   final int restaurantId = cart.items.first.categoryId;
-                  final deliveryProvider = Provider.of<DeliveryProvider>(cartScreenContext, listen: false);
+                  final deliveryProvider = Provider.of<DeliveryProvider>(
+                      cartScreenContext,
+                      listen: false);
 
-                  // 🔥 هنا نستخدم الملف المخزن
-                  double calculated = deliveryProvider.calculateFeeForRestaurant(
-                      restaurantId,
-                      _capturedPosition!.latitude,
-                      _capturedPosition!.longitude
-                  );
-
+                  // إظهار رسالة الاتصال
                   if (context.mounted) {
                     setDialogState(() {
-                      _deliveryFee = calculated;
-                      _locationMessage = "تم تحديد الموقع وحساب التكلفة ✅";
+                      _locationMessage = "جاري الاتصال بالسيرفر...";
+                    });
+                  }
+
+                  // استدعاء دالة الـ API (انتظار الرد)
+                  await deliveryProvider.calculateDeliveryFee(
+                      restaurantId: restaurantId,
+                      userLat: _capturedPosition!.latitude,
+                      userLng: _capturedPosition!.longitude);
+
+                  // تحديث الواجهة بالبيانات القادمة من السيرفر
+                  if (context.mounted) {
+                    setDialogState(() {
+                      if (deliveryProvider.hasError) {
+                        _deliveryFee = 0.0;
+                        _locationMessage = deliveryProvider.message;
+                      } else {
+                        _deliveryFee = deliveryProvider.deliveryFee;
+                        _locationMessage = deliveryProvider.message;
+                      }
                       _isCalcFinished = true;
                     });
                   }
                 } else {
+                  // حالة فشل تحديد الموقع
                   if (context.mounted) {
                     setDialogState(() {
-                      _locationMessage = "تعذر تحديد الموقع (السعر الافتراضي)";
-                      _deliveryFee = 1000.0;
+                      _locationMessage = "تعذر تحديد الموقع (يرجى تفعيل GPS)";
+                      _deliveryFee = 0.0;
                       _isCalcFinished = true;
                     });
                   }
                 }
               } catch (e) {
+                // حالة حدوث استثناء
                 if (context.mounted) {
                   setDialogState(() {
-                    _locationMessage = "خطأ في الموقع (السعر الافتراضي)";
+                    _locationMessage = "خطأ في تحديد الموقع أو الاتصال";
                     _isCalcFinished = true;
                   });
                 }
@@ -6558,7 +6621,8 @@ class _CartScreenState extends State<CartScreen> {
           }
 
           return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             title: const Text('إتمام الطلب'),
             content: Form(
               key: _formKey,
@@ -6566,33 +6630,72 @@ class _CartScreenState extends State<CartScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(
+                        controller: _nameController,
+                        decoration:
+                        const InputDecoration(labelText: 'الاسم الكامل'),
+                        validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                        enabled: !isSubmitting),
                     const SizedBox(height: 10),
-                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(
+                        controller: _phoneController,
+                        decoration:
+                        const InputDecoration(labelText: 'رقم الهاتف'),
+                        keyboardType: TextInputType.phone,
+                        validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                        enabled: !isSubmitting),
                     const SizedBox(height: 10),
-                    TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(
+                        controller: _addressController,
+                        decoration: const InputDecoration(labelText: 'العنوان'),
+                        validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                        enabled: !isSubmitting),
                     const SizedBox(height: 20),
                     Container(
                       padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
+                      decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.blue.shade200)),
                       child: Column(
                         children: [
-                          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                            const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
-                            Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 16)),
-                          ]),
+                          Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text("تكلفة التوصيل:",
+                                    style:
+                                    TextStyle(fontWeight: FontWeight.bold)),
+                                Text(
+                                    "${NumberFormat('#,###').format(_deliveryFee)} د.ع",
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blue,
+                                        fontSize: 16)),
+                              ]),
                           const SizedBox(height: 5),
                           Row(children: [
-                            const Icon(Icons.info_outline, color: Colors.grey, size: 14),
+                            const Icon(Icons.info_outline,
+                                color: Colors.grey, size: 14),
                             const SizedBox(width: 5),
-                            Expanded(child: Text(_locationMessage, style: const TextStyle(fontSize: 11, color: Colors.grey))),
-                            if (!_isCalcFinished) const SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 2))
+                            Expanded(
+                                child: Text(_locationMessage,
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Colors.grey))),
+                            if (!_isCalcFinished)
+                              const SizedBox(
+                                  width: 10,
+                                  height: 10,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2))
                           ])
                         ],
                       ),
                     ),
                     const SizedBox(height: 15),
-                    TextFormField(controller: _couponController, decoration: const InputDecoration(labelText: 'كود الخصم (اختياري)')),
+                    TextFormField(
+                        controller: _couponController,
+                        decoration: const InputDecoration(
+                            labelText: 'كود الخصم (اختياري)')),
                     const Divider(height: 30),
                     _buildPriceSummary(cart, _deliveryFee, !_isCalcFinished, ""),
                   ],
@@ -6600,9 +6703,15 @@ class _CartScreenState extends State<CartScreen> {
               ),
             ),
             actions: <Widget>[
-              TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
+              TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('إلغاء')),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).primaryColor,
+                    foregroundColor: Colors.white),
                 onPressed: (isSubmitting || !_isCalcFinished)
                     ? null
                     : () async {
@@ -6610,8 +6719,12 @@ class _CartScreenState extends State<CartScreen> {
                   setDialogState(() => isSubmitting = true);
                   try {
                     final prefs = await SharedPreferences.getInstance();
-                    final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
-                    if (currentZoneId == 0) throw Exception("يرجى تحديد المنطقة من الصفحة الرئيسية.");
+                    final int currentZoneId =
+                        prefs.getInt('selectedAreaId') ?? 0;
+                    if (currentZoneId == 0) {
+                      throw Exception(
+                          "يرجى تحديد المنطقة من الصفحة الرئيسية.");
+                    }
 
                     final createdOrder = await _apiService.submitOrder(
                       name: _nameController.text,
@@ -6620,53 +6733,65 @@ class _CartScreenState extends State<CartScreen> {
                       cartItems: cart.items,
                       couponCode: cart.appliedCoupon,
                       position: _capturedPosition,
-                      deliveryFee: _deliveryFee, // ✅ إرسال السعر المحسوب
+                      deliveryFee: _deliveryFee,
                       zoneId: currentZoneId,
                     );
 
                     if (!cartScreenContext.mounted) return;
-                    if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
+                    if (createdOrder == null) {
+                      throw Exception('فشل إنشاء الطلب.');
+                    }
 
                     await cart._recordSuccessfulOrder();
 
-                    // 1. إغلاق نافذة الإدخال (الديالوج الحالي)
                     Navigator.of(dialogContext).pop();
-
-                    // 2. تنظيف السلة
                     cart.clearCart();
 
-                    // 🔥🔥🔥 3. تحديث قائمة الطلبات فوراً 🔥🔥🔥
-                    // هذا السطر يجبر شاشة OrdersHistoryScreen على التحديث
-                    Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
+                    Provider.of<NotificationProvider>(cartScreenContext,
+                        listen: false)
+                        .triggerRefresh();
 
-                    // 4. إظهار رسالة النجاح والانتقال للطلبات
                     if (cartScreenContext.mounted) {
                       showDialog(
                           context: cartScreenContext,
                           barrierDismissible: false,
                           builder: (ctx) => AlertDialog(
                               title: const Text("تم بنجاح! 🎉"),
-                              content: const Text("تم استلام طلبك. يمكنك متابعة حالته الآن في صفحة طلباتي."),
+                              content: const Text(
+                                  "تم استلام طلبك. يمكنك متابعة حالته الآن في صفحة طلباتي."),
                               actions: [
                                 ElevatedButton(
                                   onPressed: () {
                                     Navigator.pop(ctx);
-                                    // 🔥 الانتقال لتبويب "طلباتي" (index 2)
-                                    Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
+                                    Provider.of<NavigationProvider>(
+                                        cartScreenContext,
+                                        listen: false)
+                                        .changeTab(2);
                                   },
                                   child: const Text("متابعة الطلب"),
                                 )
-                              ]
-                          )
-                      );
+                              ]));
                     }
                   } catch (e) {
-                    if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
+                    if (cartScreenContext.mounted) {
+                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(
+                          SnackBar(
+                              content: Text('خطأ: $e'),
+                              backgroundColor: Colors.red));
+                    }
                   } finally {
-                    if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
+                    if (dialogContext.mounted) {
+                      setDialogState(() => isSubmitting = false);
+                    }
                   }
                 },
-                child: isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('تأكيد الطلب'),
+                child: isSubmitting
+                    ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                    : const Text('تأكيد الطلب'),
               )
             ],
           );

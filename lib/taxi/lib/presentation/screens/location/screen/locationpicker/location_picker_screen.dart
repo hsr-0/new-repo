@@ -1,29 +1,27 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data'; // ضروري لتحويل الصور
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart' show rootBundle; // ضروري لتحميل الصور
 
-// ✅ استيراد المكتبات بأسماء مستعارة لتجنب التعارض
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
+// المكتبات الخارجية
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
 import 'package:geolocator/geolocator.dart' as geo;
-
 import 'package:get/get.dart';
+
+// ملفات المشروع الخاصة بك
 import 'package:cosmetic_store/taxi/lib/core/utils/debouncer.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/style.dart';
-import 'package:cosmetic_store/taxi/lib/core/utils/util.dart';
-import 'package:cosmetic_store/taxi/lib/data/controller/home/home_controller.dart';
+// import 'package:cosmetic_store/taxi/lib/core/utils/util.dart'; // غير مستخدم حسب الصورة
 import 'package:cosmetic_store/taxi/lib/presentation/components/annotated_region/annotated_region_widget.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/buttons/rounded_button.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/custom_loader/custom_loader.dart';
-import 'package:cosmetic_store/taxi/lib/presentation/components/divider/custom_spacer.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/image/custom_svg_picture.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/text-form-field/location_pick_text_field.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/text/label_text.dart';
-import 'package:cosmetic_store/taxi/lib/core/route/route.dart';
-import '../../../../../core/utils/dimensions.dart';
-import '../../../../../core/utils/helper.dart';
+// import '../../../../../core/utils/dimensions.dart'; // غير مستخدم حسب الصورة
 import '../../../../../core/utils/my_color.dart';
 import '../../../../../core/utils/my_strings.dart';
 import '../../../../../data/controller/location/select_location_controller.dart';
@@ -39,587 +37,350 @@ class LocationPickerScreen extends StatefulWidget {
 
 class _LocationPickerScreenState extends State<LocationPickerScreen> {
   // ---------------------------------------------
-  // 🗺️ متغيرات الخرائط (Map Variables)
+  // 🗺️ متغيرات الخرائط
   // ---------------------------------------------
-
-  // Android: Mapbox
-  mb.MapboxMap? mapboxMap;
-  mb.PointAnnotationManager? pointAnnotationManager;
-  String? pickupAnnotationId;
-  String? destinationAnnotationId;
-
-  // iOS: Apple Maps
+  // ✅ تصحيح الاسم: MapLibreMapController (L كبيرة)
+  ml.MapLibreMapController? maplibreController;
   ap.AppleMapController? appleController;
+
   Set<ap.Annotation> appleAnnotations = {};
 
-  // المشتركة
-  bool isMapReady = false;
+  // حالة الخريطة لتجنب الأخطاء
+  bool isStyleLoaded = false;
 
-  // ---------------------------------------------
-  // 🎨 الصور والأيقونات (Visual Assets)
-  // ---------------------------------------------
-  Uint8List? pickUpIconBytes;      // للأندرويد
-  Uint8List? destinationIconBytes; // للأندرويد
+  // 🎨 معرفات الصور للرموز
+  final String _pickupIconId = "pickup-icon-id";
+  final String _destIconId = "dest-icon-id";
 
-  ap.BitmapDescriptor? pickUpIconApple;      // للآيفون
-  ap.BitmapDescriptor? destinationIconApple; // للآيفون
-
-  // ---------------------------------------------
-  // ⚙️ أدوات التحكم (Logic Controls)
-  // ---------------------------------------------
+  // ⚙️ أدوات التحكم
   final GlobalKey _secondContainerKey = GlobalKey();
   double? _secondContainerHeight;
-  TextEditingController searchLocationController = TextEditingController(text: '');
   int index = 0;
-  bool isFirsTime = true;
-
-  // ✅ الديباونسر للبحث فقط (وليس لحركة الكاميرا لتجنب التعليق)
   final myDeBouncer = MyDeBouncer(delay: const Duration(milliseconds: 600));
 
   @override
   void initState() {
     index = widget.pickupLocationForIndex;
     super.initState();
-    print("🚀 [Init] Platform: ${Platform.isIOS ? 'iOS (Apple Maps)' : 'Android (Mapbox)'}");
 
+    // حقن الكنترولر والريبو
     Get.put(LocationSearchRepo(apiClient: Get.find()));
     var controller = Get.put(
       SelectLocationController(locationSearchRepo: Get.find(), selectedLocationIndex: index),
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // حساب ارتفاع البوكس السفلي
-      final RenderBox? box = _secondContainerKey.currentContext?.findRenderObject() as RenderBox?;
-      if (box != null) {
-        setState(() => _secondContainerHeight = box.size.height);
-      }
-
-      // تحميل الصور
-      await loadMarkerImages();
-
+      _calculateBottomHeight();
       controller.initialize();
-
-      // في الآيفون، نطلب الموقع فوراً لأن الخريطة جاهزة
-      if (Platform.isIOS) {
-        _getCurrentLocation();
-      }
+      _getCurrentLocation();
     });
   }
 
-  /// ✅ تحميل صور الدبابيس لكلا النظامين لضمان نفس الشكل الجميل
-  Future<void> loadMarkerImages() async {
-    try {
-      // 1. للأندرويد (Mapbox يحتاج Uint8List)
-      pickUpIconBytes = await Helper.getBytesFromAsset(MyIcons.mapMarkerPickUpIcon, 120);
-      destinationIconBytes = await Helper.getBytesFromAsset(MyIcons.mapMarkerIcon, 120);
-
-      // 2. للآيفون (Apple Maps يحتاج BitmapDescriptor)
-      // نستخدم نفس الأيقونة لتظهر بنفس الجمالية
-      pickUpIconApple = await ap.BitmapDescriptor.fromAssetImage(
-          const ImageConfiguration(size: Size(48, 48)),
-          MyIcons.mapMarkerPickUpIcon
-      );
-      destinationIconApple = await ap.BitmapDescriptor.fromAssetImage(
-          const ImageConfiguration(size: Size(48, 48)),
-          MyIcons.mapMarkerIcon
-      );
-
-      setState(() {});
-    } catch (e) {
-      print("🔴 [Error] Failed to load marker images: $e");
-    }
+  void _calculateBottomHeight() {
+    final RenderBox? box = _secondContainerKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null) setState(() => _secondContainerHeight = box.size.height);
   }
 
-  // ---------------------------------------------
-  // 📍 دوال الخرائط (Map Logic)
-  // ---------------------------------------------
+  // ==========================================
+  // 🤖 Android: MapLibre Logic
+  // ==========================================
 
-  /// 🤖 Mapbox: تم إنشاء الخريطة
-  _onMapboxCreated(mb.MapboxMap mapboxMap) {
-    this.mapboxMap = mapboxMap;
-    Get.find<SelectLocationController>().setMapController(mapboxMap);
+  // ✅ تصحيح الاسم هنا أيضاً
+  void _onMapLibreCreated(ml.MapLibreMapController controller) {
+    maplibreController = controller;
   }
 
-  /// 🤖 Mapbox: الستايل جاهز
-  _onMapboxStyleLoaded(mb.StyleLoadedEventData data) async {
-    isMapReady = true;
-    try {
-      // إعداد مدير الدبابيس
-      pointAnnotationManager = await mapboxMap!.annotations.createPointAnnotationManager();
+  /// هذه الدالة يتم استدعاؤها فقط بعد تحميل الستايل بالكامل
+  void _onStyleLoaded() async {
+    isStyleLoaded = true;
 
-      // مستمع النقر على الدبوس
-      pointAnnotationManager?.addOnPointAnnotationClickListener(AnnotationClickListener(
-        onAnnotationClick: (annotation) {
-          if (annotation.id == pickupAnnotationId) _handleMarkerClick(0);
-          if (annotation.id == destinationAnnotationId) _handleMarkerClick(1);
-        },
-      ));
+    // 1. تحميل الصور إلى ذاكرة الخريطة أولاً
+    // ملاحظة: تأكد أن المسارات في MyIcons هي لصور PNG
+    await _addImageFromAsset(_pickupIconId, MyIcons.mapMarkerPickUpIcon);
+    await _addImageFromAsset(_destIconId, MyIcons.mapMarkerIcon);
 
-      // جلب الموقع وتحديث الدبابيس
-      await _getCurrentLocation();
-      _updateMapMarkers(Get.find<SelectLocationController>());
-
-    } catch (e) {
-      print("🔴 [Mapbox Error] $e");
-    }
-  }
-
-  /// 🍎 Apple Maps: تم إنشاء الخريطة
-  _onAppleMapCreated(ap.AppleMapController controller) {
-    appleController = controller;
-    isMapReady = true;
+    // 2. تحديث العلامات الآن بأمان
     _updateMapMarkers(Get.find<SelectLocationController>());
   }
 
-  /// معالجة النقر على الدبوس (للتعديل)
-  void _handleMarkerClick(int type) {
-    Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: type);
+  /// دالة مساعدة لتحويل الصورة من Assets إلى بايتات للخريطة
+  Future<void> _addImageFromAsset(String imageName, String assetPath) async {
+    if (maplibreController == null) return;
+    try {
+      final ByteData bytes = await rootBundle.load(assetPath);
+      final Uint8List list = bytes.buffer.asUint8List();
+      await maplibreController!.addImage(imageName, list);
+    } catch (e) {
+      debugPrint("Error loading map icon: $e");
+    }
   }
 
-  /// 📍 جلب الموقع الحالي (GPS)
+  // ==========================================
+  // 🍎 iOS: Apple Maps Logic
+  // ==========================================
+  void _onAppleMapCreated(ap.AppleMapController controller) {
+    appleController = controller;
+    _updateMapMarkers(Get.find<SelectLocationController>());
+  }
+
+  // ==========================================
+  // 🔄 المزامنة والتحريك
+  // ==========================================
+
+  void _moveCameraTo(double lat, double lng) {
+    if (lat == 0 || lng == 0) return;
+
+    if (Platform.isIOS && appleController != null) {
+      appleController!.animateCamera(ap.CameraUpdate.newLatLngZoom(ap.LatLng(lat, lng), 15.0));
+    }
+    else if (maplibreController != null) {
+      maplibreController!.animateCamera(ml.CameraUpdate.newLatLngZoom(ml.LatLng(lat, lng), 15.0));
+    }
+  }
+
   Future<void> _getCurrentLocation() async {
     try {
-      geo.LocationPermission permission = await geo.Geolocator.checkPermission();
-      if (permission == geo.LocationPermission.denied) {
-        permission = await geo.Geolocator.requestPermission();
-      }
-
-      if (permission == geo.LocationPermission.whileInUse || permission == geo.LocationPermission.always) {
-        geo.Position position = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
-
-        // تحريك الكاميرا لموقع المستخدم
-        _moveCameraTo(position.latitude, position.longitude);
-      }
+      geo.Position position = await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(accuracy: geo.LocationAccuracy.high)
+      );
+      _moveCameraTo(position.latitude, position.longitude);
     } catch (e) {
-      print("❌ Error getting GPS: $e");
+      debugPrint("GPS Error: $e");
     }
   }
 
-  /// 🎥 تحريك الكاميرا (السر في النعومة هنا)
-  void _moveCameraTo(double lat, double lng) {
-    if (Platform.isIOS && appleController != null) {
-      // 🍎 للآيفون: حركة ناعمة قياسية
-      appleController!.animateCamera(
-        ap.CameraUpdate.newLatLngZoom(ap.LatLng(lat, lng), 15.0),
-      );
-    } else if (mapboxMap != null && isMapReady) {
-      // 🤖 للأندرويد: حركة FlyTo السينمائية (كود الحلم)
-      mapboxMap!.flyTo(
-        mb.CameraOptions(
-          center: mb.Point(coordinates: mb.Position(lng, lat)),
-          zoom: 15.0,
-        ),
-        mb.MapAnimationOptions(duration: 1200), // مدة أطول قليلاً لنعومة فائقة
-      );
-    }
-  }
-
-  /// 📍 تحديث الدبابيس (بدون كراش)
-  /// السر: لا نربط هذه الدالة بحركة الكاميرا، بل بتغير البيانات فقط
+  /// دالة تحديث الدبابيس (Markers)
   Future<void> _updateMapMarkers(SelectLocationController controller) async {
-    if (!isMapReady) return;
 
-    // 🍎 منطق الآيفون
+    // ✅ iOS Logic
     if (Platform.isIOS) {
       Set<ap.Annotation> newAnnotations = {};
-
       if (controller.pickupLatlong.latitude != 0) {
         newAnnotations.add(ap.Annotation(
           annotationId: ap.AnnotationId('pickup'),
           position: ap.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
-          icon: pickUpIconApple ?? ap.BitmapDescriptor.defaultAnnotation, // استخدام أيقونتنا المخصصة
-          onTap: () => _handleMarkerClick(0),
+          icon: ap.BitmapDescriptor.defaultAnnotation,
         ));
       }
-
       if (controller.destinationLatlong.latitude != 0) {
         newAnnotations.add(ap.Annotation(
-          annotationId: ap.AnnotationId('destination'),
+          annotationId: ap.AnnotationId('dest'),
           position: ap.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
-          icon: destinationIconApple ?? ap.BitmapDescriptor.defaultAnnotation, // استخدام أيقونتنا المخصصة
-          onTap: () => _handleMarkerClick(1),
+          icon: ap.BitmapDescriptor.defaultAnnotation,
         ));
       }
-
-      setState(() {
-        appleAnnotations = newAnnotations;
-      });
-      return;
+      setState(() => appleAnnotations = newAnnotations);
     }
 
-    // 🤖 منطق الأندرويد (Mapbox)
-    if (pointAnnotationManager == null) return;
+    // ✅ Android / MapLibre Logic
+    else {
+      // حماية: إذا لم يتحمل الستايل بعد، لا تفعل شيئاً
+      if (maplibreController == null || !isStyleLoaded) return;
 
-    try {
-      // حذف القديم (آمن هنا لأننا لا نستدعيه داخل Loop)
-      await pointAnnotationManager!.deleteAll();
-      pickupAnnotationId = null;
-      destinationAnnotationId = null;
+      try {
+        await maplibreController!.clearSymbols();
 
-      // رسم Pickup
-      if (controller.pickupLatlong.latitude != 0 && pickUpIconBytes != null) {
-        var options = mb.PointAnnotationOptions(
-          geometry: mb.Point(coordinates: mb.Position(
-              controller.pickupLatlong.longitude,
-              controller.pickupLatlong.latitude
-          )),
-          image: pickUpIconBytes!,
-          iconSize: 1.2, // حجم أكبر قليلاً وواضح
-        );
-        var annotation = await pointAnnotationManager!.create(options);
-        pickupAnnotationId = annotation.id;
+        if (controller.pickupLatlong.latitude != 0) {
+          await maplibreController!.addSymbol(ml.SymbolOptions(
+            geometry: ml.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
+            iconImage: _pickupIconId,
+            iconSize: 0.5, // ✅ تم التصغير (0.1 مناسب للصور الكبيرة)
+            // ❌ تم حذف iconAllowOverlap لحل الخطأ الأحمر
+          ));
+        }
+        if (controller.destinationLatlong.latitude != 0) {
+          await maplibreController!.addSymbol(ml.SymbolOptions(
+            geometry: ml.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
+            iconImage: _destIconId,
+            iconSize: 0.5, // ✅ تم التصغير
+            // ❌ تم حذف iconAllowOverlap لحل الخطأ الأحمر
+          ));
+        }
+      } catch (e) {
+        debugPrint("Error updating MapLibre symbols: $e");
       }
-
-      // رسم Destination
-      if (controller.destinationLatlong.latitude != 0 && destinationIconBytes != null) {
-        var options = mb.PointAnnotationOptions(
-          geometry: mb.Point(coordinates: mb.Position(
-              controller.destinationLatlong.longitude,
-              controller.destinationLatlong.latitude
-          )),
-          image: destinationIconBytes!,
-          iconSize: 1.2,
-        );
-        var annotation = await pointAnnotationManager!.create(options);
-        destinationAnnotationId = annotation.id;
-      }
-    } catch (e) {
-      print("🔴 [Markers Error] $e");
     }
   }
-
-  // ---------------------------------------------
-  // 📱 بناء الواجهة (Build UI)
-  // ---------------------------------------------
 
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegionWidget(
       statusBarColor: MyColor.transparentColor,
-      child: GetBuilder<SelectLocationController>(
-        builder: (controller) {
+      child: GetBuilder<SelectLocationController>(builder: (controller) {
 
-          // ✅ مراقب التغييرات: إذا تغير الموقع في الكنترولر، نحدث الخريطة
-          // هذا بديل عن وضع التحديث داخل onCameraMove الذي كان يسبب الكراش
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            // نتحقق من شرط بسيط لمنع التكرار اللانهائي إذا لزم الأمر
-            // ولكن مع GetBuilder التحديث يأتي من الخارج، لذا هو آمن
-            _updateMapMarkers(controller);
-          });
+        // تحديث الدبابيس عند تغير الحالة
+        WidgetsBinding.instance.addPostFrameCallback((_) => _updateMapMarkers(controller));
 
-          return Scaffold(
-            extendBody: true,
-            extendBodyBehindAppBar: true,
-            backgroundColor: MyColor.screenBgColor,
-            resizeToAvoidBottomInset: true,
-            body: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // اللودر الأولي
-                if (controller.isLoading && controller.isLoadingFirstTime)
-                  const SizedBox.expand()
-                else
-                  Stack(
-                    children: [
-                      SizedBox(
-                        height: context.height - (_secondContainerHeight ?? 0),
-                        // ✅ التبديل الذكي بين الخريطتين
-                        child: Platform.isIOS
-                            ? _buildAppleMapWidget()
-                            : _buildMapboxWidget(),
-                      ),
-                    ],
-                  ),
+        return Scaffold(
+          extendBodyBehindAppBar: true,
+          resizeToAvoidBottomInset: false,
+          body: Stack(
+            children: [
+              // 1. الخريطة
+              SizedBox(
+                height: context.height - (_secondContainerHeight ?? 250),
+                child: Platform.isIOS ? _buildAppleMap() : _buildMapLibre(),
+              ),
 
-                // لودر العمليات
-                Positioned.fill(
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: controller.isLoading
-                        ? CircularProgressIndicator(color: MyColor.getPrimaryColor())
-                        : const SizedBox.shrink(),
-                  ),
-                ),
+              // 2. زر الرجوع
+              _buildBackButton(),
 
-                // زر الرجوع
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: Dimensions.space12),
-                      child: IconButton(
-                        style: IconButton.styleFrom(backgroundColor: MyColor.colorWhite),
-                        color: MyColor.colorBlack,
-                        onPressed: () => Get.back(result: true),
-                        icon: const Icon(Icons.arrow_back_ios_new_rounded),
-                      ),
-                    ),
-                  ),
-                )
-              ],
-            ),
-            bottomSheet: buildConfirmDestination(controller),
-          );
-        },
-      ),
+              // 3. اللودر
+              if (controller.isLoading) const Center(child: CustomLoader()),
+            ],
+          ),
+          bottomSheet: _buildBottomSheet(controller),
+        );
+      }),
     );
   }
 
-  // --- 🍎 ودجت خرائط أبل (محسنة) ---
-  Widget _buildAppleMapWidget() {
+  Widget _buildAppleMap() {
     return ap.AppleMap(
-      initialCameraPosition: const ap.CameraPosition(
-        target: ap.LatLng(33.312805, 44.361488), // موقع افتراضي (بغداد)
-        zoom: 12,
-      ),
+      initialCameraPosition: const ap.CameraPosition(target: ap.LatLng(32.9063, 45.0510), zoom: 12),
       onMapCreated: _onAppleMapCreated,
       annotations: appleAnnotations,
-      myLocationEnabled: true, // تفعيل النقطة الزرقاء
-      myLocationButtonEnabled: false,
-      mapType: ap.MapType.standard,
-      // لا نحتاج onCameraIdle لتحديث الدبابيس، لأننا نحدثها من الكنترولر مباشرة
+      myLocationEnabled: true,
+      myLocationButtonEnabled: true,
     );
   }
 
-  // --- 🤖 ودجت خرائط ماب بوكس (كود الحلم) ---
-  Widget _buildMapboxWidget() {
-    return mb.MapWidget(
-      styleUri: mb.MapboxStyles.MAPBOX_STREETS,
-      cameraOptions: mb.CameraOptions(
-        center: mb.Point(coordinates: mb.Position(44.361488, 33.312805)),
-        zoom: 10.0,
-      ),
-      onMapCreated: _onMapboxCreated,
-      onStyleLoadedListener: _onMapboxStyleLoaded,
-      // ⚠️ أزلنا onCameraChangeListener لتحديث الدبابيس
-      // هذا هو الذي كان يسبب الكراش والبطء
+  Widget _buildMapLibre() {
+    // ✅ تصحيح الاسم: MapLibreMap (L كبيرة)
+    return ml.MapLibreMap(
+      // 🔗 الرابط الصحيح للسيرفر
+      styleString: "https://maps.beytei.com/styles/iraq-taxi-style/style.json",
+      initialCameraPosition: const ml.CameraPosition(target: ml.LatLng(32.9063, 45.0510), zoom: 12),
+      onMapCreated: _onMapLibreCreated,
+      onStyleLoadedCallback: _onStyleLoaded, // مهم جداً
+      myLocationEnabled: true,
+      trackCameraPosition: true,
+      attributionButtonPosition: ml.AttributionButtonPosition.topLeft,
     );
   }
 
-  // ---------------------------------------------
-  // 📋 القائمة السفلية (Bottom Sheet)
-  // ---------------------------------------------
-  Widget buildConfirmDestination(SelectLocationController controller) {
-    return AnimatedContainer(
-      key: _secondContainerKey,
-      duration: const Duration(milliseconds: 600),
-      height: null,
-      padding: const EdgeInsets.all(Dimensions.space16),
-      decoration: BoxDecoration(
-        color: MyColor.getCardBgColor(),
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(30),
-          topRight: Radius.circular(30),
+  Widget _buildBackButton() {
+    return Positioned(
+      top: 50, left: 20,
+      child: InkWell(
+        onTap: () => Get.back(),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 5)]),
+          child: const Icon(Icons.arrow_back_ios_new, color: Colors.black, size: 20),
         ),
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Align(
-              alignment: Alignment.topCenter,
-              child: Container(
-                height: 5,
-                width: 50,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  color: MyColor.colorGrey.withOpacity(0.2),
-                ),
-              ),
-            ),
-            spaceDown(Dimensions.space10),
+    );
+  }
+
+  Widget _buildBottomSheet(SelectLocationController controller) {
+    return Container(
+      key: _secondContainerKey,
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildLocationField(
+            title: MyStrings.pickUpLocation,
+            textController: controller.pickUpController,
+            isSelected: controller.selectedLocationIndex == 0,
+            icon: MyIcons.currentLocation,
+            onTap: () => controller.changeIndex(0),
+            onChanged: (val) => myDeBouncer.run(() => controller.searchYourAddress(locationName: val)),
+            onClear: () => controller.clearTextFiled(0),
+          ),
+          const SizedBox(height: 15),
+          _buildLocationField(
+            title: MyStrings.destination,
+            textController: controller.destinationController,
+            isSelected: controller.selectedLocationIndex == 1,
+            icon: MyIcons.location,
+            onTap: () => controller.changeIndex(1),
+            onChanged: (val) => myDeBouncer.run(() => controller.searchYourAddress(locationName: val)),
+            onClear: () => controller.clearTextFiled(1),
+          ),
+
+          // عرض نتائج البحث
+          if (controller.allPredictions.isNotEmpty)
             Container(
-              width: MediaQuery.of(context).size.width,
-              padding: const EdgeInsetsDirectional.symmetric(vertical: Dimensions.space3),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
-              ),
-              child: GetBuilder<HomeController>(
-                builder: (homeController) {
-                  return Container(
-                    color: Colors.transparent,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        LabelText(text: MyStrings.pickUpLocation),
-                        spaceDown(Dimensions.space5),
-                        LocationPickTextField(
-                          fillColor: controller.selectedLocationIndex == 0 ? MyColor.colorWhite : MyColor.textFieldBgColor,
-                          shadowColor: controller.selectedLocationIndex == 0 ? MyColor.primaryColor.withOpacity(0.2) : MyColor.colorGrey.withOpacity(0.1),
-                          labelText: MyStrings.pickUpLocation,
-                          controller: controller.pickUpController,
-                          onTap: () {
-                            controller.changeIndex(0);
-                          },
-                          prefixIcon: Padding(
-                            padding: const EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space2),
-                            child: CustomSvgPicture(
-                              image: MyIcons.currentLocation,
-                              color: MyColor.primaryColor,
-                              height: Dimensions.space35,
-                            ),
-                          ),
-                          onSubmit: () {},
-                          onChanged: (text) {
-                            if (isFirsTime == true) {
-                              isFirsTime = false;
-                              setState(() {});
-                            }
-                            myDeBouncer.run(() {
-                              controller.searchYourAddress(locationName: text);
-                            });
-                          },
-                          hintText: MyStrings.pickUpLocation.tr,
-                          radius: Dimensions.moreRadius,
-                          inputAction: TextInputAction.done,
-                          suffixIcon: Padding(
-                            padding: const EdgeInsetsDirectional.only(end: Dimensions.space5),
-                            child: IconButton(
-                              onPressed: () async {
-                                controller.clearTextFiled(0);
-                              },
-                              icon: const Icon(Icons.close, size: Dimensions.space20, color: MyColor.bodyTextColor),
-                            ),
-                          ),
-                        ),
-                        spaceDown(Dimensions.space15),
-                        LabelText(text: MyStrings.destination),
-                        spaceDown(Dimensions.space5),
-                        LocationPickTextField(
-                          fillColor: controller.selectedLocationIndex == 1 ? MyColor.colorWhite : MyColor.textFieldBgColor,
-                          shadowColor: controller.selectedLocationIndex == 1 ? MyColor.primaryColor.withOpacity(0.2) : MyColor.colorGrey.withOpacity(0.1),
-                          inputAction: TextInputAction.done,
-                          labelText: MyStrings.whereToGo,
-                          controller: controller.destinationController,
-                          onTap: () {
-                            controller.changeIndex(1);
-                          },
-                          onChanged: (text) {
-                            if (isFirsTime == true) {
-                              isFirsTime = false;
-                              setState(() {});
-                            }
-                            myDeBouncer.run(() {
-                              controller.searchYourAddress(locationName: text);
-                            });
-                          },
-                          hintText: MyStrings.pickUpDestination.tr,
-                          radius: Dimensions.mediumRadius,
-                          prefixIcon: Padding(
-                            padding: const EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space2),
-                            child: CustomSvgPicture(
-                              image: MyIcons.location,
-                              color: MyColor.primaryColor,
-                              height: Dimensions.space35,
-                            ),
-                          ),
-                          suffixIcon: Padding(
-                            padding: const EdgeInsetsDirectional.only(end: Dimensions.space5),
-                            child: IconButton(
-                              onPressed: () async {
-                                controller.clearTextFiled(1);
-                              },
-                              icon: const Icon(Icons.close, size: Dimensions.space20, color: MyColor.bodyTextColor),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+              height: 200,
+              margin: const EdgeInsets.only(top: 10),
+              child: ListView.separated(
+                itemCount: controller.allPredictions.length,
+                separatorBuilder: (c, i) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final item = controller.allPredictions[i];
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.location_on_outlined, color: MyColor.primaryColor),
+                    title: Text(item.description ?? "", style: regularDefault.copyWith(fontSize: 14)),
+                    onTap: () async {
+                      // إخفاء الكيبورد
+                      FocusManager.instance.primaryFocus?.unfocus();
+
+                      // جلب الإحداثيات
+                      await controller.getLangAndLatFromMap(item);
+                      controller.pickLocation();
+                      controller.updateSelectedAddressFromSearch(item.description ?? '');
+
+                      // تحريك الكاميرا
+                      double lat = controller.selectedLocationIndex == 0 ? controller.pickupLatlong.latitude : controller.destinationLatlong.latitude;
+                      double lng = controller.selectedLocationIndex == 0 ? controller.pickupLatlong.longitude : controller.destinationLatlong.longitude;
+
+                      _moveCameraTo(lat, lng);
+
+                      // مسح نتائج البحث
+                      controller.allPredictions.clear();
+                      controller.update();
+                    },
                   );
                 },
               ),
             ),
 
-            // --- نتائج البحث ---
-            controller.isSearched && controller.allPredictions.isEmpty
-                ? const CustomLoader(isPagination: true)
-                : GestureDetector(
-              onTap: () {},
-              child: SizedBox(
-                height: controller.allPredictions.isNotEmpty ? context.height * .3 : 0,
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: Dimensions.space20),
-                  itemCount: controller.allPredictions.length,
-                  shrinkWrap: true,
-                  itemBuilder: (context, index) {
-                    var item = controller.allPredictions[index];
-                    return InkWell(
-                      radius: Dimensions.defaultRadius,
-                      onTap: () async {
-                        await controller.getLangAndLatFromMap(item).whenComplete(() {
-                          controller.pickLocation();
-                          controller.updateSelectedAddressFromSearch(item.description ?? '');
-
-                          double lat = controller.selectedLocationIndex == 0
-                              ? controller.pickupLatlong.latitude
-                              : controller.destinationLatlong.latitude;
-                          double lng = controller.selectedLocationIndex == 0
-                              ? controller.pickupLatlong.longitude
-                              : controller.destinationLatlong.longitude;
-
-                          if (lat != 0 && lng != 0) {
-                            // ✅ تحريك الكاميرا إلى النقطة المختارة
-                            _moveCameraTo(lat, lng);
-
-                            // ✅ تحديث الدبابيس صراحةً (لأننا أزلنا التحديث التلقائي)
-                            _updateMapMarkers(controller);
-                          }
-                        });
-                        MyUtils.closeKeyboard();
-                      },
-                      child: Container(
-                        width: MediaQuery.of(context).size.width,
-                        padding: const EdgeInsetsDirectional.symmetric(
-                          vertical: Dimensions.space15,
-                          horizontal: Dimensions.space8,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.location_on_rounded, size: Dimensions.space20, color: MyColor.bodyTextColor),
-                            spaceSide(Dimensions.space10),
-                            Expanded(
-                              child: Text(
-                                "${item.description}",
-                                style: regularDefault.copyWith(color: MyColor.colorBlack),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-            spaceDown(Dimensions.space15),
-            RoundedButton(
-              text: MyStrings.confirmLocation,
-              press: () {
-                Get.back(result: 'true');
-              },
-              isOutlined: false,
-            )
-          ],
-        ),
+          const SizedBox(height: 20),
+          RoundedButton(
+            text: MyStrings.confirmLocation,
+            press: () => Get.back(result: 'true'),
+          ),
+        ],
       ),
     );
   }
-}
 
-// كلاس مساعد للنقر في ماب بوكس
-class AnnotationClickListener extends mb.OnPointAnnotationClickListener {
-  final Function(mb.PointAnnotation) onAnnotationClick;
-  AnnotationClickListener({required this.onAnnotationClick});
-
-  @override
-  void onPointAnnotationClick(mb.PointAnnotation annotation) {
-    onAnnotationClick(annotation);
+  Widget _buildLocationField({
+    required String title,
+    required TextEditingController textController,
+    required bool isSelected,
+    required String icon,
+    required VoidCallback onTap,
+    required Function(String) onChanged,
+    required VoidCallback onClear,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LabelText(text: title),
+        const SizedBox(height: 5),
+        LocationPickTextField(
+          onTap: onTap,
+          onChanged: onChanged,
+          controller: textController,
+          hintText: title.tr,
+          fillColor: isSelected ? MyColor.primaryColor.withOpacity(0.05) : MyColor.textFieldBgColor,
+          prefixIcon: Padding(
+            padding: const EdgeInsets.all(12),
+            child: CustomSvgPicture(image: icon, color: MyColor.primaryColor),
+          ),
+          suffixIcon: IconButton(onPressed: onClear, icon: const Icon(Icons.close, size: 18, color: Colors.grey)),
+        ),
+      ],
+    );
   }
 }

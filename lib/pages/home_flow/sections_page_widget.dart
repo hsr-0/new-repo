@@ -22,6 +22,7 @@ import 'package:facebook_app_events/facebook_app_events.dart';
 // تأكد من صحة مسار هذه الملفات في مشروعك
 import '../../doctore/medical_home_screen.dart';
 import '../../taxi/lib/main.dart';
+import '../../taxi/tx.dart';
 import '../../zone.dart';
 import '../webview_flow/webview_page.dart';
 
@@ -531,6 +532,22 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                           context,
                           MaterialPageRoute(
                               builder: (context) => const TaxiAppEntry()),
+                        );
+                      },
+                    ),
+
+
+
+
+                    _buildGridCard(
+                      context: context,
+                      title: 'تكسي بيتي (سائق)', // يمكنك تغيير الاسم إلى "توصيل" أو كما تحب
+                      imagePath: 'assets/images/taxi.png',
+                      onTap: () {
+                        // الانتقال إلى تطبيق التوصيل (بوابة السائقين)
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => const DeliveryApp()),
                         );
                       },
                     ),

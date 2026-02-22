@@ -26,6 +26,12 @@ import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:intl/date_symbol_data_local.dart'; // 👈 مهم جداً
 import '../taxi/cash.dart';
 
+import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:uuid/uuid.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 // =======================================================================
 // --- إعدادات وثوابت عامة للوحدة ---
 // =======================================================================
@@ -82,7 +88,396 @@ class NavigationProvider with ChangeNotifier {
 }
 
 
+// =======================================================================
+// 🔥🔥🔥 نظام الاتصال المتكامل (Call System - All in One) 🔥🔥🔥
+// =======================================================================
 
+// -----------------------------------------------------------------------
+// 1. خدمة إدارة المكالمات (CallKit Service)
+// -----------------------------------------------------------------------
+class CallService {
+  static final CallService _instance = CallService._internal();
+  factory CallService() => _instance;
+  CallService._internal();
+
+  // عرض شاشة المكالمة الواردة (رنين واهتزاز مثل واتساب)
+  Future<void> showIncomingCall({
+    required String driverName,
+    required String driverImage,
+    required String channelName,
+    required String agoraAppId,
+    required String orderId,
+  }) async {
+
+    final params = CallKitParams(
+      id: const Uuid().v4(),
+      nameCaller: driverName,
+      appName: 'Beytei Miswak',
+      avatar: driverImage.isNotEmpty ? driverImage : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png', // صورة افتراضية
+      handle: 'Order #$orderId', // الرقم الذي يظهر تحت الاسم
+      type: 0, // 0 for Audio Call
+      duration: 30000, // مدة الرنين قبل الفصل (30 ثانية)
+      textAccept: 'رد',
+      textDecline: 'رفض',
+      missedCallNotification: const NotificationParams(
+        showNotification: true,
+        isShowCallback: true,
+        subtitle: 'مكالمة فائتة',
+        callbackText: 'عاود الاتصال',
+      ),
+      extra: <String, dynamic>{
+        'channelName': channelName,
+        'agoraAppId': agoraAppId,
+        'driverName': driverName,
+        'driverImage': driverImage,
+      },
+      headers: <String, dynamic>{'apiKey': 'Abc@123!', 'platform': 'flutter'},
+      android: AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        ringtonePath: 'system_ringtone_default', // يستخدم نغمة النظام
+        backgroundColor: '#009688', // لون الخلفية (تيل)
+        backgroundUrl: driverImage, // صورة السائق كخلفية
+        actionColor: '#4CAF50',
+        textColor: '#ffffff',
+        incomingCallNotificationChannelName: "المكالمات الواردة",
+        isShowFullLockedScreen: true, // يظهر فوق شاشة القفل
+      ),
+      ios: const IOSParams(
+        iconName: 'CallKitLogo',
+        handleType: 'generic',
+        supportsVideo: false,
+        maximumCallGroups: 1,
+        maximumCallsPerCallGroup: 1,
+        audioSessionMode: 'default',
+        audioSessionActive: true,
+        audioSessionPreferredSampleRate: 44100.0,
+        audioSessionPreferredIOBufferDuration: 0.005,
+        supportsDTMF: true,
+        supportsHolding: true,
+        supportsGrouping: false,
+        supportsUngrouping: false,
+        ringtonePath: 'system_ringtone_default',
+      ),
+    );
+
+    await FlutterCallkitIncoming.showCallkitIncoming(params);
+  }
+
+  // الاستماع لأحداث الرد والرفض
+  void listenToCallEvents(BuildContext context) {
+    FlutterCallkitIncoming.onEvent.listen((event) {
+      if (event == null) return;
+
+      switch (event.event) {
+        case Event.actionCallAccept:
+        // عند الضغط على "قبول" -> ننتقل لصفحة Agora
+          _handleCallAccepted(event.body, context);
+          break;
+        case Event.actionCallDecline:
+        // عند الرفض
+          print("Call Declined by User");
+          break;
+        case Event.actionCallEnded:
+          print("Call Ended");
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  void _handleCallAccepted(Map<String, dynamic> body, BuildContext context) {
+    // استخراج البيانات المخزنة في extra
+    final extra = body['extra'];
+    if (extra == null) return;
+
+    final channelName = extra['channelName'];
+    final agoraAppId = extra['agoraAppId'];
+    final driverName = extra['driverName'];
+    final driverImage = extra['driverImage'];
+
+    // الانتقال لصفحة المكالمة
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerCallPage(
+          channelName: channelName,
+          agoraAppId: agoraAppId,
+          driverName: driverName,
+          driverImage: driverImage,
+        ),
+      ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------
+// 2. صفحة المكالمة الحية (Agora Call Screen)
+// -----------------------------------------------------------------------
+class CustomerCallPage extends StatefulWidget {
+  final String channelName;
+  final String agoraAppId;
+  final String driverName;
+  final String? driverImage;
+
+  const CustomerCallPage({
+    super.key,
+    required this.channelName,
+    required this.agoraAppId,
+    required this.driverName,
+    this.driverImage,
+  });
+
+  @override
+  State<CustomerCallPage> createState() => _CustomerCallPageState();
+}
+
+class _CustomerCallPageState extends State<CustomerCallPage> {
+  int? _remoteUid;
+  bool _localUserJoined = false;
+  late RtcEngine _engine;
+  bool _isMuted = false;
+  bool _isSpeaker = false;
+  int _seconds = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    initAgora();
+  }
+
+  Future<void> initAgora() async {
+    // طلب صلاحيات المايكروفون
+    await [Permission.microphone].request();
+
+    // إنشاء المحرك
+    _engine = createAgoraRtcEngine();
+    await _engine.initialize(RtcEngineContext(
+      appId: widget.agoraAppId,
+      channelProfile: ChannelProfileType.channelProfileCommunication,
+    ));
+
+    _engine.registerEventHandler(
+      RtcEngineEventHandler(
+        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
+          debugPrint("local user ${connection.localUid} joined");
+          setState(() {
+            _localUserJoined = true;
+          });
+        },
+        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
+          debugPrint("remote user $remoteUid joined");
+          setState(() {
+            _remoteUid = remoteUid;
+          });
+          _startTimer(); // بدء عداد الوقت عند انضمام السائق
+        },
+        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
+          debugPrint("remote user $remoteUid left channel");
+          _onCallEnd(); // إنهاء المكالمة عند خروج السائق
+        },
+      ),
+    );
+
+    await _engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
+    await _engine.enableAudio();
+
+    // الانضمام للقناة (التوكن فارغ في وضع الاختبار)
+    await _engine.joinChannel(
+      token: "",
+      channelId: widget.channelName,
+      uid: 0,
+      options: const ChannelMediaOptions(),
+    );
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _seconds++;
+      });
+    });
+  }
+
+  String _formatDuration(int seconds) {
+    int minutes = seconds ~/ 60;
+    int remainingSeconds = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${remainingSeconds.toString().padLeft(2, '0')}';
+  }
+
+  void _onCallEnd() {
+    _timer?.cancel();
+    _engine.leaveChannel();
+    Navigator.pop(context);
+  }
+
+  void _onToggleMute() {
+    setState(() {
+      _isMuted = !_isMuted;
+    });
+    _engine.muteLocalAudioStream(_isMuted);
+  }
+
+  void _onToggleSpeaker() {
+    setState(() {
+      _isSpeaker = !_isSpeaker;
+    });
+    _engine.setEnableSpeakerphone(_isSpeaker);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _engine.release();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F2027), // خلفية داكنة أنيقة
+      body: SafeArea(
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF203A43), Color(0xFF2C5364)],
+            ),
+          ),
+          child: Column(
+            children: [
+              const Spacer(flex: 1),
+
+              // 1. صورة السائق واسمه
+              Center(
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(4), // حواف بيضاء
+                      decoration: const BoxDecoration(
+                        color: Colors.white10,
+                        shape: BoxShape.circle,
+                      ),
+                      child: CircleAvatar(
+                        radius: 70,
+                        backgroundImage: widget.driverImage != null && widget.driverImage!.isNotEmpty
+                            ? NetworkImage(widget.driverImage!)
+                            : null,
+                        backgroundColor: Colors.grey.shade800,
+                        child: widget.driverImage == null || widget.driverImage!.isEmpty
+                            ? const Icon(Icons.person, size: 70, color: Colors.white)
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 25),
+                    Text(
+                      widget.driverName,
+                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1),
+                    ),
+                    const SizedBox(height: 10),
+                    // حالة الاتصال أو العداد
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        _localUserJoined
+                            ? (_remoteUid != null ? _formatDuration(_seconds) : "جاري انتظار الرد...")
+                            : "جاري الاتصال...",
+                        style: const TextStyle(fontSize: 16, color: Colors.white70, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const Spacer(flex: 2),
+
+              // 2. أزرار التحكم (Control Panel)
+              Container(
+                padding: const EdgeInsets.only(bottom: 50, top: 30),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.3),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // زر الكتم
+                    _buildControlBtn(
+                      icon: _isMuted ? Icons.mic_off : Icons.mic,
+                      color: _isMuted ? Colors.white : Colors.white70,
+                      bgColor: _isMuted ? Colors.blueGrey : Colors.white10,
+                      label: "كتم",
+                      onTap: _onToggleMute,
+                    ),
+
+                    // زر الإنهاء (الأحمر الكبير)
+                    GestureDetector(
+                      onTap: _onCallEnd,
+                      child: Container(
+                        padding: const EdgeInsets.all(25),
+                        decoration: BoxDecoration(
+                            color: Colors.redAccent.shade400,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 15, spreadRadius: 2)
+                            ]
+                        ),
+                        child: const Icon(Icons.call_end, color: Colors.white, size: 36),
+                      ),
+                    ),
+
+                    // زر مكبر الصوت
+                    _buildControlBtn(
+                      icon: _isSpeaker ? Icons.volume_up : Icons.volume_down,
+                      color: _isSpeaker ? Colors.white : Colors.white70,
+                      bgColor: _isSpeaker ? Colors.blueGrey : Colors.white10,
+                      label: "مكبر",
+                      onTap: _onToggleSpeaker,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlBtn({
+    required IconData icon,
+    required Color color,
+    required Color bgColor,
+    required String label,
+    required VoidCallback onTap
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: bgColor,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 28),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))
+      ],
+    );
+  }
+}
 
 
 class StoreAuthProvider with ChangeNotifier {
@@ -1163,31 +1558,165 @@ class DeliveryConfig {
     );
   }
 }
+// =======================================================================
+// --- Delivery Provider (Server-Side Calculation) ---
+// =======================================================================
 class DeliveryProvider with ChangeNotifier {
-  // ✨ إعدادات ثابتة (لتجنب أخطاء الخادم)
-  final DeliveryConfig _defaultConfig = DeliveryConfig(
-    baseFee: 1000.0,       // السعر الأساسي
-    feePerKm: 250.0,        // سعر الكيلومتر
-    maxDistanceKm: 25.0,    // أقصى مسافة
-  );
+  // متغيرات الواجهة
+  double _deliveryFee = 0.0;
+  String _message = "";
+  bool _isLoading = false;
+  bool _hasError = false;
 
-  DeliveryConfig? _config;
+  // بيانات الكاش
+  List<dynamic> _zones = [];
+  Map<int, LatLng> _storeLocations = {};
+  double _defaultBaseFee = 1000.0;
 
-  bool get isLoading => false;
-  bool get hasError => false;
-  String? get errorMessage => null;
+  // Getters
+  double get deliveryFee => _deliveryFee;
+  String get message => _message;
+  bool get isLoading => _isLoading;
+  bool get hasError => _hasError;
 
-  DeliveryConfig? get config => _config;
+  // مفاتيح التخزين
+  static const String KEY_CONFIG = "delivery_config_json_v2";
+  static const String KEY_LAST_FETCH = "delivery_config_last_fetch_v2";
 
-  DeliveryProvider() {
-    _config = _defaultConfig;
+  // --- 1. دالة التهيئة (تحميل البيانات عند فتح التطبيق) ---
+  @override
+  Future<void> init() async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastFetch = prefs.getInt(KEY_LAST_FETCH) ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // تحديث الكاش كل 7 أيام أو إذا كان فارغاً
+    if (now - lastFetch > 7 * 24 * 60 * 60 * 1000 || !prefs.containsKey(KEY_CONFIG)) {
+      await refreshConfigFromServer();
+    } else {
+      _parseConfig(prefs.getString(KEY_CONFIG)!);
+    }
   }
 
-  Future<bool> fetchConfig() async {
-    _config = _defaultConfig;
-    return true;
+  Future<void> refreshConfigFromServer() async {
+    try {
+      final response = await http.get(
+          Uri.parse('https://beytei.com/wp-json/restaurant-app/v1/delivery-config-full')
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(KEY_CONFIG, response.body);
+        await prefs.setInt(KEY_LAST_FETCH, DateTime.now().millisecondsSinceEpoch);
+        _parseConfig(response.body);
+      }
+    } catch (e) {
+      print("⚠️ Error refreshing config: $e");
+    }
+  }
+
+  void _parseConfig(String jsonStr) {
+    try {
+      final data = json.decode(jsonStr);
+      _zones = data['zones'] ?? [];
+      _storeLocations.clear();
+      for (var loc in data['locations']) {
+        _storeLocations[loc['id']] = LatLng(
+            double.parse(loc['lat'].toString()),
+            double.parse(loc['lng'].toString())
+        );
+      }
+      _defaultBaseFee = double.parse(data['pricing']['base_fee'].toString());
+      notifyListeners();
+    } catch (e) {
+      print("❌ Parse Error: $e");
+    }
+  }
+
+  // --- 2. 🔥 دالة الحساب الفوري (Instant Calculation) ---
+  Future<void> calculateDeliveryFee({
+    required int restaurantId,
+    required double userLat,
+    required double userLng,
+  }) async {
+    _isLoading = true;
+    _message = "جاري حساب التكلفة...";
+    notifyListeners();
+
+    // محاكاة تأخير بسيط جداً لإعطاء شعور بالعملية (اختياري)
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    final userPos = LatLng(userLat, userLng);
+
+    // أ) فحص إذا كان الزبون داخل منطقة مرسومة (Polygon)
+    for (var zone in _zones) {
+      if (_isPointInPolygon(userPos, zone['latlngs'])) {
+        _deliveryFee = double.parse(zone['price'].toString());
+        _message = "✅ موقعك ضمن (${zone['name']}). أجرة ثابتة.";
+        _isLoading = false;
+        _hasError = false;
+        notifyListeners();
+        return;
+      }
+    }
+
+    // ب) إذا لم يكن في منطقة، الحساب بناءً على المسافة
+    final storePos = _storeLocations[restaurantId];
+    if (storePos != null) {
+      final distance = const Distance().as(LengthUnit.Kilometer, userPos, storePos);
+
+      // تطبيق معادلة المسافة (مثال: أول 5 كم بـ 1000، ثم 250 لكل كم إضافي)
+      double fee = _defaultBaseFee;
+      if (distance > 5) {
+        fee += (distance - 5) * 250;
+      }
+
+      _deliveryFee = (fee / 250).ceil() * 250.0; // تقريب لأقرب 250
+      if (_deliveryFee > 2000) _deliveryFee = 2000; // سقف السعر
+
+      _message = "📏 المسافة من المتجر: ${distance.toStringAsFixed(1)} كم.";
+    } else {
+      _deliveryFee = _defaultBaseFee;
+      _message = "تم استخدام السعر الافتراضي.";
+    }
+
+    _isLoading = false;
+    _hasError = false;
+    notifyListeners();
+  }
+
+  // خوارزمية فحص النقطة داخل المضلع (Ray Casting)
+  bool _isPointInPolygon(LatLng point, dynamic polygonData) {
+    List<dynamic> points = polygonData is List && polygonData[0] is List ? polygonData[0] : polygonData;
+    var intersections = 0;
+
+    for (var i = 0; i < points.length; i++) {
+      var p1 = points[i];
+      var p2 = points[(i + 1) % points.length];
+
+      double p1Lat = double.parse(p1['lat'].toString());
+      double p1Lng = double.parse(p1['lng'].toString());
+      double p2Lat = double.parse(p2['lat'].toString());
+      double p2Lng = double.parse(p2['lng'].toString());
+
+      if (p1Lng > point.longitude != p2Lng > point.longitude &&
+          point.latitude < (p2Lat - p1Lat) * (point.longitude - p1Lng) / (p2Lng - p1Lng) + p1Lat) {
+        intersections++;
+      }
+    }
+    return intersections % 2 != 0;
+  }
+
+  void reset() {
+    _deliveryFee = 0.0;
+    _message = "";
+    _hasError = false;
+    notifyListeners();
   }
 }
+
+
+
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
@@ -2040,6 +2569,9 @@ class ApiService {
       throw Exception(responseBody['message'] ?? 'فشل إرسال طلب التوصيل.');
     });
   }
+  // =================================================================
+  // 🔥 دالة إرسال الطلب (ترسل التوكن دائماً لضمان الاتصال)
+  // =================================================================
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -2048,41 +2580,80 @@ class ApiService {
     String? couponCode,
     geolocator.Position? position,
     double? deliveryFee,
-    // ✨ متغيرات جديدة
     required int? restaurantId,
     required int? regionId,
   }) async {
+    // 1. إعداد خطوط الكوبون والشحن
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
 
-    String? fcmToken = await FirebaseMessaging.instance.getToken();
+    // 2. 🔥🔥🔥 جلب التوكن الحالي للجهاز (إجباري) 🔥🔥🔥
+    // هذا يضمن أن السيرفر لديه أحدث عنوان للاتصال بهذا الجهاز
+    String? fcmToken;
+    try {
+      fcmToken = await FirebaseMessaging.instance.getToken();
+      print("🚀 [SubmitOrder] Sending FCM Token with Order: $fcmToken");
+    } catch (e) {
+      print("⚠️ [SubmitOrder] Failed to get FCM token: $e");
+    }
 
+    // 3. بناء جسم الطلب (JSON Payload)
     Map<String, dynamic> bodyPayload = {
-      "payment_method": "cod", "payment_method_title": "الدفع عند الاستلام",
-      "billing": {"first_name": name, "last_name":".", "phone": phone, "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001", "email": "customer@example.com"},
-      "shipping": {"first_name": name, "last_name":".", "address_1": address, "country": "IQ", "city": "Default", "postcode":"10001"},
+      "payment_method": "cod",
+      "payment_method_title": "الدفع عند الاستلام",
+      "billing": {
+        "first_name": name,
+        "last_name": ".",
+        "phone": phone,
+        "address_1": address,
+        "country": "IQ",
+        "city": "Default",
+        "postcode": "10001",
+        "email": "customer@example.com"
+      },
+      "shipping": {
+        "first_name": name,
+        "last_name": ".",
+        "address_1": address,
+        "country": "IQ",
+        "city": "Default",
+        "postcode": "10001"
+      },
       "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
       "coupon_lines": couponLines,
       "shipping_lines": shippingLines,
+
+      // 🔥🔥🔥 البيانات الوصفية (Meta Data) 🔥🔥🔥
       "meta_data": [
-        if (fcmToken != null) {"key": "_customer_fcm_token", "value": fcmToken},
-        if (position != null) {"key": "_customer_destination_lat", "value": position.latitude.toString()},
-        if (position != null) {"key": "_customer_destination_lng", "value": position.longitude.toString()},
-        // 🔥🔥🔥 هنا الإضافة الحاسمة لربط الطلب 🔥🔥🔥
+        // أ) إرسال التوكن (مهم جداً للمكالمات)
+        if (fcmToken != null) ...[
+          {"key": "_customer_fcm_token", "value": fcmToken}, // المفتاح الأساسي للسيرفر
+          {"key": "fcm_token", "value": fcmToken},           // مفتاح احتياطي
+        ],
+
+        // ب) إرسال الإحداثيات (لتحديد موقع التوصيل)
+        if (position != null) ...[
+          {"key": "_customer_destination_lat", "value": position.latitude.toString()},
+          {"key": "_customer_destination_lng", "value": position.longitude.toString()},
+        ],
+
+        // ج) إرسال بيانات الربط (للتيم ليدر والمسواك)
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
         if (regionId != null) {"key": "_region_id", "value": regionId.toString()},
         if (regionId != null) {"key": "_area_id", "value": regionId.toString()}, // احتياط
       ],
     };
 
+    // 4. تنفيذ الطلب
     final response = await _executeWithRetry(() => http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
         headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
         body: json.encode(bodyPayload)
     ));
 
+    // 5. معالجة الرد
     if (response.statusCode == 201) {
       final createdOrder = Order.fromJson(json.decode(response.body));
       await OrderHistoryService().saveOrder(createdOrder);
@@ -3181,16 +3752,37 @@ class _MiswakModuleState extends State<MiswakModule> {
 
   Future<void> _initializeServices() async {
     await NotificationService.initialize();
+
+    // 1. الاستماع للإشعارات والرسائل القادمة
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      NotificationService.display(message);
-      if (mounted) {
-        final auth = Provider.of<StoreAuthProvider>(context, listen: false);
-        if (auth.isLoggedIn && auth.token != null) {
-          // ✅ استخدام الاسم الجديد: MiswakDashboardProvider
-          Provider.of<MiswakDashboardProvider>(context, listen: false).triggerSmartRefresh(auth.token!);
+      // 🔥 أ: فحص ما إذا كان الإشعار هو طلب مكالمة
+      if (message.data['type'] == 'incoming_call') {
+        CallService().showIncomingCall(
+          driverName: message.data['driver_name'] ?? 'السائق',
+          driverImage: message.data['driver_image'] ?? '',
+          channelName: message.data['channel_name'] ?? '',
+          agoraAppId: message.data['agora_app_id'] ?? '',
+          orderId: message.data['order_id'] ?? '0',
+        );
+      }
+      // 🔥 ب: إشعار عادي (تحديث طلب، إلخ)
+      else {
+        NotificationService.display(message);
+
+        // تحديث الداشبورد تلقائياً إذا كان المدير فاتحاً للتطبيق
+        if (mounted) {
+          final auth = Provider.of<StoreAuthProvider>(context, listen: false);
+          if (auth.isLoggedIn && auth.token != null) {
+            Provider.of<MiswakDashboardProvider>(context, listen: false).triggerSmartRefresh(auth.token!);
+          }
         }
       }
     });
+
+    // 2. 🔥 تفعيل الاستماع لأزرار المكالمة (الرد/الرفض) في كامل التطبيق
+    if (mounted) {
+      CallService().listenToCallEvents(context);
+    }
   }
 
   @override
@@ -3205,7 +3797,7 @@ class _MiswakModuleState extends State<MiswakModule> {
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
 
-        // 🔥🔥🔥 المزودات المعتمدة (Proxy) بالأسماء الجديدة 🔥🔥🔥
+        // 🔥🔥🔥 المزودات المعتمدة (Proxy) 🔥🔥🔥
 
         // 1. داشبورد المسواك
         ChangeNotifierProxyProvider<StoreAuthProvider, MiswakDashboardProvider>(
@@ -3644,11 +4236,28 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
+
+    // تنفيذ العمليات الأولية عند فتح الشاشة
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadInitialData();
+      _preFetchDeliveryData(); // 🔥 إضافة مهمة: تحميل بيانات التوصيل مبكراً
+    });
   }
 
-  // ✅ الدالة المعدلة للتحديث التلقائي المزدوج
-// داخل MiswakStoreHomeScreenState
+  // 🔥 دالة لتحميل ملف أسعار التوصيل JSON في الخلفية
+  void _preFetchDeliveryData() {
+    // نستخدم microtask لضمان عدم التأثير على سلاسة بناء الواجهة
+    Future.microtask(() {
+      try {
+        final deliveryProvider = Provider.of<DeliveryProvider>(context, listen: false);
+        // استدعاء دالة التحميل التي تتحقق من الكاش (7 أيام) أو تحمل من السيرفر
+        deliveryProvider.init();
+        print("🚀 [Delivery] Pre-fetching system initialized in background...");
+      } catch (e) {
+        print("⚠️ [Delivery] Pre-fetch error: $e");
+      }
+    });
+  }
 
   Future<void> _loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
@@ -3666,6 +4275,7 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
           .fetchStoreHomeData(_selectedAreaId!, isRefresh: false);
     }
   }
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -3689,7 +4299,7 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
             final result = await Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const SelectLocationScreen(isCancellable: true)));
 
-            if (result == true || true) {
+            if (result == true) {
               final prefs = await SharedPreferences.getInstance();
               _selectedAreaId = prefs.getInt('miswak_area_id');
               _selectedAreaName = prefs.getString('miswak_area_name');
@@ -3774,10 +4384,9 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
                       return _buildRestaurantGridShimmer();
                     }
                     if (!provider.isLoading && stores.isEmpty) {
-                      // تم إضافة RefreshIndicator هنا أيضاً للسماح بالسحب حتى لو فارغة
                       return Stack(
                         children: [
-                          ListView(), // يسمح بعملية السحب
+                          ListView(),
                           const Center(child: Text("لا توجد مسواك متاحة حالياً في هذه المنطقة")),
                         ],
                       );
@@ -3898,6 +4507,7 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
     );
   }
 }
+
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
   const SelectLocationScreen({super.key, this.isCancellable = false});
@@ -4830,15 +5440,10 @@ class _CartScreenState extends State<CartScreen> {
     bool isSubmitting = false;
 
     geolocator.Position? _capturedPosition;
-
-    // 🛑 التعديل 1: إلغاء حالة "جاري الحساب" لأن السعر ثابت
-    bool _isGettingLocation = false;
-
-    // 🛑 التعديل 2: رسالة توضيحية للسعر الثابت
-    String _locationMessage = "سعر توصيل ثابت لكل المناطق";
-
-    // 🛑 التعديل 3: تثبيت السعر عند 1000 دينار
-    double _deliveryFee = 1000.0;
+    // 1. تبدأ الرسالة بحالة "جاري الحساب" والسعر بـ 0
+    String _locationMessage = "جاري حساب تكلفة التوصيل من السيرفر...";
+    double _deliveryFee = 0.0;
+    bool _isCalcFinished = false;
 
     showDialog(
       context: cartScreenContext,
@@ -4846,36 +5451,58 @@ class _CartScreenState extends State<CartScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
 
-          // --- دالة جلب الموقع فقط (بدون تغيير السعر) ---
-          Future<void> fetchLocationForDriver() async {
-            try {
-              bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-              if (!serviceEnabled) return;
-
-              geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-              if (permission == geolocator.LocationPermission.denied) {
-                permission = await geolocator.Geolocator.requestPermission();
-              }
-
-              if (permission == geolocator.LocationPermission.whileInUse || permission == geolocator.LocationPermission.always) {
-                // نجلب الموقع بصمت لإرساله مع الطلب
-                _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
-                    desiredAccuracy: geolocator.LocationAccuracy.medium,
-                    timeLimit: const Duration(seconds: 5)
-                );
-                if(context.mounted) {
-                  setDialogState(() => _locationMessage = "تم تحديد موقعك للسائق ✅");
+          // 2. 🔥 محرك الحساب التلقائي (يتصل بالسيرفر فور فتح النافذة)
+          if (!_isCalcFinished) {
+            Future.delayed(Duration.zero, () async {
+              try {
+                // جلب إحداثيات الزبون الحالية
+                bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+                if (serviceEnabled) {
+                  geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+                  if (permission == geolocator.LocationPermission.denied) {
+                    permission = await geolocator.Geolocator.requestPermission();
+                  }
+                  if (permission == geolocator.LocationPermission.whileInUse ||
+                      permission == geolocator.LocationPermission.always) {
+                    _capturedPosition = await geolocator.Geolocator.getCurrentPosition(
+                        desiredAccuracy: geolocator.LocationAccuracy.high,
+                        timeLimit: const Duration(seconds: 5));
+                  }
                 }
-              }
-            } catch (e) {
-              // تجاهل الأخطاء، السعر ثابت ولا يتأثر
-            }
-          }
 
-          // تشغيل جلب الموقع في الخلفية عند فتح النافذة
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if(_capturedPosition == null) fetchLocationForDriver();
-          });
+                // طلب السعر من السيرفر بناءً على الموقع المكتشف
+                if (_capturedPosition != null && cart.items.isNotEmpty) {
+                  final int storeIdForCalc = cart.items.first.categoryId;
+                  final deliveryProvider = Provider.of<DeliveryProvider>(cartScreenContext, listen: false);
+
+                  // استدعاء دالة السيرفر
+                  await deliveryProvider.calculateDeliveryFee(
+                      restaurantId: storeIdForCalc,
+                      userLat: _capturedPosition!.latitude,
+                      userLng: _capturedPosition!.longitude);
+
+                  if (context.mounted) {
+                    setDialogState(() {
+                      // ✅ تحديث السعر والرسالة بناءً على رد السيرفر (3000 أو 1000 إلخ)
+                      _deliveryFee = deliveryProvider.deliveryFee;
+                      _locationMessage = deliveryProvider.message;
+                      _isCalcFinished = true;
+                    });
+                  }
+                } else {
+                  setDialogState(() {
+                    _locationMessage = "تعذر تحديد الموقع، يرجى تفعيل GPS";
+                    _isCalcFinished = true;
+                  });
+                }
+              } catch (e) {
+                setDialogState(() {
+                  _locationMessage = "خطأ في الاتصال بالسيرفر";
+                  _isCalcFinished = true;
+                });
+              }
+            });
+          }
 
           return AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -4886,58 +5513,35 @@ class _CartScreenState extends State<CartScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'الرجاء إدخال الاسم' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 15),
-                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'الرجاء إدخال رقم الهاتف' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 15),
-                    TextFormField(
-                        controller: _addressController,
-                        decoration: const InputDecoration(labelText: 'العنوان بالتفصيل (أقرب نقطة دالة)'),
-                        maxLines: 2,
-                        enabled: !isSubmitting,
-                        validator: (v) => v!.isEmpty ? 'الرجاء إدخال العنوان بالتفصيل' : null
-                    ),
+                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    const SizedBox(height: 10),
+                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    const SizedBox(height: 10),
+                    TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
                     const SizedBox(height: 20),
 
-                    // عرض السعر والموقع بتصميم أنيق
+                    // 3. 📦 عرض السعر الذي حسبه السيرفر (الديناميكي)
                     Container(
                       padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.teal.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.teal.withOpacity(0.2)),
-                      ),
+                      decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
                       child: Column(
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
-                              // عرض السعر الثابت مباشرة
-                              Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
-                            ],
-                          ),
+                          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                            const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
+                            // يعرض السعر القادم من السيرفر (مثلاً 3,000 د.ع)
+                            Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع",
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 16)),
+                          ]),
                           const SizedBox(height: 5),
-                          Row(
-                            children: [
-                              const Icon(Icons.info_outline, color: Colors.grey, size: 14),
-                              const SizedBox(width: 5),
-                              Expanded(child: Text(_locationMessage, style: const TextStyle(fontSize: 11, color: Colors.grey))),
-                            ],
-                          )
+                          // يعرض اسم المنطقة أو المسافة التي أرجعها السيرفر
+                          Text(_locationMessage, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                         ],
                       ),
                     ),
-
                     const SizedBox(height: 15),
-                    TextFormField(controller: _couponController, decoration: InputDecoration(labelText: 'كود الخصم (إن وجد)', suffixIcon: TextButton(child: const Text("تطبيق"), onPressed: () async {
-                      final result = await cart.applyCoupon(_couponController.text);
-                      if(cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text(result['message']), backgroundColor: result['valid'] ? Colors.green : Colors.red));
-                      setDialogState(() {});
-                    }))),
+                    TextFormField(controller: _couponController, decoration: const InputDecoration(labelText: 'كود الخصم (اختياري)')),
                     const Divider(height: 30),
-                    // تمرير false دائماً لأننا لا نحسب السعر
-                    _buildPriceSummary(cart, _deliveryFee, false, ""),
+                    _buildPriceSummary(cart, _deliveryFee, !_isCalcFinished, ""),
                   ],
                 ),
               ),
@@ -4946,41 +5550,29 @@ class _CartScreenState extends State<CartScreen> {
               TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                onPressed: isSubmitting
-                    ? null
-                    : () async {
+                onPressed: (isSubmitting || !_isCalcFinished) ? null : () async {
                   if (!_formKey.currentState!.validate()) return;
 
                   setDialogState(() => isSubmitting = true);
+
                   try {
-                    // 🔥🔥🔥 بداية التعديل: جلب معرف المنطقة ومعرف المتجر 🔥🔥🔥
-
-                    // 1. جلب معرف المنطقة المحفوظ
                     final prefs = await SharedPreferences.getInstance();
-                    final int? regionId = prefs.getInt('miswak_area_id');
+                    final int currentZoneId = prefs.getInt('miswak_area_id') ?? 0;
+                    int? storeId = cart.items.isNotEmpty ? cart.items.first.categoryId : null;
 
-                    // 2. جلب معرف المتجر (المسواك) من أول عنصر في السلة
-                    // ملاحظة: نفترض هنا أن السلة تحتوي على منتجات من متجر واحد (مسواك واحد)
-                    // الـ categoryId في FoodItem يمثل معرف المتجر (Parent ID)
-                    int? storeId;
-                    if (cart.items.isNotEmpty) {
-                      storeId = cart.items.first.categoryId;
-                    }
+                    if (currentZoneId == 0) throw Exception("يرجى تحديد المنطقة من الصفحة الرئيسية.");
 
-                    // 🔥🔥🔥 نهاية التعديل: التجهيز للإرسال 🔥🔥🔥
-
+                    // 4. 🚀 إرسال الطلب النهائي مع السعر المحسوب من السيرفر
                     final createdOrder = await _apiService.submitOrder(
-                        name: _nameController.text,
-                        phone: _phoneController.text,
-                        address: _addressController.text,
-                        cartItems: cart.items,
-                        couponCode: cart.appliedCoupon,
-                        position: _capturedPosition, // نرسل الموقع إذا تم جلبه بنجاح
-                        deliveryFee: _deliveryFee, // السعر الثابت (1000)
-
-                        // ✅ تمرير المتغيرات الجديدة للـ API
-                        restaurantId: storeId,
-                        regionId: regionId
+                      name: _nameController.text,
+                      phone: _phoneController.text,
+                      address: _addressController.text,
+                      cartItems: cart.items,
+                      couponCode: cart.appliedCoupon,
+                      position: _capturedPosition,
+                      deliveryFee: _deliveryFee, // السعر المحسوب ديناميكياً
+                      restaurantId: storeId,
+                      regionId: currentZoneId,
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -4989,47 +5581,29 @@ class _CartScreenState extends State<CartScreen> {
                     await cart._recordSuccessfulOrder();
                     Navigator.of(dialogContext).pop();
                     cart.clearCart();
-                    HapticFeedback.heavyImpact();
+                    Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
 
-                    if (cartScreenContext.mounted) {
-                      showDialog(
+                    showDialog(
                         context: cartScreenContext,
-                        barrierDismissible: false,
                         builder: (ctx) => AlertDialog(
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                          content: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.check_circle, size: 70, color: Colors.teal),
-                              const SizedBox(height: 15),
-                              const Text("تم استلام طلبك!", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 10),
-                              const Text("جاري تحضير الطلب وإرسال المندوب.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-                            ],
-                          ),
-                          actions: [
-                            ElevatedButton(
+                            title: const Text("تم بنجاح! 🎉"),
+                            content: const Text("تم استلام طلبك بنجاح."),
+                            actions: [
+                              ElevatedButton(
                                 onPressed: () {
-                                  Navigator.of(ctx).pop();
+                                  Navigator.pop(ctx);
                                   Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
                                 },
-                                child: const Text("متابعة الطلب")
-                            )
-                          ],
-                        ),
-                      );
-                    }
+                                child: const Text("متابعة الطلب"),
+                              )
+                            ]));
                   } catch (e) {
-                    if (cartScreenContext.mounted) {
-                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red));
-                    }
+                    if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
                   } finally {
                     if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
                   }
                 },
-                child: isSubmitting
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.0))
-                    : const Text('تأكيد الطلب والدفع'),
+                child: isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('تأكيد الطلب'),
               )
             ],
           );
@@ -5037,7 +5611,6 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
   }
-
   Widget _buildCartItemCard(
       BuildContext context, CartProvider cart, FoodItem item) {
     return Card(

@@ -1,0 +1,2 @@
+C:/Users/NSR-BM/StudioProjects/new-repo/android/app/.cxx/release/6q6y1y52/armeabi-v7a/CMakeFiles/edit_cache.dir
+C:/Users/NSR-BM/StudioProjects/new-repo/android/app/.cxx/release/6q6y1y52/armeabi-v7a/CMakeFiles/rebuild_cache.dir
