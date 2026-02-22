@@ -60,12 +60,86 @@ class AppConstants {
 // =======================================================================
 // --- معالج رسائل الخلفية ---
 // =======================================================================
+// --- معالج رسائل الخلفية (يعمل والتطبيق مغلق تماماً أو في الخلفية) ---
+// =======================================================================
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+
+  // 🔥 التحقق مما إذا كان الإشعار عبارة عن مكالمة واردة
+  if (message.data['type'] == 'incoming_call') {
+    final params = CallKitParams(
+      id: message.data['order_id'] ?? const Uuid().v4(),
+      nameCaller: message.data['driver_name'] ?? 'السائق',
+      appName: 'بيتي مسواك',
+      avatar: message.data['driver_image'] ?? 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png',
+      handle: message.data['channel_name'] ?? 'طلب توصيل',
+      type: 0, // 0 للصوت
+      duration: 30000, // 30 ثانية رنين
+      textAccept: 'رد',
+      textDecline: 'رفض',
+      missedCallNotification: const NotificationParams(
+        showNotification: true,
+        isShowCallback: true,
+        subtitle: 'مكالمة فائتة',
+        callbackText: 'عاود الاتصال',
+      ),
+      extra: <String, dynamic>{
+        'channelName': message.data['channel_name'] ?? '',
+        'agoraAppId': message.data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec',
+        'orderId': message.data['order_id'] ?? '0',
+        'driverName': message.data['driver_name'] ?? 'السائق',
+        'driverImage': message.data['driver_image'] ?? '',
+      },
+      headers: <String, dynamic>{'apiKey': 'Abc@123!', 'platform': 'flutter'},
+      android: AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        ringtonePath: 'system_ringtone_default',
+        backgroundColor: '#009688',
+        actionColor: '#4CAF50',
+        textColor: '#ffffff',
+        incomingCallNotificationChannelName: "المكالمات الواردة",
+        isShowFullLockedScreen: true, // 👈 الأهم: يظهر فوق شاشة القفل مثل واتساب
+        isShowCallID: true,
+      ),
+      ios: const IOSParams(
+        iconName: 'CallKitLogo',
+        handleType: 'generic',
+        supportsVideo: false,
+        maximumCallGroups: 1,
+        maximumCallsPerCallGroup: 1,
+        audioSessionMode: 'default',
+        audioSessionActive: true,
+        audioSessionPreferredSampleRate: 44100.0,
+        audioSessionPreferredIOBufferDuration: 0.005,
+        supportsDTMF: true,
+        supportsHolding: true,
+        supportsGrouping: false,
+        supportsUngrouping: false,
+        ringtonePath: 'system_ringtone_default',
+      ),
+    );
+
+    // 1. عرض شاشة المكالمة الواردة فوراً
+    await FlutterCallkitIncoming.showCallkitIncoming(params);
+
+    // 2. حفظ البيانات في SharedPreferences لاستخدامها عند الرد
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('incoming_call', json.encode({
+      'channel_name': message.data['channel_name'] ?? '',
+      'order_id': message.data['order_id'] ?? '0',
+      'driver_name': message.data['driver_name'] ?? 'السائق',
+      'driver_image': message.data['driver_image'] ?? '',
+      'agora_app_id': message.data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec'
+    }));
+
+    return; // 👈 إيقاف التنفيذ هنا حتى لا يظهر كإشعار نصي عادي
+  }
+
+  // إذا لم يكن مكالمة، سيتم عرضه كإشعار عادي
   await NotificationService.display(message);
 }
-
 // =======================================================================
 // --- PROVIDERS ---
 // =======================================================================
@@ -95,6 +169,15 @@ class NavigationProvider with ChangeNotifier {
 // -----------------------------------------------------------------------
 // 1. خدمة إدارة المكالمات (CallKit Service)
 // -----------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
 class CallService {
   static final CallService _instance = CallService._internal();
   factory CallService() => _instance;
@@ -3753,28 +3836,41 @@ class _MiswakModuleState extends State<MiswakModule> {
   Future<void> _initializeServices() async {
     await NotificationService.initialize();
 
-    // 1. الاستماع للإشعارات والرسائل القادمة
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    // 1. الاستماع للإشعارات والرسائل القادمة (والتطبيق مفتوح في الواجهة)
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+
       // 🔥 أ: فحص ما إذا كان الإشعار هو طلب مكالمة
       if (message.data['type'] == 'incoming_call') {
+        // استدعاء دالة CallService التي لديك لعرض الرنين
         CallService().showIncomingCall(
           driverName: message.data['driver_name'] ?? 'السائق',
           driverImage: message.data['driver_image'] ?? '',
           channelName: message.data['channel_name'] ?? '',
-          agoraAppId: message.data['agora_app_id'] ?? '',
+          agoraAppId: message.data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec',
           orderId: message.data['order_id'] ?? '0',
         );
-      }
-      // 🔥 ب: إشعار عادي (تحديث طلب، إلخ)
-      else {
-        NotificationService.display(message);
 
-        // تحديث الداشبورد تلقائياً إذا كان المدير فاتحاً للتطبيق
-        if (mounted) {
-          final auth = Provider.of<StoreAuthProvider>(context, listen: false);
-          if (auth.isLoggedIn && auth.token != null) {
-            Provider.of<MiswakDashboardProvider>(context, listen: false).triggerSmartRefresh(auth.token!);
-          }
+        // حفظ البيانات في SharedPreferences لاستخدامها لاحقاً
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('incoming_call', json.encode({
+          'channel_name': message.data['channel_name'] ?? '',
+          'order_id': message.data['order_id'] ?? '0',
+          'driver_name': message.data['driver_name'] ?? 'السائق',
+          'driver_image': message.data['driver_image'] ?? '',
+          'agora_app_id': message.data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec'
+        }));
+
+        return; // الخروج لتجنب عرض إشعار عادي متكرر
+      }
+
+      // 🔥 ب: إشعار عادي (تحديث طلب، إلخ)
+      NotificationService.display(message);
+
+      // تحديث الداشبورد تلقائياً إذا كان المدير فاتحاً للتطبيق
+      if (mounted) {
+        final auth = Provider.of<StoreAuthProvider>(context, listen: false);
+        if (auth.isLoggedIn && auth.token != null) {
+          Provider.of<MiswakDashboardProvider>(context, listen: false).triggerSmartRefresh(auth.token!);
         }
       }
     });
@@ -3784,7 +3880,6 @@ class _MiswakModuleState extends State<MiswakModule> {
       CallService().listenToCallEvents(context);
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
