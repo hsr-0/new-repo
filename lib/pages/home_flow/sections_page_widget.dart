@@ -537,21 +537,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     ),
 
 
-
-
-                    _buildGridCard(
-                      context: context,
-                      title: 'تكسي بيتي (سائق)', // يمكنك تغيير الاسم إلى "توصيل" أو كما تحب
-                      imagePath: 'assets/images/taxi.png',
-                      onTap: () {
-                        // الانتقال إلى تطبيق التوصيل (بوابة السائقين)
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const DeliveryApp()),
-                        );
-                      },
-                    ),
-
                     _buildGridCard(
                       context: context,
                       title: 'مسواك بيتي ',

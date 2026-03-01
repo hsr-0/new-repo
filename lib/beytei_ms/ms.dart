@@ -1978,8 +1978,6 @@ class _LoyaltyChallengeWidgetState extends State<LoyaltyChallengeWidget> {
   }
 }
 // (الصق هذا الكلاس بالكامل بدلاً من CartProvider القديم)
-
-
 class CartProvider with ChangeNotifier {
   final List<FoodItem> _items = [];
 
@@ -2004,8 +2002,12 @@ class CartProvider with ChangeNotifier {
   String? get promoterCode => _promoterCode;
   int get usageCount => _usageCount;
 
-  // --- حساب الخصومات ---
+  // ✨✨✨ دالة مقارنة الأوزان بدقة (الحل الأساسي للمشكلة) ✨✨✨
+  bool _weightsAreEqual(double w1, double w2) {
+    return (w1 - w2).abs() < 0.001;
+  }
 
+  // --- حساب الخصومات ---
   double get totalDiscountAmount {
     double couponDiscount = 0.0;
     if (_discountType == 'fixed_cart') {
@@ -2013,10 +2015,7 @@ class CartProvider with ChangeNotifier {
     } else if (_discountType == 'percent') {
       couponDiscount = totalPrice * (_discountPercentage / 100);
     }
-
     double loyaltyDiscount = totalPrice * (_loyaltyDiscountPercentage / 100);
-
-    // نطبق الخصم الأكبر (إما الكوبون أو الولاء)
     return max(couponDiscount, loyaltyDiscount);
   }
 
@@ -2025,7 +2024,6 @@ class CartProvider with ChangeNotifier {
   }
 
   // --- إدارة نظام الولاء ---
-
   Future<int> _loadUsageCount(String code) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('promoter_usage_$code') ?? 0;
@@ -2058,15 +2056,11 @@ class CartProvider with ChangeNotifier {
   }
 
   // --- إدارة الكوبونات ---
-
   Future<Map<String, dynamic>> applyCoupon(String code) async {
-    // افترض أن ApiService مستورد
     final result = await ApiService().validateCoupon(code);
-
     if (result['is_promoter'] == true) {
       _promoterCode = code.toUpperCase();
       _usageCount = await _loadUsageCount(_promoterCode!);
-
       if (_usageCount == 3) {
         _loyaltyDiscountPercentage = 50.0;
         _discountType = 'loyalty_discount';
@@ -2077,19 +2071,16 @@ class CartProvider with ChangeNotifier {
         final remaining = 3 - _usageCount;
         result['message'] = "تم تفعيل رمز المروج. تبقى ${remaining} طلب للحصول على خصم ٥٠٪!";
       }
-
       _appliedCoupon = null;
       _discountAmount = 0.0;
       _discountPercentage = 0.0;
       notifyListeners();
       return result;
-
     } else if (result['valid'] == true) {
       _appliedCoupon = code.toUpperCase();
       _discountType = result['discount_type'];
       _discountAmount = double.tryParse(result['amount'].toString()) ?? 0.0;
       if (_discountType == 'percent') _discountPercentage = _discountAmount;
-
       _promoterCode = null;
       _loyaltyDiscountPercentage = 0.0;
       notifyListeners();
@@ -2108,19 +2099,18 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // --- 🔥 إدارة السلة (الإضافة والتعديل) 🔥 ---
+  // --- 🔥 إدارة السلة (الإضافة والتعديل) - ✅ مُصلح 🔥 ---
 
-  // ✅ تم تحديث الدالة لتقبل الوزن (weight)
   void addToCart(FoodItem foodItem, BuildContext context, {double weight = 1.0}) {
     if (!foodItem.isDeliverable) {
       _showItemUnavailableDialog(context, foodItem);
       return;
     }
 
-    // ✅ البحث عن منتج بنفس المعرف ونفس الوزن
-    // (لكي لا يتم دمج 1 كيلو مع نصف كيلو)
+    // ✅ البحث عن منتج بنفس المعرف ونفس الوزن باستخدام المقارنة الدقيقة
     final existingIndex = _items.indexWhere((item) =>
-    item.id == foodItem.id && item.selectedWeight == weight);
+    item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, weight)
+    );
 
     if (existingIndex != -1) {
       // إذا وجد نفس المنتج بنفس الوزن، نزيد الكمية
@@ -2141,7 +2131,7 @@ class CartProvider with ChangeNotifier {
         restaurantLng: foodItem.restaurantLng,
         averageRating: foodItem.averageRating,
         ratingCount: foodItem.ratingCount,
-        // ✅ حفظ الوزن المختار
+        // ✅ حفظ الوزن المختار بدقة
         selectedWeight: weight,
       ));
     }
@@ -2150,9 +2140,10 @@ class CartProvider with ChangeNotifier {
   }
 
   void incrementQuantity(FoodItem foodItem) {
-    // البحث بالمعرف والوزن معاً
+    // ✅ البحث بالمعرف والوزن معاً باستخدام المقارنة الدقيقة
     final itemIndex = _items.indexWhere((item) =>
-    item.id == foodItem.id && item.selectedWeight == foodItem.selectedWeight);
+    item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight)
+    );
 
     if (itemIndex != -1) {
       _items[itemIndex].quantity++;
@@ -2161,9 +2152,10 @@ class CartProvider with ChangeNotifier {
   }
 
   void decrementQuantity(FoodItem foodItem) {
-    // البحث بالمعرف والوزن معاً
+    // ✅ البحث بالمعرف والوزن معاً باستخدام المقارنة الدقيقة
     final itemIndex = _items.indexWhere((item) =>
-    item.id == foodItem.id && item.selectedWeight == foodItem.selectedWeight);
+    item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight)
+    );
 
     if (itemIndex != -1) {
       if (_items[itemIndex].quantity > 1) {
@@ -2182,11 +2174,11 @@ class CartProvider with ChangeNotifier {
   }
 
   // --- نوافذ التنبيه ---
-
   void _showItemUnavailableDialog(BuildContext context, FoodItem item) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         title: const Text("عذراً، المنتج غير متاح"),
         content: Text("لا يمكن إضافة '${item.name}' إلى السلة لأن المتجر مغلق حالياً."),
         actions: [
@@ -2197,24 +2189,44 @@ class CartProvider with ChangeNotifier {
   }
 
   void _showAddToCartDialog(BuildContext context, FoodItem item, double weight) {
-    // تجهيز نص الوزن للعرض
-    String weightText = "$weight كيلو";
-    if (weight == 0.25) weightText = "ربع كيلو";
-    if (weight == 0.5) weightText = "نصف كيلو";
-    if (weight == 1.0) weightText = "1 كيلو";
+    // ✨ تجهيز نص الوزن للعرض بشكل جميل
+    String weightText = _getWeightDisplayText(weight);
 
     showDialog(
       context: context,
+      barrierDismissible: true,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(
           children: [
-            Icon(Icons.check_circle, color: Colors.green),
+            Icon(Icons.check_circle, color: Colors.green, size: 28),
             SizedBox(width: 10),
-            Text("تمت الإضافة"),
+            Text("تمت الإضافة", style: TextStyle(fontWeight: FontWeight.bold)),
           ],
         ),
-        content: Text("تم إضافة:\n${item.name}\n(الوزن: $weightText) بنجاح."),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Theme.of(context).primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.scale, size: 16, color: Theme.of(context).primaryColor),
+                  const SizedBox(width: 5),
+                  Text('الوزن: $weightText', style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -2228,6 +2240,7 @@ class CartProvider with ChangeNotifier {
             style: ElevatedButton.styleFrom(
               backgroundColor: Theme.of(context).primaryColor,
               foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             child: const Text("الذهاب للسلة"),
           ),
@@ -2235,7 +2248,19 @@ class CartProvider with ChangeNotifier {
       ),
     );
   }
-}// =======================================================================
+
+  // ✨ دالة مساعدة لعرض الوزن بشكل جميل
+  String _getWeightDisplayText(double weight) {
+    if (weight == 0.25) return "ربع كيلو (250غم)";
+    if (weight == 0.5) return "نصف كيلو (500غم)";
+    if (weight == 1.0) return "1 كيلو";
+    if (weight == 1.5) return "كيلو ونصف (1.5 كغم)";
+    if (weight % 1 == 0) return "${weight.toInt()} كيلو";
+    return "$weight كيلو";
+  }
+}
+
+// =======================================================================
 // --- API SERVICE (المعدل والنهائي) ---
 // =======================================================================
 class ApiService {
@@ -4220,7 +4245,6 @@ class MainScreen extends StatefulWidget {
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
-
 class _MainScreenState extends State<MainScreen> {
   // مفاتيح للحفاظ على حالة التصفح داخل كل تبويب
   final List<GlobalKey<NavigatorState>> _navigatorKeys = [
@@ -4230,6 +4254,129 @@ class _MainScreenState extends State<MainScreen> {
     GlobalKey<NavigatorState>()
   ];
 
+  // ✨✨✨ دالة إظهار نافذة الخروج العصرية ✨✨✨
+  Future<bool> _showExitConfirmation() async {
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // أيقونة متحركة
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).primaryColor.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.logout_rounded,
+                    size: 48,
+                    color: Theme.of(context).primaryColor,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // العنوان
+                const Text(
+                  'هل ترغب بالمغادرة؟',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // الوصف
+                Text(
+                  'سيتم حفظ سلتك ويمكنك العودة لاحقاً',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade600,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                // الأزرار
+                Row(
+                  children: [
+                    // زر متابعة التسوق
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          side: BorderSide(
+                            color: Theme.of(context).primaryColor,
+                            width: 2,
+                          ),
+                        ),
+                        child: Text(
+                          'متابعة التسوق',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).primaryColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    // زر الخروج
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          backgroundColor: Colors.red.shade500,
+                          elevation: 8,
+                          shadowColor: Colors.red.withOpacity(0.3),
+                        ),
+                        child: const Text(
+                          'نعم، خروج',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ) ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     // نستخدم الـ Provider لمعرفة التبويب الحالي
@@ -4238,15 +4385,21 @@ class _MainScreenState extends State<MainScreen> {
     return WillPopScope(
       onWillPop: () async {
         final currentNavigator = _navigatorKeys[navProvider.currentIndex].currentState;
+
+        // إذا كان هناك صفحات داخل التبويب الحالي، نعود للصفحة السابقة
         if (currentNavigator != null && currentNavigator.canPop()) {
           currentNavigator.pop();
           return false;
         }
+
+        // إذا لم نكن في التبويب الأول، نعود للرئيسية
         if (navProvider.currentIndex != 0) {
           navProvider.changeTab(0);
           return false;
         }
-        return true;
+
+        // ✨✨✨ إظهار نافذة الخروج العصرية ✨✨✨
+        return await _showExitConfirmation();
       },
       child: Scaffold(
         // عرض الصفحة الحالية بناءً على التبويب المختار
@@ -5069,8 +5222,13 @@ class _DetailScreenState extends State<DetailScreen> {
   // الوزن المختار افتراضياً
   double _currentWeight = 1.0;
 
-  // قائمة الخيارات السريعة
-  final List<double> _quickWeights = [0.25, 0.50, 1.0, 2.0, 3.0];
+  // ✨✨✨ الترتيب الجديد: كيلو ونصف ← كيلو ← نصف ← ربع ✨✨✨
+  final List<double> _quickWeights = [1.5, 1.0, 0.5, 0.25];
+
+  // ✨ دالة مقارنة الأوزان بدقة (لتجنب مشاكل الفاصلة العشرية)
+  bool _weightsAreEqual(double w1, double w2) {
+    return (w1 - w2).abs() < 0.001;
+  }
 
   // دالة لعرض نافذة إدخال وزن مخصص
   void _showCustomWeightDialog() {
@@ -5078,7 +5236,8 @@ class _DetailScreenState extends State<DetailScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("أدخل الوزن (بالكيلو)"),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("أدخل الوزن (بالكيلو)", style: TextStyle(fontWeight: FontWeight.bold)),
         content: TextField(
           controller: controller,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -5086,6 +5245,7 @@ class _DetailScreenState extends State<DetailScreen> {
             hintText: "مثال: 5.5",
             suffixText: "كغم",
             border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.scale),
           ),
         ),
         actions: [
@@ -5101,8 +5261,13 @@ class _DetailScreenState extends State<DetailScreen> {
                   _currentWeight = val;
                 });
                 Navigator.pop(ctx);
+                HapticFeedback.lightImpact();
               }
             },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
             child: const Text("تأكيد"),
           ),
         ],
@@ -5114,8 +5279,20 @@ class _DetailScreenState extends State<DetailScreen> {
   String _getWeightLabel(double w) {
     if (w == 0.25) return "ربع";
     if (w == 0.5) return "نصف";
-    if (w == 1.0) return "1";
-    return "${w.toInt()}"; // يعرض 2، 3 بدون كسور
+    if (w == 1.0) return "1 كيلو";
+    if (w == 1.5) return "كيلو ونصف";
+    if (w % 1 == 0) return "${w.toInt()} كيلو";
+    return "$w كيلو";
+  }
+
+  // ✨ دالة مساعدة لعرض الوزن بشكل كامل (للسعر والنافذة)
+  String _getWeightDisplayText(double weight) {
+    if (weight == 0.25) return "ربع كيلو (250غم)";
+    if (weight == 0.5) return "نصف كيلو (500غم)";
+    if (weight == 1.0) return "1 كيلو";
+    if (weight == 1.5) return "كيلو ونصف (1.5 كغم)";
+    if (weight % 1 == 0) return "${weight.toInt()} كيلو";
+    return "$weight كيلو";
   }
 
   @override
@@ -5147,6 +5324,10 @@ class _DetailScreenState extends State<DetailScreen> {
                 child: CachedNetworkImage(
                   imageUrl: widget.foodItem.imageUrl,
                   fit: BoxFit.cover,
+                  errorWidget: (c, u, e) => Container(
+                    color: Colors.grey.shade300,
+                    child: const Icon(Icons.fastfood, size: 80, color: Colors.grey),
+                  ),
                 ),
               ),
             ),
@@ -5181,7 +5362,6 @@ class _DetailScreenState extends State<DetailScreen> {
                               color: Theme.of(context).primaryColor,
                             ),
                           ),
-                          // عرض الوزن المختار بجانب السعر للتوضيح
                           Text(
                             _currentWeight < 1
                                 ? "${(_currentWeight * 1000).toInt()} غم"
@@ -5194,60 +5374,112 @@ class _DetailScreenState extends State<DetailScreen> {
                   ),
                   const SizedBox(height: 25),
 
-                  // ✨✨✨ قسم اختيار الوزن العصري ✨✨✨
-                  const Text("اختر الوزن / الكمية:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  // ✨✨✨ قسم اختيار الوزن العصري المحسن ✨✨✨
+                  const Text("اختر الوزن:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  const SizedBox(height: 16),
+
+                  // الصف الأول: كيلو ونصف + كيلو
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildWeightChip(
+                          label: "كيلو ونصف",
+                          subLabel: "1.5 كغم",
+                          weight: 1.5,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildWeightChip(
+                          label: "1 كيلو",
+                          subLabel: "1000 غم",
+                          weight: 1.0,
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 12),
 
-                  SizedBox(
-                    height: 50,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: _quickWeights.length + 1, // +1 لزر "مخصص"
-                      separatorBuilder: (ctx, i) => const SizedBox(width: 10),
-                      itemBuilder: (ctx, index) {
+                  // الصف الثاني: نصف + ربع
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildWeightChip(
+                          label: "نصف كيلو",
+                          subLabel: "500 غم",
+                          weight: 0.5,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildWeightChip(
+                          label: "ربع كيلو",
+                          subLabel: "250 غم",
+                          weight: 0.25,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
 
-                        // زر "مخصص" (الأخير)
-                        if (index == _quickWeights.length) {
-                          bool isCustomSelected = !_quickWeights.contains(_currentWeight);
-                          return GestureDetector(
-                            onTap: () {
-                              HapticFeedback.lightImpact();
-                              _showCustomWeightDialog();
-                            },
-                            child: _buildWeightChip(
-                              label: "مخصص ✏️",
-                              isSelected: isCustomSelected,
-                              isCustom: true,
+                  // زر الوزن المخصص
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      _showCustomWeightDialog();
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight))
+                            ? Theme.of(context).primaryColor
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight))
+                              ? Theme.of(context).primaryColor
+                              : Colors.grey.shade300,
+                          width: 2,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.edit_note_rounded,
+                            color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight))
+                                ? Colors.white
+                                : Colors.grey.shade600,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            "حدد وزن مخصص",
+                            style: TextStyle(
+                              color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight))
+                                  ? Colors.white
+                                  : Colors.grey.shade600,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
                             ),
-                          );
-                        }
-
-                        // الأزرار العادية
-                        final weightVal = _quickWeights[index];
-                        final bool isSelected = _currentWeight == weightVal;
-                        final String label = _getWeightLabel(weightVal);
-
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() => _currentWeight = weightVal);
-                            HapticFeedback.lightImpact();
-                          },
-                          child: _buildWeightChip(label: label, isSelected: isSelected),
-                        );
-                      },
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  // ✨✨✨ نهاية القسم ✨✨✨
 
-                  const SizedBox(height: 25),
+                  const SizedBox(height: 30),
                   const Divider(),
+                  const SizedBox(height: 10),
+
                   const Text("الوصف", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   Text(
                     widget.foodItem.description,
-                    style: TextStyle(color: Colors.grey.shade700, height: 1.5, fontSize: 15),
+                    style: TextStyle(color: Colors.grey.shade700, height: 1.6, fontSize: 15),
                   ),
-                  const SizedBox(height: 100),
+                  const SizedBox(height: 120),
                 ],
               ),
             ),
@@ -5260,36 +5492,46 @@ class _DetailScreenState extends State<DetailScreen> {
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: Colors.white,
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 20,
+              offset: const Offset(0, -5),
+            ),
+          ],
         ),
         child: isDeliverable
             ? ElevatedButton(
           onPressed: () {
             // ✅ إضافة المنتج مع الوزن المختار للسلة
             Provider.of<CartProvider>(context, listen: false).addToCart(
-                widget.foodItem,
-                context,
-                weight: _currentWeight
+              widget.foodItem,
+              context,
+              weight: _currentWeight,
             );
           },
           style: ElevatedButton.styleFrom(
             backgroundColor: Theme.of(context).primaryColor,
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            elevation: 2,
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            elevation: 8,
+            shadowColor: Theme.of(context).primaryColor.withOpacity(0.3),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.shopping_bag_outlined, color: Colors.white),
-              const SizedBox(width: 10),
+              const Icon(Icons.shopping_bag_outlined, color: Colors.white, size: 24),
+              const SizedBox(width: 12),
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text("إضافة للسلة", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  const Text(
+                    "إضافة للسلة",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
                   Text(
-                    "$formattedPrice", // السعر النهائي
-                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.9)),
+                    "$formattedPrice د.ع",
+                    style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.9)),
                   ),
                 ],
               ),
@@ -5297,17 +5539,33 @@ class _DetailScreenState extends State<DetailScreen> {
           ),
         )
             : Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(15)),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.red.shade50,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.red.shade200),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text("غير متاح حالياً", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red.shade700)),
-              if (restaurant != null)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.info_outline, color: Colors.red.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    "غير متاح حالياً",
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red.shade700, fontSize: 16),
+                  ),
+                ],
+              ),
+              if (restaurant != null) ...[
+                const SizedBox(height: 4),
                 Text(
                   "يفتح ${restaurant.autoOpenTime}",
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  style: const TextStyle(fontSize: 13, color: Colors.grey),
                 ),
+              ],
             ],
           ),
         ),
@@ -5315,57 +5573,78 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  // ✨ دالة بناء تصميم الزر (Chip)
-  Widget _buildWeightChip({required String label, required bool isSelected, bool isCustom = false}) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: isSelected ? Theme.of(context).primaryColor : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
+  // ✨ دالة بناء زر الوزن المحسنة (تصميم شبكي عصري)
+  Widget _buildWeightChip({
+    required String label,
+    required String subLabel,
+    required double weight,
+  }) {
+    final bool isSelected = _weightsAreEqual(_currentWeight, weight);
+
+    return GestureDetector(
+      onTap: () {
+        setState(() => _currentWeight = weight);
+        HapticFeedback.lightImpact();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? Theme.of(context).primaryColor : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
             color: isSelected ? Theme.of(context).primaryColor : Colors.grey.shade300,
-            width: 1.5
+            width: isSelected ? 2 : 1.5,
+          ),
+          boxShadow: isSelected
+              ? [
+            BoxShadow(
+              color: Theme.of(context).primaryColor.withOpacity(0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ]
+              : [],
         ),
-        boxShadow: isSelected ? [
-          BoxShadow(color: Theme.of(context).primaryColor.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))
-        ] : [],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
                 color: isSelected ? Colors.white : Colors.black87,
                 fontWeight: FontWeight.bold,
-                fontSize: 15
-            ),
-          ),
-          if (!isCustom) // إضافة كلمة كغم للأرقام فقط
-            Text(
-              " خاص للخضروات والفواكهة كغم",
-              style: TextStyle(
-                  color: isSelected ? Colors.white70 : Colors.grey,
-                  fontSize: 11
+                fontSize: 15,
               ),
             ),
-        ],
+            const SizedBox(height: 4),
+            Text(
+              subLabel,
+              style: TextStyle(
+                color: isSelected ? Colors.white70 : Colors.grey.shade600,
+                fontSize: 12,
+              ),
+            ),
+            if (isSelected) ...[
+              const SizedBox(height: 6),
+              Icon(
+                Icons.check_circle,
+                color: Colors.white,
+                size: 18,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
 }
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
+
   @override
   State<CartScreen> createState() => _CartScreenState();
 }
 
-// (في ملف re.dart)
-// (استبدل الكلاس القديم بالكامل بهذا الكلاس المحدث V18)
-
-// --- ✨ [ الخطوة 2هـ: استبدال كلاس _CartScreenState بالكامل ] ---
 class _CartScreenState extends State<CartScreen> {
   final _apiService = ApiService();
   final _nameController = TextEditingController();
@@ -5383,45 +5662,128 @@ class _CartScreenState extends State<CartScreen> {
     super.dispose();
   }
 
+  // ✨ دالة مساعدة لعرض الوزن بشكل جميل في السلة
+  String _getWeightDisplayText(double weight) {
+    if (weight == 0.25) return "ربع كيلو (250غم)";
+    if (weight == 0.5) return "نصف كيلو (500غم)";
+    if (weight == 1.0) return "1 كيلو";
+    if (weight == 1.5) return "كيلو ونصف (1.5 كغم)";
+    if (weight % 1 == 0) return "${weight.toInt()} كيلو";
+    return "$weight كيلو";
+  }
+
   @override
   Widget build(BuildContext context) {
     // ✅ حفظ السياق الرئيسي للصفحة في متغير لاستخدامه لاحقاً بأمان
     final mainContext = context;
 
     return Scaffold(
-        appBar: AppBar(title: const Text('سلتي')),
-        body: Consumer<CartProvider>(
-          // ✅ قمنا بتغيير اسم المتغير هنا إلى (ctx) لتجنب التضارب مع (context) الرئيسي
-            builder: (ctx, cart, child) {
-              if (cart.items.isEmpty) {
-                return const Center(
-                    child: Text('سلّتك فارغة!',
-                        style: TextStyle(fontSize: 18, color: Colors.grey)));
+      appBar: AppBar(
+        title: const Text('سلتي'),
+        actions: [
+          Consumer<CartProvider>(
+            builder: (context, cart, child) {
+              if (cart.items.isNotEmpty) {
+                return IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  tooltip: 'إفراغ السلة',
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        title: const Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                            SizedBox(width: 10),
+                            Text('تفريغ السلة؟', style: TextStyle(fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        content: const Text('هل تريد حذف جميع العناصر من سلتك؟'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+                          ElevatedButton(
+                            onPressed: () {
+                              cart.clearCart();
+                              Navigator.pop(ctx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('تم تفريغ السلة'), backgroundColor: Colors.green),
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                            child: const Text('نعم، احذف'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
               }
-              return Column(children: [
-                Expanded(
-                    child: ListView.builder(
-                        padding: const EdgeInsets.all(15),
-                        itemCount: cart.items.length,
-                        itemBuilder: (ctx, index) => _buildCartItemCard(
-                            mainContext, cart, cart.items[index]))),
-                // ✅ نمرر mainContext الثابت هنا بدلاً من ctx المتغير
-                _buildCheckoutSection(mainContext, cart)
-              ]);
-            }));
+              return const SizedBox.shrink();
+            },
+          ),
+        ],
+      ),
+      body: Consumer<CartProvider>(
+        // ✅ قمنا بتغيير اسم المتغير هنا إلى (ctx) لتجنب التضارب مع (context) الرئيسي
+        builder: (ctx, cart, child) {
+          if (cart.items.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.shopping_cart_outlined, size: 100, color: Colors.grey.shade400),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'سلّتك فارغة!',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'ابدأ التسوق الآن لإضافة منتجاتك المفضلة',
+                    style: TextStyle(fontSize: 14, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 30),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Provider.of<NavigationProvider>(context, listen: false).changeTab(0);
+                    },
+                    icon: const Icon(Icons.storefront),
+                    label: const Text('تصفح المسواك'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          return Column(children: [
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(15),
+                itemCount: cart.items.length,
+                itemBuilder: (ctx, index) =>
+                    _buildCartItemCard(mainContext, cart, cart.items[index]),
+              ),
+            ),
+            // ✅ نمرر mainContext الثابت هنا بدلاً من ctx المتغير
+            _buildCheckoutSection(mainContext, cart),
+          ]);
+        },
+      ),
+    );
   }
 
-  // (دالة بناء ملخص السعر - كما هي)
+  // (دالة بناء ملخص السعر - محسّنة)
   Widget _buildPriceSummary(CartProvider cart, double? deliveryFee,
       bool isCalculatingFee, String feeMessage) {
-    final totalFormatted =
-    NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
-    final discountFormatted =
-    NumberFormat('#,###', 'ar_IQ').format(cart.totalDiscountAmount);
-
+    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
+    final discountFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalDiscountAmount);
     final double finalTotal = (cart.discountedTotal) + (deliveryFee ?? 0);
-    final finalTotalFormatted =
-    NumberFormat('#,###', 'ar_IQ').format(finalTotal);
+    final finalTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(finalTotal);
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -5436,8 +5798,7 @@ class _CartScreenState extends State<CartScreen> {
             children: [
               const Text('سعر الطلبات', style: TextStyle(fontSize: 14)),
               Text('$totalFormatted د.ع',
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.bold)),
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
             ],
           ),
           if (cart.totalDiscountAmount > 0) ...[
@@ -5446,8 +5807,7 @@ class _CartScreenState extends State<CartScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('الخصم',
-                    style: TextStyle(
-                        fontSize: 14, color: Theme.of(context).primaryColor)),
+                    style: TextStyle(fontSize: 14, color: Theme.of(context).primaryColor)),
                 Text('- $discountFormatted د.ع',
                     style: TextStyle(
                         fontSize: 14,
@@ -5462,8 +5822,7 @@ class _CartScreenState extends State<CartScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.delivery_dining_outlined,
-                      size: 20, color: Colors.blue.shade700),
+                  Icon(Icons.delivery_dining_outlined, size: 20, color: Colors.blue.shade700),
                   const SizedBox(width: 5),
                   const Text('خدمة التوصيل', style: TextStyle(fontSize: 14)),
                 ],
@@ -5486,9 +5845,7 @@ class _CartScreenState extends State<CartScreen> {
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: deliveryFee == null && !isCalculatingFee
-                          ? Colors.red
-                          : Colors.black),
+                      color: deliveryFee == null && !isCalculatingFee ? Colors.red : Colors.black),
                 ),
               ),
             ],
@@ -5548,7 +5905,6 @@ class _CartScreenState extends State<CartScreen> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
-
           // 2. 🔥 محرك الحساب التلقائي (يتصل بالسيرفر فور فتح النافذة)
           if (!_isCalcFinished) {
             Future.delayed(Duration.zero, () async {
@@ -5603,29 +5959,68 @@ class _CartScreenState extends State<CartScreen> {
           }
 
           return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            title: const Text('إتمام الطلب'),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Row(
+              children: [
+                Icon(Icons.shopping_cart_checkout, color: Colors.teal, size: 28),
+                SizedBox(width: 10),
+                Text('إتمام الطلب', style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
             content: Form(
               key: _formKey,
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 10),
-                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 10),
-                    TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(
+                      controller: _nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'الاسم الكامل',
+                        prefixIcon: Icon(Icons.person_outline),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                      ),
+                      validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                      enabled: !isSubmitting,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _phoneController,
+                      decoration: const InputDecoration(
+                        labelText: 'رقم الهاتف',
+                        prefixIcon: Icon(Icons.phone_outlined),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                      ),
+                      keyboardType: TextInputType.phone,
+                      validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                      enabled: !isSubmitting,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _addressController,
+                      decoration: const InputDecoration(
+                        labelText: 'العنوان بالتفصيل',
+                        prefixIcon: Icon(Icons.location_on_outlined),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                      ),
+                      validator: (v) => v!.isEmpty ? 'مطلوب' : null,
+                      enabled: !isSubmitting,
+                      maxLines: 2,
+                    ),
                     const SizedBox(height: 20),
 
                     // 3. 📦 عرض السعر الذي حسبه السيرفر (الديناميكي)
                     Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
                       child: Column(
                         children: [
                           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                            const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
+                            const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                             // يعرض السعر القادم من السيرفر (مثلاً 3,000 د.ع)
                             Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع",
                                 style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 16)),
@@ -5637,7 +6032,14 @@ class _CartScreenState extends State<CartScreen> {
                       ),
                     ),
                     const SizedBox(height: 15),
-                    TextFormField(controller: _couponController, decoration: const InputDecoration(labelText: 'كود الخصم (اختياري)')),
+                    TextFormField(
+                      controller: _couponController,
+                      decoration: const InputDecoration(
+                        labelText: 'كود الخصم (اختياري)',
+                        prefixIcon: Icon(Icons.local_offer_outlined),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                      ),
+                    ),
                     const Divider(height: 30),
                     _buildPriceSummary(cart, _deliveryFee, !_isCalcFinished, ""),
                   ],
@@ -5645,9 +6047,16 @@ class _CartScreenState extends State<CartScreen> {
               ),
             ),
             actions: <Widget>[
-              TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text('إلغاء'),
+              ),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).primaryColor,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
                 onPressed: (isSubmitting || !_isCalcFinished) ? null : () async {
                   if (!_formKey.currentState!.validate()) return;
 
@@ -5682,26 +6091,60 @@ class _CartScreenState extends State<CartScreen> {
                     Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
 
                     showDialog(
-                        context: cartScreenContext,
-                        builder: (ctx) => AlertDialog(
-                            title: const Text("تم بنجاح! 🎉"),
-                            content: const Text("تم استلام طلبك بنجاح."),
-                            actions: [
-                              ElevatedButton(
-                                onPressed: () {
-                                  Navigator.pop(ctx);
-                                  Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
-                                },
-                                child: const Text("متابعة الطلب"),
-                              )
-                            ]));
+                      context: cartScreenContext,
+                      barrierDismissible: false,
+                      builder: (ctx) => AlertDialog(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.check_circle, color: Colors.green, size: 60),
+                            ),
+                            const SizedBox(height: 20),
+                            const Text("تم بنجاح! 🎉", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 10),
+                            const Text(
+                              "تم استلام طلبك بنجاح.\nسيتم التواصل معك قريباً.",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 14, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                        actions: [
+                          ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Theme.of(context).primaryColor,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: const Text("متابعة الطلب"),
+                          )
+                        ],
+                      ),
+                    );
                   } catch (e) {
-                    if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
+                    if (cartScreenContext.mounted) {
+                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(
+                        SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
+                      );
+                    }
                   } finally {
                     if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
                   }
                 },
-                child: isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('تأكيد الطلب'),
+                child: isSubmitting
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Text('تأكيد الطلب'),
               )
             ],
           );
@@ -5709,114 +6152,263 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
   }
-  Widget _buildCartItemCard(
-      BuildContext context, CartProvider cart, FoodItem item) {
+
+  // ✨✨✨ دالة بناء بطاقة المنتج في السلة - محسّنة مع عرض الوزن ✨✨✨
+  Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
     return Card(
-        margin: const EdgeInsets.only(bottom: 15),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        child: Padding(
-            padding: const EdgeInsets.all(10.0),
-            child: Row(children: [
-              ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: CachedNetworkImage(
-                      imageUrl: item.imageUrl,
-                      width: 80,
-                      height: 80,
-                      fit: BoxFit.cover)),
-              const SizedBox(width: 15),
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(item.name,
-                            style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 5),
-                        Text(item.formattedPrice,
-                            style: TextStyle(
-                                fontSize: 16,
-                                color: Theme.of(context).primaryColor,
-                                fontWeight: FontWeight.bold))
-                      ])),
-              Row(children: [
-                IconButton(
-                    icon: const Icon(Icons.remove_circle_outline),
-                    onPressed: () => cart.decrementQuantity(item)),
-                Text(item.quantity.toString(),
+      margin: const EdgeInsets.only(bottom: 15),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      elevation: 3,
+      shadowColor: Colors.black.withOpacity(0.08),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Row(
+          children: [
+            // صورة المنتج
+            ClipRRect(
+              borderRadius: BorderRadius.circular(15),
+              child: CachedNetworkImage(
+                imageUrl: item.imageUrl,
+                width: 90,
+                height: 90,
+                fit: BoxFit.cover,
+                errorWidget: (c, u, e) => Container(
+                  width: 90,
+                  height: 90,
+                  color: Colors.grey.shade300,
+                  child: const Icon(Icons.fastfood, size: 40, color: Colors.grey),
+                ),
+              ),
+            ),
+            const SizedBox(width: 15),
+
+            // تفاصيل المنتج
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.name,
                     style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold)),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 6),
+
+                  // ✨ عرض الوزن بشكل واضح ومميز
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).primaryColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.scale_rounded,
+                          size: 14,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _getWeightDisplayText(item.selectedWeight),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).primaryColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+                  Text(
+                    item.formattedPrice,
+                    style: TextStyle(
+                      fontSize: 17,
+                      color: Theme.of(context).primaryColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // أزرار الكمية + حذف
+            Column(
+              children: [
+                // أزرار +/-
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove, size: 20),
+                        onPressed: () => cart.decrementQuantity(item),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                      ),
+                      Text(
+                        item.quantity.toString(),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add, size: 20),
+                        onPressed: () => cart.incrementQuantity(item),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // زر الحذف
                 IconButton(
-                    icon: const Icon(Icons.add_circle_outline),
-                    onPressed: () => cart.incrementQuantity(item))
-              ])
-            ])));
+                  icon: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 22),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        title: const Text('حذف المنتج؟', style: TextStyle(fontWeight: FontWeight.bold)),
+                        content: Text('هل تريد حذف "${item.name}" من السلة؟'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('إلغاء'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () {
+                              cart.decrementQuantity(item);
+                              Navigator.pop(ctx);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: const Text('حذف'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildCheckoutSection(BuildContext context, CartProvider cart) {
-    final totalFormatted =
-    NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
-    final discountedTotalFormatted =
-    NumberFormat('#,###', 'ar_IQ').format(cart.discountedTotal);
+    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
+    final discountedTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.discountedTotal);
+
     return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(30), topRight: Radius.circular(30)),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.grey.withOpacity(0.2),
-                  blurRadius: 10,
-                  spreadRadius: 5)
-            ]),
-        child: Column(children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('المجموع',
-                style: TextStyle(fontSize: 18, color: Colors.grey)),
-            Text('$totalFormatted د.ع',
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(30),
+          topRight: Radius.circular(30),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.2),
+            blurRadius: 10,
+            spreadRadius: 5,
+          )
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('المجموع', style: TextStyle(fontSize: 18, color: Colors.grey)),
+              Text(
+                '$totalFormatted د.ع',
                 style: TextStyle(
-                    fontSize: 18,
-                    color: Colors.grey,
-                    decoration: cart.appliedCoupon != null
-                        ? TextDecoration.lineThrough
-                        : TextDecoration.none))
-          ]),
+                  fontSize: 18,
+                  color: Colors.grey,
+                  decoration: cart.appliedCoupon != null ? TextDecoration.lineThrough : TextDecoration.none,
+                ),
+              ),
+            ],
+          ),
           if (cart.appliedCoupon != null)
             Padding(
               padding: const EdgeInsets.only(top: 8.0),
               child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('الإجمالي بعد الخصم',
-                        style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).primaryColor)),
-                    Text('$discountedTotalFormatted د.ع',
-                        style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).primaryColor))
-                  ]),
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'الإجمالي بعد الخصم',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  ),
+                  Text(
+                    '$discountedTotalFormatted د.ع',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  ),
+                ],
+              ),
             ),
           const SizedBox(height: 20),
           SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                  onPressed: () => _showCheckoutDialog(context, cart),
-                  style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30)),
-                      backgroundColor: Theme.of(context).primaryColor,
-                      foregroundColor: Colors.white),
-                  child: const Text('إتمام الطلب',
-                      style: TextStyle(fontSize: 18))))
-        ]));
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => _showCheckoutDialog(context, cart),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                backgroundColor: Theme.of(context).primaryColor,
+                foregroundColor: Colors.white,
+                elevation: 8,
+                shadowColor: Theme.of(context).primaryColor.withOpacity(0.3),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.shopping_cart_checkout, color: Colors.white, size: 22),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'إتمام الطلب',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
-
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
   @override
