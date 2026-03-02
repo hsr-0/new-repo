@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
-// ✅ استبدال Mapbox بـ MapLibre
+// --- مكتبات الخرائط ---
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
 
@@ -22,9 +20,10 @@ class PolyLineMapScreen extends StatefulWidget {
   State<PolyLineMapScreen> createState() => _PolyLineMapScreenState();
 }
 
-class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
-  // --- Android (MapLibre) Variables ---
-  ml.MaplibreMapController? maplibreController;
+class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProviderStateMixin {
+  // --- Android (MapLibre / OpenFreeMap) Variables ---
+  ml.MaplibreMapController? _freeMapController;
+  bool isFreeMapStyleLoaded = false;
 
   // --- iOS (Apple Maps) Variables ---
   ap.AppleMapController? appleController;
@@ -49,71 +48,35 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
         const ImageConfiguration(size: Size(40, 40)), MyIcons.mapMarkerPickUpIcon);
     destIconApple = await ap.BitmapDescriptor.fromAssetImage(
         const ImageConfiguration(size: Size(40, 40)), MyIcons.mapMarkerIcon);
-    setState(() {});
+    if (mounted) setState(() {});
+  }
+
+  // تحميل أيقونات الماركرز لخريطة MapLibre
+  Future<void> _loadMapLibreIcons() async {
+    if (_freeMapController == null) return;
+
+    final ByteData pickupBytes = await rootBundle.load(MyIcons.mapMarkerPickUpIcon);
+    await _freeMapController!.addImage('pickup_icon', pickupBytes.buffer.asUint8List());
+
+    final ByteData destBytes = await rootBundle.load(MyIcons.mapMarkerIcon);
+    await _freeMapController!.addImage('dest_icon', destBytes.buffer.asUint8List());
   }
 
   // ==========================================
-  // 🤖 Android MapLibre Logic
-  // ==========================================
-  void _onMapLibreCreated(ml.MaplibreMapController controller) {
-    maplibreController = controller;
-    setState(() => isMapReady = true);
-    // تحديث الواجهة فور الجاهزية
-    _updateMapUI(Get.find<RideMapController>());
-  }
-
-  // ==========================================
-  // 🍎 iOS Apple Maps Logic
-  // ==========================================
-  void _onAppleMapCreated(ap.AppleMapController controller) {
-    appleController = controller;
-    setState(() => isMapReady = true);
-    _updateMapUI(Get.find<RideMapController>());
-  }
-
-  // ==========================================
-  // 🔄 Unified Update Logic
+  // 🔄 منطق التحديث الموحد (Unified)
   // ==========================================
   Future<void> _updateMapUI(RideMapController controller) async {
     if (!isMapReady) return;
 
     if (Platform.isIOS) {
       _updateAppleUI(controller);
-      return;
-    }
-
-    // --- Android (MapLibre) Update ---
-    if (maplibreController == null) return;
-    try {
-      // تنظيف الخريطة
-      await maplibreController!.clearLines();
-      await maplibreController!.clearSymbols();
-
-      // 1. رسم المسار (Polyline)
-      if (controller.polylineCoordinates.isNotEmpty) {
-        List<ml.LatLng> routePoints = controller.polylineCoordinates
-            .map((e) => ml.LatLng(e.latitude, e.longitude))
-            .toList();
-
-        await maplibreController!.addLine(
-          ml.LineOptions(
-            geometry: routePoints,
-            lineColor: "#${MyColor.primaryColor.value.toRadixString(16).substring(2)}",
-            lineWidth: 5.0,
-            lineOpacity: 1.0,
-          ),
-        );
-        _fitCameraToBoundsUnified(controller.polylineCoordinates);
-      }
-
-      // 2. رسم الدبابيس (Symbols)
-      await _drawMapLibreMarkers(controller);
-    } catch (e) {
-      debugPrint("🔴 Error updating MapLibre UI: $e");
+    } else {
+      _updateMapLibreUI(controller);
     }
   }
 
   void _updateAppleUI(RideMapController controller) {
+    if (appleController == null) return;
     setState(() {
       applePolylines.clear();
       appleAnnotations.clear();
@@ -146,52 +109,55 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
     });
   }
 
-  Future<void> _drawMapLibreMarkers(RideMapController controller) async {
-    // رسم نقطة البداية
+  void _updateMapLibreUI(RideMapController controller) {
+    if (_freeMapController == null || !isFreeMapStyleLoaded) return;
+
+    // مسح المسارات والعلامات السابقة قبل رسم الجديدة
+    _freeMapController!.clearLines();
+    _freeMapController!.clearSymbols();
+
+    // رسم المسار (Polyline)
+    if (controller.polylineCoordinates.isNotEmpty) {
+      final List<ml.LatLng> line = controller.polylineCoordinates
+          .map((e) => ml.LatLng(e.latitude, e.longitude))
+          .toList();
+
+      // تحويل لون التطبيق إلى صيغة Hex يقبلها MapLibre
+      String hexColor = '#${MyColor.primaryColor.value.toRadixString(16).substring(2, 8)}';
+
+      _freeMapController!.addLine(ml.LineOptions(
+        geometry: line,
+        lineColor: hexColor,
+        lineWidth: 5.0,
+      ));
+      _fitCameraToBoundsUnified(controller.polylineCoordinates);
+    }
+
+    // إضافة علامة الانطلاق (Pickup Marker)
     if (controller.pickupLatLng.latitude != 0) {
-      await maplibreController!.addSymbol(ml.SymbolOptions(
+      _freeMapController!.addSymbol(ml.SymbolOptions(
         geometry: ml.LatLng(controller.pickupLatLng.latitude, controller.pickupLatLng.longitude),
-        iconImage: "pickup_marker", // يجب أن تكون الصور محملة في الستايل أو كـ Assets
-        iconSize: 1.0,
+        iconImage: 'pickup_icon',
+        iconSize: 0.5, // قم بتعديل الحجم حسب مقاس الصورة الأصلية
       ));
     }
-    // رسم نقطة النهاية
+
+    // إضافة علامة الوصول (Destination Marker)
     if (controller.destinationLatLng.latitude != 0) {
-      await maplibreController!.addSymbol(ml.SymbolOptions(
+      _freeMapController!.addSymbol(ml.SymbolOptions(
         geometry: ml.LatLng(controller.destinationLatLng.latitude, controller.destinationLatLng.longitude),
-        iconImage: "dest_marker",
-        iconSize: 1.0,
+        iconImage: 'dest_icon',
+        iconSize: 0.5, // قم بتعديل الحجم حسب مقاس الصورة الأصلية
       ));
     }
   }
 
+  // ==========================================
+  // 🎥 ضبط حدود الكاميرا (الإصدار المصحح للبلاتفورمين)
+  // ==========================================
   void _fitCameraToBoundsUnified(List points) {
     if (points.isEmpty) return;
 
-    if (Platform.isIOS && appleController != null) {
-      double minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
-      for (var p in points) {
-        if (p.latitude < minLat) minLat = p.latitude;
-        if (p.latitude > maxLat) maxLat = p.latitude;
-        if (p.longitude < minLng) minLng = p.longitude;
-        if (p.longitude > maxLng) maxLng = p.longitude;
-      }
-      appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
-          ap.LatLngBounds(southwest: ap.LatLng(minLat, minLng), northeast: ap.LatLng(maxLat, maxLng)),
-          50.0));
-    } else if (maplibreController != null) {
-      // ضبط الكاميرا في MapLibre
-      List<ml.LatLng> mlPoints = points.map((e) => ml.LatLng(e.latitude, e.longitude)).toList();
-
-      // حساب الحدود يدوياً أو استخدام الكاميرا لعمل احتواء
-      maplibreController!.animateCamera(ml.CameraUpdate.newLatLngBounds(
-        _computeBounds(mlPoints),
-        top: 100, left: 50, bottom: 100, right: 50,
-      ));
-    }
-  }
-
-  ml.LatLngBounds _computeBounds(List<ml.LatLng> points) {
     double minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
     for (var p in points) {
       if (p.latitude < minLat) minLat = p.latitude;
@@ -199,7 +165,23 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
       if (p.longitude < minLng) minLng = p.longitude;
       if (p.longitude > maxLng) maxLng = p.longitude;
     }
-    return ml.LatLngBounds(southwest: ml.LatLng(minLat, minLng), northeast: ml.LatLng(maxLat, maxLng));
+
+    if (Platform.isIOS && appleController != null) {
+      appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
+          ap.LatLngBounds(southwest: ap.LatLng(minLat, minLng), northeast: ap.LatLng(maxLat, maxLng)),
+          70.0
+      ));
+    } else if (!Platform.isIOS && _freeMapController != null && isFreeMapStyleLoaded) {
+      _freeMapController!.animateCamera(
+          ml.CameraUpdate.newLatLngBounds(
+            ml.LatLngBounds(southwest: ml.LatLng(minLat, minLng), northeast: ml.LatLng(maxLat, maxLng)),
+            left: 70.0,
+            right: 70.0,
+            top: 70.0,
+            bottom: 70.0,
+          )
+      );
+    }
   }
 
   @override
@@ -210,21 +192,39 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
           final initialLat = (controller.pickupLatLng.latitude == 0) ? 32.5029 : controller.pickupLatLng.latitude;
           final initialLng = (controller.pickupLatLng.longitude == 0) ? 45.8219 : controller.pickupLatLng.longitude;
 
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (isMapReady) _updateMapUI(controller);
+          });
+
           return Stack(
             children: [
               Platform.isIOS
                   ? ap.AppleMap(
                 initialCameraPosition: ap.CameraPosition(target: ap.LatLng(initialLat, initialLng), zoom: 14),
-                onMapCreated: _onAppleMapCreated,
+                onMapCreated: (c) {
+                  appleController = c;
+                  setState(() => isMapReady = true);
+                },
                 annotations: appleAnnotations,
                 polylines: applePolylines,
                 myLocationEnabled: true,
+                myLocationButtonEnabled: false,
               )
-                  : ml.MaplibreMap(
-                styleString: "https://maps.beytei.com/styles/iraq-taxi-style/style.json",
-                initialCameraPosition: ml.CameraPosition(target: ml.LatLng(initialLat, initialLng), zoom: 14.0),
-                onMapCreated: _onMapLibreCreated,
+                  : ml.MapLibreMap(
+                // رابط سيرفرات OpenFreeMap المجانية
+                styleString: 'https://tiles.openfreemap.org/styles/liberty',
+                initialCameraPosition: ml.CameraPosition(target: ml.LatLng(initialLat, initialLng), zoom: 14),
+                onMapCreated: (ml.MaplibreMapController c) {
+                  _freeMapController = c;
+                  setState(() => isMapReady = true);
+                },
+                onStyleLoadedCallback: () async {
+                  isFreeMapStyleLoaded = true;
+                  await _loadMapLibreIcons(); // تحميل الصور داخل الخريطة بعد جهوزية الستايل
+                  _updateMapUI(controller); // رسم البيانات فور جاهزية الستايل
+                },
                 myLocationEnabled: true,
+                myLocationRenderMode: ml.MyLocationRenderMode.normal,
               ),
 
               // زر إعادة التركيز
@@ -232,10 +232,11 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> {
                 bottom: 20,
                 right: 20,
                 child: FloatingActionButton(
+                  mini: true,
                   backgroundColor: Colors.white,
                   child: const Icon(Icons.center_focus_strong, color: Colors.black),
                   onPressed: () {
-                    if (controller.polylineCoordinates.isNotEmpty && isMapReady) {
+                    if (controller.polylineCoordinates.isNotEmpty) {
                       _fitCameraToBoundsUnified(controller.polylineCoordinates);
                     }
                   },

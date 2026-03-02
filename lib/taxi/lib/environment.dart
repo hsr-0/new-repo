@@ -5,11 +5,10 @@ class Environment {
 
   //Language
   // Default display name for the app's language (used in UI language selectors)
-  static String defaultLanguageName = "English";
+  static String defaultLanguageName = "العربية";
 
   // Default language code (ISO 639-1) used by the app at startup
-  static String defaultLanguageCode = "en";
-
+  static String defaultLanguageCode = "ar";
   // Default country code
   static const String defaultCountryCode = 'د.ع';
 
