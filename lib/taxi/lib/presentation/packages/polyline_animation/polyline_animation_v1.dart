@@ -2,11 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 
-// ✅ تصحيح الاستيراد لاستخدام MapLibre بدلاً من Mapbox
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
-
-// مكتبة الإحداثيات العامة
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:cosmetic_store/taxi/lib/core/utils/my_color.dart';
 
@@ -15,6 +12,11 @@ class PolylineAnimator {
 
   // تخزين مراجع الخطوط النشطة للأندرويد (في MapLibre نستخدم Line)
   final Map<String, ml.Line> _activeLines = {};
+
+  // دالة مساعدة لتحويل الألوان لنسق يقبله MapLibre (Hex String)
+  String _colorToHex(Color color) {
+    return "#${color.value.toRadixString(16).padLeft(8, '0').substring(2)}";
+  }
 
   void animatePolyline(
       List<ll.LatLng> points,
@@ -25,7 +27,7 @@ class PolylineAnimator {
         Function(Set<ap.Polyline>)? onUpdateApple,
       }) async {
 
-    // إلغاء أي مؤقت سابق لنفس المسار
+    // إلغاء أي مؤقت سابق لنفس المسار لمنع تداخل الأنيميشن
     _polylinesTimers[id]?.cancel();
 
     if (points.isEmpty) return;
@@ -64,19 +66,31 @@ class PolylineAnimator {
 
         Set<ap.Polyline> polylines = {};
 
+        // 1. رسم الحدود العريضة (الطبقة السفلية)
+        polylines.add(ap.Polyline(
+          polylineId: ap.PolylineId('${id}_border'),
+          points: allApplePoints,
+          color: MyColor.primaryColor,
+          width: 8, // خط عريض ليتطابق مع القديم
+          jointType: ap.JointType.round,
+        ));
+
+        // 2. رسم الخلفية الفاتحة (الطبقة الوسطى)
         polylines.add(ap.Polyline(
           polylineId: ap.PolylineId('${id}_bg'),
           points: allApplePoints,
-          color: backgroundColor.withOpacity(0.5),
-          width: 6,
+          color: backgroundColor,
+          width: 5,
+          jointType: ap.JointType.round,
         ));
 
-        if (currentPoints.isNotEmpty) {
+        // 3. الخط المتحرك (الطبقة العلوية)
+        if (currentPoints.length >= 2) {
           polylines.add(ap.Polyline(
             polylineId: ap.PolylineId('${id}_moving'),
             points: List.from(currentPoints),
             color: color,
-            width: 6,
+            width: 5,
             jointType: ap.JointType.round,
           ));
         }
@@ -93,26 +107,43 @@ class PolylineAnimator {
     // -------------------------------------------------------------------------
     if (mapController == null) return;
 
-    // تحويل النقاط لنسق MapLibre
     List<ml.LatLng> allmlPoints = points.map((e) => ml.LatLng(e.latitude, e.longitude)).toList();
 
-    // 1. رسم الخلفية الثابتة
+    String primaryHex = _colorToHex(MyColor.primaryColor);
+    String bgHex = _colorToHex(backgroundColor);
+    String fgHex = _colorToHex(color);
+
+    // --- 1. رسم الحدود (Border) ---
     await mapController.addLine(
       ml.LineOptions(
         geometry: allmlPoints,
-        lineColor: "#${backgroundColor.value.toRadixString(16).substring(2)}",
-        lineWidth: 5.0,
-        lineOpacity: 0.5,
+        lineColor: primaryHex,
+        lineWidth: 6.0, // زيادة السماكة قليلاً لتبدو مثل القديم
+        lineOpacity: 1.0,
+        lineJoin: "round", // يحافظ على انحناءات الشوارع الناعمة
       ),
     );
 
-    // 2. إنشاء الخط المتحرك (يبدأ بنقطة واحدة)
+    // --- 2. رسم الخلفية (Background) ---
+    await mapController.addLine(
+      ml.LineOptions(
+        geometry: allmlPoints,
+        lineColor: bgHex,
+        lineWidth: 5.0, // زيادة السماكة
+        lineOpacity: 1.0,
+        lineJoin: "round",
+      ),
+    );
+
+    // --- 3. الخط المتحرك (Animation) ---
+    // يجب تمرير نقطتين على الأقل لتجنب تعطل MapLibre
     ml.Line movingLine = await mapController.addLine(
       ml.LineOptions(
-        geometry: [allmlPoints[0]],
-        lineColor: "#${color.value.toRadixString(16).substring(2)}",
-        lineWidth: 5.0,
+        geometry: [allmlPoints[0], allmlPoints[0]],
+        lineColor: fgHex,
+        lineWidth: 5.0, // مطابقة سماكة الخلفية
         lineOpacity: 1.0,
+        lineJoin: "round",
       ),
     );
 
@@ -120,7 +151,15 @@ class PolylineAnimator {
     int backwardIndex = -1;
     List<ml.LatLng> currentMlPoints = [];
 
+    // سرعة 50ms تعطي أنيميشن سريع ومريح للعين، مطابق للنسخة القديمة
     Timer timer = Timer.periodic(const Duration(milliseconds: 50), (Timer timer) async {
+
+      // التأكد من أن الخط لا يزال موجوداً على الخريطة
+      if (!_activeLines.containsKey(id)) {
+        timer.cancel();
+        return;
+      }
+
       if (forwardIndex < allmlPoints.length) {
         currentMlPoints.add(allmlPoints[forwardIndex]);
         forwardIndex++;
@@ -140,10 +179,11 @@ class PolylineAnimator {
         currentMlPoints.clear();
       }
 
-      // تحديث إحداثيات الخط في MapLibre
-      if (currentMlPoints.isNotEmpty) {
-        await mapController.updateLine(movingLine, ml.LineOptions(geometry: currentMlPoints));
-      }
+      List<ml.LatLng> validGeometry = currentMlPoints.length >= 2
+          ? currentMlPoints
+          : (currentMlPoints.isNotEmpty ? [currentMlPoints[0], currentMlPoints[0]] : [allmlPoints[0], allmlPoints[0]]);
+
+      await mapController.updateLine(movingLine, ml.LineOptions(geometry: validGeometry));
     });
 
     _polylinesTimers[id] = timer;
@@ -155,6 +195,8 @@ class PolylineAnimator {
       timer.cancel();
     }
     _polylinesTimers.clear();
+
+    // في حال أردنا إضافة كود مسح الخطوط يدوياً من الخريطة لاحقاً
     _activeLines.clear();
   }
 }

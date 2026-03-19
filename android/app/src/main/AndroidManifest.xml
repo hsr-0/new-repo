@@ -8,26 +8,23 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
-    <!-- أذونات المكالمات الصوتية (ضرورية للرنين عند الإغلاق) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
-    <!-- أذونات الموقع -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
-    <!-- أذونات التخزين -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.READ_MEDIA_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_MEDIA_STORAGE"/>
 
-    <!-- أذونات الصوت والهاتف -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -76,6 +73,16 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <service
+            android:name="com.hiennv.flutter_callkit_incoming.CallkitNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
+
+        <service
+            android:name="com.hiennv.flutter_callkit_incoming.CallkitSoundService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
 
         <activity
             android:name=".MainActivity"
@@ -130,7 +137,6 @@
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
             android:exported="false" />
 
-        <!-- قناة الإشعارات عالية الأولوية (مهمة للمكالمات) -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />

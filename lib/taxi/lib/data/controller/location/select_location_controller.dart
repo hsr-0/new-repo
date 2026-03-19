@@ -3,17 +3,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 
-// --- تم استبدال flutter_map بمكتبة MapLibre المجانية المتوافقة مع OpenFreeMap ---
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
-
 import 'package:geolocator/geolocator.dart' as geo;
+
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
-import 'package:latlong2/latlong.dart'; // نستخدم LatLng لتوحيد البيانات مع باقي أجزاء التطبيق
+import 'package:latlong2/latlong.dart' as ll;
 import 'package:cosmetic_store/taxi/lib/core/utils/my_color.dart';
 import 'package:cosmetic_store/taxi/lib/data/model/location/selected_location_info.dart';
-import 'package:cosmetic_store/taxi/lib/environment.dart';
+import 'package:cosmetic_store/taxi/lib/presentation/packages/polyline_animation/polyline_animation_v1.dart';
 
 import '../../model/location/prediction.dart';
 import '../../repo/location/location_search_repo.dart';
@@ -29,35 +28,33 @@ class SelectLocationController extends GetxController {
   });
 
   // ===========================================================================
-  // 🆕 بيانات المسافة والوقت
+  // متغيرات حفظ المسافة والوقت (مهم جداً لحساب السعر في تطبيق بيتي)
   // ===========================================================================
-  double tripDistance = 0.0; // بالكيلومتر
-  double tripDuration = 0.0; // بالدقائق
+  double tripDistance = 0.0;
+  double tripDuration = 0.0;
 
-  // ===========================================================================
-  // 🤖 متغيرات الاندرويد (MapLibre / OpenFreeMap)
-  // ===========================================================================
   ml.MaplibreMapController? mapLibreController;
-  ml.Line? routeLine; // مرجع لخط المسار لتحديثه دون مسح الخريطة
-
-  // ===========================================================================
-  // 🍎 متغيرات iOS (Apple Maps)
-  // ===========================================================================
   ap.AppleMapController? appleController;
   Set<ap.Polyline> applePolylines = {};
 
-  // ---------------------------------------------------------------------------
+  Timer? _idleIgnoreTimer;
+  bool ignoreCameraIdle = false;
 
-  // إعداد MapLibre (Android)
-  void setMapLibreController(ml.MaplibreMapController controller) {
-    mapLibreController = controller;
-    update();
+  void pauseCameraIdle() {
+    ignoreCameraIdle = true;
+    _idleIgnoreTimer?.cancel();
+    _idleIgnoreTimer = Timer(const Duration(milliseconds: 2000), () {
+      ignoreCameraIdle = false;
+    });
   }
 
-  // إعداد Apple Maps (iOS Only)
+  void setMapLibreController(ml.MaplibreMapController map) {
+    if (Platform.isIOS) return;
+    mapLibreController = map;
+  }
+
   void setAppleController(ap.AppleMapController controller) {
     appleController = controller;
-    update();
   }
 
   void changeIndex(int i) {
@@ -65,8 +62,8 @@ class SelectLocationController extends GetxController {
     update();
   }
 
-  LatLng pickupLatlong = const LatLng(0, 0);
-  LatLng destinationLatlong = const LatLng(0, 0);
+  ll.LatLng pickupLatlong = const ll.LatLng(0, 0);
+  ll.LatLng destinationLatlong = const ll.LatLng(0, 0);
 
   geo.Position? currentPosition;
   final currentAddress = "".obs;
@@ -81,7 +78,9 @@ class SelectLocationController extends GetxController {
   final TextEditingController destinationController = TextEditingController();
   final TextEditingController pickUpController = TextEditingController();
 
-  List<LatLng> polylineCoordinates = [];
+  final PolylineAnimator animator = PolylineAnimator();
+  List<ll.LatLng> polylineCoordinates = [];
+
   bool isSearched = false;
   List<Prediction> allPredictions = [];
   String selectedAddressFromSearch = '';
@@ -89,8 +88,23 @@ class SelectLocationController extends GetxController {
   void clearTextFiled(int index) {
     if (index == 0) {
       pickUpController.text = '';
+      pickupLatlong = const ll.LatLng(0, 0);
     } else {
       destinationController.text = '';
+      destinationLatlong = const ll.LatLng(0, 0);
+    }
+    clearPolylines();
+    update();
+  }
+
+  void clearPolylines() {
+    polylineCoordinates.clear();
+    applePolylines.clear();
+    animator.dispose(); // إيقاف الأنيميشن فوراً عند المسح
+    if (mapLibreController != null) {
+      try {
+        mapLibreController!.clearLines();
+      } catch (e) {}
     }
     update();
   }
@@ -99,17 +113,17 @@ class SelectLocationController extends GetxController {
     if (homeController.selectedLocations.isNotEmpty) {
       final pickupInfo = homeController.getSelectedLocationInfoAtIndex(0);
       if (pickupInfo != null) {
-        pickupLatlong = LatLng(pickupInfo.latitude ?? 0, pickupInfo.longitude ?? 0);
+        pickupLatlong = ll.LatLng(pickupInfo.latitude ?? 0, pickupInfo.longitude ?? 0);
         pickUpController.text = pickupInfo.getFullAddress(showFull: true);
       }
 
       if (homeController.selectedLocations.length > 1) {
         final destInfo = homeController.getSelectedLocationInfoAtIndex(1);
         if (destInfo != null) {
-          destinationLatlong = LatLng(destInfo.latitude ?? 0, destInfo.longitude ?? 0);
+          destinationLatlong = ll.LatLng(destInfo.latitude ?? 0, destInfo.longitude ?? 0);
           destinationController.text = destInfo.getFullAddress(showFull: true);
         }
-        await _generateRoutePolyline();
+        await _generateRoutePolyline(fitBounds: true);
       }
     }
 
@@ -118,55 +132,54 @@ class SelectLocationController extends GetxController {
     }
   }
 
-  // ===========================================================================
-  // ✅ دالة البحث (استخدام Nominatim المجاني كبديل لـ Mapbox)
-  // ===========================================================================
-  Future<void> searchYourAddress({
-    required String locationName,
-    void Function()? onSuccessCallback,
-  }) async {
+  Future<void> searchYourAddress({required String locationName, void Function()? onSuccessCallback}) async {
     if (locationName.trim().isEmpty) {
       allPredictions.clear();
       update();
       return;
     }
-
     isSearched = true;
     update();
 
     try {
-      // حصر البحث في العراق (iq) لضمان السرعة والدقة
-      final String url = 'https://nominatim.openstreetmap.org/search?q=$locationName&format=json&limit=5&addressdetails=1&countrycodes=iq';
-      final response = await http.get(Uri.parse(url), headers: {'User-Agent': 'BeyteiApp'});
+      final response = await locationSearchRepo.searchAddressByLocationName(
+        text: locationName,
+        position: currentPosition,
+      );
 
       List<Prediction> finalResults = [];
+      if (response != null && response['features'] != null) {
+        List features = response['features'];
+        for (var item in features) {
+          String placeName = item['place_name'] ?? item['text'] ?? "مكان غير معروف";
+          String description = item['description'] ?? placeName;
+          double lat = 0.0, lng = 0.0;
 
-      if (response.statusCode == 200) {
-        List data = json.decode(response.body);
-        for (var item in data) {
-          finalResults.add(Prediction(
-            description: item['display_name'],
-            placeId: item['place_id'].toString(),
-            lat: double.parse(item['lat']),
-            lng: double.parse(item['lon']),
-          ));
+          if (item['geometry'] != null && item['geometry']['coordinates'] != null) {
+            var coords = item['geometry']['coordinates'];
+            lng = double.tryParse(coords[0].toString()) ?? 0.0;
+            lat = double.tryParse(coords[1].toString()) ?? 0.0;
+          } else if (item['center'] != null) {
+            var coords = item['center'];
+            lng = double.tryParse(coords[0].toString()) ?? 0.0;
+            lat = double.tryParse(coords[1].toString()) ?? 0.0;
+          }
+
+          if (lat != 0 && lng != 0) {
+            finalResults.add(Prediction(description: description, placeId: item['id'].toString(), lat: lat, lng: lng));
+          }
         }
       }
-
       allPredictions = finalResults;
       if (onSuccessCallback != null) onSuccessCallback();
-
     } catch (e) {
-      debugPrint('🔴 Search Error: $e');
+      print('🔴 Search Error: $e');
     } finally {
       isSearched = false;
       update();
     }
   }
 
-  // ===========================================================================
-  // ✅ جلب العنوان من الإحداثيات (Reverse Geocoding)
-  // ===========================================================================
   Future<void> openMap(double latitude, double longitude, {bool isMapDrag = false}) async {
     try {
       isLoading = true;
@@ -179,26 +192,25 @@ class SelectLocationController extends GetxController {
 
       if (selectedLocationIndex == 0) {
         pickUpController.text = address;
-        pickupLatlong = LatLng(latitude, longitude);
+        pickupLatlong = ll.LatLng(latitude, longitude);
       } else {
         destinationController.text = address;
-        destinationLatlong = LatLng(latitude, longitude);
+        destinationLatlong = ll.LatLng(latitude, longitude);
       }
 
       homeController.addLocationAtIndex(
-        SelectedLocationInfo(
-          latitude: latitude,
-          longitude: longitude,
-          fullAddress: address,
-        ),
+        SelectedLocationInfo(latitude: latitude, longitude: longitude, fullAddress: address),
         selectedLocationIndex,
       );
 
       if (pickupLatlong.latitude != 0 && destinationLatlong.latitude != 0) {
+        // نمنع الخريطة من القفز المزعج إذا كان المستخدم يحدد الموقع بيده (الدبوس)
         await _generateRoutePolyline(fitBounds: !isMapDrag);
+      } else {
+        clearPolylines();
       }
     } catch (e) {
-      debugPrint("🔴 Error in openMap: $e");
+      print("🔴 Error in openMap: $e");
     } finally {
       isLoading = false;
       update();
@@ -210,13 +222,7 @@ class SelectLocationController extends GetxController {
     update();
   }
 
-  void clearSearchField() {
-    allPredictions = [];
-    searchLocationController.clear();
-    update();
-  }
-
-  Future<LatLng?> getLangAndLatFromMap(Prediction prediction) async {
+  Future<ll.LatLng?> getLangAndLatFromMap(Prediction prediction) async {
     try {
       final lat = double.tryParse(prediction.lat.toString()) ?? 0.0;
       final lng = double.tryParse(prediction.lng.toString()) ?? 0.0;
@@ -227,87 +233,100 @@ class SelectLocationController extends GetxController {
 
       allPredictions = [];
       update();
-      return LatLng(lat, lng);
+      return ll.LatLng(lat, lng);
     } catch (e) {
-      debugPrint("🔴 Error selection: ${e.toString()}");
       return null;
     }
   }
 
-  // ===========================================================================
-  // 🗺️ وظائف رسم المسار (استخدام OSRM المجاني)
-  // ===========================================================================
-  Future<void> _generateRoutePolyline({bool fitBounds = true}) async {
+  Future<void> _generateRoutePolyline({bool fitBounds = false}) async {
     if (pickupLatlong.latitude == 0 || destinationLatlong.latitude == 0) return;
 
-    final points = await getPolylinePointsFromOSRM();
+    final points = await getPolylinePoints();
+    if (points.isEmpty) return;
+
     polylineCoordinates = points;
 
-    _drawPolylineUnified(points);
-
-    if (fitBounds) {
-      fitPolylineBounds(points);
+    // مسح أي مسارات سابقة على الخريطة لتجنب تراكم الخطوط
+    if (mapLibreController != null) {
+      try { mapLibreController!.clearLines(); } catch (e) {}
     }
+
+    // 🎨 هنا يتم رسم الأنيميشن الجميل الخاص بك حصراً
+    if (Platform.isIOS) {
+      animator.animatePolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), null, onUpdateApple: (p) {
+        applePolylines = p;
+        update();
+      });
+    } else {
+      animator.animatePolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), mapLibreController);
+    }
+
+    if (fitBounds) fitPolylineBounds(points);
   }
 
-  Future<void> _drawPolylineUnified(List<LatLng> coordinates) async {
-    if (coordinates.isEmpty) return;
+  // 🚀 التعديل الأهم: استخدام OSRM المجاني بالكامل، مع جلب المسافة لحساب السعر بدقة!
+  Future<List<ll.LatLng>> getPolylinePoints() async {
+    List<ll.LatLng> points = [];
 
-    if (Platform.isIOS && appleController != null) {
-      applePolylines.clear();
-      applePolylines.add(ap.Polyline(
-        polylineId: ap.PolylineId('route'),
-        points: coordinates.map((e) => ap.LatLng(e.latitude, e.longitude)).toList(),
-        color: MyColor.getPrimaryColor(),
-        width: 5,
-      ));
-    } else if (!Platform.isIOS && mapLibreController != null) {
-      if (routeLine != null) await mapLibreController!.removeLine(routeLine!);
-
-      String hexColor = '#${MyColor.getPrimaryColor().value.toRadixString(16).substring(2, 8)}';
-
-      routeLine = await mapLibreController!.addLine(ml.LineOptions(
-        geometry: coordinates.map((e) => ml.LatLng(e.latitude, e.longitude)).toList(),
-        lineColor: hexColor,
-        lineWidth: 5.0,
-      ));
-    }
-    update();
-  }
-
-  Future<List<LatLng>> getPolylinePointsFromOSRM() async {
-    List<LatLng> points = [];
     try {
+      // نستخدم سيرفر OSRM المجاني بدلاً من Mapbox المدفوع
       final String url = 'https://router.project-osrm.org/route/v1/driving/'
           '${pickupLatlong.longitude},${pickupLatlong.latitude};'
           '${destinationLatlong.longitude},${destinationLatlong.latitude}'
-          '?overview=full&geometries=geojson';
+          '?geometries=geojson&overview=full&steps=true';
+
+      print("🚀 [OSRM API] جاري طلب المسار المجاني...");
 
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['routes'] != null && data['routes'].isNotEmpty) {
-          final List coords = data['routes'][0]['geometry']['coordinates'];
-          points = coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())).toList();
 
-          tripDistance = (data['routes'][0]['distance'] as num).toDouble() / 1000;
-          tripDuration = (data['routes'][0]['duration'] as num).toDouble() / 60;
+        // التأكد من أن السيرفر وجد طريقاً متاحاً (code: Ok)
+        if (data['code'] == 'Ok' && data['routes'] != null && data['routes'].isNotEmpty) {
+
+          final List coordinates = data['routes'][0]['geometry']['coordinates'];
+          points = coordinates.map((coord) => ll.LatLng(coord[1].toDouble(), coord[0].toDouble())).toList();
+
+          // 📏 استخراج المسافة وحفظها (بالمتر -> تحويل إلى كيلو)
+          double meters = double.tryParse(data['routes'][0]['distance'].toString()) ?? 0.0;
+          tripDistance = meters / 1000;
+
+          // ⏱️ استخراج الوقت وحفظه (بالثواني -> تحويل إلى دقائق)
+          double seconds = double.tryParse(data['routes'][0]['duration'].toString()) ?? 0.0;
+          tripDuration = seconds / 60;
+
+          print("🏁 [نتائج الرحلة - مجاني 100%] -----------");
+          print("📏 المسافة: $tripDistance كيلومتر");
+          print("⏱️ الوقت المتوقع: $tripDuration دقيقة");
+          print("------------------------------------------");
+
+        } else {
+          print("⚠️ [OSRM] السيرفر لم يجد طريقاً بين هاتين النقطتين.");
         }
+      } else {
+        print("🔥 [OSRM Error] كود الخطأ: ${response.statusCode}");
       }
     } catch (e) {
-      debugPrint("🔴 OSRM Route Error: $e");
+      print("🔴 Route Error Exception: $e");
     }
     return points;
   }
 
-  void fitPolylineBounds(List<LatLng> coords) {
+  void fitPolylineBounds(List<ll.LatLng> coords) {
     if (coords.isEmpty) return;
+    pauseCameraIdle();
 
-    double minLat = coords.map((e) => e.latitude).reduce((a, b) => a < b ? a : b);
-    double maxLat = coords.map((e) => e.latitude).reduce((a, b) => a > b ? a : b);
-    double minLng = coords.map((e) => e.longitude).reduce((a, b) => a < b ? a : b);
-    double maxLng = coords.map((e) => e.longitude).reduce((a, b) => a > b ? a : b);
+    double minLat = 90.0, maxLat = -90.0;
+    double minLng = 180.0, maxLng = -180.0;
+
+    for (var point in coords) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLng) minLng = point.longitude;
+      if (point.longitude > maxLng) maxLng = point.longitude;
+    }
 
     if (Platform.isIOS && appleController != null) {
       appleController!.animateCamera(ap.CameraUpdate.newLatLngBounds(
@@ -315,12 +334,10 @@ class SelectLocationController extends GetxController {
         50.0,
       ));
     } else if (!Platform.isIOS && mapLibreController != null) {
-      mapLibreController!.animateCamera(
-          ml.CameraUpdate.newLatLngBounds(
-            ml.LatLngBounds(southwest: ml.LatLng(minLat, minLng), northeast: ml.LatLng(maxLat, maxLng)),
-            left: 50.0, right: 50.0, top: 50.0, bottom: 50.0,
-          )
-      );
+      mapLibreController!.animateCamera(ml.CameraUpdate.newLatLngBounds(
+        ml.LatLngBounds(southwest: ml.LatLng(minLat, minLng), northeast: ml.LatLng(maxLat, maxLng)),
+        left: 50, top: 100, right: 50, bottom: 300,
+      ));
     }
   }
 
@@ -344,9 +361,7 @@ class SelectLocationController extends GetxController {
     final hasPermission = await handleLocationPermission();
     if (!hasPermission) { _endLoading(); return; }
 
-    currentPosition = await geo.Geolocator.getCurrentPosition(
-        locationSettings: geo.AndroidSettings(accuracy: geo.LocationAccuracy.high)
-    );
+    currentPosition = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
 
     if (currentPosition != null) {
       changeCurrentLatLongBasedOnCameraMove(currentPosition!.latitude, currentPosition!.longitude);
@@ -369,20 +384,20 @@ class SelectLocationController extends GetxController {
 
   void animateMapCameraPosition({bool isFromEdit = false}) {
     if (selectedLatitude == 0) return;
+    pauseCameraIdle();
 
     if (Platform.isIOS && appleController != null) {
-      appleController!.animateCamera(ap.CameraUpdate.newLatLng(
-          ap.LatLng(selectedLatitude, selectedLongitude)
-      ));
+      appleController!.animateCamera(ap.CameraUpdate.newLatLng(ap.LatLng(selectedLatitude, selectedLongitude)));
     } else if (!Platform.isIOS && mapLibreController != null) {
       mapLibreController!.animateCamera(ml.CameraUpdate.newLatLngZoom(
-          ml.LatLng(selectedLatitude, selectedLongitude), 16.0
+          ml.LatLng(selectedLatitude, selectedLongitude), 17.5
       ));
     }
   }
 
   @override
   void onClose() {
+    animator.dispose();
     searchLocationController.dispose();
     destinationController.dispose();
     pickUpController.dispose();

@@ -1373,7 +1373,7 @@ class FoodItem {
   final double restaurantLat;
   final double restaurantLng;
 
-  // ✨ [جديد] الوزن المختار (الافتراضي 1.0)
+  // ✨✨ [هذا هو المتغير الناقص الذي سبب الخطأ] ✨✨
   double selectedWeight;
 
   FoodItem({
@@ -1390,7 +1390,7 @@ class FoodItem {
     this.ratingCount = 0,
     this.restaurantLat = 0.0,
     this.restaurantLng = 0.0,
-    // ✨ تهيئة الوزن
+    // الافتراضي 1.0 (كيلو أو قطعة) حتى لا يحدث خطأ للمطاعم
     this.selectedWeight = 1.0,
   });
 
@@ -1456,7 +1456,7 @@ class FoodItem {
       ratingCount: safeParseInt(json['rating_count']),
       restaurantLat: rLat,
       restaurantLng: rLng,
-      selectedWeight: 1.0, // الافتراضي عند الجلب من النت
+      selectedWeight: 1.0,
     );
   }
 
@@ -1472,14 +1472,12 @@ class FoodItem {
     return '${format.format(displayPrice)} د.ع';
   }
 
-  // ✨ نص يعرض الوزن بشكل جميل
+  // ✨ نص يعرض الوزن بشكل جميل (يستخدم في السلة)
   String get weightLabel {
     if (selectedWeight == 0.25) return "ربع كيلو (250غم)";
     if (selectedWeight == 0.5) return "نصف كيلو (500غم)";
     if (selectedWeight == 1.0) return "1 كيلو";
-    // إذا كان رقماً صحيحاً (مثل 2.0 أو 3.0) نعرضه بدون كسور
     if (selectedWeight % 1 == 0) return "${selectedWeight.toInt()} كيلو";
-
     return "$selectedWeight كيلو";
   }
 
@@ -1491,6 +1489,7 @@ class FoodItem {
     'selectedWeight': selectedWeight, // حفظ الوزن
   };
 }
+
 
 class Order {
   final int id;
@@ -2363,8 +2362,7 @@ class ApiService {
     });
   }
 
-  // إضافة منتج
-// إضافة منتج (نسخة التصحيح Debug Version)
+  // إضافة منتج (نسخة التصحيح Debug Version)
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -2392,12 +2390,11 @@ class ApiService {
       );
 
       print("📡 كود الحالة: ${response.statusCode}");
-      print("📄 رد السيرفر: ${response.body}"); // 🔥 هذا السطر سيخبرك بالسبب الحقيقي
+      print("📄 رد السيرفر: ${response.body}");
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         return true;
       } else {
-        // إذا كان هناك خطأ، قم برمي استثناء ليظهر في التطبيق
         final body = json.decode(response.body);
         throw Exception(body['message'] ?? 'خطأ غير معروف من السيرفر');
       }
@@ -2680,8 +2677,9 @@ class ApiService {
       throw Exception(responseBody['message'] ?? 'فشل إرسال طلب التوصيل.');
     });
   }
+
   // =================================================================
-  // 🔥 دالة إرسال الطلب (ترسل التوكن دائماً لضمان الاتصال)
+  // 🔥🔥🔥 دالة إرسال الطلب المعدلة (مع دعم الأوزان والكسور) 🔥🔥🔥
   // =================================================================
   Future<Order?> submitOrder({
     required String name,
@@ -2694,14 +2692,11 @@ class ApiService {
     required int? restaurantId,
     required int? regionId,
   }) async {
-    // 1. إعداد خطوط الكوبون والشحن
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
 
-    // 2. 🔥🔥🔥 جلب التوكن الحالي للجهاز (إجباري) 🔥🔥🔥
-    // هذا يضمن أن السيرفر لديه أحدث عنوان للاتصال بهذا الجهاز
     String? fcmToken;
     try {
       fcmToken = await FirebaseMessaging.instance.getToken();
@@ -2710,7 +2705,41 @@ class ApiService {
       print("⚠️ [SubmitOrder] Failed to get FCM token: $e");
     }
 
-    // 3. بناء جسم الطلب (JSON Payload)
+    // 🔥🔥🔥 تجهيز المنتجات لـ WooCommerce وحفظ الأوزان والأسعار 🔥🔥🔥
+    List<Map<String, dynamic>> preparedLineItems = cartItems.map((item) {
+      Map<String, dynamic> lineItem = {
+        "product_id": item.id,
+        "quantity": item.quantity,
+        // نرسل السعر الصافي المضروب في الوزن ليقبله السيرفر
+        "subtotal": (item.displayPrice * item.quantity).toString(),
+        "total": (item.displayPrice * item.quantity).toString(),
+      };
+
+      // إذا كان الزبون قد اختار كسراً أو وزناً مختلفاً
+      if (item.selectedWeight != 1.0) {
+        String weightText = "";
+        if (item.selectedWeight == 0.25) weightText = "ربع كيلو";
+        else if (item.selectedWeight == 0.5) weightText = "نصف كيلو";
+        else if (item.selectedWeight == 0.75) weightText = "كيلو إلا ربع";
+        else if (item.selectedWeight == 1.25) weightText = "كيلو وربع";
+        else if (item.selectedWeight == 1.5) weightText = "كيلو ونصف";
+        else if (item.selectedWeight == 1.75) weightText = "كيلو و 750 غرام";
+        else if (item.selectedWeight == 2.25) weightText = "كيلوين وربع";
+        else if (item.selectedWeight == 2.5) weightText = "كيلوين ونصف";
+        else if (item.selectedWeight % 1 == 0) weightText = "${item.selectedWeight.toInt()} كيلو";
+        else weightText = "${item.selectedWeight} كيلو";
+
+        lineItem["meta_data"] = [
+          {
+            "key": "الوزن المختار",
+            "value": weightText
+          }
+        ];
+      }
+      return lineItem;
+    }).toList();
+    // 🔥🔥🔥 ======================================================= 🔥🔥🔥
+
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
       "payment_method_title": "الدفع عند الاستلام",
@@ -2732,39 +2761,32 @@ class ApiService {
         "city": "Default",
         "postcode": "10001"
       },
-      "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
+      // ✅ نستخدم المصفوفة المجهزة هنا
+      "line_items": preparedLineItems,
       "coupon_lines": couponLines,
       "shipping_lines": shippingLines,
 
-      // 🔥🔥🔥 البيانات الوصفية (Meta Data) 🔥🔥🔥
       "meta_data": [
-        // أ) إرسال التوكن (مهم جداً للمكالمات)
         if (fcmToken != null) ...[
-          {"key": "_customer_fcm_token", "value": fcmToken}, // المفتاح الأساسي للسيرفر
-          {"key": "fcm_token", "value": fcmToken},           // مفتاح احتياطي
+          {"key": "_customer_fcm_token", "value": fcmToken},
+          {"key": "fcm_token", "value": fcmToken},
         ],
-
-        // ب) إرسال الإحداثيات (لتحديد موقع التوصيل)
         if (position != null) ...[
           {"key": "_customer_destination_lat", "value": position.latitude.toString()},
           {"key": "_customer_destination_lng", "value": position.longitude.toString()},
         ],
-
-        // ج) إرسال بيانات الربط (للتيم ليدر والمسواك)
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
         if (regionId != null) {"key": "_region_id", "value": regionId.toString()},
-        if (regionId != null) {"key": "_area_id", "value": regionId.toString()}, // احتياط
+        if (regionId != null) {"key": "_area_id", "value": regionId.toString()},
       ],
     };
 
-    // 4. تنفيذ الطلب
     final response = await _executeWithRetry(() => http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
         headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
         body: json.encode(bodyPayload)
     ));
 
-    // 5. معالجة الرد
     if (response.statusCode == 201) {
       final createdOrder = Order.fromJson(json.decode(response.body));
       await OrderHistoryService().saveOrder(createdOrder);
@@ -2797,6 +2819,7 @@ class ApiService {
     }
   }
 }
+
 class AuthService {
   // دالة تسجيل الدخول المحسنة مع طباعة تفاصيل الخطأ
   Future<String?> loginRestaurantOwner(String username, String password) async {
