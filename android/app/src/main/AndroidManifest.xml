@@ -35,12 +35,10 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="tel" />
         </intent>
-
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="waze" />
         </intent>
-
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="geo" />
@@ -49,12 +47,10 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="google.navigation" />
         </intent>
-
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
         </intent>
-
         <package android:name="com.waze" />
         <package android:name="com.google.android.apps.maps" />
         <package android:name="com.whatsapp" />
@@ -68,21 +64,21 @@
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true">
 
-        <service
-            android:name="com.voip.flutter_callkit_incoming.HeadlessService"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <receiver
+            android:name="com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver"
+            android:exported="true" />
 
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitNotificationService"
-            android:exported="false"
-            android:foregroundServiceType="phoneCall" />
+            android:exported="true"
+            android:foregroundServiceType="phoneCall"
+            tools:replace="android:exported,android:foregroundServiceType" />
 
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitSoundService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall" />
+            android:foregroundServiceType="phoneCall"
+            tools:replace="android:foregroundServiceType" />
 
         <activity
             android:name=".MainActivity"
