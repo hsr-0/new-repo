@@ -17,6 +17,7 @@ import '../../../../../core/utils/dimensions.dart';
 import '../../../../../core/utils/my_color.dart';
 import '../../../../../core/utils/my_strings.dart';
 import '../../../../../data/controller/location/select_location_controller.dart';
+import '../../../../../data/model/location/selected_location_info.dart';
 
 class EditLocationPickerScreen extends StatefulWidget {
   const EditLocationPickerScreen({super.key, required this.selectedIndex});
@@ -283,19 +284,46 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           RoundedButton(
             text: MyStrings.confirm,
             press: () {
-              // 1. إجبار الكونترولر على التقاط الإحداثيات النهائية الحالية للدبوس
+              // 1. حفظ الإحداثيات في المتغيرات العامة
               controller.selectedLatitude = currentLat;
               controller.selectedLongitude = currentLng;
 
-              // 2. تثبيت الموقع رسمياً في النظام كما لو أنك اخترته من البحث
-              controller.openMap(currentLat, currentLng, isMapDrag: false);
+              // 2. الحفظ في الموقع الصحيح
+              if (controller.selectedLocationIndex == 0) {
+                controller.pickupLatlong = ll.LatLng(currentLat, currentLng);
+                controller.pickUpController.text = controller.currentAddress.value;
+                controller.homeController.addLocationAtIndex(
+                  SelectedLocationInfo(
+                    address: controller.currentAddress.value,
+                    fullAddress: controller.currentAddress.value,
+                    latitude: currentLat,
+                    longitude: currentLng,
+                  ),
+                  0,
+                );
+              } else {
+                controller.destinationLatlong = ll.LatLng(currentLat, currentLng);
+                controller.destinationController.text = controller.currentAddress.value;
+                controller.homeController.addLocationAtIndex(
+                  SelectedLocationInfo(
+                    address: controller.currentAddress.value,
+                    fullAddress: controller.currentAddress.value,
+                    latitude: currentLat,
+                    longitude: currentLng,
+                  ),
+                  1,
+                );
+              }
 
-              // 3. العودة للشاشة الرئيسية وإرسال إشارة للنجاح
+              // 3. تحديث الخريطة
+              controller.openMap(currentLat, currentLng, isMapDrag: false);
+              controller.update();
+
+              // 4. العودة
               Get.back(result: true);
             },
             isOutlined: false,
-          ),
-        ],
+          )        ],
       ),
     );
   }

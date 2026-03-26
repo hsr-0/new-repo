@@ -46,6 +46,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
   bool isMapReady = false;
 
+  // ✅ متغير لمنع التحديث المتكرر للعلامات (مهم جداً لمنع التجميد على iOS)
+  bool _markersUpdated = false;
+
   ap.BitmapDescriptor? pickUpIconApple;
   ap.BitmapDescriptor? destinationIconApple;
 
@@ -149,6 +152,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     } else if (index == 1 && controller.destinationLatlong.latitude != 0) {
       _moveCameraTo(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude);
     }
+
+    // ✅ إعادة تعيين علم التحديث للسماح بالتحديث مرة أخرى
+    _markersUpdated = false;
+
     _updateStaticMarkers(controller);
     controller.update();
   }
@@ -169,9 +176,11 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
     if (Platform.isIOS && appleController != null) {
       Set<ap.Annotation> annotations = {};
-      if (controller.selectedLocationIndex == 1 && controller.pickupLatlong.latitude != 0) {
+
+      // ✅ إضافة علامة الانطلاق
+      if (controller.pickupLatlong.latitude != 0) {
         annotations.add(ap.Annotation(
-          annotationId: ap.AnnotationId('pickup'),
+          annotationId:  ap.AnnotationId('pickup'),
           position: ap.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
           icon: pickUpIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
           onTap: () async {
@@ -180,9 +189,11 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           },
         ));
       }
-      if (controller.selectedLocationIndex == 0 && controller.destinationLatlong.latitude != 0) {
+
+      // ✅ إضافة علامة الوجهة
+      if (controller.destinationLatlong.latitude != 0) {
         annotations.add(ap.Annotation(
-          annotationId: ap.AnnotationId('destination'),
+          annotationId:  ap.AnnotationId('destination'),
           position: ap.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
           icon: destinationIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
           onTap: () async {
@@ -191,13 +202,20 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           },
         ));
       }
-      setState(() => appleAnnotations = annotations);
+
+      // ✅ تحديث العلامات فقط إذا تغيرت
+      if (appleAnnotations.length != annotations.length ||
+          !_annotationsAreEqual(appleAnnotations, annotations)) {
+        setState(() => appleAnnotations = annotations);
+      }
+
     } else if (!Platform.isIOS && mapLibreController != null) {
       try {
         await mapLibreController!.clearSymbols();
         pickupSymbol = null;
         destSymbol = null;
 
+        // ✅ إضافة علامة الانطلاق
         if (controller.pickupLatlong.latitude != 0) {
           pickupSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
             geometry: ml.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
@@ -205,6 +223,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
             iconSize: 1.0,
           ));
         }
+
+        // ✅ إضافة علامة الوجهة
         if (controller.destinationLatlong.latitude != 0) {
           destSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
             geometry: ml.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
@@ -218,14 +238,35 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     }
   }
 
+  // ✅ دالة مساعدة لمقارنة العلامات (لتجنب التحديث غير الضروري)
+  bool _annotationsAreEqual(Set<ap.Annotation> set1, Set<ap.Annotation> set2) {
+    if (set1.length != set2.length) return false;
+
+    for (var annotation in set1) {
+      bool found = false;
+      for (var other in set2) {
+        if (annotation.annotationId.value == other.annotationId.value &&
+            annotation.position.latitude == other.position.latitude &&
+            annotation.position.longitude == other.position.longitude) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) return false;
+    }
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegionWidget(
       statusBarColor: MyColor.transparentColor,
       child: GetBuilder<SelectLocationController>(
         builder: (controller) {
-          if (isMapReady) {
+          // ✅ منع التحديث المتكرر للعلامات - مهم جداً لمنع التجميد على iOS
+          if (isMapReady && !_markersUpdated) {
             _updateStaticMarkers(controller);
+            _markersUpdated = true;
           }
 
           return Scaffold(
@@ -447,7 +488,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
             spaceDown(Dimensions.space15),
 
-            // 🔥 زر "تحديد الوجهة عبر الخريطة" تم تحديثه ليحفظ ويعكس التعديل
+            // 🔥 زر "تحديد الوجهة عبر الخريطة"
             InkWell(
               onTap: () async {
                 controller.changeIndex(1);
