@@ -37,7 +37,7 @@ target 'Runner' do
 end
 
 # ==============================================================================
-# إعدادات ماب بوكس ومنع الكراش (Post Install)
+# إعدادات ماب بوكس ومنع الكراش (Post Install) + تفعيل صلاحية المايكروفون
 # ==============================================================================
 post_install do |installer|
   installer.pods_project.targets.each do |target|
@@ -55,6 +55,12 @@ post_install do |installer|
 
       # 4. حل مشاكل البناء الخاصة بالمعالجات الحديثة
       config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = "arm64"
+
+      # 5. 🔴 تفعيل المايكروفون لمكتبة permission_handler (حل مشكلة الآيفون) 🔴
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+        'PERMISSION_MICROPHONE=1',
+      ]
     end
   end
 end

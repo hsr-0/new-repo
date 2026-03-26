@@ -25,9 +25,6 @@ import 'package:cosmetic_store/taxi/lib/presentation/components/image/custom_svg
 import 'package:cosmetic_store/taxi/lib/presentation/components/text-form-field/location_pick_text_field.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/text/label_text.dart';
 
-// ✅ استيراد شاشة الخرائط المجانية الجديدة
-
-import '../../../../../../de.dart';
 import '../../../../../core/utils/dimensions.dart';
 import '../../../../../core/utils/my_color.dart';
 import '../../../../../core/utils/my_strings.dart';
@@ -43,7 +40,6 @@ class LocationPickerScreen extends StatefulWidget {
 }
 
 class _LocationPickerScreenState extends State<LocationPickerScreen> with TickerProviderStateMixin {
-  // ✅ تم تصحيح حرف L هنا ليطابق التحديث الجديد لمكتبة MapLibre
   ml.MapLibreMapController? mapLibreController;
   ap.AppleMapController? appleController;
   Set<ap.Annotation> appleAnnotations = {};
@@ -60,7 +56,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
   double? _secondContainerHeight;
   int index = 0;
 
-  // ✅ تصحيح الاسم: isFirsTime -> isFirstTime
   bool isFirstTime = true;
 
   final myDeBouncer = MyDeBouncer(delay: const Duration(milliseconds: 600));
@@ -90,7 +85,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
   @override
   void dispose() {
-    // ✅ تنظيف الأحداث لمنع تسرب الذاكرة
     if (mapLibreController != null) {
       mapLibreController!.onSymbolTapped.remove(_onSymbolTapped);
     }
@@ -147,11 +141,26 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     }
   }
 
-  void _onSymbolTapped(ml.Symbol symbol) {
+  // ✅ دالة التحديث الجديدة لتوجيه الخريطة للموقع بعد العودة
+  void _refreshMapAfterEdit(int index) {
+    final controller = Get.find<SelectLocationController>();
+    if (index == 0 && controller.pickupLatlong.latitude != 0) {
+      _moveCameraTo(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude);
+    } else if (index == 1 && controller.destinationLatlong.latitude != 0) {
+      _moveCameraTo(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude);
+    }
+    _updateStaticMarkers(controller);
+    controller.update();
+  }
+
+  // ✅ الانتظار حتى عودة الزبون لتحديث الخريطة
+  void _onSymbolTapped(ml.Symbol symbol) async {
     if (symbol.id == pickupSymbol?.id) {
-      Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
+      final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
+      if (result != null) _refreshMapAfterEdit(0);
     } else if (symbol.id == destSymbol?.id) {
-      Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
+      final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
+      if (result != null) _refreshMapAfterEdit(1);
     }
   }
 
@@ -165,7 +174,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           annotationId: ap.AnnotationId('pickup'),
           position: ap.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
           icon: pickUpIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
-          onTap: () => Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0),
+          onTap: () async {
+            final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
+            if (result != null) _refreshMapAfterEdit(0);
+          },
         ));
       }
       if (controller.selectedLocationIndex == 0 && controller.destinationLatlong.latitude != 0) {
@@ -173,7 +185,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           annotationId: ap.AnnotationId('destination'),
           position: ap.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
           icon: destinationIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
-          onTap: () => Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1),
+          onTap: () async {
+            final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
+            if (result != null) _refreshMapAfterEdit(1);
+          },
         ));
       }
       setState(() => appleAnnotations = annotations);
@@ -198,51 +213,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           ));
         }
       } catch (e) {
-        // ✅ طباعة الخطأ بدلاً من إخفائه
         print('❌ MapLibre Marker Error: $e');
-      }
-    }
-  }
-
-  // ✅ دالة مساعدة لفتح شاشة الخرائط المجانية ومعالجة النتيجة
-  Future<void> _openFreeMapPicker(SelectLocationController controller) async {
-    // تحضير نقطة الانطلاق كنقطة بداية للخريطة
-    final startPoint = controller.pickupLatlong.latitude != 0
-        ? ll.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude)
-        : ll.LatLng(controller.selectedLatitude, controller.selectedLongitude);
-
-    // فتح شاشة الخرائط المجانية
-    final result = await Get.to<Map<String, dynamic>>(
-      DestinationSelectionScreen(initialPickup: startPoint),
-      transition: Transition.cupertino,
-      duration: const Duration(milliseconds: 300),
-    );
-
-    // معالجة النتيجة عند العودة
-    if (result != null && mounted) {
-      final destination = result['destination'] as Map<String, dynamic>?;
-
-      if (destination != null && destination['lat'] != 0.0 && destination['lng'] != 0.0) {
-        // ✅ تحديث كل البيانات في الكونترولر
-        controller.destinationController.text = destination['name'] ?? '';
-
-        controller.destinationLatlong = ll.LatLng(
-            destination['lat'] as double,
-            destination['lng'] as double
-        );
-
-        controller.selectedLatitude = destination['lat'];
-        controller.selectedLongitude = destination['lng'];
-
-        // تحريك الكاميرا وتحديث العلامات
-        _moveCameraTo(destination['lat'], destination['lng']);
-        await _updateStaticMarkers(controller);
-
-        // تحديث الواجهة
-        controller.update();
-
-        // ✅ طباعة للتأكد من العمل
-        print('✅ Location Updated: ${destination['name']}');
       }
     }
   }
@@ -253,7 +224,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
       statusBarColor: MyColor.transparentColor,
       child: GetBuilder<SelectLocationController>(
         builder: (controller) {
-          // ✅ تم نقل تحديث العلامات خارج build لمنع التكرار
           if (isMapReady) {
             _updateStaticMarkers(controller);
           }
@@ -306,7 +276,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
   Widget _buildFreeMap(SelectLocationController controller) {
     return ml.MapLibreMap(
-      // ✅ تم إصلاح المسافات الزائدة في الرابط
       styleString: 'https://tiles.openfreemap.org/styles/liberty',
       initialCameraPosition: ml.CameraPosition(target: ml.LatLng(defaultLat, defaultLng), zoom: 17.5),
       onMapCreated: (c) {
@@ -416,7 +385,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                           ),
                           onSubmit: () {},
                           onChanged: (text) {
-                            // ✅ تصحيح: isFirsTime -> isFirstTime
                             if (isFirstTime == true) {
                               isFirstTime = false;
                               setState(() {});
@@ -450,7 +418,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                             }
                           },
                           onChanged: (text) {
-                            // ✅ تصحيح: isFirsTime -> isFirstTime
                             if (isFirstTime == true) {
                               isFirstTime = false;
                               setState(() {});
@@ -480,14 +447,16 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
             spaceDown(Dimensions.space15),
 
-            // 🔥 زر "تحديد الوجهة عبر الخريطة" - تم تعديله ليعتمد كلياً على الملف الجديد
+            // 🔥 زر "تحديد الوجهة عبر الخريطة" تم تحديثه ليحفظ ويعكس التعديل
             InkWell(
               onTap: () async {
-                // 1. تغيير الفهرس للوجهة
                 controller.changeIndex(1);
 
-                // 2. فتح شاشة الخرائط المجانية والاعتماد عليها كلياً
-                await _openFreeMapPicker(controller);
+                final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
+
+                if (result != null) {
+                  _refreshMapAfterEdit(1);
+                }
               },
               borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
               child: Container(

@@ -27,7 +27,6 @@ class EditLocationPickerScreen extends StatefulWidget {
 }
 
 class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
-  // ✅ تم تصحيح حرف L ليكون كبيراً حسب التحديث الأخير لمكتبة MapLibre
   ml.MapLibreMapController? mapLibreController;
   ap.AppleMapController? appleController;
 
@@ -65,10 +64,24 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     return AnnotatedRegionWidget(
       child: GetBuilder<SelectLocationController>(builder: (controller) {
 
+        // محاولة جلب الموقع المطلوب (سواء انطلاق أو وجهة)
         final savedLocation = controller.homeController.getSelectedLocationInfoAtIndex(selectedIndex);
-        if (savedLocation != null && savedLocation.latitude != null) {
+
+        // التحقق مما إذا كان الموقع موجوداً وصالحاً (ليس 0 ولا 0.0)
+        if (savedLocation != null && savedLocation.latitude != null && savedLocation.latitude.toString() != "0" && savedLocation.latitude.toString() != "0.0") {
           currentLat = double.tryParse(savedLocation.latitude.toString()) ?? 32.5029;
           currentLng = double.tryParse(savedLocation.longitude.toString()) ?? 45.8219;
+        } else {
+          // إذا كان الموقع فارغاً (مثلاً الوجهة لم تحدد بعد)، اجعل الخريطة تفتح على نقطة الانطلاق (موقع الزبون الحالي)
+          final pickupLocation = controller.homeController.getSelectedLocationInfoAtIndex(0);
+          if (pickupLocation != null && pickupLocation.latitude != null && pickupLocation.latitude.toString() != "0" && pickupLocation.latitude.toString() != "0.0") {
+            currentLat = double.tryParse(pickupLocation.latitude.toString()) ?? 32.5029;
+            currentLng = double.tryParse(pickupLocation.longitude.toString()) ?? 45.8219;
+          } else {
+            // كخيار أخير في حال عدم وجود أي بيانات
+            currentLat = 32.5029;
+            currentLng = 45.8219;
+          }
         }
 
         return Scaffold(
@@ -99,7 +112,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                           onCameraIdle: _handleMapIdle,
                           myLocationEnabled: true,
                         )
-                            : ml.MapLibreMap( // ✅ تم استخدام الكلاس الصحيح
+                            : ml.MapLibreMap(
                           styleString: 'https://tiles.openfreemap.org/styles/liberty',
                           initialCameraPosition: ml.CameraPosition(target: ml.LatLng(currentLat, currentLng), zoom: 16.0),
                           onMapCreated: (c) {
@@ -143,7 +156,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                     ),
                   ),
 
-                  // مربع العنوان وتأكيد الموقع (تمت استعادته من القديم)
+                  // مربع العنوان وتأكيد الموقع
                   buildConfirmDestination(controller)
                 ],
               ),
@@ -265,10 +278,20 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           ),
 
           const SizedBox(height: Dimensions.space20),
+
+          // ✅ تم تعديل زر التأكيد لحل مشكلة تطابق نقطة الانطلاق مع الوجهة
           RoundedButton(
             text: MyStrings.confirm,
             press: () {
-              Get.back();
+              // 1. إجبار الكونترولر على التقاط الإحداثيات النهائية الحالية للدبوس
+              controller.selectedLatitude = currentLat;
+              controller.selectedLongitude = currentLng;
+
+              // 2. تثبيت الموقع رسمياً في النظام كما لو أنك اخترته من البحث
+              controller.openMap(currentLat, currentLng, isMapDrag: false);
+
+              // 3. العودة للشاشة الرئيسية وإرسال إشارة للنجاح
+              Get.back(result: true);
             },
             isOutlined: false,
           ),

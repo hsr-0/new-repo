@@ -4,8 +4,9 @@ import 'dart:math';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_callkit_incoming/entities/call_event.dart';
-import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+
+
+
 import 'dart:math'; // 👈 تأكد من وجود هذا السطر ضروري جداً
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart'; // مطلوب للاهتزاز
@@ -4906,32 +4907,8 @@ class _RestaurantModuleState extends State<RestaurantModule> {
     _initializeServices();
 
     // 🔥 1. تشغيل مستمع المكالمات (للرد الفوري عبر CallKit)
-    _setupCallKitListener();
   }
 
-  // 🔥 2. دالة الاستماع لأزرار CallKit
-  void _setupCallKitListener() {
-    FlutterCallkitIncoming.onEvent.listen((CallEvent? event) {
-      if (event == null) return;
-
-      if (event.event == Event.actionCallAccept) {
-        // 📞 الزبون ضغط "قبول" من شاشة القفل أو الإشعار
-        final data = event.body['extra'];
-        final channelName = data['channelName'];
-        final driverName = data['driverName'] ?? 'الكابتن';
-
-        // استخدام navigatorKey للانتقال لصفحة الاتصال فوراً
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (_) => CustomerCallPage( // تأكد من استيراد هذه الصفحة
-              channelName: channelName,
-              driverName: driverName,
-            ),
-          ),
-        );
-      }
-    });
-  }
 
   Future<void> _initializeServices() async {
     // تهيئة خدمة الإشعارات المحلية الموجودة مسبقاً
@@ -4940,8 +4917,6 @@ class _RestaurantModuleState extends State<RestaurantModule> {
     // طلب صلاحيات الإشعارات
     await FirebaseMessaging.instance.requestPermission();
 
-    // 🔥 3. الاستماع للإشعارات القادمة والتطبيق مفتوح (Foreground)
-    FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
 
     // 🔥 4. الاستماع للإشعارات عند النقر عليها لفتح التطبيق (Background to Foreground)
     FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessage);
@@ -4952,56 +4927,6 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   // ==========================================================
   // دالة معالجة الإشعارات أثناء عمل التطبيق (Foreground)
   // ==========================================================
-  void _handleForegroundMessage(RemoteMessage message) {
-    // أ. فحص مكالمة VoIP
-    if (message.data['type'] == 'voip_call') {
-      final channelName = message.data['channelName'] ?? message.data['channel_name'];
-      final driverName = message.data['driverName'] ?? message.data['driver_name'] ?? 'الكابتن';
-
-      // عرض شاشة المكالمة فوراً
-      if (navigatorKey.currentState != null) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (_) => CustomerCallPage( // تأكد من استيراد هذه الصفحة
-              channelName: channelName,
-              driverName: driverName,
-            ),
-          ),
-        );
-      }
-      return;
-    }
-
-    // ب. عرض التنبيه المرئي للإشعارات العادية
-    if (message.notification != null) {
-      NotificationService.display(message);
-    }
-
-    // ج. منطق الزبون: التحديث الصامت لحالة المطاعم
-    if (message.data['type'] == 'refresh_status') {
-      print("⚡ [Customer] وصل أمر تحديث حالة المطاعم من السيرفر!");
-      if (mounted) {
-        SharedPreferences.getInstance().then((prefs) {
-          final int? areaId = prefs.getInt('selectedAreaId');
-          if (areaId != null) {
-            final customerProvider = Provider.of<CustomerProvider>(context, listen: false);
-            customerProvider.fetchHomeData(areaId, isRefresh: true);
-            customerProvider.fetchOffers(areaId);
-          }
-        });
-      }
-    }
-
-    // د. منطق المطعم/الليدر: تحديث الطلبات
-    if (mounted) {
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      if (authProvider.isLoggedIn && authProvider.token != null) {
-        print("🔔 [Dashboard] إشعار جديد! تفعيل التحديث الذكي للطلبات...");
-        Provider.of<DashboardProvider>(context, listen: false)
-            .triggerSmartRefresh(authProvider.token!);
-      }
-    }
-  }
 
   // ==========================================================
   // دالة معالجة الإشعارات عند فتح التطبيق من الخلفية (Background)
@@ -5024,9 +4949,9 @@ class _RestaurantModuleState extends State<RestaurantModule> {
       if (navigatorKey.currentState != null) {
         navigatorKey.currentState?.push(
           MaterialPageRoute(
-            builder: (_) => CustomerCallPage( // تأكد من استيراد هذه الصفحة
+            builder: (_) => ActiveVoiceCallScreen( // 🔴 1. نغير اسم الكلاس
               channelName: channelName,
-              driverName: driverName,
+              remoteName: driverName,              // 🔴 2. نغير كلمة driverName إلى remoteName
             ),
           ),
         );
@@ -7260,263 +7185,6 @@ class InAppMapScreen extends StatelessWidget {
   }
 }
 
-
-
-// في main.dart أو ملف منفصل
-class IncomingCallService {
-  static final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
-  static AudioPlayer? _audioPlayer;
-
-  // تهيئة الخدمة
-  static Future<void> initialize() async {
-    print("🔔 [CALL SERVICE] تهيئة خدمة المكالمات...");
-
-    // إعداد الإشعارات
-    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings();
-
-    await _notifications.initialize(
-      InitializationSettings(android: androidSettings, iOS: iosSettings),
-      onDidReceiveNotificationResponse: _handleNotificationResponse,
-    );
-
-    // الاستماع للإشعارات في Foreground
-    FirebaseMessaging.onMessage.listen(_handleForegroundCall);
-
-    // الاستماع عند فتح التطبيق من الإشعار
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundCall);
-
-    print("✅ [CALL SERVICE] الخدمة جاهزة");
-  }
-
-  // معالجة الإشعار في الخلفية
-  static Future<void> _handleBackgroundCall(RemoteMessage message) async {
-    print("🔔 [CALL] تلقي مكالمة من الخلفية: ${message.data}");
-    if (message.data['type'] == 'voip_call') {
-      await _showIncomingCallScreen(message.data);
-    }
-  }
-
-  // معالجة الإشعار في الواجهة
-  static void _handleForegroundCall(RemoteMessage message) async {
-    print("🔔 [CALL] تلقي مكالمة في الواجهة: ${message.data}");
-    if (message.data['type'] == 'voip_call') {
-      await _showIncomingCallScreen(message.data);
-    }
-  }
-
-  // عرض شاشة المكالمة الواردة
-  static Future<void> _showIncomingCallScreen(Map<String, dynamic> data) async {
-    print("📱 [CALL] عرض شاشة المكالمة...");
-    print("📱 [CALL] Channel: ${data['channel_name']}");
-    print("📱 [CALL] Driver: ${data['driver_name']}");
-
-    // تشغيل صوت الرنين
-    await _playRingtone();
-
-    // عرض الشاشة الكاملة
-    if (navigatorKey.currentState != null) {
-      navigatorKey.currentState!.push(
-        MaterialPageRoute(
-          builder: (_) => IncomingCallScreen(
-            channelName: data['channel_name'],
-            driverName: data['driver_name'],
-            driverPhone: data['driver_phone'] ?? '',
-            agoraAppId: data['agora_app_id'],
-            orderId: data['order_id'],
-          ),
-        ),
-      );
-    }
-  }
-
-  // تشغيل صوت الرنين
-  static Future<void> _playRingtone() async {
-    print("🔊 [CALL] تشغيل صوت الرنين...");
-    _audioPlayer = AudioPlayer();
-
-    // تأكد من وجود ملف ringtone.mp3 في assets
-    await _audioPlayer!.play(AssetSource('sounds/ringtone.mp3'));
-    await _audioPlayer!.setReleaseMode(ReleaseMode.loop);  // ✅ صحيح
-
-    print("✅ [CALL] صوت الرنين يعمل");
-  }
-
-  // إيقاف الرنين
-  static Future<void> _stopRingtone() async {
-    print("🔇 [CALL] إيقاف صوت الرنين");
-    await _audioPlayer?.stop();
-    await _audioPlayer?.dispose();
-    _audioPlayer = null;
-  }
-
-  // معالجة الضغط على الإشعار
-  static void _handleNotificationResponse(NotificationResponse response) {
-    print("👆 [CALL] المستخدم ضغط على الإشعار");
-  }
-}
-class IncomingCallScreen extends StatefulWidget {
-  final String channelName;
-  final String driverName;
-  final String driverPhone;
-  final String agoraAppId;
-  final String orderId;
-
-  const IncomingCallScreen({
-    super.key,
-    required this.channelName,
-    required this.driverName,
-    required this.driverPhone,
-    required this.agoraAppId,
-    required this.orderId,
-  });
-
-  @override
-  State<IncomingCallScreen> createState() => _IncomingCallScreenState();
-}
-
-class _IncomingCallScreenState extends State<IncomingCallScreen> {
-  bool _isAnswered = false;
-
-  @override
-  void initState() {
-    super.initState();
-    print("📞 [INCOMING CALL] شاشة المكالمة الواردة - initState");
-    print("📞 [INCOMING CALL] Driver: ${widget.driverName}");
-    print("📞 [INCOMING CALL] Channel: ${widget.channelName}");
-  }
-
-  @override
-  void dispose() {
-    print("📞 [INCOMING CALL] dispose - إيقاف الرنين");
-    IncomingCallService._stopRingtone();
-    super.dispose();
-  }
-
-  Future<void> _acceptCall() async {
-    print("✅ [INCOMING CALL] المستخدم قبل المكالمة");
-
-    setState(() => _isAnswered = true);
-    await IncomingCallService._stopRingtone();
-
-    // الانتقال لشاشة المكالمة الفعلية
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => CustomerCallPage(
-            channelName: widget.channelName,
-            driverName: widget.driverName,
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _rejectCall() async {
-    print("❌ [INCOMING CALL] المستخدم رفض المكالمة");
-
-    await IncomingCallService._stopRingtone();
-
-    // إغلاق الشاشة
-    if (mounted) {
-      Navigator.pop(context);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        _rejectCall();
-        return false;
-      },
-      child: Scaffold(
-        backgroundColor: Colors.black87,
-        body: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Colors.blue.shade900, Colors.black],
-            ),
-          ),
-          child: SafeArea(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // صورة السائق
-                CircleAvatar(
-                  radius: 80,
-                  backgroundColor: Colors.white24,
-                  child: Icon(Icons.person, size: 80, color: Colors.white),
-                ),
-                const SizedBox(height: 30),
-
-                // اسم السائق
-                Text(
-                  widget.driverName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-
-                // نص "يتصل..."
-                Text(
-                  'يتصل بك الآن...',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 18,
-                  ),
-                ),
-                const SizedBox(height: 10),
-
-                // رقم الهاتف
-                Text(
-                  widget.driverPhone,
-                  style: TextStyle(
-                    color: Colors.white60,
-                    fontSize: 16,
-                  ),
-                ),
-
-                const Spacer(),
-
-                // أزرار قبول/رفض
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 80),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      // زر الرفض (أحمر)
-                      FloatingActionButton.extended(
-                        onPressed: _rejectCall,
-                        backgroundColor: Colors.red,
-                        icon: const Icon(Icons.call_end, size: 30),
-                        label: const Text('رفض', style: TextStyle(fontSize: 16)),
-                      ),
-
-                      // زر القبول (أخضر)
-                      FloatingActionButton.extended(
-                        onPressed: _acceptCall,
-                        backgroundColor: Colors.green,
-                        icon: const Icon(Icons.call, size: 30),
-                        label: const Text('قبول', style: TextStyle(fontSize: 16)),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 
 
