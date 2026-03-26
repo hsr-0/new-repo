@@ -75,21 +75,34 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     Get.put(SelectLocationController(locationSearchRepo: Get.find(), selectedLocationIndex: index));
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // ✅ تحقق من mounted قبل أي setState
+      if (!mounted) return;
+
       final RenderBox? box = _secondContainerKey.currentContext?.findRenderObject() as RenderBox?;
-      if (box != null) {
+      if (box != null && mounted) {
         setState(() => _secondContainerHeight = box.size.height);
       }
 
       await _loadMarkerImagesIOS();
-      Get.find<SelectLocationController>().initialize();
-      _getCurrentLocation();
+      if (mounted) {
+        Get.find<SelectLocationController>().initialize();
+        _getCurrentLocation();
+      }
     });
   }
 
   @override
   void dispose() {
+    // ✅ تنظيف المستمعات لمنع الكراش
     if (mapLibreController != null) {
       mapLibreController!.onSymbolTapped.remove(_onSymbolTapped);
+    }
+    // ✅ إلغاء أي كاميرا متحركة
+    if (Platform.isIOS && appleController != null) {
+      appleController = null;
+    }
+    if (!Platform.isIOS && mapLibreController != null) {
+      mapLibreController = null;
     }
     super.dispose();
   }
@@ -104,7 +117,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           const ImageConfiguration(size: Size(35, 35)),
           MyIcons.mapMarkerIcon
       );
-      setState(() {});
+      if (mounted) setState(() {});
     }
   }
 
@@ -146,6 +159,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
   // ✅ دالة التحديث الجديدة لتوجيه الخريطة للموقع بعد العودة
   void _refreshMapAfterEdit(int index) {
+    if (!mounted) return;
+
     final controller = Get.find<SelectLocationController>();
     if (index == 0 && controller.pickupLatlong.latitude != 0) {
       _moveCameraTo(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude);
@@ -162,17 +177,19 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
   // ✅ الانتظار حتى عودة الزبون لتحديث الخريطة
   void _onSymbolTapped(ml.Symbol symbol) async {
+    if (!mounted) return;
+
     if (symbol.id == pickupSymbol?.id) {
       final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
-      if (result != null) _refreshMapAfterEdit(0);
+      if (result != null && mounted) _refreshMapAfterEdit(0);
     } else if (symbol.id == destSymbol?.id) {
       final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
-      if (result != null) _refreshMapAfterEdit(1);
+      if (result != null && mounted) _refreshMapAfterEdit(1);
     }
   }
 
   Future<void> _updateStaticMarkers(SelectLocationController controller) async {
-    if (!isMapReady) return;
+    if (!isMapReady || !mounted) return;
 
     if (Platform.isIOS && appleController != null) {
       Set<ap.Annotation> annotations = {};
@@ -184,8 +201,13 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           position: ap.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
           icon: pickUpIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
           onTap: () async {
-            final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
-            if (result != null) _refreshMapAfterEdit(0);
+            if (!mounted) return;
+            try {
+              final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 0);
+              if (result != null && mounted) _refreshMapAfterEdit(0);
+            } catch (e) {
+              print('❌ Pickup annotation tap error: $e');
+            }
           },
         ));
       }
@@ -197,15 +219,20 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
           position: ap.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
           icon: destinationIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
           onTap: () async {
-            final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
-            if (result != null) _refreshMapAfterEdit(1);
+            if (!mounted) return;
+            try {
+              final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
+              if (result != null && mounted) _refreshMapAfterEdit(1);
+            } catch (e) {
+              print('❌ Destination annotation tap error: $e');
+            }
           },
         ));
       }
 
-      // ✅ تحديث العلامات فقط إذا تغيرت
-      if (appleAnnotations.length != annotations.length ||
-          !_annotationsAreEqual(appleAnnotations, annotations)) {
+      // ✅ تحديث العلامات فقط إذا تغيرت (يمنع التحديث المتكرر)
+      if (mounted && (appleAnnotations.length != annotations.length ||
+          !_annotationsAreEqual(appleAnnotations, annotations))) {
         setState(() => appleAnnotations = annotations);
       }
 
@@ -264,7 +291,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
       child: GetBuilder<SelectLocationController>(
         builder: (controller) {
           // ✅ منع التحديث المتكرر للعلامات - مهم جداً لمنع التجميد على iOS
-          if (isMapReady && !_markersUpdated) {
+          if (isMapReady && !_markersUpdated && mounted) {
             _updateStaticMarkers(controller);
             _markersUpdated = true;
           }
@@ -326,6 +353,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
       },
       onStyleLoadedCallback: () async {
         isMapReady = true;
+        if (!mounted) return;
+
         try {
           final Uint8List pickupData = await getBytesFromAsset(MyIcons.mapMarkerPickUpIcon, 120);
           await mapLibreController!.addImage("pickup_icon", pickupData);
@@ -335,7 +364,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
         } catch(e) {
           print('❌ Image Load Error: $e');
         }
-        _updateStaticMarkers(controller);
+        if (mounted) _updateStaticMarkers(controller);
       },
       myLocationEnabled: true,
       myLocationRenderMode: ml.MyLocationRenderMode.normal,
@@ -428,7 +457,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                           onChanged: (text) {
                             if (isFirstTime == true) {
                               isFirstTime = false;
-                              setState(() {});
+                              if (mounted) setState(() {});
                             }
                             myDeBouncer.run(() { controller.searchYourAddress(locationName: text); });
                           },
@@ -461,7 +490,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                           onChanged: (text) {
                             if (isFirstTime == true) {
                               isFirstTime = false;
-                              setState(() {});
+                              if (mounted) setState(() {});
                             }
                             myDeBouncer.run(() { controller.searchYourAddress(locationName: text); });
                           },
@@ -495,7 +524,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
                 final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
 
-                if (result != null) {
+                if (result != null && mounted) {
                   _refreshMapAfterEdit(1);
                 }
               },
@@ -549,7 +578,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                         controller.pauseCameraIdle();
 
                         ll.LatLng? latLng = await controller.getLangAndLatFromMap(item);
-                        if (latLng != null) {
+                        if (latLng != null && mounted) {
                           controller.updateSelectedAddressFromSearch(item.description ?? '');
                           _moveCameraTo(latLng.latitude, latLng.longitude);
 
