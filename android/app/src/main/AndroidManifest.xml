@@ -2,14 +2,12 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="co.median.android.wqwnby">
 
-    <!-- ✅ الصلاحيات الأساسية -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
-    <!-- ✅ صلاحيات المكالمات والخلفية -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
@@ -18,24 +16,20 @@
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
-    <!-- ✅ صلاحيات الموقع -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
-    <!-- ✅ صلاحيات التخزين -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.READ_MEDIA_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_MEDIA_STORAGE"/>
 
-    <!-- ✅ صلاحيات الصوت والاتصال -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- ✅ Queries للتطبيقات الخارجية -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -68,41 +62,24 @@
         tools:replace="android:label,android:name"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
-        android:requestLegacyExternalStorage="true"
-        android:enableOnBackInvokedCallback="true">
+        android:requestLegacyExternalStorage="true">
 
-        <!-- ✅ BroadcastReceiver لـ CallKit مع intent-filter و process -->
         <receiver
             android:name="com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver"
-            android:exported="true"
-            android:enabled="true"
-            android:process=":main">
-            <intent-filter>
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_ACCEPT" />
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_DECLINE" />
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_TIMEOUT" />
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_ENDED" />
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_TOGGLE_MUTE" />
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_TOGGLE_SPEAKER" />
-                <action android:name="com.hiennv.flutter_callkit_incoming.ACTION_CALL_TOGGLE_HOLD" />
-            </intent-filter>
-        </receiver>
+            android:exported="true" />
 
-        <!-- ✅ خدمة الإشعارات للمكالمات -->
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitNotificationService"
             android:exported="true"
             android:foregroundServiceType="phoneCall"
             tools:replace="android:exported,android:foregroundServiceType" />
 
-        <!-- ✅ خدمة الصوت للمكالمات -->
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitSoundService"
             android:exported="false"
             android:foregroundServiceType="phoneCall"
             tools:replace="android:foregroundServiceType" />
 
-        <!-- ✅ النشاط الرئيسي -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -122,19 +99,14 @@
                 android:name="io.flutter.embedding.android.SplashScreenDrawable"
                 android:resource="@drawable/launch_background"/>
 
-            <!-- ✅ Intent Filter الرئيسي للتطبيق -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- ✅ Intent Filter لفتح التطبيق عند الضغط على إشعار المكالمة -->
-            <intent-filter>
-                <action android:name="FLUTTER_NOTIFICATION_CLICK" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
+            <meta-data android:name="com.facebook.sdk.ApplicationId" android:value="@string/facebook_app_id"/>
+            <meta-data android:name="com.facebook.sdk.ClientToken" android:value="@string/facebook_client_token"/>
 
-            <!-- ✅ Deep Link للتطبيق -->
             <meta-data android:name="flutter_deeplinking_enabled" android:value="true" />
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
@@ -143,45 +115,27 @@
                 <data android:scheme="https" android:host="taxi.beytei.com" />
                 <data android:scheme="http" />
             </intent-filter>
-
-            <!-- ✅ Deep Link خاص لـ CallKit (اختياري لكن موصى به) -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="beytei-call" android:host="incoming" />
-            </intent-filter>
-
-            <!-- ✅ Meta-data لفيسبوك -->
-            <meta-data android:name="com.facebook.sdk.ApplicationId" android:value="@string/facebook_app_id"/>
-            <meta-data android:name="com.facebook.sdk.ClientToken" android:value="@string/facebook_client_token"/>
-
         </activity>
 
-        <!-- ✅ Flutter Embedding v2 -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- ✅ قناة الإشعارات الافتراضية لـ Firebase -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="high_importance_channel" />
 
-        <!-- ✅ أيقونة الإشعارات الافتراضية -->
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_icon"
-            android:resource="@mipmap/ic_launcher" />
-
-        <!-- ✅ Mapbox Token -->
         <meta-data
             android:name="com.mapbox.token"
             android:value="pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ" />
 
-        <!-- ✅ مستقبل إشعارات الجدولة -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
             android:exported="false" />
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
 
     </application>
 </manifest>

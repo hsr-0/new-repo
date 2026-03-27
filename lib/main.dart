@@ -261,65 +261,79 @@ class _MyAppState extends State<MyApp> {
   late AppStateNotifier _appStateNotifier;
   late GoRouter _router;
 
+  // 🔥 السر الاحترافي: حالة المكالمة النشطة (بدون الحاجة لـ Navigator)
+  final ValueNotifier<Map<String, dynamic>?> _activeCallNotifier = ValueNotifier(null);
+
   @override
   void initState() {
     super.initState();
     _appStateNotifier = AppStateNotifier.instance;
     _router = createRouter(_appStateNotifier);
 
-    // تشغيل مستمع CallKit
     _setupCallKitListener();
+
+    // فحص المكالمات المعلقة عند إقلاع التطبيق من الصفر
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkTerminatedCall();
+    });
 
     _router.routerDelegate.addListener(() {
       if (mounted) setState(() {});
     });
   }
 
-  // --- 🔥 دالة الاستماع لأزرار CallKit (محدثة ومدرعة) 🔥 ---
+  Future<void> _checkTerminatedCall() async {
+    try {
+      var calls = await FlutterCallkitIncoming.activeCalls();
+      if (calls is List && calls.isNotEmpty) {
+        print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فوراً...");
+        _activeCallNotifier.value = Map<String, dynamic>.from(calls.first);
+      }
+    } catch (e) {
+      print("⚠️ Error checking active calls: $e");
+    }
+  }
+
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((CallEvent? event) async {
       if (event == null) return;
 
-      if (event.event == Event.actionCallAccept) {
-        print("✅ [CallKit] تم الضغط على رد في تطبيق الزبون...");
+      switch (event.event) {
+        case Event.actionCallAccept:
+          print("✅ [CallKit] تم الضغط على رد...");
+          // إعطاء بيانات المكالمة للمتغير ليعرض الشاشة فوراً كطبقة عليا
+          _activeCallNotifier.value = event.body ?? {};
+          break;
 
-        final bodyData = event.body ?? {};
-        Map<String, dynamic> extraData = {};
+        case Event.actionCallDecline:
+        case Event.actionCallEnded:
+        case Event.actionCallTimeout:
+          print("❌ [CallKit] المكالمة انتهت أو رُفضت.");
+          await FlutterCallkitIncoming.endAllCalls();
+          _activeCallNotifier.value = null; // إخفاء شاشة المكالمة
+          break;
 
-        // 🛡️ فك تشفير البيانات للأندرويد
-        if (bodyData['extra'] != null) {
-          if (bodyData['extra'] is Map) {
-            extraData = Map<String, dynamic>.from(bodyData['extra']);
-          } else if (bodyData['extra'] is String) {
-            try { extraData = jsonDecode(bodyData['extra']); } catch (_) {}
-          }
-        }
-
-        final channel = extraData['channelName']?.toString() ?? extraData['channel_name']?.toString() ?? bodyData['channel_name']?.toString() ?? '';
-        final driver = extraData['driverName']?.toString() ?? extraData['driver_name']?.toString() ?? bodyData['driver_name']?.toString() ?? 'كابتن بيتي';
-        final appId = extraData['agoraAppId']?.toString() ?? extraData['agora_app_id']?.toString() ?? bodyData['agora_app_id']?.toString() ?? '3924f8eebe7048f8a65cb3bd4a4adcec';
-
-        // تأخير بسيط لضمان بناء الواجهة
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        final context = _router.routerDelegate.navigatorKey.currentContext;
-        if (context != null && channel.isNotEmpty) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              // 🔴 التوجيه للكلاس الجديد الاحترافي
-              builder: (_) => ActiveVoiceCallScreen(
-                channelName: channel,
-                remoteName: driver,
-                agoraAppId: appId,
-              ),
-            ),
-          );
-        } else {
-          print("🚨 [FATAL ERROR] Context is null or channel is empty!");
-        }
+        default:
+          break;
       }
     });
+  }
+
+  // دالة مساعدة لاستخراج بيانات الغرفة واسم السائق
+  Map<String, String> _extractCallData(Map<String, dynamic> rawData) {
+    Map<String, dynamic> extraData = {};
+    if (rawData['extra'] != null) {
+      if (rawData['extra'] is Map) {
+        extraData = Map<String, dynamic>.from(rawData['extra']);
+      } else if (rawData['extra'] is String) {
+        try { extraData = jsonDecode(rawData['extra']); } catch (_) {}
+      }
+    }
+    return {
+      'channelName': extraData['channelName']?.toString() ?? extraData['channel_name']?.toString() ?? rawData['channel_name']?.toString() ?? '',
+      'driverName': extraData['driverName']?.toString() ?? extraData['driver_name']?.toString() ?? rawData['driver_name']?.toString() ?? 'كابتن بيتي',
+      'appId': extraData['agoraAppId']?.toString() ?? extraData['agora_app_id']?.toString() ?? rawData['agora_app_id']?.toString() ?? '3924f8eebe7048f8a65cb3bd4a4adcec',
+    };
   }
 
   void setLocale(String language) {
@@ -368,6 +382,41 @@ class _MyAppState extends State<MyApp> {
       ),
       themeMode: _themeMode,
       routerConfig: _router,
+
+      // 🔥 سحر الـ Overlay: رسم المكالمة فوق التطبيق بالكامل
+      builder: (context, child) {
+        return Scaffold(
+          body: Stack(
+            children: [
+              if (child != null) child, // التطبيق الطبيعي (GoRouter)
+
+              // الاستماع لحالة المكالمة
+              ValueListenableBuilder<Map<String, dynamic>?>(
+                valueListenable: _activeCallNotifier,
+                builder: (context, callData, _) {
+                  if (callData == null) return const SizedBox.shrink(); // لا يوجد مكالمة
+
+                  final extractedData = _extractCallData(callData);
+
+                  if (extractedData['channelName']!.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+
+                  return ActiveVoiceCallScreen(
+                    channelName: extractedData['channelName']!,
+                    remoteName: extractedData['driverName']!,
+                    agoraAppId: extractedData['appId']!,
+                    // دالة يتم استدعاؤها عند ضغط المستخدم على إغلاق لتخفي الشاشة
+                    onCallEnded: () {
+                      _activeCallNotifier.value = null;
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -379,11 +428,13 @@ class ActiveVoiceCallScreen extends StatefulWidget {
   final String channelName;
   final String remoteName;
   final String agoraAppId;
+  final VoidCallback onCallEnded; // تمرير دالة الإنهاء
 
   const ActiveVoiceCallScreen({
     super.key,
     required this.channelName,
     required this.remoteName,
+    required this.onCallEnded,
     this.agoraAppId = "3924f8eebe7048f8a65cb3bd4a4adcec",
   });
 
@@ -455,7 +506,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
           if (mounted && _localUserJoined) {
-            _showCallEndedDialog("الكابتن أنهى المكالمة");
+            print("📞 الطرف الآخر أنهى المكالمة. جاري الإغلاق التلقائي...");
+            _endCall(); // إغلاق الشاشة فوراً وبسلاسة
           }
         },
         onError: (ErrorCodeType err, String msg) {
@@ -538,8 +590,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.pop(context);
-                _endCall();
+                Navigator.pop(context); // يغلق نافذة الحوار (Dialog)
+                _endCall(); // ينهي المكالمة ويخفي الشاشة بالكامل
               },
               child: const Text("موافق", style: TextStyle(fontWeight: FontWeight.bold)),
             ),
@@ -570,9 +622,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       print("Error releasing Agora engine: $e");
     }
 
-    if (mounted) {
-      Navigator.pop(context);
-    }
+    // إنهاء جميع مكالمات CallKit المعلقة
+    await FlutterCallkitIncoming.endAllCalls();
+
+    // 🔥 إخفاء الشاشة عبر دالة الاستدعاء بدلاً من Navigator.pop لضمان عدم إغلاق التطبيق
+    widget.onCallEnded();
   }
 
   @override
@@ -585,6 +639,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     } catch (e) {
       print("Error in dispose: $e");
     }
+    FlutterCallkitIncoming.endAllCalls();
     super.dispose();
   }
 
@@ -597,7 +652,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // استخدام WillPopScope للتعامل مع الرجوع في هواتف الأندرويد
+    // إيقاف الرجوع الافتراضي واستبداله بإنهاء المكالمة
     return WillPopScope(
       onWillPop: () async {
         _endCall();

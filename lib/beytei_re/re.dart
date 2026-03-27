@@ -4949,9 +4949,16 @@ class _RestaurantModuleState extends State<RestaurantModule> {
       if (navigatorKey.currentState != null) {
         navigatorKey.currentState?.push(
           MaterialPageRoute(
-            builder: (_) => ActiveVoiceCallScreen( // 🔴 1. نغير اسم الكلاس
+            // الكود بعد التعديل
+            builder: (context) => ActiveVoiceCallScreen(
               channelName: channelName,
-              remoteName: driverName,              // 🔴 2. نغير كلمة driverName إلى remoteName
+              remoteName: driverName,
+              // 👇 هذا هو السطر الذي سيحل المشكلة
+              onCallEnded: () {
+                if (Navigator.canPop(context)) {
+                  Navigator.pop(context); // إغلاق الشاشة عند انتهاء المكالمة
+                }
+              },
             ),
           ),
         );
