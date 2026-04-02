@@ -547,14 +547,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     ),
 
 
-                    _buildGridCard(
-                      context: context,
-                      title: 'استشارة بيتي ',
-                      imagePath: 'assets/images/clinic.png',
-                      onTap: () {
-                        context.push('/medical-store');
-                      },
-                    ),
+
                     _buildGridCard(
                       context: context,
                       title: 'المطاعم ',
@@ -563,35 +556,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                         GoRouter.of(context).push('/restaurants-store');
                       },
                     ),
-                    _buildGridCard(
-                      context: context,
-                      title: 'الحجز الطبي',
-                      imagePath: 'assets/images/medical.png',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => MedicalHomeScreen()),
-                        );
-                      },
-                    ),
 
-                    _buildGridCard(
-                      context: context,
-                      title: 'سجل بيتي الطبي ',
-                      imagePath: 'assets/images/ph.png',
-                      onTap: () {
-                        GoRouter.of(context).push('/do-store');
-                      },
-                    ),
-                    _buildGridCard(
-                      context: context,
-                      title: 'المختبرات ',
-                      imagePath: 'assets/images/lab.jpg',
-                      onTap: () {
-                        GoRouter.of(context).push('/lab-store');
-                      },
-                    ),
+
+
                   ],
                 ),
               ),

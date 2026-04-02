@@ -95,6 +95,12 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   print("🔥 [Background] Handling a background message: ${message.messageId}");
 
+  // 🚫 إيقاف الرنين فوراً إذا أرسل السائق أمر إلغاء
+  if (message.data['type'] == 'cancel_call') {
+    await FlutterCallkitIncoming.endAllCalls();
+    return;
+  }
+
   if (message.data['type'] == 'voip_call') {
     await showIncomingCall(message.data);
   } else {
@@ -106,8 +112,10 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 FlutterLocalNotificationsPlugin();
 
 void _showLocalNotification(RemoteMessage message) {
-  final String title = message.data['title'] ?? 'إشعار جديد';
-  final String body = message.data['body'] ?? 'لديك رسالة جديدة.';
+  // 🔥 الإصلاح هنا: نحاول قراءة العنوان والنص من كائن الـ notification أولاً
+  // وإذا لم يكن موجوداً، نحاول قراءته من الـ data، وإذا فشلنا، نضع قيمة افتراضية آمنة.
+  final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث من منصة بيتي';
+  final String body = message.notification?.body ?? message.data['body'] ?? 'لديك تحديث جديد بخصوص طلبك.';
 
   const AndroidNotificationDetails androidPlatformChannelSpecifics =
   AndroidNotificationDetails(
@@ -131,7 +139,6 @@ void _showLocalNotification(RemoteMessage message) {
     payload: message.data.toString(),
   );
 }
-
 // =======================================================================
 // 🔥 3. دوال إدارة التوكن
 // =======================================================================
@@ -211,8 +218,15 @@ void main() async {
     sound: true,
   );
 
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
     print("🔔 [FCM] Received message in foreground");
+
+    // 🚫 إيقاف الرنين فوراً إذا أرسل السائق أمر إلغاء
+    if (message.data['type'] == 'cancel_call') {
+      await FlutterCallkitIncoming.endAllCalls();
+      return;
+    }
+
     if (message.data['type'] == 'voip_call') {
       showIncomingCall(message.data);
     } else {
@@ -275,6 +289,15 @@ class _MyAppState extends State<MyApp> {
     // فحص المكالمات المعلقة عند إقلاع التطبيق من الصفر
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTerminatedCall();
+    });
+
+    // 🚫 الاستماع لأمر الإلغاء لإخفاء شاشة المكالمة (الـ Overlay) إذا كانت مفتوحة
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      if (message.data['type'] == 'cancel_call') {
+        if (mounted) {
+          _activeCallNotifier.value = null;
+        }
+      }
     });
 
     _router.routerDelegate.addListener(() {

@@ -181,390 +181,6 @@ class NavigationProvider with ChangeNotifier {
 
 
 
-class CallService {
-  static final CallService _instance = CallService._internal();
-  factory CallService() => _instance;
-  CallService._internal();
-
-  // عرض شاشة المكالمة الواردة (رنين واهتزاز مثل واتساب)
-  Future<void> showIncomingCall({
-    required String driverName,
-    required String driverImage,
-    required String channelName,
-    required String agoraAppId,
-    required String orderId,
-  }) async {
-
-    final params = CallKitParams(
-      id: const Uuid().v4(),
-      nameCaller: driverName,
-      appName: 'Beytei Miswak',
-      avatar: driverImage.isNotEmpty ? driverImage : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png', // صورة افتراضية
-      handle: 'Order #$orderId', // الرقم الذي يظهر تحت الاسم
-      type: 0, // 0 for Audio Call
-      duration: 30000, // مدة الرنين قبل الفصل (30 ثانية)
-      textAccept: 'رد',
-      textDecline: 'رفض',
-      missedCallNotification: const NotificationParams(
-        showNotification: true,
-        isShowCallback: true,
-        subtitle: 'مكالمة فائتة',
-        callbackText: 'عاود الاتصال',
-      ),
-      extra: <String, dynamic>{
-        'channelName': channelName,
-        'agoraAppId': agoraAppId,
-        'driverName': driverName,
-        'driverImage': driverImage,
-      },
-      headers: <String, dynamic>{'apiKey': 'Abc@123!', 'platform': 'flutter'},
-      android: AndroidParams(
-        isCustomNotification: true,
-        isShowLogo: false,
-        ringtonePath: 'system_ringtone_default', // يستخدم نغمة النظام
-        backgroundColor: '#009688', // لون الخلفية (تيل)
-        backgroundUrl: driverImage, // صورة السائق كخلفية
-        actionColor: '#4CAF50',
-        textColor: '#ffffff',
-        incomingCallNotificationChannelName: "المكالمات الواردة",
-        isShowFullLockedScreen: true, // يظهر فوق شاشة القفل
-      ),
-      ios: const IOSParams(
-        iconName: 'CallKitLogo',
-        handleType: 'generic',
-        supportsVideo: false,
-        maximumCallGroups: 1,
-        maximumCallsPerCallGroup: 1,
-        audioSessionMode: 'default',
-        audioSessionActive: true,
-        audioSessionPreferredSampleRate: 44100.0,
-        audioSessionPreferredIOBufferDuration: 0.005,
-        supportsDTMF: true,
-        supportsHolding: true,
-        supportsGrouping: false,
-        supportsUngrouping: false,
-        ringtonePath: 'system_ringtone_default',
-      ),
-    );
-
-    await FlutterCallkitIncoming.showCallkitIncoming(params);
-  }
-
-  // الاستماع لأحداث الرد والرفض
-  void listenToCallEvents(BuildContext context) {
-    FlutterCallkitIncoming.onEvent.listen((event) {
-      if (event == null) return;
-
-      switch (event.event) {
-        case Event.actionCallAccept:
-        // عند الضغط على "قبول" -> ننتقل لصفحة Agora
-          _handleCallAccepted(event.body, context);
-          break;
-        case Event.actionCallDecline:
-        // عند الرفض
-          print("Call Declined by User");
-          break;
-        case Event.actionCallEnded:
-          print("Call Ended");
-          break;
-        default:
-          break;
-      }
-    });
-  }
-
-  void _handleCallAccepted(Map<String, dynamic> body, BuildContext context) {
-    // استخراج البيانات المخزنة في extra
-    final extra = body['extra'];
-    if (extra == null) return;
-
-    final channelName = extra['channelName'];
-    final agoraAppId = extra['agoraAppId'];
-    final driverName = extra['driverName'];
-    final driverImage = extra['driverImage'];
-
-    // الانتقال لصفحة المكالمة
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CustomerCallPage(
-          channelName: channelName,
-          agoraAppId: agoraAppId,
-          driverName: driverName,
-          driverImage: driverImage,
-        ),
-      ),
-    );
-  }
-}
-
-// -----------------------------------------------------------------------
-// 2. صفحة المكالمة الحية (Agora Call Screen)
-// -----------------------------------------------------------------------
-class CustomerCallPage extends StatefulWidget {
-  final String channelName;
-  final String agoraAppId;
-  final String driverName;
-  final String? driverImage;
-
-  const CustomerCallPage({
-    super.key,
-    required this.channelName,
-    required this.agoraAppId,
-    required this.driverName,
-    this.driverImage,
-  });
-
-  @override
-  State<CustomerCallPage> createState() => _CustomerCallPageState();
-}
-
-class _CustomerCallPageState extends State<CustomerCallPage> {
-  int? _remoteUid;
-  bool _localUserJoined = false;
-  late RtcEngine _engine;
-  bool _isMuted = false;
-  bool _isSpeaker = false;
-  int _seconds = 0;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    initAgora();
-  }
-
-  Future<void> initAgora() async {
-    // طلب صلاحيات المايكروفون
-    await [Permission.microphone].request();
-
-    // إنشاء المحرك
-    _engine = createAgoraRtcEngine();
-    await _engine.initialize(RtcEngineContext(
-      appId: widget.agoraAppId,
-      channelProfile: ChannelProfileType.channelProfileCommunication,
-    ));
-
-    _engine.registerEventHandler(
-      RtcEngineEventHandler(
-        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          debugPrint("local user ${connection.localUid} joined");
-          setState(() {
-            _localUserJoined = true;
-          });
-        },
-        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          debugPrint("remote user $remoteUid joined");
-          setState(() {
-            _remoteUid = remoteUid;
-          });
-          _startTimer(); // بدء عداد الوقت عند انضمام السائق
-        },
-        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          debugPrint("remote user $remoteUid left channel");
-          _onCallEnd(); // إنهاء المكالمة عند خروج السائق
-        },
-      ),
-    );
-
-    await _engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
-    await _engine.enableAudio();
-
-    // الانضمام للقناة (التوكن فارغ في وضع الاختبار)
-    await _engine.joinChannel(
-      token: "",
-      channelId: widget.channelName,
-      uid: 0,
-      options: const ChannelMediaOptions(),
-    );
-  }
-
-  void _startTimer() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _seconds++;
-      });
-    });
-  }
-
-  String _formatDuration(int seconds) {
-    int minutes = seconds ~/ 60;
-    int remainingSeconds = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${remainingSeconds.toString().padLeft(2, '0')}';
-  }
-
-  void _onCallEnd() {
-    _timer?.cancel();
-    _engine.leaveChannel();
-    Navigator.pop(context);
-  }
-
-  void _onToggleMute() {
-    setState(() {
-      _isMuted = !_isMuted;
-    });
-    _engine.muteLocalAudioStream(_isMuted);
-  }
-
-  void _onToggleSpeaker() {
-    setState(() {
-      _isSpeaker = !_isSpeaker;
-    });
-    _engine.setEnableSpeakerphone(_isSpeaker);
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _engine.release();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F2027), // خلفية داكنة أنيقة
-      body: SafeArea(
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF203A43), Color(0xFF2C5364)],
-            ),
-          ),
-          child: Column(
-            children: [
-              const Spacer(flex: 1),
-
-              // 1. صورة السائق واسمه
-              Center(
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(4), // حواف بيضاء
-                      decoration: const BoxDecoration(
-                        color: Colors.white10,
-                        shape: BoxShape.circle,
-                      ),
-                      child: CircleAvatar(
-                        radius: 70,
-                        backgroundImage: widget.driverImage != null && widget.driverImage!.isNotEmpty
-                            ? NetworkImage(widget.driverImage!)
-                            : null,
-                        backgroundColor: Colors.grey.shade800,
-                        child: widget.driverImage == null || widget.driverImage!.isEmpty
-                            ? const Icon(Icons.person, size: 70, color: Colors.white)
-                            : null,
-                      ),
-                    ),
-                    const SizedBox(height: 25),
-                    Text(
-                      widget.driverName,
-                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1),
-                    ),
-                    const SizedBox(height: 10),
-                    // حالة الاتصال أو العداد
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        _localUserJoined
-                            ? (_remoteUid != null ? _formatDuration(_seconds) : "جاري انتظار الرد...")
-                            : "جاري الاتصال...",
-                        style: const TextStyle(fontSize: 16, color: Colors.white70, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const Spacer(flex: 2),
-
-              // 2. أزرار التحكم (Control Panel)
-              Container(
-                padding: const EdgeInsets.only(bottom: 50, top: 30),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.3),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // زر الكتم
-                    _buildControlBtn(
-                      icon: _isMuted ? Icons.mic_off : Icons.mic,
-                      color: _isMuted ? Colors.white : Colors.white70,
-                      bgColor: _isMuted ? Colors.blueGrey : Colors.white10,
-                      label: "كتم",
-                      onTap: _onToggleMute,
-                    ),
-
-                    // زر الإنهاء (الأحمر الكبير)
-                    GestureDetector(
-                      onTap: _onCallEnd,
-                      child: Container(
-                        padding: const EdgeInsets.all(25),
-                        decoration: BoxDecoration(
-                            color: Colors.redAccent.shade400,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 15, spreadRadius: 2)
-                            ]
-                        ),
-                        child: const Icon(Icons.call_end, color: Colors.white, size: 36),
-                      ),
-                    ),
-
-                    // زر مكبر الصوت
-                    _buildControlBtn(
-                      icon: _isSpeaker ? Icons.volume_up : Icons.volume_down,
-                      color: _isSpeaker ? Colors.white : Colors.white70,
-                      bgColor: _isSpeaker ? Colors.blueGrey : Colors.white10,
-                      label: "مكبر",
-                      onTap: _onToggleSpeaker,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildControlBtn({
-    required IconData icon,
-    required Color color,
-    required Color bgColor,
-    required String label,
-    required VoidCallback onTap
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: bgColor,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color, size: 28),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))
-      ],
-    );
-  }
-}
-
 
 class StoreAuthProvider with ChangeNotifier {
   String? _token;
@@ -2693,6 +2309,8 @@ class ApiService {
     required int? regionId,
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
+
+    // إرسال رسوم التوصيل كـ Shipping Line قياسي
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
@@ -2771,6 +2389,11 @@ class ApiService {
           {"key": "_customer_fcm_token", "value": fcmToken},
           {"key": "fcm_token", "value": fcmToken},
         ],
+
+        // 🔥🔥🔥 التعديل الأهم: إرسال السعر المحسوب في التطبيق بصراحة تامة 🔥🔥🔥
+        if (deliveryFee != null)
+          {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
+
         if (position != null) ...[
           {"key": "_customer_destination_lat", "value": position.latitude.toString()},
           {"key": "_customer_destination_lng", "value": position.longitude.toString()},
@@ -2795,7 +2418,6 @@ class ApiService {
       throw Exception('Failed to submit order: ${response.body}');
     }
   }
-
   Future<bool> submitReview({required int productId, required double rating, required String review, required String author, required String email}) async {
     final response = await _executeWithRetry(() => http.post(
       Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/submit-review'),
@@ -3890,31 +3512,12 @@ class _MiswakModuleState extends State<MiswakModule> {
     // 1. الاستماع للإشعارات والرسائل القادمة (والتطبيق مفتوح في الواجهة)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
 
-      // 🔥 أ: فحص ما إذا كان الإشعار هو طلب مكالمة
-      if (message.data['type'] == 'incoming_call') {
-        // استدعاء دالة CallService التي لديك لعرض الرنين
-        CallService().showIncomingCall(
-          driverName: message.data['driver_name'] ?? 'السائق',
-          driverImage: message.data['driver_image'] ?? '',
-          channelName: message.data['channel_name'] ?? '',
-          agoraAppId: message.data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec',
-          orderId: message.data['order_id'] ?? '0',
-        );
-
-        // حفظ البيانات في SharedPreferences لاستخدامها لاحقاً
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('incoming_call', json.encode({
-          'channel_name': message.data['channel_name'] ?? '',
-          'order_id': message.data['order_id'] ?? '0',
-          'driver_name': message.data['driver_name'] ?? 'السائق',
-          'driver_image': message.data['driver_image'] ?? '',
-          'agora_app_id': message.data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec'
-        }));
-
-        return; // الخروج لتجنب عرض إشعار عادي متكرر
+      // 🛑 [الحل الجذري للمشكلة]: منع المسواك من تحويل المكالمة إلى إشعار عادي
+      if (message.data['type'] == 'voip_call' || message.data['type'] == 'incoming_call') {
+        return; // تجاهل الأمر تماماً واترك المهمة لملف main.dart ليظهر شاشة الرنين
       }
 
-      // 🔥 ب: إشعار عادي (تحديث طلب، إلخ)
+      // 🔥 ب: إشعار عادي (تحديث طلب، عرض الخصومات، إلخ)
       NotificationService.display(message);
 
       // تحديث الداشبورد تلقائياً إذا كان المدير فاتحاً للتطبيق
@@ -3925,13 +3528,7 @@ class _MiswakModuleState extends State<MiswakModule> {
         }
       }
     });
-
-    // 2. 🔥 تفعيل الاستماع لأزرار المكالمة (الرد/الرفض) في كامل التطبيق
-    if (mounted) {
-      CallService().listenToCallEvents(context);
-    }
-  }
-  @override
+  }  @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
