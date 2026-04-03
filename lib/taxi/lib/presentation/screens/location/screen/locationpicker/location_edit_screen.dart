@@ -34,9 +34,9 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   bool isDragging = false;
   int selectedIndex = 0;
 
-  // ✅ متغيرات محلية للإحداثيات الحالية
-  double _currentLat = 32.5029;
-  double _currentLng = 45.8219;
+  // إحداثيات مبدئية فقط، سيتم تحديثها فوراً في _initCurrentLocation
+  double _currentLat = 32.5056;
+  double _currentLng = 45.8247;
 
   @override
   void initState() {
@@ -49,38 +49,49 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     });
   }
 
-  // ✅ تهيئة الموقع الحالي عند فتح الشاشة
-  void _initCurrentLocation() {
+  // ✅ تهيئة الموقع الحالي (جلب الـ GPS إذا لم يكن هناك موقع محفوظ)
+  void _initCurrentLocation() async {
     final controller = Get.find<SelectLocationController>();
     final savedLocation = controller.homeController.getSelectedLocationInfoAtIndex(selectedIndex);
 
+    // 1. إذا كان هناك موقع محفوظ مسبقاً لهذه الخانة (انطلاق أو وجهة)
     if (savedLocation != null &&
         savedLocation.latitude != null &&
         savedLocation.latitude.toString().isNotEmpty) {
       final lat = double.tryParse(savedLocation.latitude.toString());
       final lng = double.tryParse(savedLocation.longitude.toString());
       if (lat != null && lng != null && lat != 0 && lng != 0) {
-        setState(() {
-          _currentLat = lat;
-          _currentLng = lng;
-        });
-        return;
-      }
-    }
-
-    // Fallback: استخدام موقع الانطلاق إذا كانت الوجهة فارغة
-    if (selectedIndex == 1) {
-      final pickupLocation = controller.homeController.getSelectedLocationInfoAtIndex(0);
-      if (pickupLocation != null && pickupLocation.latitude != null) {
-        final lat = double.tryParse(pickupLocation.latitude.toString());
-        final lng = double.tryParse(pickupLocation.longitude.toString());
-        if (lat != null && lng != null && lat != 0 && lng != 0) {
+        if(mounted) {
           setState(() {
             _currentLat = lat;
             _currentLng = lng;
           });
         }
+        return;
       }
+    }
+
+    // 2. إذا لم يكن هناك موقع محفوظ، اجلب الموقع الفعلي للزبون (GPS)
+    try {
+      bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      if (serviceEnabled) {
+        geo.Position pos = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
+        if (mounted) {
+          setState(() {
+            _currentLat = pos.latitude;
+            _currentLng = pos.longitude;
+          });
+
+          // تحريك الخريطة للموقع الفعلي
+          if (Platform.isIOS && appleController != null) {
+            appleController?.moveCamera(ap.CameraUpdate.newLatLng(ap.LatLng(_currentLat, _currentLng)));
+          } else if (!Platform.isIOS && mapLibreController != null) {
+            mapLibreController?.moveCamera(ml.CameraUpdate.newLatLng(ml.LatLng(_currentLat, _currentLng)));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ لم نتمكن من جلب الموقع: $e');
     }
   }
 
@@ -96,13 +107,16 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     if (lat == 0 || lng == 0) return;
 
     final controller = Get.find<SelectLocationController>();
+    // ✅ إجبار الكونترولر على معرفة الـ index الصحيح (لحل مشكلة الأندرويد)
+    controller.changeIndex(selectedIndex);
+
     controller.changeCurrentLatLongBasedOnCameraMove(lat, lng);
     controller.pickLocation(isMapDrag: true);
   }
 
   @override
   void dispose() {
-    // ✅ تنظيف بسيط لمنع التسرب
+    // تنظيف لتجنب تسرب الذاكرة
     if (Platform.isIOS) {
       appleController = null;
     } else {
@@ -136,7 +150,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                           ),
                           onMapCreated: (c) {
                             appleController = c;
-                            controller.setAppleController(c);
+                            // ❌ تم حذف إرسال المتحكم لمنع الـ Crash
                           },
                           onCameraMove: (pos) {
                             if (!isDragging) setState(() => isDragging = true);
@@ -154,7 +168,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                           ),
                           onMapCreated: (c) {
                             mapLibreController = c;
-                            controller.setMapLibreController(c);
+                            // ❌ تم حذف إرسال المتحكم لمنع الـ Crash
                           },
                           onCameraMove: (position) {
                             if (!isDragging) setState(() => isDragging = true);
@@ -258,8 +272,14 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return;
 
-      await controller.getCurrentPosition(pickupLocationForIndex: -1, isFromEdit: true);
       final pos = await geo.Geolocator.getCurrentPosition(desiredAccuracy: geo.LocationAccuracy.high);
+
+      if(mounted) {
+        setState(() {
+          _currentLat = pos.latitude;
+          _currentLng = pos.longitude;
+        });
+      }
 
       if (Platform.isIOS && appleController != null) {
         appleController?.animateCamera(ap.CameraUpdate.newLatLng(ap.LatLng(pos.latitude, pos.longitude)));
@@ -267,7 +287,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
         mapLibreController?.animateCamera(ml.CameraUpdate.newLatLngZoom(ml.LatLng(pos.latitude, pos.longitude), 16.0));
       }
     } catch (e) {
-      print('❌ Go to my location error: $e');
+      debugPrint('❌ Go to my location error: $e');
     }
   }
 
@@ -324,32 +344,30 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
           const SizedBox(height: Dimensions.space20),
 
-          // ✅ زر التأكيد - النسخة المتوازنة (تحفظ الموقع + تمنع الكراش)
+          // ✅ زر التأكيد - النسخة الآمنة
           RoundedButton(
             text: MyStrings.confirm,
-            press: () async {
-              // ✅ 1. حفظ الإحداثيات في المتغيرات العامة للكونترولر
+            press: () {
+              // 1. التأكيد على الاندكس
+              controller.changeIndex(selectedIndex);
+
               controller.selectedLatitude = _currentLat;
               controller.selectedLongitude = _currentLng;
 
-              // ✅ 2. عنوان احتياطي
               String finalAddress = controller.currentAddress.value.isNotEmpty
                   ? controller.currentAddress.value
                   : (controller.homeController.getSelectedLocationInfoAtIndex(selectedIndex)?.fullAddress ?? "موقع محدد");
 
-              // ✅ 3. الحفظ في الموقع الصحيح بناءً على selectedIndex
-              // هذا هو الجزء الأهم الذي كان يسبب المشكلة سابقاً
+              // 2. الحفظ في الموقع الصحيح بناءً على selectedIndex
               if (selectedIndex == 0) {
-                // حفظ في موقع الانطلاق
                 controller.pickupLatlong = ll.LatLng(_currentLat, _currentLng);
                 controller.pickUpController.text = finalAddress;
               } else {
-                // حفظ في موقع الوجهة ← هذا هو الذي كان لا يعمل!
                 controller.destinationLatlong = ll.LatLng(_currentLat, _currentLng);
                 controller.destinationController.text = finalAddress;
               }
 
-              // ✅ 4. تحديث HomeController باستخدام selectedIndex مباشرة (أهم نقطة!)
+              // 3. تحديث HomeController
               controller.homeController.addLocationAtIndex(
                 SelectedLocationInfo(
                   address: finalAddress,
@@ -357,20 +375,12 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                   latitude: _currentLat,
                   longitude: _currentLng,
                 ),
-                selectedIndex,  // ← استخدم selectedIndex مباشرة، ليس 0 أو 1 ثابت!
+                selectedIndex,
               );
 
-              // ✅ 5. تحديث الخريطة الرئيسية
-              controller.openMap(_currentLat, _currentLng, isMapDrag: false);
-              controller.update();
+              // ❌ تم حذف controller.openMap و التأخير الزمني لتفادي الكراش
 
-              // ✅ 6. تأخير بسيط جداً لمنع الكراش على iOS (200ms كافية)
-              // لا نزيد أكثر حتى لا نؤخر تجربة المستخدم
-              if (Platform.isIOS) {
-                await Future.delayed(const Duration(milliseconds: 200));
-              }
-
-              // ✅ 7. العودة مع نتيجة
+              // 4. العودة بنجاح
               Get.back(result: true);
             },
             isOutlined: false,
