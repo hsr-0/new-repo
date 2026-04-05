@@ -1,3 +1,4 @@
+import 'dart:io'; // 1. أضفنا هذا الاستيراد للتعرف على نوع النظام
 import 'package:cosmetic_store/taxi/lib/core/utils/dimensions.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_color.dart';
 import 'package:cosmetic_store/taxi/lib/data/controller/home/home_controller.dart';
@@ -61,24 +62,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 openDrawer: openDrawer,
               ),
             ),
-            body: RefreshIndicator(
-              color: MyColor.primaryColor,
-              backgroundColor: MyColor.colorWhite,
-              onRefresh: () async {
-                controller.initialData(shouldLoad: true);
-              },
-              child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(horizontal: Dimensions.space16),
-                physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
-                child: Column(
-                  children: [
-                    LocationPickUpHomeWidget(controller: controller),
-                    spaceDown(Dimensions.space20),
-                    HomeBody(controller: controller),
-                    spaceDown(Dimensions.space20),
-                  ],
+            body: Stack( // 2. استخدمنا Stack هنا
+              children: [
+                // المحتوى الأصلي للصفحة
+                RefreshIndicator(
+                  color: MyColor.primaryColor,
+                  backgroundColor: MyColor.colorWhite,
+                  onRefresh: () async {
+                    controller.initialData(shouldLoad: true);
+                  },
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(horizontal: Dimensions.space16),
+                    physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+                    child: Column(
+                      children: [
+                        LocationPickUpHomeWidget(controller: controller),
+                        spaceDown(Dimensions.space20),
+                        HomeBody(controller: controller),
+                        spaceDown(Dimensions.space20),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+
+                // 3. زر الرجوع الخاص بالآيفون (يظهر فقط في هذه الشاشة وفي الـ iOS)
+                if (Platform.isIOS)
+                  Positioned(
+                    right: 0,
+                    top: MediaQuery.of(context).size.height * 0.4, // مكان الزر عمودياً
+                    child: GestureDetector(
+                      onTap: () {
+                        // إغلاق قسم التاكسي والعودة لمنصة بيتي
+                        Navigator.of(context, rootNavigator: true).pop();
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 20),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade800.withOpacity(0.7),
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(20),
+                            bottomLeft: Radius.circular(20),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 5,
+                              offset: const Offset(-2, 0),
+                            )
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.arrow_forward_ios,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         );

@@ -1500,15 +1500,19 @@ class CacheService {
 
 class OrderHistoryService {
   static const _key = 'order_history';
+
+  // 1. دالة حفظ طلب جديد (لأول مرة)
   Future<void> saveOrder(Order order) async {
     final prefs = await SharedPreferences.getInstance();
     final List<Order> orders = await getOrders();
+    // إزالة النسخة القديمة إن وجدت لتجنب التكرار
     orders.removeWhere((o) => o.id == order.id);
     orders.insert(0, order);
     final String encodedData = json.encode(orders.map<Map<String, dynamic>>((o) => o.toJson()).toList());
     await prefs.setString(_key, encodedData);
   }
 
+  // 2. دالة جلب كل الطلبات المخزنة
   Future<List<Order>> getOrders() async {
     final prefs = await SharedPreferences.getInstance();
     final String? ordersString = prefs.getString(_key);
@@ -1517,6 +1521,36 @@ class OrderHistoryService {
       return decodedData.map<Order>((item) => Order.fromJson(item)).toList();
     }
     return [];
+  }
+
+  // 3. 🔥 الدالة الجديدة: تحديث حالة طلب موجود مسبقاً
+  Future<void> updateOrderStatusLocally(int orderId, String newStatus) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? ordersString = prefs.getString(_key);
+
+      if (ordersString != null) {
+        List<dynamic> decodedData = json.decode(ordersString);
+        bool isUpdated = false;
+
+        // البحث عن الطلب وتحديث حالته فقط
+        for (var i = 0; i < decodedData.length; i++) {
+          if (decodedData[i]['id'] == orderId) {
+            decodedData[i]['status'] = newStatus;
+            isUpdated = true;
+            break;
+          }
+        }
+
+        // إذا تم التعديل، نحفظ القائمة الجديدة
+        if (isUpdated) {
+          await prefs.setString(_key, json.encode(decodedData));
+          print("💾 تم تحديث حالة الطلب #$orderId محلياً بنجاح إلى: $newStatus");
+        }
+      }
+    } catch (e) {
+      print("⚠️ خطأ أثناء تحديث الطلب محلياً: $e");
+    }
   }
 }
 // ==========================================
@@ -7190,6 +7224,8 @@ class _CartScreenState extends State<CartScreen> {
         ]));
   }
 }
+
+
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
 
@@ -7199,20 +7235,19 @@ class OrdersHistoryScreen extends StatefulWidget {
 
 class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
   late Future<List<Order>> _ordersFuture;
+  bool _isSyncing = false; // حالة المزامنة الحالية
 
   @override
   void initState() {
     super.initState();
     _loadOrders();
 
-    // 🔥 1. الاستماع لتنبيهات التحديث (من السلة أو الإشعارات)
-    // هذا يضمن ظهور الطلب فوراً بعد إتمامه
+    // 🔥 الاستماع لتنبيهات التحديث (من السلة أو الإشعارات)
     Provider.of<NotificationProvider>(context, listen: false).addListener(_refreshOrders);
   }
 
   @override
   void dispose() {
-    // 🔥 2. إزالة المستمع عند إغلاق الشاشة لتجنب أخطاء الذاكرة
     try {
       Provider.of<NotificationProvider>(context, listen: false).removeListener(_refreshOrders);
     } catch (e) {
@@ -7228,31 +7263,139 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
     }
   }
 
-  // دالة جلب البيانات من الذاكرة المحلية
-  void _loadOrders() {
+  // ============================================================
+  // 🔥 دالة التحميل المحسنة: عرض فوري + مزامنة ذكية
+  // ============================================================
+  Future<void> _loadOrders() async {
+    if (!mounted) return;
+
+    // 1. ✅ العرض الفوري: جلب البيانات من الذاكرة المحلية فوراً
     setState(() {
       _ordersFuture = OrderHistoryService().getOrders();
     });
+
+    // 2. 🔄 المزامنة الخلفية: تصحيح الطلبات النشطة من السيرفر
+    // ننتظر قليلاً لضمان استقرار الواجهة ثم نبدأ المزامنة
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (mounted) {
+      await _syncActiveOrdersWithServer();
+    }
+  }
+
+  // ============================================================
+  // 🔥 دالة المزامنة مع سيرفر التاكسي (نفس منطق التتبع)
+  // ============================================================
+  Future<void> _syncActiveOrdersWithServer() async {
+    try {
+      // أ. جلب الطلبات المحلية
+      final localOrders = await OrderHistoryService().getOrders();
+      if (localOrders.isEmpty) return;
+
+      // ب. فلترة الطلبات النشطة فقط (لحماية الأداء)
+      final activeStatuses = ['pending', 'processing', 'on-hold', 'accepted', 'at_store', 'picked_up', 'out-for-delivery', 'driver-assigned'];
+      final activeOrders = localOrders.where((o) => activeStatuses.contains(o.status.toLowerCase())).toList();
+
+      if (activeOrders.isEmpty) return; // لا يوجد ما يزامن
+
+      // ج. بدء المزامنة
+      setState(() => _isSyncing = true);
+
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final String? taxiToken = auth.taxiToken;
+      bool hasChanges = false;
+
+      // د. المرور على الطلبات النشطة وفحصها
+      for (var order in activeOrders) {
+        try {
+          // استخدام النقطة المخصصة الموثوقة
+          final response = await http.get(
+            Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/status-by-source/${order.id}'),
+            headers: {
+              'Content-Type': 'application/json',
+              if (taxiToken != null) 'Authorization': 'Bearer $taxiToken',
+            },
+          ).timeout(const Duration(seconds: 5)); // مهلة قصيرة لعدم تعطيل التطبيق
+
+          if (response.statusCode == 200) {
+            final data = json.decode(response.body);
+            String serverStatus = data['order_status']?.toString().toLowerCase() ?? order.status;
+            String? driverName = data['driver_name'];
+
+            // هل هناك تغيير؟
+            if (serverStatus != order.status.toLowerCase()) {
+              // تحديث الحالة في الكائن المحلي
+              // ملاحظة: كلاس Order قد يكون immutable، لذا نحتاج لتحديثه عبر الخدمة
+              await OrderHistoryService().updateOrderStatusLocally(order.id, serverStatus);
+
+              // تحديث اسم السائق إذا وجد (اختياري حسب هيكلية الكلاس)
+              if (driverName != null && driverName.isNotEmpty) {
+                // إذا كان الكلاس يدعم التحديث الكامل، يمكن استدعاء دالة تحديث كاملة هنا
+              }
+
+              hasChanges = true;
+              print("🔄 تم تحديث الطلب #${order.id}: ${order.status} -> $serverStatus");
+            }
+          }
+        } catch (e) {
+          // في حال فشل الاتصال، نتجاهل الخطأ ونعتمد على الكاش (لا نوقف التطبيق)
+          print("⚠️ فشل مزامنة الطلب #${order.id}: $e");
+        }
+      }
+
+      // هـ. إذا حدثت تغييرات، نعيد تحميل القائمة لتحديث الواجهة
+      if (hasChanges && mounted) {
+        setState(() {
+          _ordersFuture = OrderHistoryService().getOrders();
+        });
+        // تحديث السلة أيضاً لضمان التزامن الشامل
+        Provider.of<NotificationProvider>(context, listen: false).triggerRefresh();
+      }
+
+    } catch (e) {
+      print("⚠️ خطأ عام في المزامنة: $e");
+    } finally {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('سجل طلباتي')),
+      appBar: AppBar(
+        title: const Text('سجل طلباتي'),
+        centerTitle: true,
+        actions: [
+          // 🔥 مؤشر المزامنة الذكي
+          if (_isSyncing)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+            ),
+          // زر التحديث اليدوي
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _isSyncing ? null : _loadOrders,
+          ),
+        ],
+      ),
       body: RefreshIndicator(
-        onRefresh: () async => _loadOrders(),
+        onRefresh: _loadOrders,
         child: FutureBuilder<List<Order>>(
           future: _ordersFuture,
           builder: (context, snapshot) {
-
-            // الحالة 1: الانتظار
+            // الحالة 1: الانتظار الأولي
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
 
             // الحالة 2: وجود خطأ
             if (snapshot.hasError) {
-              // نستخدم ListView لكي يعمل الـ RefreshIndicator حتى مع الخطأ
               return ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
@@ -7267,7 +7410,6 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
             // الحالة 3: القائمة فارغة
             if (orders == null || orders.isEmpty) {
               return ListView(
-                // ✅ ضروري جداً: يسمح بالسحب للتحديث حتى لو القائمة فارغة
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   SizedBox(height: MediaQuery.of(context).size.height * 0.3),

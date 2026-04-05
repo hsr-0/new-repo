@@ -1,7 +1,7 @@
 class MyImages {
   static const String logoWhite = "assets/images/logo/logo_white.png";
   static const String appLogoWhite = "assets/images/logo/app_logo_white.png";
-  static const String appLogoIcon = "assets/images/logo/app_icon.png";
+  static const String appLogoIcon = "assets/images/logo/.png";
 
   //Onboard Image
   static const List<String> onboardImages = [
