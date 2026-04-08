@@ -6,8 +6,7 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 
-import '../beytei_re/re.dart';
-// تأكد من استيراد ملف الثوابت والـ AuthProvider الخاص بك
+import '../beytei_re/re.dart'; // تأكد من المسار الصحيح لكلاس CustomerChatPage و AuthProvider
 
 class OrderTrackingScreen extends StatefulWidget {
   final dynamic order;
@@ -44,7 +43,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
     bool syncedViaTaxi = await _syncWithTaxiServer();
 
-
     if (mounted) setState(() => _isSyncing = false);
   }
 
@@ -58,7 +56,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
       final response = await http.get(
         Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/status-by-source/${widget.order.id}'),
-
         headers: {
           'Content-Type': 'application/json',
           if (taxiToken != null) 'Authorization': 'Bearer $taxiToken',
@@ -72,7 +69,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
         setState(() {
           _currentStatus = taxiStatus;
-          if (driver != null) _driverName = driver;
+          if (driver != null && driver.isNotEmpty) _driverName = driver;
         });
 
         await _updateLocalStorage(widget.order.id, taxiStatus);
@@ -115,14 +112,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   void _listenToTaxiUpdates() {
     _fcmSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (message.data.isNotEmpty && message.data['order_id'] == widget.order.id.toString()) {
-
         String? newStatus = message.data['new_status'] ?? message.data['status'];
         String? driver = message.data['driver_name'];
 
         if (mounted) {
           setState(() {
             if (newStatus != null) _currentStatus = newStatus;
-            if (driver != null) _driverName = driver;
+            if (driver != null && driver.isNotEmpty) _driverName = driver;
           });
         }
 
@@ -196,15 +192,23 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     : _buildCustomTimeline(currentStep),
               ),
 
-              // ---------------- البطاقة الثانية: المندوب ----------------
+              // ---------------- البطاقة الثانية: المندوب (مع زر الدردشة) ----------------
               if (currentStep >= 1 && _driverName != null && !isCancelled)
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: Colors.blue.shade800, borderRadius: BorderRadius.circular(20)),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade800,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))],
+                  ),
                   child: Row(
                     children: [
-                      const CircleAvatar(backgroundColor: Colors.white24, child: Icon(Icons.motorcycle, color: Colors.white)),
+                      const CircleAvatar(
+                        backgroundColor: Colors.white24,
+                        radius: 25,
+                        child: Icon(Icons.motorcycle, color: Colors.white, size: 28),
+                      ),
                       const SizedBox(width: 15),
                       Expanded(
                         child: Column(
@@ -213,6 +217,29 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                             const Text("المندوب المسؤول", style: TextStyle(color: Colors.white70, fontSize: 12)),
                             Text(_driverName!, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                           ],
+                        ),
+                      ),
+                      // 🔥 زر الدردشة الجديد 🔥
+                      IconButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => CustomerChatPage(
+                                orderId: widget.order.id.toString(),
+                                driverName: _driverName ?? 'المندوب',
+                                customerName: widget.order.customerName, // يفترض أن order يحتوي على customerName
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.chat_bubble_rounded),
+                        color: Colors.white,
+                        iconSize: 28,
+                        tooltip: "محادثة المندوب",
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.green.shade600,
+                          padding: const EdgeInsets.all(10),
                         ),
                       ),
                     ],

@@ -30,7 +30,7 @@ import 'package:image_picker/image_picker.dart';
 import '../main.dart';
 import '../taxi/cash.dart';
 import 'OrderTracking.dart';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 // =======================================================================
 // --- إعدادات وثوابت عامة للوحدة ---
 // =======================================================================
@@ -5054,7 +5054,11 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   // ==========================================================
   // دالة معالجة الإشعارات عند فتح التطبيق من الخلفية (Background)
   // ==========================================================
+// ==========================================================
+  // دالة معالجة الإشعارات عند فتح التطبيق من الخلفية (Background)
+  // ==========================================================
   Future<void> _handleBackgroundMessage(RemoteMessage message) async {
+    // 1️⃣ معالجة مكالمات الصوت (VoIP)
     if (message.data['type'] == 'voip_call') {
       final channelName = message.data['channelName'] ?? message.data['channel_name'];
       final driverName = message.data['driverName'] ?? message.data['driver_name'] ?? 'الكابتن';
@@ -5087,8 +5091,27 @@ class _RestaurantModuleState extends State<RestaurantModule> {
         );
       }
     }
-  }
+    // 2️⃣ 🔥 التعديل الجديد: معالجة إشعارات الدردشة
+    else if (message.data['type'] == 'chat_message') {
+      final orderId = message.data['order_id'];
+      final driverName = message.data['sender_name'] ?? 'المندوب';
 
+      // الانتظار قليلاً لضمان بناء الواجهة الأساسية (مهم جداً لتجنب الشاشة السوداء)
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (navigatorKey.currentState != null && orderId != null) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (context) => CustomerChatPage(
+              orderId: orderId.toString(),
+              driverName: driverName,
+              customerName: 'الزبون', // يمكن تبديلها باسم الزبون الحقيقي من الـ SharedPreferences لاحقاً إذا أردت
+            ),
+          ),
+        );
+      }
+    }
+  }
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
@@ -8609,7 +8632,286 @@ class _EditProductScreenState extends State<EditProductScreen> {
     );
   }
 }
-// أضف هذا الكلاس الجديد في ملف re.dart
+
+
+
+
+
+
+
+
+
+
+
+
+// =============================================================================
+// 💬 شاشة الدردشة للزبون (Customer Chat Page)
+// =============================================================================
+class CustomerChatPage extends StatefulWidget {
+  final String orderId;
+  final String driverName;
+  final String customerName;
+  final String? driverFcmToken; // (اختياري) إذا كان متوفراً لإرسال إشعار للسائق
+
+  const CustomerChatPage({
+    super.key,
+    required this.orderId,
+    required this.driverName,
+    required this.customerName,
+    this.driverFcmToken,
+  });
+
+  @override
+  State<CustomerChatPage> createState() => _CustomerChatPageState();
+}
+
+class _CustomerChatPageState extends State<CustomerChatPage> {
+  final TextEditingController _msgController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  bool _isSending = false;
+
+  // معرّف ثابت للزبون لتمييز رسائله عن رسائل السائق
+  final String _customerId = 'customer';
+
+  Future<void> _sendMessage() async {
+    final text = _msgController.text.trim();
+    if (text.isEmpty) return;
+
+    setState(() => _isSending = true);
+
+    final chatDoc = FirebaseFirestore.instance.collection('OrdersChat').doc(widget.orderId);
+    final messageData = {
+      'text': text,
+      'senderId': _customerId, // الزبون دائماً يرسل بهذا الـ ID
+      'senderName': widget.customerName,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    };
+
+    try {
+      // تحديث المستند بإضافة الرسالة للمصفوفة
+      await chatDoc.set({
+        'messages': FieldValue.arrayUnion([messageData])
+      }, SetOptions(merge: true));
+
+      _msgController.clear();
+
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(0.0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      }
+
+      // إرسال إشعار للسائق (إذا كان التوكن الخاص به متوفراً لدينا)
+      if (widget.driverFcmToken != null && widget.driverFcmToken!.isNotEmpty) {
+        String notifyUrl = 'https://re.beytei.com/wp-json/beytei-chat/v1/notify';
+        http.post(
+          Uri.parse(notifyUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'fcm_token': widget.driverFcmToken,
+            'sender_name': widget.customerName,
+            'message': text,
+            'order_id': widget.orderId,
+          }),
+        ).then((_) => print("✅ تم إرسال إشعار للسائق"));
+      }
+
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('فشل الإرسال: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  String _formatTime(int? epoch) {
+    if (epoch == null) return '';
+    final date = DateTime.fromMillisecondsSinceEpoch(epoch);
+    return DateFormat('hh:mm a', 'ar').format(date);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      appBar: AppBar(
+        title: Row(
+          children: [
+            const CircleAvatar(
+              backgroundColor: Colors.white24,
+              child: Icon(Icons.two_wheeler, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.driverName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text("المندوب", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Theme.of(context).primaryColor, // استخدم لون التطبيق الأساسي
+        elevation: 0,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(bottom: Radius.circular(20))),
+      ),
+      body: Column(
+        children: [
+          // 📜 منطقة عرض الرسائل
+          Expanded(
+            child: StreamBuilder<DocumentSnapshot>(
+              stream: FirebaseFirestore.instance.collection('OrdersChat').doc(widget.orderId).snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                if (!snapshot.hasData || !snapshot.data!.exists) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.chat_bubble_outline, size: 80, color: Colors.grey.shade300),
+                        const SizedBox(height: 15),
+                        Text('تواصل مع المندوب هنا', style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
+                      ],
+                    ),
+                  );
+                }
+
+                final data = snapshot.data!.data() as Map<String, dynamic>;
+                List<dynamic> messages = data['messages'] ?? [];
+
+                // ترتيب الرسائل من الأحدث للأقدم
+                messages.sort((a, b) => (b['timestamp'] as int).compareTo(a['timestamp'] as int));
+
+                return ListView.builder(
+                  reverse: true,
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 20),
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = messages[index] as Map<String, dynamic>;
+                    final isMe = msg['senderId'] == _customerId; // التحقق إذا كان الزبون هو المرسل
+                    return _buildMessageBubble(msg, isMe);
+                  },
+                );
+              },
+            ),
+          ),
+
+          // ⌨️ منطقة إدخال النص
+          Container(
+            padding: const EdgeInsets.only(left: 10, right: 10, bottom: 20, top: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 15, offset: const Offset(0, -5))],
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+            ),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _msgController,
+                      decoration: InputDecoration(
+                        hintText: 'اكتب رسالة للمندوب...',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
+                        filled: true,
+                        fillColor: Colors.grey.shade100,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                      ),
+                      maxLines: null,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _sendMessage(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: _isSending ? null : _sendMessage,
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor,
+                        shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: Theme.of(context).primaryColor.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))],
+                      ),
+                      child: _isSending
+                          ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Icon(Icons.send_rounded, color: Colors.white, size: 24),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 💬 تصميم فقاعة الرسالة
+  Widget _buildMessageBubble(Map<String, dynamic> msg, bool isMe) {
+    return Align(
+      alignment: isMe ? Alignment.centerLeft : Alignment.centerRight,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        decoration: BoxDecoration(
+          color: isMe ? Theme.of(context).primaryColor : Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(20),
+            topRight: const Radius.circular(20),
+            bottomLeft: Radius.circular(isMe ? 0 : 20),
+            bottomRight: Radius.circular(isMe ? 20 : 0),
+          ),
+          boxShadow: [
+            BoxShadow(
+                color: isMe ? Theme.of(context).primaryColor.withOpacity(0.2) : Colors.black.withOpacity(0.05),
+                blurRadius: 8,
+                offset: const Offset(0, 3)
+            )
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: isMe ? CrossAxisAlignment.start : CrossAxisAlignment.end,
+          children: [
+            Text(
+              msg['text'] ?? '',
+              style: TextStyle(color: isMe ? Colors.white : Colors.black87, fontSize: 16, height: 1.3),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _formatTime(msg['timestamp'] as int?),
+              style: TextStyle(color: isMe ? Colors.white70 : Colors.grey.shade500, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class AddProductScreen extends StatefulWidget {
   final RestaurantProductsProvider productProvider;

@@ -119,8 +119,8 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: MyColor.colorBlack.withValues(alpha: 0.05), // soft top shadow
-                            offset: const Offset(0, -30), // ⬆️ Shadow goes up
+                            color: MyColor.colorBlack.withValues(alpha: 0.05),
+                            offset: const Offset(0, -30),
                             blurRadius: 15,
                             spreadRadius: -3,
                           ),
@@ -141,18 +141,13 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                               inputAction: TextInputAction.next,
                               focusNode: controller.userNameFocusNode,
                               controller: controller.userNameController,
-                              nextFocus: controller.mobileNoFocusNode,
+                              nextFocus: controller.countryFocusNode, // ينتقل للهاتف مباشرة
                               onChanged: (value) {
                                 return;
                               },
+                              // ✅ تم تعطيل التحقق للسماح للكنترولر بتوليد الاسم تلقائياً في الخلفية
                               validator: (value) {
-                                if (value != null && value.isEmpty) {
-                                  return MyStrings.enterYourUsername.tr;
-                                } else if (value.length < 6) {
-                                  return MyStrings.kShortUserNameError;
-                                } else {
-                                  return null;
-                                }
+                                return null;
                               },
                             ),
                             const SizedBox(
@@ -165,7 +160,7 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                               inputAction: TextInputAction.next,
                               focusNode: controller.countryFocusNode,
                               controller: controller.mobileNoController,
-                              nextFocus: controller.addressFocusNode,
+                              nextFocus: controller.stateFocusNode, // ينتقل للمحافظة مباشرة
                               prefixIcon: IntrinsicWidth(
                                 child: Padding(
                                   padding: EdgeInsetsGeometry.symmetric(horizontal: Dimensions.space10),
@@ -180,9 +175,7 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                                       crossAxisAlignment: CrossAxisAlignment.center,
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
-                                        spaceSide(
-                                          Dimensions.space3,
-                                        ),
+                                        spaceSide(Dimensions.space3),
                                         MyImageWidget(
                                           imageUrl: UrlContainer.countryFlagImageLink.replaceAll(
                                             "{countryCode}",
@@ -191,9 +184,7 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                                           height: Dimensions.space25,
                                           width: Dimensions.space40,
                                         ),
-                                        spaceSide(
-                                          Dimensions.space5,
-                                        ),
+                                        spaceSide(Dimensions.space5),
                                         Text(
                                           "+${controller.selectedCountryData.dialCode}",
                                           style: regularMediumLarge.copyWith(
@@ -229,21 +220,9 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                             const SizedBox(
                               height: Dimensions.space20,
                             ),
-                            CustomTextField(
-                              labelText: MyStrings.address.tr,
-                              hintText: "${MyStrings.enterYour.tr} ${MyStrings.address.toLowerCase().tr}",
-                              textInputType: TextInputType.text,
-                              inputAction: TextInputAction.next,
-                              focusNode: controller.addressFocusNode,
-                              controller: controller.addressController,
-                              nextFocus: controller.stateFocusNode,
-                              onChanged: (value) {
-                                return;
-                              },
-                            ),
-                            const SizedBox(
-                              height: Dimensions.space20,
-                            ),
+
+                            // ✅ تم حذف حقل العنوان (Address)
+
                             CustomTextField(
                               labelText: MyStrings.state,
                               hintText: "${MyStrings.enterYour.tr} ${MyStrings.state.toLowerCase().tr}",
@@ -263,44 +242,16 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                               labelText: MyStrings.city.tr,
                               hintText: "${MyStrings.enterYour.tr} ${MyStrings.city.toLowerCase().tr}",
                               textInputType: TextInputType.text,
-                              inputAction: TextInputAction.next,
+                              inputAction: TextInputAction.done, // آخر حقل
                               focusNode: controller.cityFocusNode,
                               controller: controller.cityController,
-                              nextFocus: controller.zipCodeFocusNode,
                               onChanged: (value) {
                                 return;
                               },
                             ),
-                            const SizedBox(
-                              height: Dimensions.space20,
-                            ),
-                            CustomTextField(
-                              labelText: MyStrings.zipCode.tr,
-                              hintText: "${MyStrings.enterYour.tr} ${MyStrings.zipCode.toLowerCase().tr}",
-                              textInputType: TextInputType.text,
-                              inputAction: TextInputAction.done,
-                              focusNode: controller.zipCodeFocusNode,
-                              controller: controller.zipCodeController,
-                              onChanged: (value) {
-                                return;
-                              },
-                            ),
-                            // if (controller.loginType == "google") ...[
-                            //   const SizedBox(
-                            //     height: Dimensions.space20,
-                            //   ),
-                            //   CustomTextField(
-                            //     labelText: MyStrings.referanceName,
-                            //     hintText: MyStrings.referanceName.tr,
-                            //     textInputType: TextInputType.text,
-                            //     inputAction: TextInputAction.next,
-                            //     controller: controller.referController,
-                            //     nextFocus: controller.addressFocusNode,
-                            //     onChanged: (value) {
-                            //       return;
-                            //     },
-                            //   ),
-                            // ],
+
+                            // ✅ تم حذف حقل الرمز البريدي (Zip Code)
+
                             const SizedBox(
                               height: Dimensions.space35,
                             ),

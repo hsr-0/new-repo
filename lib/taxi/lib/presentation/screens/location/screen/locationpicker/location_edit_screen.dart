@@ -35,7 +35,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   bool isDragging = false;
   Timer? _debounce;
 
-  // إحداثيات محلية للحفاظ على استقرار الموقع أثناء السحب في أندرويد
+  // إحداثيات افتراضية (سيتم تحديثها فوراً لموقع المستخدم)
   double _currentLat = 32.5056;
   double _currentLng = 45.8247;
 
@@ -45,35 +45,47 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     _setupInitialPosition();
   }
 
-  void _setupInitialPosition() {
+  Future<void> _setupInitialPosition() async {
     final controller = Get.find<SelectLocationController>();
-    // الاعتماد الصارم على الـ index الممرر من الشاشة السابقة
+    controller.changeIndex(widget.selectedIndex);
+
+    // 1. محاولة جلب الموقع المحفوظ سابقاً للـ index الحالي
     final savedLocation = controller.homeController.getSelectedLocationInfoAtIndex(widget.selectedIndex);
 
     if (savedLocation != null && savedLocation.latitude != null && savedLocation.latitude != 0) {
-      _currentLat = double.tryParse(savedLocation.latitude.toString()) ?? 32.5056;
-      _currentLng = double.tryParse(savedLocation.longitude.toString()) ?? 45.8247;
+      _currentLat = double.tryParse(savedLocation.latitude.toString()) ?? _currentLat;
+      _currentLng = double.tryParse(savedLocation.longitude.toString()) ?? _currentLng;
+    } else {
+      // 2. إذا لم يوجد موقع محفوظ، نجلب موقع المستخدم الحالي بدلاً من إحداثيات ثابتة
+      try {
+        geo.Position position = await geo.Geolocator.getCurrentPosition();
+        _currentLat = position.latitude;
+        _currentLng = position.longitude;
+        _moveCameraToCurrent();
+      } catch (e) {
+        debugPrint("Current Location Error: $e");
+      }
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // إخبار الكنترولر بالـ index الصحيح فور الدخول
-      controller.changeIndex(widget.selectedIndex);
-    });
+    // جلب العنوان الأولي للنقطة التي فتحت عليها الخريطة
+    _updateLocationData();
   }
 
-  // معالجة توقف حركة الخريطة بشكل احترافي
+  void _moveCameraToCurrent() {
+    if (Platform.isIOS) {
+      appleController?.animateCamera(ap.CameraUpdate.newLatLng(ap.LatLng(_currentLat, _currentLng)));
+    } else {
+      mapLibreController?.animateCamera(ml.CameraUpdate.newLatLng(ml.LatLng(_currentLat, _currentLng)));
+    }
+  }
+
   void _onMapIdle() {
     if (!mounted) return;
-
-    // التأكد من أن الشاشة هي الحالية لمنع التحديثات في الخلفية
-    if (ModalRoute.of(context)?.isCurrent != true) return;
-
     setState(() => isDragging = false);
 
-    // استخدام Debounce أطول قليلاً للأندرويد لضمان الاستقرار
     _debounce?.cancel();
-    _debounce = Timer(Duration(milliseconds: Platform.isAndroid ? 600 : 400), () {
-      if (mounted && _currentLat != 0) {
+    _debounce = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) {
         _updateLocationData();
       }
     });
@@ -81,10 +93,13 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
   void _updateLocationData() {
     final controller = Get.find<SelectLocationController>();
-    // إعادة تأكيد الـ index لمنع القفز لنقطة الانطلاق (0) في أندرويد
+
+    // إجبار الكنترولر على البقاء في الـ Index الصحيح (هام جداً للأندرويد)
     controller.changeIndex(widget.selectedIndex);
+
+    // تحديث الإحداثيات في الكنترولر وجلب العنوان من السيرفر (Reverse Geocoding)
     controller.changeCurrentLatLongBasedOnCameraMove(_currentLat, _currentLng);
-    controller.pickLocation(isMapDrag: true);
+    controller.openMap(_currentLat, _currentLng, isMapDrag: true);
   }
 
   @override
@@ -101,24 +116,23 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           extendBodyBehindAppBar: true,
           body: Stack(
             children: [
-              // طبقة الخريطة
               Positioned.fill(
                 child: Platform.isIOS ? _buildAppleMap() : _buildMapLibre(),
               ),
 
-              // الدبوس المركزي (Pin)
+              // الدبوس المركزي
               Center(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 40),
                   child: AnimatedScale(
-                    scale: isDragging ? 1.2 : 1.0,
+                    scale: isDragging ? 1.3 : 1.0,
                     duration: const Duration(milliseconds: 200),
                     child: Image.asset(
                       widget.selectedIndex == 0
                           ? "assets/images/map/pickup_marker.png"
                           : "assets/images/map/destination_marker.png",
-                      width: 48,
-                      height: 48,
+                      width: 50,
+                      height: 50,
                       errorBuilder: (c, e, s) => Icon(
                         Icons.location_on,
                         size: 50,
@@ -129,16 +143,13 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 ),
               ),
 
-              // واجهة التحكم العلوية
               _buildTopBar(controller),
 
-              // اللوحة السفلية للتأكيد
               Align(
                 alignment: Alignment.bottomCenter,
                 child: _buildBottomPanel(controller),
               ),
 
-              // مؤشر التحميل عند جلب العنوان من السيرفر
               if (controller.isLoading)
                 const Center(child: CircularProgressIndicator(color: MyColor.primaryColor)),
             ],
@@ -186,7 +197,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             _circleButton(Icons.arrow_back_ios_new, () => Get.back()),
-            _circleButton(Icons.gps_fixed, () => _goToCurrentLocation(controller)),
+            _circleButton(Icons.gps_fixed, () => _goToCurrentLocation()),
           ],
         ),
       ),
@@ -195,10 +206,13 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
   Widget _circleButton(IconData icon, VoidCallback tap) => CircleAvatar(
     backgroundColor: Colors.white,
-    child: IconButton(icon: Icon(icon, color: Colors.black, size: 20), onPressed: tap),
+    child: IconButton(
+        icon: Icon(icon, color: Colors.black, size: 20),
+        onPressed: tap
+    ),
   );
 
-  Future<void> _goToCurrentLocation(SelectLocationController controller) async {
+  Future<void> _goToCurrentLocation() async {
     try {
       final pos = await geo.Geolocator.getCurrentPosition();
       _currentLat = pos.latitude;
@@ -208,6 +222,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       } else {
         mapLibreController?.animateCamera(ml.CameraUpdate.newLatLngZoom(ml.LatLng(_currentLat, _currentLng), 16));
       }
+      _updateLocationData();
     } catch (e) {
       debugPrint("Location error: $e");
     }
@@ -215,19 +230,30 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
   Widget _buildBottomPanel(SelectLocationController controller) {
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: const BoxDecoration(
+      padding: const EdgeInsets.all(Dimensions.space20),
+      decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 15)],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(MyStrings.setYourLocationPerfectly.tr, style: boldDefault.copyWith(fontSize: 18)),
+          // عرض نوع الموقع (انطلاق أو وجهة)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+                color: widget.selectedIndex == 0 ? MyColor.primaryColor.withOpacity(0.1) : Colors.redAccent.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10)
+            ),
+            child: Text(
+              widget.selectedIndex == 0 ? "نقطة الانطلاق" : "وجهة التوصيل",
+              style: boldDefault.copyWith(color: widget.selectedIndex == 0 ? MyColor.primaryColor : Colors.redAccent),
+            ),
+          ),
           const SizedBox(height: 15),
           InnerShadowContainer(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(15),
             backgroundColor: MyColor.neutral50,
             child: Row(
               children: [
@@ -235,20 +261,21 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                   image: widget.selectedIndex == 0 ? MyIcons.currentLocation : MyIcons.location,
                   color: MyColor.primaryColor,
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     controller.currentAddress.value.isNotEmpty
                         ? controller.currentAddress.value
-                        : "تحديد الموقع على الخريطة...",
+                        : "جاري جلب العنوان...",
                     maxLines: 2,
-                    style: regularDefault.copyWith(fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                    style: regularDefault.copyWith(fontSize: 14, color: MyColor.colorBlack),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 25),
           RoundedButton(
             text: MyStrings.confirm.tr,
             press: () => _handleFinalConfirmation(controller),
@@ -259,26 +286,28 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   }
 
   void _handleFinalConfirmation(SelectLocationController controller) {
-    // أهم خطوة: تثبيت الـ index قبل الحفظ النهائي
+    // إجبار الكنترولر مرة أخيرة على الـ Index الصحيح
     controller.changeIndex(widget.selectedIndex);
-
-    controller.selectedLatitude = _currentLat;
-    controller.selectedLongitude = _currentLng;
 
     String finalAddress = controller.currentAddress.value.isNotEmpty
         ? controller.currentAddress.value
-        : "موقع محدد";
+        : "موقع تم تحديده";
 
-    // التخزين في الحقل الصحيح (Pickup أو Destination)
+    // تحديث البيانات في الكنترولر بناءً على الـ Index
     if (widget.selectedIndex == 0) {
       controller.pickupLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.pickUpController.text = finalAddress;
+      controller.selectedLatitude = _currentLat;
+      controller.selectedLongitude = _currentLng;
     } else {
       controller.destinationLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.destinationController.text = finalAddress;
+      // مهم للأندرويد: تحديث الإحداثيات المختارة للوجهة
+      controller.selectedLatitude = _currentLat;
+      controller.selectedLongitude = _currentLng;
     }
 
-    // تحديث البيانات في الـ HomeController لعرضها في الشاشة الرئيسية
+    // حفظ البيانات في HomeController
     controller.homeController.addLocationAtIndex(
       SelectedLocationInfo(
         address: finalAddress,
@@ -289,6 +318,10 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       widget.selectedIndex,
     );
 
+    controller.update();
     Get.back(result: true);
   }
 }
+
+
+

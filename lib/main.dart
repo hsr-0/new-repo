@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http; // للتعامل مع الطلبات
 import 'package:shared_preferences/shared_preferences.dart'; // لحفظ التوكن محلياً
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -18,7 +19,14 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:easy_debounce/easy_debounce.dart';
 
+// ✅ 1. مكتبة فيسبوك هنا
+import 'package:facebook_app_events/facebook_app_events.dart';
+
 // استيرادات مشروعك الخاصة
+import 'beytei_re/OrderTracking.dart';
+import 'webview_screen.dart';
+import '../beytei_re/re.dart';
+
 import '/custom_code/actions/index.dart' as actions;
 import 'backend/firebase/firebase_config.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -28,9 +36,28 @@ import '/flutter_flow/nav/nav.dart';
 import 'index.dart';
 
 // =======================================================================
+// 🔥 متغيرات عالمية للتوجيه الذكي (Overlay)
+// =======================================================================
+final ValueNotifier<Map<String, dynamic>?> activeCallNotifier = ValueNotifier(null);
+final ValueNotifier<Map<String, dynamic>?> activeChatNotifier = ValueNotifier(null);
+final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifier(null);
+
+// دالة التوجيه الموحدة (تعمل عند الضغط على الإشعار من أي مكان)
+void handleNotificationClick(Map<String, dynamic> data) {
+  if (data['type'] == 'voip_call') {
+    showIncomingCall(data);
+  } else if (data['type'] == 'chat_message') {
+    print("🚀 [Routing] توجيه مباشر إلى شاشة الدردشة!");
+    activeChatNotifier.value = data;
+  } else if (data['type'] == 'status_update' || data['type'] == 'driver_assigned' || data['type'] == 'new_order') {
+    print("🚀 [Routing] توجيه مباشر إلى شاشة تتبع الطلب!");
+    activeTrackingNotifier.value = data;
+  }
+}
+
+// =======================================================================
 // 🔥 1. دوال مساعدة لإظهار المكالمة
 // =======================================================================
-
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
@@ -95,12 +122,12 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   print("🔥 [Background] Handling a background message: ${message.messageId}");
 
-  // 🚫 إيقاف الرنين فوراً إذا أرسل السائق أمر إلغاء
   if (message.data['type'] == 'cancel_call') {
     await FlutterCallkitIncoming.endAllCalls();
     return;
   }
 
+  // 🛡️ هذا هو نفس الفرز في الكود القديم الخاص بك 100%
   if (message.data['type'] == 'voip_call') {
     await showIncomingCall(message.data);
   } else {
@@ -108,17 +135,16 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-FlutterLocalNotificationsPlugin();
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void _showLocalNotification(RemoteMessage message) {
-  // 🔥 الإصلاح هنا: نحاول قراءة العنوان والنص من كائن الـ notification أولاً
-  // وإذا لم يكن موجوداً، نحاول قراءته من الـ data، وإذا فشلنا، نضع قيمة افتراضية آمنة.
+  // إضافة حماية إضافية
+  if (message.data['type'] == 'voip_call') return;
+
   final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث من منصة بيتي';
   final String body = message.notification?.body ?? message.data['body'] ?? 'لديك تحديث جديد بخصوص طلبك.';
 
-  const AndroidNotificationDetails androidPlatformChannelSpecifics =
-  AndroidNotificationDetails(
+  const AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
     'high_importance_channel',
     'High Importance Notifications',
     channelDescription: 'This channel is used for important notifications.',
@@ -136,9 +162,11 @@ void _showLocalNotification(RemoteMessage message) {
     title,
     body,
     platformChannelSpecifics,
-    payload: message.data.toString(),
+    // حفظ البيانات ليتم توجيه المستخدم عند الضغط
+    payload: jsonEncode(message.data),
   );
 }
+
 // =======================================================================
 // 🔥 3. دوال إدارة التوكن
 // =======================================================================
@@ -181,10 +209,8 @@ void main() async {
   GoRouter.optionURLReflectsImperativeAPIs = true;
   usePathUrlStrategy();
 
-  // تهيئة الفايربيس
   await initFirebase();
 
-  // 1. الحصول على التوكن الحالي وتسجيله
   try {
     String? initialToken = await FirebaseMessaging.instance.getToken();
     if (initialToken != null) {
@@ -194,10 +220,29 @@ void main() async {
     print("⚠️ Error fetching initial FCM token: $e");
   }
 
-  // 2. الاستماع لتغيير التوكن
   _handleTokenRefresh();
 
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+    iOS: initializationSettingsIOS,
+  );
+
+  await flutterLocalNotificationsPlugin.initialize(
+    initializationSettings,
+    onDidReceiveNotificationResponse: (NotificationResponse response) {
+      if (response.payload != null) {
+        try {
+          handleNotificationClick(jsonDecode(response.payload!));
+        } catch (e) {
+          print("Error parsing local notification payload: $e");
+        }
+      }
+    },
+  );
 
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'high_importance_channel',
@@ -208,8 +253,7 @@ void main() async {
   );
 
   await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-      AndroidFlutterLocalNotificationsPlugin>()
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
 
   await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
@@ -221,12 +265,12 @@ void main() async {
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
     print("🔔 [FCM] Received message in foreground");
 
-    // 🚫 إيقاف الرنين فوراً إذا أرسل السائق أمر إلغاء
     if (message.data['type'] == 'cancel_call') {
       await FlutterCallkitIncoming.endAllCalls();
       return;
     }
 
+    // 🛡️ نفس أسلوبك القديم في المعالجة
     if (message.data['type'] == 'voip_call') {
       showIncomingCall(message.data);
     } else {
@@ -235,10 +279,16 @@ void main() async {
   });
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    if (message.data['type'] == 'voip_call') {
-      showIncomingCall(message.data);
-    }
+    // توجيه الإشعارات من الخلفية
+    handleNotificationClick(message.data);
   });
+
+  // معالجة فتح التطبيق من الإشعار وهو مغلق تماماً
+  final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+  if (initialMessage != null) {
+    print("🚀 تم فتح التطبيق من إشعار وهو مغلق تماماً!");
+    handleNotificationClick(initialMessage.data);
+  }
 
   await actions.connected();
   await actions.notificationPermission();
@@ -275,9 +325,6 @@ class _MyAppState extends State<MyApp> {
   late AppStateNotifier _appStateNotifier;
   late GoRouter _router;
 
-  // 🔥 السر الاحترافي: حالة المكالمة النشطة (بدون الحاجة لـ Navigator)
-  final ValueNotifier<Map<String, dynamic>?> _activeCallNotifier = ValueNotifier(null);
-
   @override
   void initState() {
     super.initState();
@@ -286,16 +333,14 @@ class _MyAppState extends State<MyApp> {
 
     _setupCallKitListener();
 
-    // فحص المكالمات المعلقة عند إقلاع التطبيق من الصفر
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTerminatedCall();
     });
 
-    // 🚫 الاستماع لأمر الإلغاء لإخفاء شاشة المكالمة (الـ Overlay) إذا كانت مفتوحة
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (message.data['type'] == 'cancel_call') {
         if (mounted) {
-          _activeCallNotifier.value = null;
+          activeCallNotifier.value = null;
         }
       }
     });
@@ -310,7 +355,7 @@ class _MyAppState extends State<MyApp> {
       var calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is List && calls.isNotEmpty) {
         print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فوراً...");
-        _activeCallNotifier.value = Map<String, dynamic>.from(calls.first);
+        activeCallNotifier.value = Map<String, dynamic>.from(calls.first);
       }
     } catch (e) {
       print("⚠️ Error checking active calls: $e");
@@ -324,8 +369,7 @@ class _MyAppState extends State<MyApp> {
       switch (event.event) {
         case Event.actionCallAccept:
           print("✅ [CallKit] تم الضغط على رد...");
-          // إعطاء بيانات المكالمة للمتغير ليعرض الشاشة فوراً كطبقة عليا
-          _activeCallNotifier.value = event.body ?? {};
+          activeCallNotifier.value = event.body ?? {};
           break;
 
         case Event.actionCallDecline:
@@ -333,7 +377,7 @@ class _MyAppState extends State<MyApp> {
         case Event.actionCallTimeout:
           print("❌ [CallKit] المكالمة انتهت أو رُفضت.");
           await FlutterCallkitIncoming.endAllCalls();
-          _activeCallNotifier.value = null; // إخفاء شاشة المكالمة
+          activeCallNotifier.value = null;
           break;
 
         default:
@@ -342,7 +386,6 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  // دالة مساعدة لاستخراج بيانات الغرفة واسم السائق
   Map<String, String> _extractCallData(Map<String, dynamic> rawData) {
     Map<String, dynamic> extraData = {};
     if (rawData['extra'] != null) {
@@ -406,18 +449,18 @@ class _MyAppState extends State<MyApp> {
       themeMode: _themeMode,
       routerConfig: _router,
 
-      // 🔥 سحر الـ Overlay: رسم المكالمة فوق التطبيق بالكامل
+      // 🔥 سحر الـ Overlay: رسم المكالمة والدردشة والتتبع فوق التطبيق بالكامل
       builder: (context, child) {
         return Scaffold(
           body: Stack(
             children: [
-              if (child != null) child, // التطبيق الطبيعي (GoRouter)
+              if (child != null) child,
 
-              // الاستماع لحالة المكالمة
+              // 1. الاستماع لحالة المكالمة
               ValueListenableBuilder<Map<String, dynamic>?>(
-                valueListenable: _activeCallNotifier,
+                valueListenable: activeCallNotifier,
                 builder: (context, callData, _) {
-                  if (callData == null) return const SizedBox.shrink(); // لا يوجد مكالمة
+                  if (callData == null) return const SizedBox.shrink();
 
                   final extractedData = _extractCallData(callData);
 
@@ -429,11 +472,61 @@ class _MyAppState extends State<MyApp> {
                     channelName: extractedData['channelName']!,
                     remoteName: extractedData['driverName']!,
                     agoraAppId: extractedData['appId']!,
-                    // دالة يتم استدعاؤها عند ضغط المستخدم على إغلاق لتخفي الشاشة
                     onCallEnded: () {
-                      _activeCallNotifier.value = null;
+                      activeCallNotifier.value = null;
                     },
                   );
+                },
+              ),
+
+              // 2. الاستماع لفتح الدردشة المباشرة
+              ValueListenableBuilder<Map<String, dynamic>?>(
+                valueListenable: activeChatNotifier,
+                builder: (context, chatData, _) {
+                  if (chatData != null) {
+                    Future.microtask(() {
+                      _router.routerDelegate.navigatorKey.currentState?.push(
+                        MaterialPageRoute(
+                          builder: (_) => CustomerChatPage(
+                            orderId: chatData['order_id'].toString(),
+                            driverName: chatData['sender_name'] ?? 'المندوب',
+                            customerName: 'الزبون',
+                          ),
+                        ),
+                      ).then((_) {
+                        activeChatNotifier.value = null;
+                      });
+                    });
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+
+              // 3. الاستماع لفتح شاشة تتبع الطلب المباشرة
+              ValueListenableBuilder<Map<String, dynamic>?>(
+                valueListenable: activeTrackingNotifier,
+                builder: (context, trackData, _) {
+                  if (trackData != null) {
+                    Future.microtask(() async {
+                      try {
+                        final orderId = trackData['order_id'].toString();
+                        final localOrders = await OrderHistoryService().getOrders();
+                        final order = localOrders.firstWhere((o) => o.id.toString() == orderId);
+
+                        _router.routerDelegate.navigatorKey.currentState?.push(
+                          MaterialPageRoute(
+                            builder: (_) => OrderTrackingScreen(order: order),
+                          ),
+                        ).then((_) {
+                          activeTrackingNotifier.value = null;
+                        });
+                      } catch (e) {
+                        print("لم يتم العثور على الطلب محلياً: $e");
+                        activeTrackingNotifier.value = null;
+                      }
+                    });
+                  }
+                  return const SizedBox.shrink();
                 },
               ),
             ],
@@ -451,7 +544,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
   final String channelName;
   final String remoteName;
   final String agoraAppId;
-  final VoidCallback onCallEnded; // تمرير دالة الإنهاء
+  final VoidCallback onCallEnded;
 
   const ActiveVoiceCallScreen({
     super.key,
@@ -471,7 +564,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   int? _remoteUid;
 
   bool _isMuted = false;
-  bool _isSpeaker = false; // الزبون يفضل السماعة العادية
+  bool _isSpeaker = false;
 
   int _callDuration = 0;
   Timer? _durationTimer;
@@ -485,7 +578,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     super.initState();
     _initAgora();
 
-    // 🔴 إغلاق المكالمة تلقائياً بعد 30 ثانية إذا لم يتم الاتصال بالسائق
     _timeoutTimer = Timer(const Duration(seconds: 30), () {
       if (_remoteUid == null) {
         print("⏳ انتهى الوقت ولم يتم الاتصال بالسائق، جاري إنهاء المكالمة.");
@@ -530,7 +622,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
           if (mounted && _localUserJoined) {
             print("📞 الطرف الآخر أنهى المكالمة. جاري الإغلاق التلقائي...");
-            _endCall(); // إغلاق الشاشة فوراً وبسلاسة
+            _endCall();
           }
         },
         onError: (ErrorCodeType err, String msg) {
@@ -613,8 +705,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.pop(context); // يغلق نافذة الحوار (Dialog)
-                _endCall(); // ينهي المكالمة ويخفي الشاشة بالكامل
+                Navigator.pop(context);
+                _endCall();
               },
               child: const Text("موافق", style: TextStyle(fontWeight: FontWeight.bold)),
             ),
@@ -645,10 +737,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       print("Error releasing Agora engine: $e");
     }
 
-    // إنهاء جميع مكالمات CallKit المعلقة
     await FlutterCallkitIncoming.endAllCalls();
-
-    // 🔥 إخفاء الشاشة عبر دالة الاستدعاء بدلاً من Navigator.pop لضمان عدم إغلاق التطبيق
     widget.onCallEnded();
   }
 
@@ -675,7 +764,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // إيقاف الرجوع الافتراضي واستبداله بإنهاء المكالمة
     return WillPopScope(
       onWillPop: () async {
         _endCall();

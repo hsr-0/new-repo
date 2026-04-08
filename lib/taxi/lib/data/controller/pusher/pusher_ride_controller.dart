@@ -66,7 +66,8 @@ class PusherRideController extends GetxController {
 
   /// Update UI or state based on event name
   void updateEvent(PusherResponseModel event) {
-    final eventName = event.eventName?.toLowerCase();
+    // تنظيف اسم الحدث لضمان المطابقة
+    final eventName = event.eventName?.toLowerCase().trim();
     printX('Handling event: $eventName');
 
     switch (eventName) {
@@ -94,15 +95,18 @@ class PusherRideController extends GetxController {
         _handleCashPayment(event);
         break;
 
-    // ✅ التعديل الجوهري هنا: أضفنا ride_accepted
+    // ✅ تم تحديث حالات القبول لتشمل كل ما يرسله السيرفر في Pusher
       case 'ride_accepted':
-      case 'ride_active':
+      case 'ride_accept':
+      case 'ride.accepted':
+      case 'bid_accepted':
+      case 'bid_accept':
+      case 'accepted':
         _handleInstantAccept(event);
         break;
 
       case 'pick_up':
       case 'ride_end':
-      case 'bid_accept': // أبقينا عليه للدعم القديم
         _updateRideIfAvailable(event);
         break;
 
@@ -112,31 +116,30 @@ class PusherRideController extends GetxController {
     }
   }
 
-  /// Handlers for each event type
-
-  // 🔥 الدالة الجديدة للتعامل مع القبول الفوري
+  // 🔥 الدالة المُحدثة للتعامل مع القبول الفوري
   void _handleInstantAccept(PusherResponseModel event) {
-    // 1. تحديث بيانات الرحلة (ستتحول الحالة إلى ACTIVE)
-    _updateRideIfAvailable(event);
+    printX('🔥 RIDE ACCEPTED TRIGGERED! Forcing UI Refresh...');
 
-    // 2. تشغيل التنبيهات (صوت + هزاز)
+    // 1. إغلاق أي ديالوج مفتوح
+    if (Get.isDialogOpen ?? false) {
+      Get.back();
+    }
+
+    // 2. تحديث حالة الرحلة داخلياً
+    rideDetailsController.ride.status = AppStatus.RIDE_ACTIVE.toString();
+
+    // 3. تحديث البيانات فوراً من السيرفر (لسحب معلومات السائق)
+    rideDetailsController.getRideDetails(rideID);
+
+    // 4. التنبيهات
     AudioUtils.playAudio(apiClient.getNotificationAudio());
     if (rideDetailsController.repo.apiClient.isNotificationAudioEnable()) {
       MyUtils.vibrate();
     }
 
-    // 3. الخدعة: إغلاق أي ديالوج (مثل ديالوج البحث أو العروض) إذا كان مفتوحاً
-    if (Get.isDialogOpen ?? false) {
-      Get.back();
-    }
-
-    // 4. الانتقال الإجباري لصفحة التفاصيل إذا لم يكن المستخدم فيها
-    // هذا يضمن خروج المستخدم من شاشة "جاري البحث" فوراً
+    // 5. التأكد من الانتقال لشاشة تفاصيل الرحلة الحية
     if (Get.currentRoute != RouteHelper.rideDetailsScreen) {
-      // نستخدم ID القادم من الحدث أو الـ ID المحفوظ
       String targetRideId = event.data?.ride?.id ?? rideID;
-      printX('🚀 Force navigating to Ride Details for ride: $targetRideId');
-
       Get.offNamed(
           RouteHelper.rideDetailsScreen,
           arguments: targetRideId
@@ -145,7 +148,6 @@ class PusherRideController extends GetxController {
   }
 
   void _handleOnlinePayment(PusherResponseModel event) {
-    printX('Online payment received for ride: ${event.data?.rideId}');
     Get.offAndToNamed(
       RouteHelper.rideReviewScreen,
       arguments: event.data?.rideId ?? '',
@@ -154,25 +156,18 @@ class PusherRideController extends GetxController {
 
   void _handleMessageReceived(PusherResponseModel eventResponse) {
     if (eventResponse.data?.message != null) {
-      if (eventResponse.data!.ride != null && eventResponse.data!.ride!.id != rideID) {
-        printX('Message for different ride: ${eventResponse.data!.ride!.id}, current ride: $rideID');
-        return;
-      }
+      if (eventResponse.data!.ride != null && eventResponse.data!.ride!.id != rideID) return;
       if (isRideDetailsPage()) {
         if (rideDetailsController.repo.apiClient.isNotificationAudioEnable()) {
           MyUtils.vibrate();
         }
       }
-
       rideMessageController.addEventMessage(eventResponse.data!.message!);
     }
   }
 
   void _handleLiveLocation(PusherResponseModel eventResponse) {
-    if (eventResponse.data!.ride != null && eventResponse.data!.ride!.id != rideID) {
-      printX('Message for different ride: ${eventResponse.data!.ride!.id}, current ride: $rideID');
-      return;
-    }
+    if (eventResponse.data!.ride != null && eventResponse.data!.ride!.id != rideID) return;
     if (rideDetailsController.ride.status == AppStatus.RIDE_ACTIVE.toString() || rideDetailsController.ride.status == AppStatus.RIDE_RUNNING.toString()) {
       final lat = StringConverter.formatDouble(eventResponse.data?.driverLatitude ?? '0', precision: 10);
       final lng = StringConverter.formatDouble(eventResponse.data?.driverLongitude ?? '0', precision: 10);
@@ -185,15 +180,9 @@ class PusherRideController extends GetxController {
   }
 
   void _handleNewBid(PusherResponseModel eventResponse) {
-    // 🛑 حماية إضافية: إذا كانت الرحلة قد قبلت بالفعل، تجاهل أي عروض متأخرة
-    if (rideDetailsController.ride.status == AppStatus.RIDE_ACTIVE.toString()) {
-      return;
-    }
+    if (rideDetailsController.ride.status == AppStatus.RIDE_ACTIVE.toString()) return;
 
-    if (eventResponse.data!.bid != null && eventResponse.data!.bid!.rideId != rideID) {
-      printX('Message for different ride: ${eventResponse.data!.bid!.rideId}, current ride: $rideID');
-      return;
-    }
+    if (eventResponse.data!.bid != null && eventResponse.data!.bid!.rideId != rideID) return;
     final bid = eventResponse.data?.bid;
     if (bid != null) {
       AudioUtils.playAudio(apiClient.getNotificationAudio());
@@ -218,17 +207,13 @@ class PusherRideController extends GetxController {
   }
 
   void _updateRideIfAvailable(PusherResponseModel eventResponse) {
-    if (eventResponse.data!.ride != null && eventResponse.data!.ride!.id != rideID) {
-      printX('Message for different ride: ${eventResponse.data!.ride!.id}, current ride: $rideID');
-      return;
-    }
+    if (eventResponse.data!.ride != null && eventResponse.data!.ride!.id != rideID) return;
     final ride = eventResponse.data?.ride;
     if (ride != null) {
       rideDetailsController.updateRide(ride);
     }
   }
 
-  /// Utility
   bool isRideDetailsPage() => Get.currentRoute == RouteHelper.rideDetailsScreen;
 
   @override
@@ -237,10 +222,12 @@ class PusherRideController extends GetxController {
     super.onClose();
   }
 
+  // ✅ تعديل هام: تغيير "user" إلى "rider" لتطابق قناة الإرسال في السيرفر
   Future<void> ensureConnection({String? channelName}) async {
     try {
       var userId = apiClient.sharedPreferences.getString(SharedPreferenceHelper.userIdKey) ?? '';
-      await PusherManager().checkAndInitIfNeeded(channelName ?? "private-rider-user-$userId");
+      // التغيير هنا ليتطابق مع: private-rider-rider-ID
+      await PusherManager().checkAndInitIfNeeded(channelName ?? "private-rider-rider-$userId");
     } catch (e) {
       printX("Error ensuring connection: $e");
     }

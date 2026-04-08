@@ -1,6 +1,6 @@
 class MyStrings {
   //APP Name
-  static const String appName = "OvoRide";
+  static const String appName = "beytei";
 
   //Onboard
   static const String continue_ = "Continue";

@@ -68,31 +68,54 @@ class RegistrationController extends GetxController {
   RegExp regex = RegExp(r'[!@#$%^&*(),.?":{}|<>]');
   bool submitLoading = false;
 
+  // 🔥 دالة توليد اسم مستخدم عشوائي مستحيل التكرار (مع حماية ضد اللغة العربية)
+  void generateRandomUsername() {
+    String baseName = fNameController.text.trim().toLowerCase().replaceAll(' ', '');
+
+    // فحص: هل الاسم يحتوي على أحرف إنجليزية فقط؟
+    RegExp englishRegex = RegExp(r'^[a-zA-Z]+$');
+
+    // إذا كان فارغاً أو يحتوي على عربي/رموز، نستخدم كلمة 'user'
+    if (baseName.isEmpty || !englishRegex.hasMatch(baseName)) {
+      baseName = 'user';
+    }
+
+    // نأخذ آخر 5 أرقام من الوقت الحالي بالملي ثانية لضمان تفرد الاسم 100%
+    String timeBasedDigits = (DateTime.now().millisecondsSinceEpoch % 100000).toString();
+
+    userNameController.text = '${baseName}_$timeBasedDigits';
+
+    Get.snackbar(
+      'ممتاز!',
+      'تم اختيار اسم مستخدم متاح لك تلقائياً: ${userNameController.text}',
+      snackPosition: SnackPosition.TOP,
+      backgroundColor: Colors.green.withOpacity(0.8),
+      colorText: Colors.white,
+    );
+
+    update();
+  }
+
   Future<void> signUpUser() async {
     if (needAgree && !agreeTC) {
       CustomSnackBar.error(errorList: [MyStrings.agreePolicyMessage]);
       return;
     }
 
-    // ✅ فحص القيم وطباعتها في الكونسول للتأكد (Debugging)
-    print("🔥🔥🔥 DEBUG: STARTING SIGNUP 🔥🔥🔥");
-    print("👤 Name: ${fNameController.text} ${lNameController.text}");
-    print("📱 Phone Input: '${mobileController.text}'");
-    print("📧 Email: ${emailController.text}");
-
     if(mobileController.text.trim().isEmpty){
-      print("❌ ERROR: Mobile field is empty!");
       CustomSnackBar.error(errorList: ["يرجى إدخال رقم الهاتف"]);
       return;
+    }
+
+    // ✅ التحقق من اسم المستخدم قبل الإرسال (توليد تلقائي إذا تركه الزبون فارغاً)
+    if (userNameController.text.trim().isEmpty) {
+      generateRandomUsername();
     }
 
     submitLoading = true;
     update();
 
     SignUpModel model = getUserData();
-
-    // طباعة الموديل النهائي قبل الإرسال
-    print("📦 Model to Send: mobile=${model.mobile}, code=${model.mobileCode}, country=${model.countryCode}");
 
     final responseModel = await registrationRepo.registerUser(model);
     try {
@@ -131,22 +154,29 @@ class RegistrationController extends GetxController {
   }
 
   SignUpModel getUserData() {
+    // ✅ إزالة الصفر من بداية رقم الهاتف (إذا كتبه المستخدم)
+    String cleanMobile = mobileController.text.trim();
+    if (cleanMobile.startsWith('0')) {
+      cleanMobile = cleanMobile.substring(1); // يحذف أول حرف (وهو الصفر)
+    }
+
     SignUpModel model = SignUpModel(
       referName: referNameController.text.toString(),
-      mobile: mobileController.text.toString(),
+      mobile: cleanMobile, // ✅ نرسل الرقم النظيف بدون صفر
       email: emailController.text.toString(),
       agree: generalSettingRepo.apiClient.isAgreePolicyEnabled()
           ? agreeTC
           ? true
           : false
           : false,
-      username: '',
+
+      // ✅ أصبح يأخذ الاسم من الحقل (سواء كتبه يدوياً أو تم توليده تلقائياً)
+      username: userNameController.text.toString(),
+
       fName: fNameController.text,
       lName: lNameController.text,
       password: passwordController.text.toString(),
 
-      // ✅ تعديل هام جداً: تثبيت بيانات العراق
-      // هذا يضمن أن السيرفر يستلم كود الدولة 964 حتى لو كانت القائمة مخفية
       country: 'Iraq',
       mobileCode: "964",
       countryCode: 'IQ',

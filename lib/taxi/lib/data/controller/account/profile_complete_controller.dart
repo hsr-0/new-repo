@@ -88,7 +88,7 @@ class ProfileCompleteController extends GetxController {
     }
     isLoading = false;
     update();
-  } // country data
+  }
 
   TextEditingController searchCountryController = TextEditingController();
   bool countryLoading = true;
@@ -109,7 +109,35 @@ class ProfileCompleteController extends GetxController {
     String city = cityController.text.toString();
     String zip = zipCodeController.text.toString();
     String state = stateController.text.toString();
-    printD("model.username");
+
+    // 🔥 1. معالجة رقم الهاتف (حذف الصفر من البداية إذا كتبه الزبون)
+    String cleanMobile = mobileNoController.text.trim();
+    if (cleanMobile.startsWith('0')) {
+      cleanMobile = cleanMobile.substring(1);
+    }
+
+    // 🔥 2. فلتر اسم المستخدم الذكي (لإرضاء سيرفر Laravel بالقوة!)
+    String currentUsername = userNameController.text.trim().toLowerCase();
+
+    // شروط السيرفر: أحرف إنجليزية صغيرة وأرقام فقط، لا مسافات، لا رموز، طوله 6 فما فوق
+    bool isValidUsername = RegExp(r'^[a-z0-9]{6,}$').hasMatch(currentUsername);
+
+    if (!isValidUsername) {
+      // استخراج الأحرف الإنجليزية فقط من اسم الزبون
+      String safeBaseName = firstName.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+      if (safeBaseName.isEmpty) {
+        safeBaseName = 'user'; // إذا كان اسمه بالعربي، نضع كلمة user
+      }
+
+      // إضافة 5 أرقام تعتمد على الوقت بالملي ثانية لضمان عدم التكرار
+      String timeDigits = (DateTime.now().millisecondsSinceEpoch % 100000).toString().padLeft(5, '0');
+
+      // دمج الاسم مع الأرقام (بدون شرطة سفلية _ لأن السيرفر يرفضها أحياناً)
+      currentUsername = '$safeBaseName$timeDigits';
+
+      // تحديث الحقل مخفياً
+      userNameController.text = currentUsername;
+    }
 
     submitLoading = true;
     update();
@@ -118,12 +146,13 @@ class ProfileCompleteController extends GetxController {
       image: null,
       firstname: firstName,
       lastName: lastName,
-      mobile: mobileNoController.text,
-      email: '',
-      username: userNameController.text,
+
+      // ✅ نرسل الرقم والاسم بعد التنظيف والفلترة
+      mobile: cleanMobile,
+      username: currentUsername,
+      email: '', // يمكن تركه فارغاً إذا لم يكن مطلوباً
 
       // ✅ التعديل: تثبيت بيانات العراق هنا أيضاً لمنع الأخطاء
-      // بدلاً من الاعتماد على selectedCountryData التي قد تكون خاطئة
       countryCode: 'IQ',
       country: 'Iraq',
       mobileCode: '964',
