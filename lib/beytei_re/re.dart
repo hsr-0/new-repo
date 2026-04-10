@@ -28,7 +28,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import '../main.dart';
-import '../taxi/cash.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart'; // أضف هذه المكتبة في pubspec.yaml
@@ -7696,7 +7695,6 @@ class InAppMapScreen extends StatelessWidget {
             urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
 
             // 🔥 تفعيل الكاش (هام جداً لعدم إعادة تحميل الصور)
-            tileProvider: MapboxCachedTileProvider(),
 
             additionalOptions: const {
               'accessToken': 'pk.eyJ1IjoicmUtYmV5dGVpMzIxIiwiYSI6ImNtaTljbzM4eDBheHAyeHM0Y2Z0NmhzMWMifQ.ugV8uRN8pe9MmqPDcD5XcQ',
