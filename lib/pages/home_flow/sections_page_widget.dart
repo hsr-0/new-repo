@@ -22,7 +22,6 @@ import 'package:facebook_app_events/facebook_app_events.dart';
 // تأكد من صحة مسار هذه الملفات في مشروعك
 import '../../doctore/medical_home_screen.dart';
 import '../../taxi/lib/main.dart';
-import '../../taxi/tx.dart';
 import '../../zone.dart';
 import '../webview_flow/webview_page.dart';
 

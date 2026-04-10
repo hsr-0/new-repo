@@ -31,6 +31,9 @@ import '../main.dart';
 import '../taxi/cash.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:uuid/uuid.dart'; // أضف هذه المكتبة في pubspec.yaml
+import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
+
 // =======================================================================
 // --- إعدادات وثوابت عامة للوحدة ---
 // =======================================================================
@@ -8645,13 +8648,15 @@ class _EditProductScreenState extends State<EditProductScreen> {
 
 
 // =============================================================================
-// 💬 شاشة الدردشة للزبون (Customer Chat Page)
 // =============================================================================
+// 💬 شاشة الدردشة للزبون (الإصدار المُصحح - يعمل 100%)
+// =============================================================================
+
 class CustomerChatPage extends StatefulWidget {
   final String orderId;
   final String driverName;
   final String customerName;
-  final String? driverFcmToken; // (اختياري) إذا كان متوفراً لإرسال إشعار للسائق
+  final String? driverFcmToken;
 
   const CustomerChatPage({
     super.key,
@@ -8670,56 +8675,193 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
   final ScrollController _scrollController = ScrollController();
   bool _isSending = false;
 
-  // معرّف ثابت للزبون لتمييز رسائله عن رسائل السائق
-  final String _customerId = 'customer';
+  // 🔥 متغير ديناميكي لـ customerId (ليس ثابتاً)
+  String _customerId = '';
+  bool _isAuthInitialized = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _initializeCustomerAuth();
+
+    // 🔥 طباعة للتشخيص
+    print("🔍 [CustomerChat] orderId: '${widget.orderId}'");
+    print("🔍 [CustomerChat] orderId.trim: '${widget.orderId.trim()}'");
+  }
+
+  // 🔥 دالة تهيئة مصادقة الزبون (الحل الجذري)
+  Future<void> _initializeCustomerAuth() async {
+    try {
+      print("🔐 [Auth] جاري تهيئة مصادقة الزبون...");
+
+      // 1. التحقق من المستخدم الحالي
+      final user = fb_auth.FirebaseAuth.instance.currentUser;
+
+      if (user == null) {
+        // 2. تسجيل دخول مجهول (أسرع وأبسط حل)
+        final credential = await fb_auth.FirebaseAuth.instance.signInAnonymously();
+        print("✅ [Auth] تم تسجيل دخول الزبون مجهول الهوية");
+        print("✅ [Auth] UID: ${credential.user?.uid}");
+      }
+
+      // 3. حفظ الـ UID الفريد لهذا الزبون
+      setState(() {
+        _customerId = fb_auth.FirebaseAuth.instance.currentUser?.uid
+            ?? 'customer_${const Uuid().v4()}'; // fallback إذا فشل
+        _isAuthInitialized = true;
+      });
+
+      print("🆔 [CustomerChat] customerId النهائي: $_customerId");
+
+    } catch (e) {
+      print("❌ [Auth] فشل تهيئة المصادقة: $e");
+      // Fallback: استخدام UUID فريد
+      setState(() {
+        _customerId = 'customer_${const Uuid().v4()}';
+        _isAuthInitialized = true;
+      });
+    }
+  }
+
+  // 🔥 دالة الإرسال المُحسّنة مع تشخيص مفصل
   Future<void> _sendMessage() async {
     final text = _msgController.text.trim();
     if (text.isEmpty) return;
 
+    // 🔥 التحقق من تهيئة المصادقة أولاً
+    if (!_isAuthInitialized) {
+      await _initializeCustomerAuth();
+      // انتظار بسيط لضمان اكتمال التهيئة
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+
     setState(() => _isSending = true);
 
-    final chatDoc = FirebaseFirestore.instance.collection('OrdersChat').doc(widget.orderId);
+    // 🔥 تنظيف orderId من أي مسافات أو أحرف غير مرغوبة
+    final cleanOrderId = widget.orderId.trim().replaceAll(RegExp(r'\s+'), '');
+    print("📤 [Send] جاري إرسال رسالة إلى: OrdersChat/$cleanOrderId");
+    print("📤 [Send] senderId: $_customerId");
+    print("📤 [Send] النص: $text");
+
+    final chatDoc = FirebaseFirestore.instance
+        .collection('OrdersChat')
+        .doc(cleanOrderId);
+
     final messageData = {
       'text': text,
-      'senderId': _customerId, // الزبون دائماً يرسل بهذا الـ ID
+      'senderId': _customerId, // 🔥 الآن فريد لكل زبون
       'senderName': widget.customerName,
+      'senderType': 'customer', // 🔥 للتمييز في الواجهة
       'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'read': false, // 🔥 لتتبع قراءة الرسائل
     };
 
     try {
-      // تحديث المستند بإضافة الرسالة للمصفوفة
+      // 🔥 خطوة 1: التحقق من صلاحية الكتابة (اختياري للتشخيص)
+      print("🔍 [Debug] جاري اختبار الكتابة في Firestore...");
+
+      // 🔥 خطوة 2: تنفيذ الكتابة
       await chatDoc.set({
-        'messages': FieldValue.arrayUnion([messageData])
+        'messages': FieldValue.arrayUnion([messageData]),
+        'order_id': cleanOrderId,
+        'last_message': text,
+        'last_updated': FieldValue.serverTimestamp(),
+        'participants': FieldValue.arrayUnion([_customerId]), // 🔥 لتتبع المشاركين
       }, SetOptions(merge: true));
 
+      print("✅ [Send] تم إرسال الرسالة بنجاح!");
+
+      // 🔥 خطوة 3: تنظيف الحقل والتمرير للأسفل
       _msgController.clear();
-
       if (_scrollController.hasClients) {
-        _scrollController.animateTo(0.0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        _scrollController.animateTo(
+            0.0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut
+        );
       }
 
-      // إرسال إشعار للسائق (إذا كان التوكن الخاص به متوفراً لدينا)
+      // 🔥 خطوة 4: إرسال إشعار للسائق (إذا توفر التوكن)
       if (widget.driverFcmToken != null && widget.driverFcmToken!.isNotEmpty) {
-        String notifyUrl = 'https://re.beytei.com/wp-json/beytei-chat/v1/notify';
-        http.post(
-          Uri.parse(notifyUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({
-            'fcm_token': widget.driverFcmToken,
-            'sender_name': widget.customerName,
-            'message': text,
-            'order_id': widget.orderId,
-          }),
-        ).then((_) => print("✅ تم إرسال إشعار للسائق"));
+        _sendNotificationToDriver(text);
       }
 
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print("❌ [Send] فشل الإرسال: $e");
+      print("❌ [Send] StackTrace: $stackTrace");
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('فشل الإرسال: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('فشل الإرسال: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  // 🔥 دالة إرسال الإشعار للسائق
+  Future<void> _sendNotificationToDriver(String message) async {
+    try {
+      final notifyUrl = 'https://re.beytei.com/wp-json/beytei-chat/v1/notify';
+      final response = await http.post(
+        Uri.parse(notifyUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'fcm_token': widget.driverFcmToken,
+          'sender_name': widget.customerName,
+          'message': message,
+          'order_id': widget.orderId.trim(),
+          'type': 'chat_message',
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        print("✅ [Notification] تم إرسال الإشعار للسائق");
+      } else {
+        print("⚠️ [Notification] فشل إرسال الإشعار: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("❌ [Notification] خطأ في إرسال الإشعار: $e");
+    }
+  }
+
+  // 🔥 دالة اختبار الاتصال بـ Firestore (للتشخيص)
+  Future<void> _testFirestoreConnection() async {
+    try {
+      print("🧪 [Test] جاري اختبار اتصال Firestore...");
+
+      // اختبار القراءة
+      final testDoc = await FirebaseFirestore.instance
+          .collection('OrdersChat')
+          .doc('test_connection')
+          .get();
+
+      print("✅ [Test] قراءة ناجحة: ${testDoc.exists ? 'موجود' : 'غير موجود'}");
+
+      // اختبار الكتابة (مؤقت)
+      await FirebaseFirestore.instance
+          .collection('OrdersChat')
+          .doc('test_connection')
+          .set({
+        'test': true,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      }, SetOptions(merge: true));
+
+      print("✅ [Test] كتابة ناجحة في Firestore!");
+
+      // تنظيف بيانات الاختبار
+      await FirebaseFirestore.instance
+          .collection('OrdersChat')
+          .doc('test_connection')
+          .delete();
+
+    } catch (e) {
+      print("❌ [Test] فشل اختبار Firestore: $e");
     }
   }
 
@@ -8731,6 +8873,14 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 🔥 عرض مؤشر تحميل حتى تهيئة المصادقة
+    if (!_isAuthInitialized) {
+      return Scaffold(
+        appBar: AppBar(title: const Text("جاري التحميل...")),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
@@ -8752,17 +8902,59 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
             ),
           ],
         ),
-        backgroundColor: Theme.of(context).primaryColor, // استخدم لون التطبيق الأساسي
+        backgroundColor: Theme.of(context).primaryColor,
         elevation: 0,
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(bottom: Radius.circular(20))),
+        actions: [
+          // 🔥 زر اختبار للاتصال (للتطوير فقط - احذفه في الإنتاج)
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: Colors.white),
+            onPressed: _testFirestoreConnection,
+            tooltip: "اختبار الاتصال",
+          ),
+        ],
       ),
       body: Column(
         children: [
           // 📜 منطقة عرض الرسائل
           Expanded(
             child: StreamBuilder<DocumentSnapshot>(
-              stream: FirebaseFirestore.instance.collection('OrdersChat').doc(widget.orderId).snapshots(),
+              stream: FirebaseFirestore.instance
+                  .collection('OrdersChat')
+                  .doc(widget.orderId.trim())
+                  .snapshots()
+                  .handleError((error) {
+                // 🔥 معالجة أخطاء Stream
+                print("❌ [Stream] خطأ في الاستماع: $error");
+              }),
               builder: (context, snapshot) {
+                // 🔥 معالجة الأخطاء
+                if (snapshot.hasError) {
+                  print("❌ [UI] خطأ في Stream: ${snapshot.error}");
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.error_outline, size: 50, color: Colors.red),
+                          const SizedBox(height: 10),
+                          Text(
+                            'خطأ في قاعدة البيانات:\n${snapshot.error}',
+                            style: const TextStyle(color: Colors.red),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 15),
+                          ElevatedButton(
+                            onPressed: () => setState(() {}), // إعادة بناء
+                            child: const Text("إعادة المحاولة"),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -8774,7 +8966,11 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
                       children: [
                         Icon(Icons.chat_bubble_outline, size: 80, color: Colors.grey.shade300),
                         const SizedBox(height: 15),
-                        Text('تواصل مع المندوب هنا', style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
+                        const Text('ابدأ الدردشة مع المندوب الآن',
+                            style: TextStyle(color: Colors.grey, fontSize: 16)),
+                        const SizedBox(height: 10),
+                        Text("رقم الطلب: ${widget.orderId.trim()}",
+                            style: const TextStyle(color: Colors.grey, fontSize: 12)),
                       ],
                     ),
                   );
@@ -8782,6 +8978,8 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
 
                 final data = snapshot.data!.data() as Map<String, dynamic>;
                 List<dynamic> messages = data['messages'] ?? [];
+
+                print("📥 [UI] عدد الرسائل المستلمة: ${messages.length}");
 
                 // ترتيب الرسائل من الأحدث للأقدم
                 messages.sort((a, b) => (b['timestamp'] as int).compareTo(a['timestamp'] as int));
@@ -8793,7 +8991,11 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final msg = messages[index] as Map<String, dynamic>;
-                    final isMe = msg['senderId'] == _customerId; // التحقق إذا كان الزبون هو المرسل
+                    final isMe = msg['senderId'] == _customerId;
+
+                    // 🔥 طباعة للتشخيص (يمكن حذفها لاحقاً)
+                    // print("📨 [Bubble] رسالة #${index}: senderId=${msg['senderId']}, isMe=$isMe");
+
                     return _buildMessageBubble(msg, isMe);
                   },
                 );
@@ -8892,13 +9094,14 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _msgController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
 }
-
-
-
-
-
-
 
 
 

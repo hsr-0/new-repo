@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // 🔥 1. تمت إضافة هذه المكتبة لمصادقة الزبون للدردشة
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
@@ -19,7 +20,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:easy_debounce/easy_debounce.dart';
 
-// ✅ 1. مكتبة فيسبوك هنا
+// ✅ مكتبة فيسبوك هنا
 import 'package:facebook_app_events/facebook_app_events.dart';
 
 // استيرادات مشروعك الخاصة
@@ -58,6 +59,7 @@ void handleNotificationClick(Map<String, dynamic> data) {
 // =======================================================================
 // 🔥 1. دوال مساعدة لإظهار المكالمة
 // =======================================================================
+
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
@@ -127,7 +129,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  // 🛡️ هذا هو نفس الفرز في الكود القديم الخاص بك 100%
   if (message.data['type'] == 'voip_call') {
     await showIncomingCall(message.data);
   } else {
@@ -138,7 +139,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void _showLocalNotification(RemoteMessage message) {
-  // إضافة حماية إضافية
+  // حماية إضافية
   if (message.data['type'] == 'voip_call') return;
 
   final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث من منصة بيتي';
@@ -162,7 +163,6 @@ void _showLocalNotification(RemoteMessage message) {
     title,
     body,
     platformChannelSpecifics,
-    // حفظ البيانات ليتم توجيه المستخدم عند الضغط
     payload: jsonEncode(message.data),
   );
 }
@@ -209,8 +209,20 @@ void main() async {
   GoRouter.optionURLReflectsImperativeAPIs = true;
   usePathUrlStrategy();
 
+  // تهيئة الفايربيس
   await initFirebase();
 
+  // 🔥 2. الحل القاطع لمشكلة الدردشة: إعطاء الزبون هوية مخفية في Firebase
+  try {
+    if (FirebaseAuth.instance.currentUser == null) {
+      await FirebaseAuth.instance.signInAnonymously();
+      print("✅ تم تسجيل دخول الزبون مجهول الهوية في فايربيس بنجاح (مطلوب للدردشة)");
+    }
+  } catch (e) {
+    print("⚠️ خطأ في مصادقة فايربيس للزبون: $e");
+  }
+
+  // 1. الحصول على التوكن الحالي وتسجيله
   try {
     String? initialToken = await FirebaseMessaging.instance.getToken();
     if (initialToken != null) {
@@ -220,6 +232,7 @@ void main() async {
     print("⚠️ Error fetching initial FCM token: $e");
   }
 
+  // 2. الاستماع لتغيير التوكن
   _handleTokenRefresh();
 
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -270,7 +283,6 @@ void main() async {
       return;
     }
 
-    // 🛡️ نفس أسلوبك القديم في المعالجة
     if (message.data['type'] == 'voip_call') {
       showIncomingCall(message.data);
     } else {
@@ -279,11 +291,9 @@ void main() async {
   });
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    // توجيه الإشعارات من الخلفية
     handleNotificationClick(message.data);
   });
 
-  // معالجة فتح التطبيق من الإشعار وهو مغلق تماماً
   final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
   if (initialMessage != null) {
     print("🚀 تم فتح التطبيق من إشعار وهو مغلق تماماً!");
