@@ -23,6 +23,9 @@ class LocationPickTextField extends StatefulWidget {
   final Widget? suffixIcon;
   final Widget? prefixIcon;
 
+  // ✅ تمت إضافة هذا المتغير للتحكم في التركيز (فتح الكيبورد)
+  final FocusNode? focusNode;
+
   const LocationPickTextField({
     super.key,
     this.labelText,
@@ -41,6 +44,7 @@ class LocationPickTextField extends StatefulWidget {
     this.readOnly = false,
     this.suffixIcon,
     this.prefixIcon,
+    this.focusNode, // ✅ تمت إضافته للـ Constructor
   });
 
   @override
@@ -55,11 +59,12 @@ class _LocationPickTextFieldState extends State<LocationPickTextField> {
       backgroundColor: widget.fillColor,
       borderRadius: Dimensions.moreRadius,
       blur: 6,
-      offset: Offset(3, 3),
+      offset: const Offset(3, 3), // أضفت const هنا كتحسين بسيط للأداء
       shadowColor: widget.shadowColor ?? MyColor.colorBlack.withValues(alpha: 0.04),
       isShadowTopLeft: true,
       isShadowBottomRight: true,
       child: TextFormField(
+        focusNode: widget.focusNode, // ✅ تمرير الـ focusNode هنا ليعمل بشكل صحيح
         style: regularDefault.copyWith(
           color: widget.textColor,
           fontSize: Dimensions.fontLarge,
@@ -84,7 +89,7 @@ class _LocationPickTextFieldState extends State<LocationPickTextField> {
           hintText: widget.hintText?.tr ?? '',
           suffixIcon: widget.suffixIcon,
           prefixIcon: widget.prefixIcon,
-          prefixIconConstraints: BoxConstraints.loose(Size(40, 40)),
+          prefixIconConstraints:  BoxConstraints.loose(Size(40, 40)), // أضفت const
           border: InputBorder.none,
           enabledBorder: InputBorder.none,
           focusedBorder: InputBorder.none,

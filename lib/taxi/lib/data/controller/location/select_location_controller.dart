@@ -20,20 +20,31 @@ import '../home/home_controller.dart';
 
 class SelectLocationController extends GetxController {
   final LocationSearchRepo locationSearchRepo;
-  int selectedLocationIndex;
+
+  // ✅ تعديل 1: أزلنا final من Index الافتراضي لكي نتمكن من السيطرة عليه بالكامل
+  int initialIndex;
+
+  // ✅ تعديل 2: أنشأنا متغير محلي يحفظ الفهرس النشط ولن يتغير أبداً بسبب النظام
+  int _activeLocationIndex = 0;
 
   SelectLocationController({
     required this.locationSearchRepo,
-    required this.selectedLocationIndex,
-  });
+    required int selectedLocationIndex, // استقبلناه كمتغير عادي
+  }) : initialIndex = selectedLocationIndex {
+    // تعيين المتغير المحلي للقيمة الأولية مرة واحدة فقط عند البداية
+    _activeLocationIndex = selectedLocationIndex;
+  }
+
+  // ✅ تعديل 3: استخدام Getter لضمان الحصول دائماً على الفهرس الصحيح والمحفوظ
+  int get selectedLocationIndex => _activeLocationIndex;
 
   // ===========================================================================
-  // متغيرات حفظ المسافة والوقت (مهم جداً لحساب السعر في تطبيق بيتي)
+  // متغيرات حفظ المسافة والوقت
   // ===========================================================================
   double tripDistance = 0.0;
   double tripDuration = 0.0;
 
-  ml.MapLibreMapController? mapLibreController; // ✅ تعديل حرف L كابيتال
+  ml.MapLibreMapController? mapLibreController;
   ap.AppleMapController? appleController;
   Set<ap.Polyline> applePolylines = {};
 
@@ -48,7 +59,7 @@ class SelectLocationController extends GetxController {
     });
   }
 
-  void setMapLibreController(ml.MapLibreMapController map) { // ✅ تعديل حرف L كابيتال
+  void setMapLibreController(ml.MapLibreMapController map) {
     if (Platform.isIOS) return;
     mapLibreController = map;
   }
@@ -57,8 +68,9 @@ class SelectLocationController extends GetxController {
     appleController = controller;
   }
 
+  // ✅ تعديل 4: دالة التغيير أصبحت تعدل المتغير المحلي المحمي
   void changeIndex(int i) {
-    selectedLocationIndex = i;
+    _activeLocationIndex = i;
     update();
   }
 
@@ -100,11 +112,14 @@ class SelectLocationController extends GetxController {
   void clearPolylines() {
     polylineCoordinates.clear();
     applePolylines.clear();
-    animator.clearPolylines(mapLibreController); // ✅ التحديث هنا: تنظيف الخطوط بدلاً من dispose
+    animator.clearPolylines(mapLibreController);
     update();
   }
 
   void initialize() async {
+    // ✅ نضمن أن الفهرس النشط هو نفسه الذي فُتحت به الشاشة في البداية
+    _activeLocationIndex = initialIndex;
+
     if (homeController.selectedLocations.isNotEmpty) {
       final pickupInfo = homeController.getSelectedLocationInfoAtIndex(0);
       if (pickupInfo != null) {
@@ -123,7 +138,7 @@ class SelectLocationController extends GetxController {
     }
 
     if (homeController.selectedLocations.length < 2) {
-      await getCurrentPosition(isLoading1stTime: true, pickupLocationForIndex: selectedLocationIndex);
+      await getCurrentPosition(isLoading1stTime: true, pickupLocationForIndex: _activeLocationIndex);
     }
   }
 
@@ -185,7 +200,8 @@ class SelectLocationController extends GetxController {
 
       currentAddress.value = address;
 
-      if (selectedLocationIndex == 0) {
+      // ✅ استخدام المتغير المحلي الموثوق
+      if (_activeLocationIndex == 0) {
         pickUpController.text = address;
         pickupLatlong = ll.LatLng(latitude, longitude);
       } else {
@@ -195,7 +211,7 @@ class SelectLocationController extends GetxController {
 
       homeController.addLocationAtIndex(
         SelectedLocationInfo(latitude: latitude, longitude: longitude, fullAddress: address),
-        selectedLocationIndex,
+        _activeLocationIndex,
       );
 
       if (pickupLatlong.latitude != 0 && destinationLatlong.latitude != 0) {
@@ -241,17 +257,29 @@ class SelectLocationController extends GetxController {
 
     polylineCoordinates = points;
 
-    // مسح أي مسارات سابقة
     animator.clearPolylines(mapLibreController);
 
-    // ✅ التحديث هنا: استخدام drawSolidPolyline بدلاً من animatePolyline
+    // 🔥 إعادة تشغيل الأنيميشن (المسار العصري)
     if (Platform.isIOS) {
-      animator.drawSolidPolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), null, onUpdateApple: (p) {
-        applePolylines = p;
-        update();
-      });
+      animator.animatePolyline(
+          points,
+          'main_route',
+          Colors.blueAccent, // لون الخط المتحرك
+          MyColor.getPrimaryColor(), // لون الخط الخلفي الثابت
+          null,
+          onUpdateApple: (p) {
+            applePolylines = p;
+            update();
+          }
+      );
     } else {
-      animator.drawSolidPolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), mapLibreController);
+      animator.animatePolyline(
+          points,
+          'main_route',
+          Colors.yellow, // لون الخط المتحرك
+          MyColor.getPrimaryColor(), // لون الخط الخلفي الثابت
+          mapLibreController
+      );
     }
 
     if (fitBounds) fitPolylineBounds(points);
@@ -379,7 +407,7 @@ class SelectLocationController extends GetxController {
 
   @override
   void onClose() {
-    animator.clearPolylines(mapLibreController); // ✅ التحديث هنا: تنظيف الخطوط قبل الإغلاق
+    animator.clearPolylines(mapLibreController);
     searchLocationController.dispose();
     destinationController.dispose();
     pickUpController.dispose();

@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // ✅ تمت الإضافة للتعامل مع مسارات الصور
-import 'dart:ui' as ui; // ✅ تمت الإضافة لتحويل الصور
+import 'package:flutter/services.dart';
+import 'dart:ui' as ui;
 
 import 'package:get/get.dart';
 import 'package:geolocator/geolocator.dart' as geo;
@@ -38,33 +38,40 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   bool isDragging = false;
   Timer? _debounce;
 
-  // إحداثيات مبدئية (سيتم تحديثها فوراً في setupInitialPosition)
-  double _currentLat = 32.5056;
-  double _currentLng = 45.8247;
+  // إحداثيات مبدئية سيتم تحديثها فوراً
+  double _currentLat = 33.3152; // مركز بغداد كافتراضي
+  double _currentLng = 44.3661;
+
+  // ✅ متغير محلي لمعرفة الفهرس الحالي بشكل قاطع
+  late int currentIndex;
 
   @override
   void initState() {
     super.initState();
+    // ✅ الحل الجذري لمشكلة الأندرويد: نعتمد حصراً على widget.selectedIndex
+    // لأنه ثابت ولا يضيع مع دورة حياة التطبيق بعكس Get.arguments
+    currentIndex = widget.selectedIndex;
     _setupInitialPosition();
   }
 
   Future<void> _setupInitialPosition() async {
     final controller = Get.find<SelectLocationController>();
-    controller.changeIndex(widget.selectedIndex);
+
+    controller.changeIndex(currentIndex);
 
     double? targetLat;
     double? targetLng;
 
     // 1. الأولوية: جلب الموقع المحفوظ سابقاً من الكنترولر (إذا وجد)
-    if (widget.selectedIndex == 0 && controller.pickupLatlong.latitude != 0) {
+    if (currentIndex == 0 && controller.pickupLatlong.latitude != 0) {
       targetLat = controller.pickupLatlong.latitude;
       targetLng = controller.pickupLatlong.longitude;
-    } else if (widget.selectedIndex == 1 && controller.destinationLatlong.latitude != 0) {
+    } else if (currentIndex == 1 && controller.destinationLatlong.latitude != 0) {
       targetLat = controller.destinationLatlong.latitude;
       targetLng = controller.destinationLatlong.longitude;
     }
 
-    // 2. إذا لم يوجد موقع سابق، نجلب موقع الجهاز الحالي فوراً (لحل مشكلة الكوت)
+    // 2. إذا لم يوجد موقع سابق، نجلب موقع الجهاز الحالي
     if (targetLat == null || targetLat == 0) {
       try {
         bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
@@ -82,10 +89,12 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
     // تحديث الإحداثيات وتحريك الكاميرا
     if (targetLat != null) {
-      setState(() {
-        _currentLat = targetLat!;
-        _currentLng = targetLng!;
-      });
+      if (mounted) {
+        setState(() {
+          _currentLat = targetLat!;
+          _currentLng = targetLng!;
+        });
+      }
       _moveCameraToCurrent();
     }
 
@@ -115,16 +124,13 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
   void _updateLocationData() {
     final controller = Get.find<SelectLocationController>();
-    controller.changeIndex(widget.selectedIndex);
+
+    controller.changeIndex(currentIndex);
     controller.changeCurrentLatLongBasedOnCameraMove(_currentLat, _currentLng);
 
-    // 🔥 هذا السطر هو ما يقوم بجلب العنوان ورسم المسار فوراً عند إفلات الدبوس
     controller.openMap(_currentLat, _currentLng, isMapDrag: true);
   }
 
-  // =========================================================================
-  // 🔥 دوال تحميل صور المركبات لهذه الشاشة بالتحديد
-  // =========================================================================
   Future<Uint8List> getBytesFromAsset(String path, int width) async {
     ByteData data = await rootBundle.load(path);
     ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: width);
@@ -135,23 +141,16 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   Future<void> _loadMapStylesAndDrivers() async {
     if (!mounted || mapLibreController == null) return;
     try {
-      // تحميل أيقونة السيارة
       final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
       await mapLibreController!.addImage("car_icon", carData);
 
-      // تحميل أيقونة التكتك
       final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
       await mapLibreController!.addImage("tuktuk_icon", tuktukData);
-
-      // 🔥 تنويه: لكي تظهر السيارات هنا، يجب أن تمرر قائمة السائقين من HomeController
-      // لقد تركت لك هذا السطر لتقوم بتفعيله لاحقاً عندما تقوم بجلب السائقين من السيرفر
-      // Get.find<HomeController>().drawNearbyDriversOnMap(mapLibreController);
 
     } catch(e) {
       debugPrint('❌ Error loading images in Edit Screen: $e');
     }
   }
-  // =========================================================================
 
   @override
   void dispose() {
@@ -171,7 +170,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 child: Platform.isIOS ? _buildAppleMap() : _buildMapLibre(),
               ),
 
-              // الدبوس المركزي (الثابت فوق الخريطة)
               Center(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 40),
@@ -179,7 +177,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                     scale: isDragging ? 1.3 : 1.0,
                     duration: const Duration(milliseconds: 200),
                     child: Image.asset(
-                      widget.selectedIndex == 0
+                      currentIndex == 0
                           ? "assets/images/map/pickup_marker.png"
                           : "assets/images/map/destination_marker.png",
                       width: 50,
@@ -187,7 +185,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                       errorBuilder: (c, e, s) => Icon(
                         Icons.location_on,
                         size: 50,
-                        color: widget.selectedIndex == 0 ? MyColor.primaryColor : Colors.redAccent,
+                        color: currentIndex == 0 ? MyColor.primaryColor : Colors.redAccent,
                       ),
                     ),
                   ),
@@ -216,10 +214,9 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       initialCameraPosition: ml.CameraPosition(target: ml.LatLng(_currentLat, _currentLng), zoom: 16),
       onMapCreated: (c) {
         mapLibreController = c;
-        // 🚀 السر هنا: تمرير الكنترولر إلى SelectLocationController لكي يرسم المسار!
         Get.find<SelectLocationController>().setMapLibreController(c);
       },
-      onStyleLoadedCallback: _loadMapStylesAndDrivers, // 🔥 استدعاء تحميل الصور بمجرد جاهزية الخريطة
+      onStyleLoadedCallback: _loadMapStylesAndDrivers,
       onCameraMove: (pos) {
         if (!isDragging) setState(() => isDragging = true);
         _currentLat = pos.target.latitude;
@@ -236,7 +233,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       initialCameraPosition: ap.CameraPosition(target: ap.LatLng(_currentLat, _currentLng), zoom: 16),
       onMapCreated: (c) {
         appleController = c;
-        // 🚀 تمرير الكنترولر للـ iOS أيضاً لرسم المسار
         Get.find<SelectLocationController>().setAppleController(c);
       },
       onCameraMove: (pos) {
@@ -298,12 +294,12 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
-                color: widget.selectedIndex == 0 ? MyColor.primaryColor.withOpacity(0.1) : Colors.redAccent.withOpacity(0.1),
+                color: currentIndex == 0 ? MyColor.primaryColor.withOpacity(0.1) : Colors.redAccent.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(10)
             ),
             child: Text(
-              widget.selectedIndex == 0 ? "نقطة الانطلاق" : "وجهة التوصيل",
-              style: boldDefault.copyWith(color: widget.selectedIndex == 0 ? MyColor.primaryColor : Colors.redAccent),
+              currentIndex == 0 ? "نقطة الانطلاق" : "وجهة التوصيل",
+              style: boldDefault.copyWith(color: currentIndex == 0 ? MyColor.primaryColor : Colors.redAccent),
             ),
           ),
           const SizedBox(height: 15),
@@ -313,7 +309,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
             child: Row(
               children: [
                 CustomSvgPicture(
-                  image: widget.selectedIndex == 0 ? MyIcons.currentLocation : MyIcons.location,
+                  image: currentIndex == 0 ? MyIcons.currentLocation : MyIcons.location,
                   color: MyColor.primaryColor,
                 ),
                 const SizedBox(width: 12),
@@ -341,15 +337,13 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   }
 
   void _handleFinalConfirmation(SelectLocationController controller) {
-    // 1. ضمان الفهرس الصحيح قبل الحفظ لمنع تداخل الأندرويد
-    controller.changeIndex(widget.selectedIndex);
+    controller.changeIndex(currentIndex);
 
     String finalAddress = controller.currentAddress.value.isNotEmpty
         ? controller.currentAddress.value
         : "موقع تم تحديده";
 
-    // 2. تحديث الإحداثيات والعنوان بناءً على الفهرس حصراً
-    if (widget.selectedIndex == 0) {
+    if (currentIndex == 0) {
       controller.pickupLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.pickUpController.text = finalAddress;
       controller.selectedLatitude = _currentLat;
@@ -357,12 +351,10 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     } else {
       controller.destinationLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.destinationController.text = finalAddress;
-      // تحديث الإحداثيات المختارة للوجهة (تمنع تكرار موقع الانطلاق)
       controller.selectedLatitude = _currentLat;
       controller.selectedLongitude = _currentLng;
     }
 
-    // 3. حفظ البيانات في الهوم كنترولر للرجوع إليها
     controller.homeController.addLocationAtIndex(
       SelectedLocationInfo(
         address: finalAddress,
@@ -370,10 +362,10 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
         latitude: _currentLat,
         longitude: _currentLng,
       ),
-      widget.selectedIndex,
+      currentIndex,
     );
 
     controller.update();
-    Get.back(result: true); // إرجاع نتيجة لنجاح العملية
+    Get.back(result: true);
   }
 }
