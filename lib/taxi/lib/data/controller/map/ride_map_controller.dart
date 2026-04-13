@@ -4,6 +4,9 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // ✅ للتعامل مع مسارات الصور
+import 'dart:ui' as ui; // ✅ لتحويل الصور
+
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:geocoding/geocoding.dart';
@@ -18,7 +21,7 @@ import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_images.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_color.dart';
 
-// 🚀 تم استرجاع كلاس الأنيميشن الجميل الخاص بك
+// 🚀 أداة الرسم الاحترافية
 import 'package:cosmetic_store/taxi/lib/presentation/packages/polyline_animation/polyline_animation_v1.dart';
 import '../../model/location/prediction.dart';
 
@@ -28,6 +31,9 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   bool isLoading = false;
   bool isSearching = false;
 
+  // ✅ 1 = سيارة ، 2 = تكتك (يتم تمريرها من شاشة قبول الرحلة)
+  int activeServiceId = 1;
+
   LatLng pickupLatLng = const LatLng(0, 0);
   LatLng destinationLatLng = const LatLng(0, 0);
 
@@ -35,7 +41,7 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   double driverRotation = 0.0;
   String driverAddress = 'جاري التحميل...';
 
-  ml.MaplibreMapController? mapLibreController;
+  ml.MapLibreMapController? mapLibreController; // ✅ تعديل حرف L كابيتال
   ml.Symbol? pickupSymbol;
   ml.Symbol? destSymbol;
   ml.Symbol? driverSymbol;
@@ -49,7 +55,7 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
 
   late final AnimationController _animationController;
 
-  // 🚀 تفعيل المسار المتحرك
+  // 🚀 تفعيل المسار
   final PolylineAnimator animator = PolylineAnimator();
 
   @override
@@ -61,13 +67,45 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   @override
   void onClose() {
     _animationController.dispose();
-    animator.dispose(); // إيقاف الأنيميشن عند إغلاق الشاشة
+    animator.clearPolylines(mapLibreController);
     super.onClose();
   }
 
-  void setMapLibreController(ml.MaplibreMapController controller) {
+  // =========================================================================
+  // 🔥 دوال تحميل صور المركبات (السيارة والتكتك) إلى ذاكرة الخريطة
+  // =========================================================================
+  Future<Uint8List> getBytesFromAsset(String path, int width) async {
+    ByteData data = await rootBundle.load(path);
+    ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: width);
+    ui.FrameInfo fi = await codec.getNextFrame();
+    return (await fi.image.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+  }
+
+  Future<void> loadVehicleImagesToMap() async {
+    if (mapLibreController == null) return;
+    try {
+      // تحميل أيقونة السيارة (حجم 100 بكسل، يمكنك تغييره)
+      final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
+      await mapLibreController!.addImage("car_icon", carData);
+
+      // تحميل أيقونة التكتك
+      final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
+      await mapLibreController!.addImage("tuktuk_icon", tuktukData);
+
+      print("✅ تم تحميل صور السيارات والتكتك بنجاح في ذاكرة الخريطة!");
+    } catch(e) {
+      print('❌ خطأ في تحميل صور المركبات: $e');
+    }
+  }
+  // =========================================================================
+
+  void setMapLibreController(ml.MapLibreMapController controller) {
     mapLibreController = controller;
     isMapReady = true;
+
+    // 🚀 استدعاء تحميل الصور فور جاهزية الخريطة
+    loadVehicleImagesToMap();
+
     _checkInitialData();
   }
 
@@ -102,8 +140,8 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
       final pickupIcon = await ap.BitmapDescriptor.fromAssetImage(const ImageConfiguration(size: Size(35, 35)), MyIcons.mapMarkerPickUpIcon);
       final destIcon = await ap.BitmapDescriptor.fromAssetImage(const ImageConfiguration(size: Size(35, 35)), MyIcons.mapMarkerIcon);
 
-      appleAnnotations.add(ap.Annotation(annotationId: ap.AnnotationId('pickup'), position: ap.LatLng(pickupLatLng.latitude, pickupLatLng.longitude), icon: pickupIcon));
-      appleAnnotations.add(ap.Annotation(annotationId: ap.AnnotationId('destination'), position: ap.LatLng(destinationLatLng.latitude, destinationLatLng.longitude), icon: destIcon));
+      appleAnnotations.add(ap.Annotation(annotationId:  ap.AnnotationId('pickup'), position: ap.LatLng(pickupLatLng.latitude, pickupLatLng.longitude), icon: pickupIcon));
+      appleAnnotations.add(ap.Annotation(annotationId:  ap.AnnotationId('destination'), position: ap.LatLng(destinationLatLng.latitude, destinationLatLng.longitude), icon: destIcon));
     } else if (!Platform.isIOS && mapLibreController != null) {
       if (pickupSymbol != null) await mapLibreController!.removeSymbol(pickupSymbol!);
       if (destSymbol != null) await mapLibreController!.removeSymbol(destSymbol!);
@@ -111,13 +149,13 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
       pickupSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
         geometry: ml.LatLng(pickupLatLng.latitude, pickupLatLng.longitude),
         iconImage: 'pickup_icon',
-        iconSize: 0.15, // حجم احترافي ومتناسق
+        iconSize: 0.15,
       ));
 
       destSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
         geometry: ml.LatLng(destinationLatLng.latitude, destinationLatLng.longitude),
         iconImage: 'dest_icon',
-        iconSize: 0.15, // حجم احترافي ومتناسق
+        iconSize: 0.15,
       ));
     }
     update();
@@ -150,12 +188,15 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     update();
   }
 
-  // 🎨 هنا تم إرجاع الأنيميشن الاحترافي الخاص بك!
+  // 🎨 الرسم الاحترافي الموحد
   Future<void> _drawPolylineUnified() async {
     if (polylineCoordinates.isEmpty) return;
 
+    // مسح الخطوط القديمة قبل رسم الجديدة
+    animator.clearPolylines(mapLibreController);
+
     if (Platform.isIOS && appleController != null) {
-      animator.animatePolyline(
+      animator.drawSolidPolyline(
         polylineCoordinates,
         'ride_route',
         MyColor.getPrimaryColor(),
@@ -167,8 +208,7 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
         },
       );
     } else if (!Platform.isIOS && mapLibreController != null) {
-      try { mapLibreController!.clearLines(); } catch (e) {}
-      animator.animatePolyline(
+      animator.drawSolidPolyline(
         polylineCoordinates,
         'ride_route',
         MyColor.getPrimaryColor(),
@@ -209,27 +249,48 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     _animationController.forward();
   }
 
+  // ✅ التحديث السحري: تغيير شكل السيارة بناءً على المتغير
   Future<void> _updateDriverMarkerUnified(LatLng position, double rotation) async {
+
+    // 🚗 تحديد اسم ومسار الصورة ديناميكياً بناءً على نوع المركبة
+    String iconName = (activeServiceId == 1) ? 'car_icon' : 'tuktuk_icon';
+    String assetPath = (activeServiceId == 1) ? 'assets/images/car.png' : 'assets/images/tuktuk.png';
+
     if (Platform.isIOS && appleController != null) {
       appleAnnotations.removeWhere((a) => a.annotationId.value == 'driver');
-      final driverIcon = await ap.BitmapDescriptor.fromAssetImage(const ImageConfiguration(size: Size(35, 35)), MyImages.mapDriverMarker);
-      appleAnnotations.add(ap.Annotation(annotationId: ap.AnnotationId('driver'), position: ap.LatLng(position.latitude, position.longitude), icon: driverIcon));
+
+      final driverIcon = await ap.BitmapDescriptor.fromAssetImage(
+          const ImageConfiguration(size: Size(35, 35)), assetPath);
+
+      appleAnnotations.add(ap.Annotation(
+          annotationId:  ap.AnnotationId('driver'),
+          position: ap.LatLng(position.latitude, position.longitude),
+          icon: driverIcon));
+
     } else if (!Platform.isIOS && mapLibreController != null) {
       if (driverSymbol == null) {
+        // رسم السيارة أو التكتك لأول مرة في الأندرويد
         driverSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
           geometry: ml.LatLng(position.latitude, position.longitude),
-          iconImage: 'driver_icon',
+          iconImage: iconName,
           iconSize: 0.15,
           iconRotate: rotation,
         ));
       } else {
-        await mapLibreController!.updateSymbol(driverSymbol!, ml.SymbolOptions(geometry: ml.LatLng(position.latitude, position.longitude), iconRotate: rotation));
+        // تحديث الانزلاق والدوران مع الحفاظ على نفس الأيقونة
+        await mapLibreController!.updateSymbol(
+            driverSymbol!,
+            ml.SymbolOptions(
+              geometry: ml.LatLng(position.latitude, position.longitude),
+              iconRotate: rotation,
+              iconImage: iconName,
+            ));
       }
     }
     update();
   }
 
-  // 🔍 البحث الهجين الخارق (مجاني 100%): سيرفر منصة بيتي + Nominatim !
+  // 🔍 البحث الهجين
   Future<void> searchLocation(String query) async {
     if (query.isEmpty) {
       predictionList.clear();
@@ -240,7 +301,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     update();
     List<Prediction> combinedResults = [];
 
-    // 1. البحث في سيرفر منصة بيتي (مجاني وسريع جداً ومحلي)
     try {
       final String myServerUrl = 'https://taxi.beytei.com/api/local-search?q=$query';
       final myResponse = await http.get(Uri.parse(myServerUrl)).timeout(const Duration(seconds: 2));
@@ -260,11 +320,8 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
           )));
         }
       }
-    } catch (e) {
-      debugPrint("⚠️ Local Search Error: $e");
-    }
+    } catch (e) {}
 
-    // 2. دمج نتائج Nominatim المجاني كبديل قوي لماب بوكس
     try {
       final String searchUrl = 'https://nominatim.openstreetmap.org/search?q=$query&format=json&addressdetails=1&limit=5&countrycodes=iq';
       final response = await http.get(Uri.parse(searchUrl), headers: {'User-Agent': 'BeyteiApp'});
@@ -284,7 +341,7 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
           ));
         }
       }
-    } catch (e) { debugPrint("⚠️ Nominatim Search Error: $e"); }
+    } catch (e) {}
 
     predictionList = combinedResults;
     isSearching = false;

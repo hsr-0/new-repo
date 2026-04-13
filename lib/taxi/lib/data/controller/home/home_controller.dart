@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert'; // ✅ تمت الإضافة للتعامل مع JSON
+import 'package:http/http.dart' as http; // ✅ تمت الإضافة للاتصال بالسيرفر
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
@@ -27,6 +29,9 @@ import 'package:cosmetic_store/taxi/lib/presentation/components/dialog/app_dialo
 import 'package:cosmetic_store/taxi/lib/presentation/components/snack_bar/show_custom_snackbar.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/home/widgets/bottomsheet/ride_distance_warning_bottom_sheet.dart';
 
+// ملاحظة: إذا أردت تمرير البيانات مباشرة لكنترولر الرحلة، يمكنك تفعيل هذا الاستيراد:
+// import 'package:cosmetic_store/taxi/lib/presentation/controllers/ride_map_controller.dart';
+
 class HomeController extends GetxController {
   HomeRepo homeRepo;
   AppLocationController appLocationController;
@@ -54,6 +59,9 @@ class HomeController extends GetxController {
   RideModel runningRide = RideModel(id: "-1");
   bool isKycVerified = true;
   bool isKycPending = false;
+
+  // 🔥 قائمة لحفظ السائقين القريبين (السيارات والتكتك) لتمريرها للخريطة
+  List<dynamic> nearbyDrivers = [];
 
   void updatePassenger(bool isIncrement) {
     if (isIncrement) {
@@ -100,6 +108,12 @@ class HomeController extends GetxController {
         );
         addLocationAtIndex(location, 0);
       }
+
+      // 🚀 جلب السيارات فور معرفة موقع الزبون عند فتح التطبيق
+      if (currentPosition != null) {
+        fetchNearbyDrivers(currentPosition!.latitude, currentPosition!.longitude);
+      }
+
       update(); // Ensure UI reflects added location
     }
   }
@@ -288,10 +302,10 @@ class HomeController extends GetxController {
   }
 
   Future<void> addLocationAtIndex(
-    SelectedLocationInfo selectedLocationInfo,
-    int index, {
-    bool getFareData = false,
-  }) async {
+      SelectedLocationInfo selectedLocationInfo,
+      int index, {
+        bool getFareData = false,
+      }) async {
     SelectedLocationInfo newLocation = selectedLocationInfo;
     if (selectedLocations.length > index && index >= 0) {
       selectedLocations[index] = newLocation;
@@ -300,10 +314,44 @@ class HomeController extends GetxController {
     }
     update();
 
+    // 🚀 جلب السيارات فوراً إذا قام الزبون بتغيير "نقطة الانطلاق" (index == 0)
+    if (index == 0 && newLocation.latitude != null && newLocation.longitude != null) {
+      fetchNearbyDrivers(newLocation.latitude!, newLocation.longitude!);
+    }
+
     if (selectedLocations.length >= 2 && selectedService.id != "-99" && getFareData == true) {
       getRideFare();
     }
   }
+
+  // ===========================================================================
+  // 🔥 دالة جلب السائقين القريبين من سيرفر Laravel (Beytei)
+  // ===========================================================================
+  Future<void> fetchNearbyDrivers(double lat, double lng) async {
+    try {
+      final String url = 'https://taxi.beytei.com/api/nearby-drivers?lat=$lat&lng=$lng';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['success'] == true) {
+          nearbyDrivers = data['data']; // حفظ القائمة
+
+          // يمكنك إرسال البيانات فوراً لـ RideMapController إذا كان مفعلاً
+          // if (Get.isRegistered<RideMapController>()) {
+          //   Get.find<RideMapController>().updateNearbyDriversOnMap(nearbyDrivers);
+          // }
+
+          update(); // تحديث الواجهة
+        }
+      }
+    } catch (e) {
+      print("❌ خطأ في جلب السائقين القريبين: $e");
+    }
+  }
+  // ===========================================================================
 
   SelectedLocationInfo? getSelectedLocationInfoAtIndex(int index) {
     if (index >= 0 && index < selectedLocations.length) {

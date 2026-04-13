@@ -1,6 +1,9 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // ✅ تمت الإضافة للتعامل مع مسارات الصور
+import 'dart:ui' as ui; // ✅ تمت الإضافة لتحويل الصور
+
 import 'package:get/get.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 
@@ -35,7 +38,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   bool isDragging = false;
   Timer? _debounce;
 
-  // إحداثيات افتراضية (سيتم تحديثها فوراً لموقع المستخدم)
+  // إحداثيات مبدئية (سيتم تحديثها فوراً في setupInitialPosition)
   double _currentLat = 32.5056;
   double _currentLng = 45.8247;
 
@@ -49,25 +52,44 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     final controller = Get.find<SelectLocationController>();
     controller.changeIndex(widget.selectedIndex);
 
-    // 1. محاولة جلب الموقع المحفوظ سابقاً للـ index الحالي
-    final savedLocation = controller.homeController.getSelectedLocationInfoAtIndex(widget.selectedIndex);
+    double? targetLat;
+    double? targetLng;
 
-    if (savedLocation != null && savedLocation.latitude != null && savedLocation.latitude != 0) {
-      _currentLat = double.tryParse(savedLocation.latitude.toString()) ?? _currentLat;
-      _currentLng = double.tryParse(savedLocation.longitude.toString()) ?? _currentLng;
-    } else {
-      // 2. إذا لم يوجد موقع محفوظ، نجلب موقع المستخدم الحالي بدلاً من إحداثيات ثابتة
+    // 1. الأولوية: جلب الموقع المحفوظ سابقاً من الكنترولر (إذا وجد)
+    if (widget.selectedIndex == 0 && controller.pickupLatlong.latitude != 0) {
+      targetLat = controller.pickupLatlong.latitude;
+      targetLng = controller.pickupLatlong.longitude;
+    } else if (widget.selectedIndex == 1 && controller.destinationLatlong.latitude != 0) {
+      targetLat = controller.destinationLatlong.latitude;
+      targetLng = controller.destinationLatlong.longitude;
+    }
+
+    // 2. إذا لم يوجد موقع سابق، نجلب موقع الجهاز الحالي فوراً (لحل مشكلة الكوت)
+    if (targetLat == null || targetLat == 0) {
       try {
-        geo.Position position = await geo.Geolocator.getCurrentPosition();
-        _currentLat = position.latitude;
-        _currentLng = position.longitude;
-        _moveCameraToCurrent();
+        bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+        if (serviceEnabled) {
+          geo.Position position = await geo.Geolocator.getCurrentPosition(
+              desiredAccuracy: geo.LocationAccuracy.high
+          );
+          targetLat = position.latitude;
+          targetLng = position.longitude;
+        }
       } catch (e) {
-        debugPrint("Current Location Error: $e");
+        debugPrint("Location service error: $e");
       }
     }
 
-    // جلب العنوان الأولي للنقطة التي فتحت عليها الخريطة
+    // تحديث الإحداثيات وتحريك الكاميرا
+    if (targetLat != null) {
+      setState(() {
+        _currentLat = targetLat!;
+        _currentLng = targetLng!;
+      });
+      _moveCameraToCurrent();
+    }
+
+    // جلب العنوان النصي من السيرفر للموقع الحالي
     _updateLocationData();
   }
 
@@ -93,14 +115,43 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
 
   void _updateLocationData() {
     final controller = Get.find<SelectLocationController>();
-
-    // إجبار الكنترولر على البقاء في الـ Index الصحيح (هام جداً للأندرويد)
     controller.changeIndex(widget.selectedIndex);
-
-    // تحديث الإحداثيات في الكنترولر وجلب العنوان من السيرفر (Reverse Geocoding)
     controller.changeCurrentLatLongBasedOnCameraMove(_currentLat, _currentLng);
+
+    // 🔥 هذا السطر هو ما يقوم بجلب العنوان ورسم المسار فوراً عند إفلات الدبوس
     controller.openMap(_currentLat, _currentLng, isMapDrag: true);
   }
+
+  // =========================================================================
+  // 🔥 دوال تحميل صور المركبات لهذه الشاشة بالتحديد
+  // =========================================================================
+  Future<Uint8List> getBytesFromAsset(String path, int width) async {
+    ByteData data = await rootBundle.load(path);
+    ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: width);
+    ui.FrameInfo fi = await codec.getNextFrame();
+    return (await fi.image.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+  }
+
+  Future<void> _loadMapStylesAndDrivers() async {
+    if (!mounted || mapLibreController == null) return;
+    try {
+      // تحميل أيقونة السيارة
+      final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
+      await mapLibreController!.addImage("car_icon", carData);
+
+      // تحميل أيقونة التكتك
+      final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
+      await mapLibreController!.addImage("tuktuk_icon", tuktukData);
+
+      // 🔥 تنويه: لكي تظهر السيارات هنا، يجب أن تمرر قائمة السائقين من HomeController
+      // لقد تركت لك هذا السطر لتقوم بتفعيله لاحقاً عندما تقوم بجلب السائقين من السيرفر
+      // Get.find<HomeController>().drawNearbyDriversOnMap(mapLibreController);
+
+    } catch(e) {
+      debugPrint('❌ Error loading images in Edit Screen: $e');
+    }
+  }
+  // =========================================================================
 
   @override
   void dispose() {
@@ -120,7 +171,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 child: Platform.isIOS ? _buildAppleMap() : _buildMapLibre(),
               ),
 
-              // الدبوس المركزي
+              // الدبوس المركزي (الثابت فوق الخريطة)
               Center(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 40),
@@ -143,7 +194,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 ),
               ),
 
-              _buildTopBar(controller),
+              _buildTopBar(),
 
               Align(
                 alignment: Alignment.bottomCenter,
@@ -163,7 +214,12 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     return ml.MapLibreMap(
       styleString: 'https://tiles.openfreemap.org/styles/liberty',
       initialCameraPosition: ml.CameraPosition(target: ml.LatLng(_currentLat, _currentLng), zoom: 16),
-      onMapCreated: (c) => mapLibreController = c,
+      onMapCreated: (c) {
+        mapLibreController = c;
+        // 🚀 السر هنا: تمرير الكنترولر إلى SelectLocationController لكي يرسم المسار!
+        Get.find<SelectLocationController>().setMapLibreController(c);
+      },
+      onStyleLoadedCallback: _loadMapStylesAndDrivers, // 🔥 استدعاء تحميل الصور بمجرد جاهزية الخريطة
       onCameraMove: (pos) {
         if (!isDragging) setState(() => isDragging = true);
         _currentLat = pos.target.latitude;
@@ -178,7 +234,11 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   Widget _buildAppleMap() {
     return ap.AppleMap(
       initialCameraPosition: ap.CameraPosition(target: ap.LatLng(_currentLat, _currentLng), zoom: 16),
-      onMapCreated: (c) => appleController = c,
+      onMapCreated: (c) {
+        appleController = c;
+        // 🚀 تمرير الكنترولر للـ iOS أيضاً لرسم المسار
+        Get.find<SelectLocationController>().setAppleController(c);
+      },
       onCameraMove: (pos) {
         if (!isDragging) setState(() => isDragging = true);
         _currentLat = pos.target.latitude;
@@ -189,7 +249,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     );
   }
 
-  Widget _buildTopBar(SelectLocationController controller) {
+  Widget _buildTopBar() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(15),
@@ -217,14 +277,10 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       final pos = await geo.Geolocator.getCurrentPosition();
       _currentLat = pos.latitude;
       _currentLng = pos.longitude;
-      if (Platform.isIOS) {
-        appleController?.animateCamera(ap.CameraUpdate.newLatLng(ap.LatLng(_currentLat, _currentLng)));
-      } else {
-        mapLibreController?.animateCamera(ml.CameraUpdate.newLatLngZoom(ml.LatLng(_currentLat, _currentLng), 16));
-      }
+      _moveCameraToCurrent();
       _updateLocationData();
     } catch (e) {
-      debugPrint("Location error: $e");
+      debugPrint("GPS error: $e");
     }
   }
 
@@ -239,7 +295,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // عرض نوع الموقع (انطلاق أو وجهة)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
@@ -286,14 +341,14 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   }
 
   void _handleFinalConfirmation(SelectLocationController controller) {
-    // إجبار الكنترولر مرة أخيرة على الـ Index الصحيح
+    // 1. ضمان الفهرس الصحيح قبل الحفظ لمنع تداخل الأندرويد
     controller.changeIndex(widget.selectedIndex);
 
     String finalAddress = controller.currentAddress.value.isNotEmpty
         ? controller.currentAddress.value
         : "موقع تم تحديده";
 
-    // تحديث البيانات في الكنترولر بناءً على الـ Index
+    // 2. تحديث الإحداثيات والعنوان بناءً على الفهرس حصراً
     if (widget.selectedIndex == 0) {
       controller.pickupLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.pickUpController.text = finalAddress;
@@ -302,12 +357,12 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     } else {
       controller.destinationLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.destinationController.text = finalAddress;
-      // مهم للأندرويد: تحديث الإحداثيات المختارة للوجهة
+      // تحديث الإحداثيات المختارة للوجهة (تمنع تكرار موقع الانطلاق)
       controller.selectedLatitude = _currentLat;
       controller.selectedLongitude = _currentLng;
     }
 
-    // حفظ البيانات في HomeController
+    // 3. حفظ البيانات في الهوم كنترولر للرجوع إليها
     controller.homeController.addLocationAtIndex(
       SelectedLocationInfo(
         address: finalAddress,
@@ -319,9 +374,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     );
 
     controller.update();
-    Get.back(result: true);
+    Get.back(result: true); // إرجاع نتيجة لنجاح العملية
   }
 }
-
-
-

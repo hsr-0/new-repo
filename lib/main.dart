@@ -46,13 +46,19 @@ final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifie
 // دالة التوجيه الموحدة (تعمل عند الضغط على الإشعار من أي مكان)
 void handleNotificationClick(Map<String, dynamic> data) {
   if (data['type'] == 'voip_call') {
-    showIncomingCall(data);
+    showIncomingCall(data); // 👈 لم نلمس نظام المكالمات نهائياً، آمن 100%
   } else if (data['type'] == 'chat_message') {
     print("🚀 [Routing] توجيه مباشر إلى شاشة الدردشة!");
-    activeChatNotifier.value = data;
+    // 🔥 زيادة الوقت إلى 1500 لضمان بناء الواجهة عند فتح التطبيق وهو مغلق تماماً
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      activeChatNotifier.value = data;
+    });
   } else if (data['type'] == 'status_update' || data['type'] == 'driver_assigned' || data['type'] == 'new_order') {
     print("🚀 [Routing] توجيه مباشر إلى شاشة تتبع الطلب!");
-    activeTrackingNotifier.value = data;
+    // 🔥 زيادة الوقت إلى 1500 هنا أيضاً
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      activeTrackingNotifier.value = data;
+    });
   }
 }
 
@@ -131,15 +137,14 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   if (message.data['type'] == 'voip_call') {
     await showIncomingCall(message.data);
-  } else {
-    _showLocalNotification(message);
   }
+  // 🔥 تم إزالة _showLocalNotification من هنا لمنع الإشعار المكرر وإصلاح النافذة المنبثقة
 }
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void _showLocalNotification(RemoteMessage message) {
-  // حماية إضافية
+  // حماية إضافية لعدم إظهار إشعار عادي للمكالمات
   if (message.data['type'] == 'voip_call') return;
 
   final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث من منصة بيتي';
@@ -163,7 +168,7 @@ void _showLocalNotification(RemoteMessage message) {
     title,
     body,
     platformChannelSpecifics,
-    payload: jsonEncode(message.data),
+    payload: jsonEncode(message.data), // 🔥 يضمن قراءة التطبيق لنوع الإشعار عند النقر
   );
 }
 
@@ -249,6 +254,7 @@ void main() async {
     onDidReceiveNotificationResponse: (NotificationResponse response) {
       if (response.payload != null) {
         try {
+          // استخراج البيانات وتوجيه المستخدم عند النقر (التطبيق مفتوح)
           handleNotificationClick(jsonDecode(response.payload!));
         } catch (e) {
           print("Error parsing local notification payload: $e");
@@ -345,6 +351,14 @@ class _MyAppState extends State<MyApp> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTerminatedCall();
+
+      // 🔥 ضمان التقاط الإشعار وتوجيهه إذا كان التطبيق مغلقاً تماماً
+      FirebaseMessaging.instance.getInitialMessage().then((message) {
+        if (message != null) {
+          print("🚀 [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
+          handleNotificationClick(message.data);
+        }
+      });
     });
 
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {

@@ -33,7 +33,7 @@ class SelectLocationController extends GetxController {
   double tripDistance = 0.0;
   double tripDuration = 0.0;
 
-  ml.MaplibreMapController? mapLibreController;
+  ml.MapLibreMapController? mapLibreController; // ✅ تعديل حرف L كابيتال
   ap.AppleMapController? appleController;
   Set<ap.Polyline> applePolylines = {};
 
@@ -48,7 +48,7 @@ class SelectLocationController extends GetxController {
     });
   }
 
-  void setMapLibreController(ml.MaplibreMapController map) {
+  void setMapLibreController(ml.MapLibreMapController map) { // ✅ تعديل حرف L كابيتال
     if (Platform.isIOS) return;
     mapLibreController = map;
   }
@@ -100,12 +100,7 @@ class SelectLocationController extends GetxController {
   void clearPolylines() {
     polylineCoordinates.clear();
     applePolylines.clear();
-    animator.dispose(); // إيقاف الأنيميشن فوراً عند المسح
-    if (mapLibreController != null) {
-      try {
-        mapLibreController!.clearLines();
-      } catch (e) {}
-    }
+    animator.clearPolylines(mapLibreController); // ✅ التحديث هنا: تنظيف الخطوط بدلاً من dispose
     update();
   }
 
@@ -204,7 +199,6 @@ class SelectLocationController extends GetxController {
       );
 
       if (pickupLatlong.latitude != 0 && destinationLatlong.latitude != 0) {
-        // نمنع الخريطة من القفز المزعج إذا كان المستخدم يحدد الموقع بيده (الدبوس)
         await _generateRoutePolyline(fitBounds: !isMapDrag);
       } else {
         clearPolylines();
@@ -247,30 +241,26 @@ class SelectLocationController extends GetxController {
 
     polylineCoordinates = points;
 
-    // مسح أي مسارات سابقة على الخريطة لتجنب تراكم الخطوط
-    if (mapLibreController != null) {
-      try { mapLibreController!.clearLines(); } catch (e) {}
-    }
+    // مسح أي مسارات سابقة
+    animator.clearPolylines(mapLibreController);
 
-    // 🎨 هنا يتم رسم الأنيميشن الجميل الخاص بك حصراً
+    // ✅ التحديث هنا: استخدام drawSolidPolyline بدلاً من animatePolyline
     if (Platform.isIOS) {
-      animator.animatePolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), null, onUpdateApple: (p) {
+      animator.drawSolidPolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), null, onUpdateApple: (p) {
         applePolylines = p;
         update();
       });
     } else {
-      animator.animatePolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), mapLibreController);
+      animator.drawSolidPolyline(points, 'main_route', MyColor.getPrimaryColor(), MyColor.getPrimaryColor().withOpacity(0.4), mapLibreController);
     }
 
     if (fitBounds) fitPolylineBounds(points);
   }
 
-  // 🚀 التعديل الأهم: استخدام OSRM المجاني بالكامل، مع جلب المسافة لحساب السعر بدقة!
   Future<List<ll.LatLng>> getPolylinePoints() async {
     List<ll.LatLng> points = [];
 
     try {
-      // نستخدم سيرفر OSRM المجاني بدلاً من Mapbox المدفوع
       final String url = 'https://router.project-osrm.org/route/v1/driving/'
           '${pickupLatlong.longitude},${pickupLatlong.latitude};'
           '${destinationLatlong.longitude},${destinationLatlong.latitude}'
@@ -283,24 +273,16 @@ class SelectLocationController extends GetxController {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        // التأكد من أن السيرفر وجد طريقاً متاحاً (code: Ok)
         if (data['code'] == 'Ok' && data['routes'] != null && data['routes'].isNotEmpty) {
 
           final List coordinates = data['routes'][0]['geometry']['coordinates'];
           points = coordinates.map((coord) => ll.LatLng(coord[1].toDouble(), coord[0].toDouble())).toList();
 
-          // 📏 استخراج المسافة وحفظها (بالمتر -> تحويل إلى كيلو)
           double meters = double.tryParse(data['routes'][0]['distance'].toString()) ?? 0.0;
           tripDistance = meters / 1000;
 
-          // ⏱️ استخراج الوقت وحفظه (بالثواني -> تحويل إلى دقائق)
           double seconds = double.tryParse(data['routes'][0]['duration'].toString()) ?? 0.0;
           tripDuration = seconds / 60;
-
-          print("🏁 [نتائج الرحلة - مجاني 100%] -----------");
-          print("📏 المسافة: $tripDistance كيلومتر");
-          print("⏱️ الوقت المتوقع: $tripDuration دقيقة");
-          print("------------------------------------------");
 
         } else {
           print("⚠️ [OSRM] السيرفر لم يجد طريقاً بين هاتين النقطتين.");
@@ -397,7 +379,7 @@ class SelectLocationController extends GetxController {
 
   @override
   void onClose() {
-    animator.dispose();
+    animator.clearPolylines(mapLibreController); // ✅ التحديث هنا: تنظيف الخطوط قبل الإغلاق
     searchLocationController.dispose();
     destinationController.dispose();
     pickUpController.dispose();

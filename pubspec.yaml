@@ -245,6 +245,9 @@ flutter:
     - assets/pdfs/
     - assets/jsons/
     - assets/icon/icon.jpg
+
+    - assets/images/car.png
+    - assets/images/tuktuk.png
     - assets/images/social/
     - assets/images/logo/
     - assets/images/map/

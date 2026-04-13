@@ -40,7 +40,7 @@ class LocationPickerScreen extends StatefulWidget {
 }
 
 class _LocationPickerScreenState extends State<LocationPickerScreen> with TickerProviderStateMixin {
-  ml.MapLibreMapController? mapLibreController;
+  ml.MapLibreMapController? mapLibreController; // ✅ حرف L كابيتال
   ap.AppleMapController? appleController;
   Set<ap.Annotation> appleAnnotations = {};
 
@@ -197,7 +197,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
       // ✅ إضافة علامة الانطلاق
       if (controller.pickupLatlong.latitude != 0) {
         annotations.add(ap.Annotation(
-          annotationId:  ap.AnnotationId('pickup'),
+          annotationId:   ap.AnnotationId('pickup'),
           position: ap.LatLng(controller.pickupLatlong.latitude, controller.pickupLatlong.longitude),
           icon: pickUpIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
           onTap: () async {
@@ -215,7 +215,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
       // ✅ إضافة علامة الوجهة
       if (controller.destinationLatlong.latitude != 0) {
         annotations.add(ap.Annotation(
-          annotationId:  ap.AnnotationId('destination'),
+          annotationId:   ap.AnnotationId('destination'),
           position: ap.LatLng(controller.destinationLatlong.latitude, controller.destinationLatlong.longitude),
           icon: destinationIconApple ?? ap.BitmapDescriptor.defaultAnnotation,
           onTap: () async {
@@ -348,7 +348,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
       initialCameraPosition: ml.CameraPosition(target: ml.LatLng(defaultLat, defaultLng), zoom: 17.5),
       onMapCreated: (c) {
         mapLibreController = c;
-        controller.setMapLibreController(c);
+        controller.setMapLibreController(c); // 🚀 يرسل الكنترولر لرسم المسار
         mapLibreController!.onSymbolTapped.add(_onSymbolTapped);
       },
       onStyleLoadedCallback: () async {
@@ -361,6 +361,17 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
           final Uint8List destData = await getBytesFromAsset(MyIcons.mapMarkerIcon, 120);
           await mapLibreController!.addImage("dest_icon", destData);
+
+          // 🔥 تحميل صور السيارات والتكتك لتكون الخريطة مستعدة لعرض السائقين القريبين هنا أيضاً
+          final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
+          await mapLibreController!.addImage("car_icon", carData);
+
+          final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
+          await mapLibreController!.addImage("tuktuk_icon", tuktukData);
+
+          // يمكنك لاحقاً استدعاء الدالة المسؤولة عن رسم السائقين من HomeController هنا
+          // Get.find<HomeController>().drawNearbyDriversOnMap(mapLibreController);
+
         } catch(e) {
           print('❌ Image Load Error: $e');
         }
