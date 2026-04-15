@@ -104,7 +104,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   Transform.translate(
                     offset: Offset(0, -Dimensions.space20),
                     child: Container(
-                      // height: MediaQuery.of(context).size.height,
                       decoration: BoxDecoration(
                         color: MyColor.colorWhite,
                         borderRadius: BorderRadius.only(
@@ -126,166 +125,175 @@ class _LoginScreenState extends State<LoginScreen> {
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
                           spaceDown(Dimensions.space15),
+
+                          // ✅ 1. قسم أزرار جوجل وأبل سيبقى ظاهراً
                           SocialAuthSection(),
-                          Form(
-                            key: formKey,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                spaceDown(Dimensions.space20),
-                                CustomTextField(
-                                  controller: controller.emailController,
-                                  hintText: MyStrings.usernameOrEmail.tr,
-                                  onChanged: (value) {},
-                                  focusNode: controller.emailFocusNode,
-                                  nextFocus: controller.passwordFocusNode,
-                                  textInputType: TextInputType.emailAddress,
-                                  inputAction: TextInputAction.next,
-                                  prefixIcon: Padding(
-                                    padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
-                                    child: CustomSvgPicture(
-                                      image: MyIcons.user,
-                                      color: MyColor.primaryColor,
-                                      height: Dimensions.space30,
+
+                          // 🔥 2. إخفاء حقول تسجيل الدخول التقليدية
+                          Visibility(
+                            visible: false,
+                            child: Form(
+                              key: formKey,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  spaceDown(Dimensions.space20),
+                                  CustomTextField(
+                                    controller: controller.emailController,
+                                    hintText: MyStrings.usernameOrEmail.tr,
+                                    onChanged: (value) {},
+                                    focusNode: controller.emailFocusNode,
+                                    nextFocus: controller.passwordFocusNode,
+                                    textInputType: TextInputType.emailAddress,
+                                    inputAction: TextInputAction.next,
+                                    prefixIcon: Padding(
+                                      padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
+                                      child: CustomSvgPicture(
+                                        image: MyIcons.user,
+                                        color: MyColor.primaryColor,
+                                        height: Dimensions.space30,
+                                      ),
                                     ),
+                                    validator: (value) {
+                                      if (value!.isEmpty) {
+                                        return MyStrings.fieldErrorMsg.tr;
+                                      } else {
+                                        return null;
+                                      }
+                                    },
                                   ),
-                                  validator: (value) {
-                                    if (value!.isEmpty) {
-                                      return MyStrings.fieldErrorMsg.tr;
-                                    } else {
-                                      return null;
-                                    }
-                                  },
-                                ),
-                                spaceDown(Dimensions.space20),
-                                CustomTextField(
-                                  hintText: MyStrings.password.tr,
-                                  controller: controller.passwordController,
-                                  focusNode: controller.passwordFocusNode,
-                                  onChanged: (value) {},
-                                  isShowSuffixIcon: true,
-                                  isPassword: true,
-                                  textInputType: TextInputType.text,
-                                  inputAction: TextInputAction.done,
-                                  prefixIcon: Padding(
-                                    padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
-                                    child: CustomSvgPicture(
-                                      image: MyIcons.password,
-                                      color: MyColor.primaryColor,
-                                      height: Dimensions.space30,
+                                  spaceDown(Dimensions.space20),
+                                  CustomTextField(
+                                    hintText: MyStrings.password.tr,
+                                    controller: controller.passwordController,
+                                    focusNode: controller.passwordFocusNode,
+                                    onChanged: (value) {},
+                                    isShowSuffixIcon: true,
+                                    isPassword: true,
+                                    textInputType: TextInputType.text,
+                                    inputAction: TextInputAction.done,
+                                    prefixIcon: Padding(
+                                      padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
+                                      child: CustomSvgPicture(
+                                        image: MyIcons.password,
+                                        color: MyColor.primaryColor,
+                                        height: Dimensions.space30,
+                                      ),
                                     ),
+                                    validator: (value) {
+                                      if (value!.isEmpty) {
+                                        return MyStrings.fieldErrorMsg.tr;
+                                      } else {
+                                        return null;
+                                      }
+                                    },
                                   ),
-                                  validator: (value) {
-                                    if (value!.isEmpty) {
-                                      return MyStrings.fieldErrorMsg.tr;
-                                    } else {
-                                      return null;
-                                    }
-                                  },
-                                ),
-                                spaceDown(Dimensions.space15),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 28,
-                                          height: 28,
-                                          child: Checkbox(
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(
-                                                Dimensions.space5,
+                                  spaceDown(Dimensions.space15),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          SizedBox(
+                                            width: 28,
+                                            height: 28,
+                                            child: Checkbox(
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(
+                                                  Dimensions.space5,
+                                                ),
                                               ),
-                                            ),
-                                            activeColor: MyColor.primaryColor,
-                                            checkColor: MyColor.colorWhite,
-                                            value: controller.remember,
-                                            side: WidgetStateBorderSide.resolveWith(
-                                              (states) => BorderSide(
-                                                width: 2.0,
-                                                color: controller.remember ? MyColor.getTextFieldEnableBorder() : MyColor.getTextFieldDisableBorder(),
+                                              activeColor: MyColor.primaryColor,
+                                              checkColor: MyColor.colorWhite,
+                                              value: controller.remember,
+                                              side: WidgetStateBorderSide.resolveWith(
+                                                    (states) => BorderSide(
+                                                  width: 2.0,
+                                                  color: controller.remember ? MyColor.getTextFieldEnableBorder() : MyColor.getTextFieldDisableBorder(),
+                                                ),
                                               ),
+                                              onChanged: (value) {
+                                                controller.changeRememberMe();
+                                              },
                                             ),
-                                            onChanged: (value) {
+                                          ),
+                                          spaceSide(Dimensions.space8),
+                                          InkWell(
+                                            onTap: () {
                                               controller.changeRememberMe();
                                             },
+                                            splashFactory: NoSplash.splashFactory,
+                                            child: DefaultText(
+                                              text: MyStrings.rememberMe.tr,
+                                              textColor: MyColor.getBodyTextColor(),
+                                              fontSize: 14,
+                                            ),
                                           ),
-                                        ),
-                                        spaceSide(Dimensions.space8),
-                                        InkWell(
-                                          onTap: () {
-                                            controller.changeRememberMe();
-                                          },
-                                          splashFactory: NoSplash.splashFactory,
-                                          child: DefaultText(
-                                            text: MyStrings.rememberMe.tr,
-                                            textColor: MyColor.getBodyTextColor(),
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    InkWell(
-                                      onTap: () {
-                                        controller.clearTextField();
-                                        Get.toNamed(
-                                          RouteHelper.forgotPasswordScreen,
-                                        );
-                                      },
-                                      child: DefaultText(
-                                        text: MyStrings.forgotPassword.tr,
-                                        textColor: MyColor.redCancelTextColor,
-                                        textStyle: boldDefault.copyWith(fontSize: Dimensions.fontLarge),
+                                        ],
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                spaceDown(Dimensions.space25),
-                                RoundedButton(
-                                  isLoading: controller.isSubmitLoading,
-                                  text: MyStrings.logIn.tr,
-                                  press: () {
-                                    if (formKey.currentState!.validate()) {
-                                      controller.loginUser();
-                                    }
-                                  },
-                                ),
-                                spaceDown(Dimensions.space30),
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      MyStrings.doNotHaveAccount.tr,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: boldLarge.copyWith(
-                                        color: MyColor.getBodyTextColor(),
-                                        fontWeight: FontWeight.normal,
-                                      ),
-                                    ),
-                                    const SizedBox(
-                                      width: Dimensions.space5,
-                                    ),
-                                    TextButton(
-                                      onPressed: () {
-                                        Get.offAndToNamed(
-                                          RouteHelper.registrationScreen,
-                                        );
-                                      },
-                                      child: Text(
-                                        MyStrings.register.tr,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: boldLarge.copyWith(
-                                          color: MyColor.getPrimaryColor(),
+                                      InkWell(
+                                        onTap: () {
+                                          controller.clearTextField();
+                                          Get.toNamed(
+                                            RouteHelper.forgotPasswordScreen,
+                                          );
+                                        },
+                                        child: DefaultText(
+                                          text: MyStrings.forgotPassword.tr,
+                                          textColor: MyColor.redCancelTextColor,
+                                          textStyle: boldDefault.copyWith(fontSize: Dimensions.fontLarge),
                                         ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                              ],
+                                    ],
+                                  ),
+                                  spaceDown(Dimensions.space25),
+                                  RoundedButton(
+                                    isLoading: controller.isSubmitLoading,
+                                    text: MyStrings.logIn.tr,
+                                    press: () {
+                                      if (formKey.currentState!.validate()) {
+                                        controller.loginUser();
+                                      }
+                                    },
+                                  ),
+                                ],
+                              ),
                             ),
+                          ),
+
+                          // ✅ 3. رابط إنشاء الحساب الجديد (موجود خارج الإخفاء)
+                          spaceDown(Dimensions.space30),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                MyStrings.doNotHaveAccount.tr,
+                                overflow: TextOverflow.ellipsis,
+                                style: boldLarge.copyWith(
+                                  color: MyColor.getBodyTextColor(),
+                                  fontWeight: FontWeight.normal,
+                                ),
+                              ),
+                              const SizedBox(
+                                width: Dimensions.space5,
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  Get.offAndToNamed(
+                                    RouteHelper.registrationScreen,
+                                  );
+                                },
+                                child: Text(
+                                  MyStrings.register.tr,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: boldLarge.copyWith(
+                                    color: MyColor.getPrimaryColor(),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

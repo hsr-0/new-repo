@@ -14,21 +14,36 @@ class RegistrationRepo {
   RegistrationRepo({required this.apiClient});
 
   Future<RegistrationResponseModel> registerUser(SignUpModel model) async {
-    // 1. التحقق من صحة رقم الهاتف محلياً
+    // 🔥 1. فلترة وتنظيف رقم الهاتف الذكية
     String phone = model.mobile?.trim() ?? '';
-    RegExp iraqiPhoneRegex = RegExp(r'^(077|078)\d{8}$');
+
+    // مسح أي مسافات، علامة الزائد، أو شرطات
+    phone = phone.replaceAll(RegExp(r'[\s\-\+]'), '');
+
+    // إذا كتب الزبون 964 في البداية، نحذفها ونضع بدلها 0
+    if (phone.startsWith('964')) {
+      phone = '0${phone.substring(3)}';
+    }
+    // إذا كتب الزبون الرقم بدون صفر (مثل 7854076931)، نضيف له الصفر
+    else if (phone.startsWith('7') && phone.length == 10) {
+      phone = '0$phone';
+    }
+
+    // 🇮🇶 2. فحص الرقم العراقي الشامل
+    RegExp iraqiPhoneRegex = RegExp(r'^0(75|77|78|79)[0-9]{8}$');
 
     if (!iraqiPhoneRegex.hasMatch(phone)) {
-      print("❌ رقم الهاتف غير صحيح");
+      print("❌ رقم الهاتف المرفوض هو: '$phone'");
       return RegistrationResponseModel(
         status: 'error',
-        message: ['رقم الهاتف يجب أن يتكون من 11 رقم ويبدأ بـ 077 أو 078'],
+        message: ['الرجاء إدخال رقم عراقي صحيح (مثال: 078XXXXXXX)'],
         data: null,
       );
     }
 
-    // 2. تجهيز البيانات
-    final map = modelToMap(model);
+    // ✅ 3. بدلاً من محاولة تغيير الموديل (الذي يسبب الخطأ)، نمرر الرقم المنظف مباشرة للدالة
+    final map = modelToMap(model, phone);
+
     String url = '${UrlContainer.baseUrl}${UrlContainer.registrationEndPoint}';
 
     print("🔥 Sending Registration Map: $map");
@@ -41,10 +56,9 @@ class RegistrationRepo {
       isOnlyAcceptType: true,
     );
 
-    // 🛑 3. المعالجة الآمنة للرد (لمنع الانهيار)
+    // 🛑 4. المعالجة الآمنة للرد
     dynamic responseData = res.responseJson;
 
-    // إذا كان الرد فارغاً أو null
     if (responseData == null || (responseData is String && responseData.isEmpty)) {
       print("⚠️ Server returned empty response");
       return RegistrationResponseModel(
@@ -53,13 +67,11 @@ class RegistrationRepo {
       );
     }
 
-    // محاولة تحويل النص إلى JSON إذا لزم الأمر
     if (responseData is String) {
       try {
         responseData = jsonDecode(responseData);
       } catch (e) {
         print("⚠️ Error decoding JSON: $e");
-        // في حال فشل التحويل، نعيد رسالة خطأ بدلاً من الانهيار
         return RegistrationResponseModel(
           status: 'error',
           message: ['حدث خطأ في معالجة البيانات من السيرفر'],
@@ -67,7 +79,6 @@ class RegistrationRepo {
       }
     }
 
-    // التأكد النهائي أن البيانات هي Map قبل تمريرها
     if (responseData is! Map<String, dynamic>) {
       print("⚠️ Invalid Data Type: ${responseData.runtimeType}");
       return RegistrationResponseModel(
@@ -76,7 +87,6 @@ class RegistrationRepo {
       );
     }
 
-    // الآن أصبح آمناً التحويل للموديل
     try {
       return RegistrationResponseModel.fromJson(responseData);
     } catch (e) {
@@ -88,9 +98,8 @@ class RegistrationRepo {
     }
   }
 
-  // ... (بقية الدوال modelToMap وغيرها تبقى كما هي في الكود السابق)
-
-  Map<String, dynamic> modelToMap(SignUpModel model) {
+  // 🔥 تعديل: جعل الدالة تستقبل الرقم المنظف (cleanedPhone) وتستخدمه بدل model.mobile
+  Map<String, dynamic> modelToMap(SignUpModel model, String cleanedPhone) {
     Map<String, dynamic> bodyFields = {
       'firstname': model.fName,
       'lastname': model.lName,
@@ -98,7 +107,7 @@ class RegistrationRepo {
       'agree': model.agree.toString() == 'true' ? 'true' : '',
       'password': model.password,
       'password_confirmation': model.password,
-      'mobile': model.mobile,
+      'mobile': cleanedPhone, // 👈 هنا نستخدم الرقم المفلتر والمجهز للإرسال
       'country_code': '964',
       'mobile_code': '964',
       'country': 'Iraq',
@@ -110,9 +119,6 @@ class RegistrationRepo {
 
     return bodyFields;
   }
-
-  // يرجى نسخ باقي الدوال (getCountryList, sendUserToken, ...) من الكود السابق إذا لم تكن موجودة هنا
-  // ...
 
   Future<dynamic> getCountryList() async {
     String url = '${UrlContainer.baseUrl}${UrlContainer.countryEndPoint}';
@@ -127,8 +133,7 @@ class RegistrationRepo {
     )) {
       deviceToken = apiClient.sharedPreferences.getString(
         SharedPreferenceHelper.fcmDeviceKey,
-      ) ??
-          '';
+      ) ?? '';
     } else {
       deviceToken = '';
     }
@@ -176,6 +181,8 @@ class RegistrationRepo {
 
     if (provider == 'google') {
       map = {'token': accessToken, 'provider': "google"};
+    } else if (provider == 'apple') {
+      map = {'token': accessToken, 'provider': "apple"};
     }
 
     String url = '${UrlContainer.baseUrl}${UrlContainer.socialLoginEndPoint}';
