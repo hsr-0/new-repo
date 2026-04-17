@@ -108,44 +108,47 @@ class RideCreateForm extends StatelessWidget {
                   children: [
                     Expanded(
                       flex: 2,
-                      child: InkWell(
-                        onTap: () {
-                          if (controller.selectedService.id != '-99') {
-                            if (controller.isPriceLocked == false) {
-                              controller.updateMainAmount(controller.mainAmount);
-                              CustomBottomSheet(child: const HomeOfferRateWidget()).customBottomSheet(context);
+                      child: IgnorePointer(
+                        ignoring: true, // تم تعطيل النقر على هذا الجزء (السعر)
+                        child: InkWell(
+                          onTap: () {
+                            if (controller.selectedService.id != '-99') {
+                              if (controller.isPriceLocked == false) {
+                                controller.updateMainAmount(controller.mainAmount);
+                                CustomBottomSheet(child: const HomeOfferRateWidget()).customBottomSheet(context);
+                              }
+                            } else {
+                              CustomSnackBar.error(errorList: [MyStrings.pleaseSelectAService]);
                             }
-                          } else {
-                            CustomSnackBar.error(errorList: [MyStrings.pleaseSelectAService]);
-                          }
-                        },
-                        child: InnerShadowContainer(
-                          width: double.infinity,
-                          backgroundColor: MyColor.neutral50,
-                          borderRadius: Dimensions.largeRadius,
-                          blur: 6,
-                          offset: Offset(3, 3),
-                          shadowColor: MyColor.colorBlack.withValues(alpha: 0.04),
-                          isShadowTopLeft: true,
-                          isShadowBottomRight: true,
-                          padding: EdgeInsetsGeometry.symmetric(vertical: Dimensions.space16, horizontal: Dimensions.space16),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  controller.mainAmount == 0 ? MyStrings.offerYourRate.tr : '${StringConverter.formatDouble(controller.mainAmount.toString())} ${controller.defaultCurrency}',
-                                  style: regularDefault.copyWith(
-                                    color: MyColor.bodyTextColor,
+                          },
+                          child: InnerShadowContainer(
+                            width: double.infinity,
+                            backgroundColor: MyColor.neutral50,
+                            borderRadius: Dimensions.largeRadius,
+                            blur: 6,
+                            offset: Offset(3, 3),
+                            shadowColor: MyColor.colorBlack.withValues(alpha: 0.04),
+                            isShadowTopLeft: true,
+                            isShadowBottomRight: true,
+                            padding: EdgeInsetsGeometry.symmetric(vertical: Dimensions.space16, horizontal: Dimensions.space16),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    controller.mainAmount == 0 ? MyStrings.offerYourRate.tr : '${StringConverter.formatDouble(controller.mainAmount.toString())} ${controller.defaultCurrency}',
+                                    style: regularDefault.copyWith(
+                                      color: MyColor.bodyTextColor,
+                                    ),
                                   ),
                                 ),
-                              ),
-                              Icon(
-                                Icons.keyboard_arrow_down_rounded,
-                                color: MyColor.getRideSubTitleColor(),
-                                size: 16,
-                              ),
-                            ],
+                                Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  color: MyColor.getRideSubTitleColor(),
+                                  size: 16,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),

@@ -40,10 +40,73 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
 
   @override
   void dispose() {
+    // تنظيف المتحكمات عند الخروج
+    Get.delete<ProfileCompleteController>();
     super.dispose();
   }
 
   final formKey = GlobalKey<FormState>();
+
+  /// ✅ دالة معالجة رقم الهاتف العراقي - تدعم جميع الاحتمالات
+  String? _formatIraqiPhoneNumber(String? value) {
+    if (value == null || value.isEmpty) return null;
+
+    // 1. إزالة جميع المسافات والشرطات والرموز غير الرقمية
+    String cleaned = value.replaceAll(RegExp(r'[^\d+]'), '');
+
+    // 2. معالجة الأرقام التي تبدأ بـ +
+    if (cleaned.startsWith('+')) {
+      cleaned = cleaned.substring(1);
+    }
+
+    // 3. إذا كان الرقم يبدأ بـ 964 (كود العراق الدولي) نحذفه ونضيف 0
+    if (cleaned.startsWith('964')) {
+      cleaned = '0${cleaned.substring(3)}';
+    }
+    // 4. إذا كان الرقم يبدأ بـ 7 (بدون 0 أو 964) نضيف 0 في البداية
+    else if (cleaned.startsWith('7') && cleaned.length == 10) {
+      cleaned = '0$cleaned';
+    }
+    // 5. إذا كان الرقم أقل من 11 خانة ويبدأ بـ 7، نضيف 0
+    else if (cleaned.startsWith('7') && cleaned.length < 11) {
+      cleaned = '0$cleaned';
+    }
+
+    // 6. التأكد أن الرقم يبدأ بـ 0
+    if (!cleaned.startsWith('0') && cleaned.length == 11) {
+      cleaned = '0$cleaned';
+    }
+
+    // 7. إزالة أي أصفار زائدة في البداية (لكن نترك صفر واحد)
+    while (cleaned.length > 11 && cleaned.startsWith('00')) {
+      cleaned = cleaned.substring(1);
+    }
+
+
+    // 9. التأكد النهائي من الصيغة العراقية: 07 + 9 أرقام = 11 خانة
+    if (cleaned.length == 11 && cleaned.startsWith(RegExp(r'^07[789]\d{8}$'))) {
+      return cleaned;
+    }
+
+    // إرجاع الرقم كما هو بعد التنظيف إذا لم يطابق الصيغة تماماً (للسماح للمستخدم بالإكمال)
+    return cleaned;
+  }
+
+  /// ✅ دالة التحقق من صحة رقم الهاتف العراقي
+  String? _validateIraqiPhone(String? value) {
+    if (value == null || value.isEmpty) {
+      return MyStrings.enterYourPhoneNumber.tr;
+    }
+
+    String cleaned = _formatIraqiPhoneNumber(value) ?? value;
+
+    // التحقق من أن الرقم 11 خانة ويبدأ بـ 07 ويتبع بأحد الأرقام 7،8،9
+    if (!RegExp(r'^07[789]\d{8}$').hasMatch(cleaned)) {
+      return 'يرجى إدخال رقم هاتف عراقي صحيح (مثال: 07712345678)';
+    }
+
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +122,10 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   AuthBackgroundWidget(
-                    colors: [MyColor.colorWhite.withValues(alpha: 0.9), MyColor.colorWhite.withValues(alpha: 0.8)],
+                    colors: [
+                      MyColor.colorWhite.withValues(alpha: 0.9),
+                      MyColor.colorWhite.withValues(alpha: 0.8)
+                    ],
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -126,7 +192,10 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                           ),
                         ],
                       ),
-                      padding: EdgeInsets.symmetric(horizontal: Dimensions.space20, vertical: Dimensions.space20),
+                      padding: EdgeInsets.symmetric(
+                          horizontal: Dimensions.space20,
+                          vertical: Dimensions.space20
+                      ),
                       child: controller.isLoading
                           ? const CustomLoader()
                           : Form(
@@ -141,26 +210,26 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                               inputAction: TextInputAction.next,
                               focusNode: controller.userNameFocusNode,
                               controller: controller.userNameController,
-                              nextFocus: controller.countryFocusNode, // ينتقل للهاتف مباشرة
+                              nextFocus: controller.countryFocusNode,
                               onChanged: (value) {
                                 return;
                               },
-                              // ✅ تم تعطيل التحقق للسماح للكنترولر بتوليد الاسم تلقائياً في الخلفية
                               validator: (value) {
                                 return null;
                               },
                             ),
-                            const SizedBox(
-                              height: Dimensions.space20,
-                            ),
+                            const SizedBox(height: Dimensions.space20),
+
+                            // ✅ حقل الهاتف مع المعالجة الذكية للأرقام العراقية
                             CustomTextField(
                               labelText: MyStrings.phone.tr,
-                              hintText: "XXX-XXX-XXXX",
-                              textInputType: TextInputType.number,
+                              hintText: "07XXXXXXXXX",
+                              textInputType: TextInputType.phone,
                               inputAction: TextInputAction.next,
                               focusNode: controller.countryFocusNode,
                               controller: controller.mobileNoController,
-                              nextFocus: controller.stateFocusNode, // ينتقل للمحافظة مباشرة
+                              nextFocus: controller.stateFocusNode,
+                              maxLength: 11, // لتحديد الطول الأقصى
                               prefixIcon: IntrinsicWidth(
                                 child: Padding(
                                   padding: EdgeInsetsGeometry.symmetric(horizontal: Dimensions.space10),
@@ -206,20 +275,23 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                                   ),
                                 ),
                               ),
+                              // ✅ معالجة فورية عند كل تغيير في النص
                               onChanged: (value) {
-                                return;
-                              },
-                              validator: (value) {
-                                if (value != null && value.isEmpty) {
-                                  return MyStrings.enterYourPhoneNumber.tr;
-                                } else {
-                                  return null;
+                                if (value != null && value.isNotEmpty) {
+                                  String? formatted = _formatIraqiPhoneNumber(value);
+                                  if (formatted != null && formatted != value) {
+                                    // تحديث النص دون إثارة حلقة لا نهائية
+                                    controller.mobileNoController.value = TextEditingValue(
+                                      text: formatted,
+                                      selection: TextSelection.collapsed(offset: formatted.length),
+                                    );
+                                  }
                                 }
                               },
+                              // ✅ تحقق صارم من صحة الرقم العراقي
+                              validator: (value) => _validateIraqiPhone(value),
                             ),
-                            const SizedBox(
-                              height: Dimensions.space20,
-                            ),
+                            const SizedBox(height: Dimensions.space20),
 
                             // ✅ تم حذف حقل العنوان (Address)
 
@@ -235,14 +307,13 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                                 return;
                               },
                             ),
-                            const SizedBox(
-                              height: Dimensions.space20,
-                            ),
+                            const SizedBox(height: Dimensions.space20),
+
                             CustomTextField(
                               labelText: MyStrings.city.tr,
                               hintText: "${MyStrings.enterYour.tr} ${MyStrings.city.toLowerCase().tr}",
                               textInputType: TextInputType.text,
-                              inputAction: TextInputAction.done, // آخر حقل
+                              inputAction: TextInputAction.done,
                               focusNode: controller.cityFocusNode,
                               controller: controller.cityController,
                               onChanged: (value) {
@@ -252,14 +323,20 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
 
                             // ✅ تم حذف حقل الرمز البريدي (Zip Code)
 
-                            const SizedBox(
-                              height: Dimensions.space35,
-                            ),
+                            const SizedBox(height: Dimensions.space35),
+
                             RoundedButton(
                               isLoading: controller.submitLoading,
                               text: MyStrings.completeProfile.tr,
                               press: () {
                                 if (formKey.currentState!.validate()) {
+                                  // ✅ التأكد النهائي من تنسيق الرقم قبل الإرسال
+                                  String? finalPhone = _formatIraqiPhoneNumber(
+                                      controller.mobileNoController.text
+                                  );
+                                  if (finalPhone != null) {
+                                    controller.mobileNoController.text = finalPhone;
+                                  }
                                   controller.updateProfile();
                                 }
                               },
@@ -269,9 +346,7 @@ class _ProfileCompleteScreenState extends State<ProfileCompleteScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(
-                    height: Dimensions.space35,
-                  ),
+                  const SizedBox(height: Dimensions.space35),
                 ],
               ),
             ),

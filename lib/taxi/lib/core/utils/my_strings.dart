@@ -5,17 +5,18 @@ class MyStrings {
   //Onboard
   static const String continue_ = "Continue";
 
-  static const String onboardTitle1 = "Check bid rate book a ride"; //Title 1
 
-  static const String onboardDescription1 = "User can set their bid amount for their destination, driver bid depend on user bid amount , if user satisfy they can book ride.";
+  static const String onboardTitle1 = "شيَّك السعر واحجز رحلتك"; //Title 1
 
-  static const String onboardTitle2 = "City to City Ride Service"; //Title 2
+  static const String onboardDescription1 = "تكدر تشوف  السعر الي يناسبك لمشوارك، والسواق راح يقدمون عروضهم بناءً عليه، وإذا عجبك السعر تكدر تأكد الحجز وتتوكل.";
 
-  static const String onboardDescription2 = "A city-to-city ride service, sometimes referred to as an intercity or long-distance ride service";
+  static const String onboardTitle2 = "رحلات بين المحافظات"; //Title 2
 
-  static const String onboardTitle3 = "Safe and Secure Rides"; //Title 3
+  static const String onboardDescription2 = "خدمة توصيل من محافظة لمحافظة بكل راحة، مخصصة لمشاويرك والمسافات الطويلة.";
 
-  static const String onboardDescription3 = "Every trip is backed by safety features and driver verification, ensuring peace of mind from start to finish.";
+  static const String onboardTitle3 = "رحلات آمنة ومضمونة"; //Title 3
+
+  static const String onboardDescription3 = "كل رحلة ويانا مدعومة بميزات أمان ونتأكد من هوية وتفاصيل السائق، حتى توصل مرتاح ومطمن من بداية الطريق لنهايته.";
 
   static const String loginScreenTitle = "Ready to GO?";
 

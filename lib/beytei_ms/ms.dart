@@ -31,6 +31,8 @@ import 'package:uuid/uuid.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../beytei_re/OrderTracking.dart';
+
 // =======================================================================
 // --- إعدادات وثوابت عامة للوحدة ---
 // =======================================================================
@@ -1498,28 +1500,122 @@ class CacheService {
   }
 }
 
+// =======================================================================
+// --- خدمة سجل الطلبات الموحدة (للمسواك والمطاعم) ---
+// =======================================================================
 class OrderHistoryService {
+  // ✅ استخدام نفس المفتاح المشترك لتوحيد السجل بين النظامين
   static const _key = 'order_history';
+
+  /// 1️⃣ دالة حفظ طلب جديد (لأول مرة)
   Future<void> saveOrder(Order order) async {
     final prefs = await SharedPreferences.getInstance();
     final List<Order> orders = await getOrders();
+
+    // إزالة النسخة القديمة إن وجدت لتجنب التكرار
     orders.removeWhere((o) => o.id == order.id);
+
+    // إضافة الطلب الجديد في البداية (الأحدث أولاً)
     orders.insert(0, order);
-    final String encodedData = json.encode(orders.map<Map<String, dynamic>>((o) => o.toJson()).toList());
+
+    // حفظ القائمة المحدثة في الذاكرة المحلية
+    final String encodedData = json.encode(
+        orders.map<Map<String, dynamic>>((o) => o.toJson()).toList()
+    );
     await prefs.setString(_key, encodedData);
+
+    print("💾 [OrderHistory] تم حفظ الطلب #${order.id} في السجل المحلي");
   }
 
+  /// 2️⃣ دالة جلب كل الطلبات المخزنة محلياً
   Future<List<Order>> getOrders() async {
     final prefs = await SharedPreferences.getInstance();
     final String? ordersString = prefs.getString(_key);
+
     if (ordersString != null) {
-      final List<dynamic> decodedData = json.decode(ordersString);
-      return decodedData.map<Order>((item) => Order.fromJson(item)).toList();
+      try {
+        final List<dynamic> decodedData = json.decode(ordersString);
+        return decodedData.map<Order>((item) => Order.fromJson(item)).toList();
+      } catch (e) {
+        print("❌ [OrderHistory] خطأ في قراءة السجل المحلي: $e");
+        return [];
+      }
     }
     return [];
   }
-}
 
+  /// 3️⃣ 🔥 دالة تحديث حالة طلب موجود محلياً (مهمة جداً لتحديث الحالة فوراً)
+  Future<void> updateOrderStatusLocally(int orderId, String newStatus) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? ordersString = prefs.getString(_key);
+
+      if (ordersString != null) {
+        List<dynamic> decodedData = json.decode(ordersString);
+        bool isUpdated = false;
+
+        // البحث عن الطلب وتحديث حالته فقط
+        for (var i = 0; i < decodedData.length; i++) {
+          if (decodedData[i]['id'] == orderId) {
+            decodedData[i]['status'] = newStatus;
+            isUpdated = true;
+            print("🔄 [OrderHistory] تم تحديث الطلب #$orderId محلياً إلى: $newStatus");
+            break;
+          }
+        }
+
+        // إذا تم التعديل، نحفظ القائمة الجديدة
+        if (isUpdated) {
+          await prefs.setString(_key, json.encode(decodedData));
+        }
+      }
+    } catch (e) {
+      print("⚠️ [OrderHistory] خطأ أثناء التحديث المحلي: $e");
+    }
+  }
+
+  /// 4️⃣ دالة مسح السجل المحلي (لأغراض الصيانة أو تسجيل الخروج)
+  Future<void> clearLocalHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_key);
+    print("🗑️ [OrderHistory] تم مسح السجل المحلي");
+  }
+
+  /// 5️⃣ دالة جلب الطلبات النشطة فقط (للعرض السريع)
+  Future<List<Order>> getActiveOrders() async {
+    final allOrders = await getOrders();
+    final activeStatuses = [
+      'pending',
+      'processing',
+      'on-hold',
+      'accepted',
+      'at_store',
+      'picked_up',
+      'out-for-delivery',
+      'driver-assigned'
+    ];
+
+    return allOrders.where((order) {
+      return activeStatuses.contains(order.status.toLowerCase());
+    }).toList();
+  }
+
+  /// 6️⃣ دالة جلب الطلبات المكتملة/المنتهية فقط
+  Future<List<Order>> getCompletedOrders() async {
+    final allOrders = await getOrders();
+    final completedStatuses = [
+      'completed',
+      'cancelled',
+      'refunded',
+      'failed',
+      'trash'
+    ];
+
+    return allOrders.where((order) {
+      return completedStatuses.contains(order.status.toLowerCase());
+    }).toList();
+  }
+}
 // في ملف re.dart (تحت قسم WIDGETS)
 
 class LoyaltyChallengeWidget extends StatefulWidget {
@@ -3160,28 +3256,35 @@ class _OrderCardState extends State<OrderCard> {
     );
   }
 }
+// =======================================================================
+// --- بطاقة سجل الطلبات الموحدة (للمسواك والمطاعم) ---
+// =======================================================================
 class OrderHistoryCard extends StatelessWidget {
   final Order order;
   const OrderHistoryCard({super.key, required this.order});
 
-  // ✨ --- [ الدالة المحدثة التي تفتح الخريطة داخلياً ] ---
+  // ✨ --- دالة فتح الخريطة الداخلية (مشتركة) ---
   Future<void> _launchMaps(BuildContext context, String? lat, String? lng) async {
-    // 1. التحقق من أن الإحداثيات موجودة
+    // 1. التحقق من صحة الإحداثيات
     if (lat == null || lng == null || lat.isEmpty || lng.isEmpty || lat == "0" || lng == "0") {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('الإحداثيات غير متوفرة لهذا الطلب')),
+          const SnackBar(
+            content: Text('الإحداثيات غير متوفرة لهذا الطلب'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 2),
+          ),
         );
       }
       return;
     }
 
     try {
-      // 2. تحويل النصوص إلى أرقام
+      // 2. تحويل النصوص إلى أرقام عشرية
       final double latitude = double.parse(lat);
       final double longitude = double.parse(lng);
 
-      // 3. ✨ الانتقال إلى شاشة الخريطة الداخلية
+      // 3. ✨ الانتقال إلى شاشة الخريطة الداخلية (InAppMapScreen)
       if (context.mounted) {
         Navigator.push(
           context,
@@ -3189,112 +3292,246 @@ class OrderHistoryCard extends StatelessWidget {
             builder: (_) => InAppMapScreen(
               latitude: latitude,
               longitude: longitude,
-              title: 'موقعي على الخريطة', // عنوان مخصص للشاشة
+              title: 'موقع التوصيل - طلب #${order.id}', // عنوان ديناميكي
             ),
           ),
         );
       }
     } catch (e) {
-      // 4. في حال كانت الإحداثيات غير صالحة
+      // 4. معالجة الأخطاء في حال كانت الإحداثيات غير صالحة
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('خطأ في تنسيق الإحداثيات.')),
+          SnackBar(
+            content: Text('خطأ: ${e.toString().replaceAll("Exception: ", "")}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
   }
-  // --- [نهاية الدالة] ---
-
+  // --- [نهاية دالة الخريطة] ---
 
   @override
   Widget build(BuildContext context) {
+    // تنسيق التاريخ والوقت
     final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
     final formattedDate = formatter.format(order.dateCreated.toLocal());
+
+    // تنسيق السعر الكلي
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(double.tryParse(order.total) ?? 0);
+
+    // معلومات الحالة (أيقونة + نص + لون)
     final statusInfo = order.statusDisplay;
 
-    // التحقق من وجود إحداثيات
-    final bool hasCoordinates = (order.destinationLat != null && order.destinationLat!.isNotEmpty);
+    // التحقق من وجود إحداثيات صالحة للعرض على الخريطة
+    final bool hasCoordinates = (
+        order.destinationLat != null &&
+            order.destinationLat!.isNotEmpty &&
+            order.destinationLat != "0" &&
+            order.destinationLng != null &&
+            order.destinationLng!.isNotEmpty &&
+            order.destinationLng != "0"
+    );
+
+    // التحقق مما إذا كان الطلب نشطاً (لإظهار زر التتبع)
+    final bool isActive = !['completed', 'cancelled', 'refunded', 'failed', 'trash']
+        .contains(order.status.toLowerCase());
 
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       elevation: 2,
+      shadowColor: Colors.black.withOpacity(0.1),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // --- رأس البطاقة: رقم الطلب + التاريخ ---
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('طلب #${order.id}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Theme.of(context).primaryColor)),
-                Text(formattedDate, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).primaryColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'طلب #${order.id}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  ),
+                ),
+                Text(
+                  formattedDate,
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                ),
               ],
             ),
+
             const Divider(height: 24),
+
+            // --- قائمة المنتجات ---
             ...order.lineItems.map((item) => Padding(
               padding: const EdgeInsets.only(bottom: 6.0),
-              child: Row(children: [
-                Text('• ${item.quantity} ×', style: TextStyle(color: Colors.grey.shade700)),
-                const SizedBox(width: 8),
-                Expanded(child: Text(item.name)),
-              ]),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${item.quantity}×',
+                      style: TextStyle(
+                        color: Theme.of(context).primaryColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      style: const TextStyle(fontSize: 14, color: Colors.black87),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
             )).toList(),
 
-            // ✨ --- [ هذا هو الجزء الذي تم تعديله ] ---
             const Divider(height: 24),
+
+            // --- العنوان مع دعم الخريطة ---
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.location_on_outlined, color: Colors.grey.shade600, size: 20),
+                Icon(
+                  Icons.location_on_outlined,
+                  color: hasCoordinates ? Theme.of(context).primaryColor : Colors.grey.shade600,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 const Text('العنوان:', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(width: 5),
                 Expanded(
                   child: hasCoordinates
-                  // 1. إذا وجدت إحداثيات: اعرض زر (يستخدم الدالة الداخلية)
+                  // ✅ إذا وجدت إحداثيات: اعرض نصاً قابلاً للنقر لفتح الخريطة
                       ? InkWell(
                     onTap: () => _launchMaps(context, order.destinationLat, order.destinationLng),
-                    child: Text(
-                      "تم تحديد الموقع (اضغط للعرض)", // النص الذي سيظهر للزبون
-                      style: TextStyle(
-                        color: Theme.of(context).primaryColor,
-                        decoration: TextDecoration.underline,
-                        fontWeight: FontWeight.bold,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        "تم تحديد الموقع 🗺️ (اضغط للعرض)",
+                        style: TextStyle(
+                          color: Theme.of(context).primaryColor,
+                          decoration: TextDecoration.underline,
+                          decorationColor: Theme.of(context).primaryColor,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   )
-                  // 2. إذا لم توجد إحداثيات: اعرض النص العادي
-                      : Text(order.address, style: TextStyle(color: Colors.grey.shade800)),
-                ),
-              ],
-            ),
-            // --- [نهاية التعديل] ---
-
-            const Divider(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('الإجمالي', style: TextStyle(color: Colors.grey.shade600, fontSize: 16)),
-                Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            const Divider(height: 24),
-            Row(
-              children: [
-                Icon(statusInfo['icon'], color: statusInfo['color'], size: 20),
-                const SizedBox(width: 8),
-                Text('الحالة:', style: TextStyle(fontSize: 16, color: Colors.grey.shade700)),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    statusInfo['text'],
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: statusInfo['color']),
+                  // ❌ إذا لم توجد إحداثيات: اعرض العنوان النصي فقط
+                      : Text(
+                    order.address.isNotEmpty ? order.address : 'عنوان غير محدد',
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 14),
                   ),
                 ),
               ],
             ),
+
+            const Divider(height: 24),
+
+            // --- الإجمالي والسعر ---
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('الإجمالي', style: TextStyle(color: Colors.grey, fontSize: 16)),
+                Text(
+                  '$totalFormatted د.ع',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                ),
+              ],
+            ),
+
+            const Divider(height: 24),
+
+            // --- حالة الطلب ---
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: statusInfo['color'].withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    statusInfo['icon'],
+                    color: statusInfo['color'],
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('حالة الطلب:', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                    Text(
+                      statusInfo['text'],
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: statusInfo['color'],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+
+            // --- زر تتبع الطلب (يظهر فقط للطلبات النشطة) ---
+            if (isActive) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 45,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => OrderTrackingScreen(order: order),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.track_changes_outlined, size: 20),
+                  label: const Text(
+                    "تتبع الطلب الآن",
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange.shade600,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 2,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

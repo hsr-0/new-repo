@@ -33,6 +33,7 @@ class CustomTextField extends StatefulWidget {
   final TextInputAction inputAction;
   final bool readOnly;
   final int maxLines;
+  final int? maxLength;  // ✅ تمت الإضافة: لتحديد أقصى عدد أحرف
   final Color fillColor;
   final Widget? prefixIcon;
   final Widget? suffixWidget;
@@ -41,6 +42,7 @@ class CustomTextField extends StatefulWidget {
   final double? radius;
   final bool isShowInstructionWidget;
   final String? instructions;
+
   const CustomTextField({
     super.key,
     this.isRequired = false,
@@ -66,6 +68,7 @@ class CustomTextField extends StatefulWidget {
     this.inputAction = TextInputAction.next,
     this.readOnly = false,
     this.maxLines = 1,
+    this.maxLength,  // ✅ تمت الإضافة في القائمة
     this.fillColor = MyColor.neutral50,
     this.prefixIcon,
     this.suffixWidget,
@@ -112,6 +115,7 @@ class _CustomTextFieldState extends State<CustomTextField> {
           child: TextFormField(
             key: widget.key,
             maxLines: widget.maxLines,
+            maxLength: widget.maxLength,  // ✅ تمت الإضافة: ربط الخاصية بـ TextFormField
             readOnly: widget.readOnly,
             style: widget.textStyle ?? regularLarge.copyWith(color: MyColor.getHeadingTextColor()),
             onTap: widget.onTap,
@@ -143,6 +147,7 @@ class _CustomTextFieldState extends State<CustomTextField> {
               errorMaxLines: 1,
               errorText: null,
               errorStyle: TextStyle(fontSize: 0),
+              counterText: "",  // ✅ إخفاء عداد الأحرف الافتراضي
               // prefixIconConstraints: BoxConstraints.loose(Size(50, 50)),
               prefixIcon: widget.prefixIcon,
               suffixIconConstraints: widget.suffixIconConstraints ??
@@ -154,35 +159,35 @@ class _CustomTextFieldState extends State<CustomTextField> {
                   ),
               suffixIcon: widget.isShowSuffixIcon
                   ? widget.isPassword
-                      ? GestureDetector(
-                          onTap: _toggle,
-                          child: Padding(
-                            padding: const EdgeInsets.only(right: 5.0),
-                            child: Center(
-                              child: Text(
-                                obscureText ? MyStrings.show.tr : MyStrings.hide.tr,
-                                style: boldDefault.copyWith(
-                                  color: obscureText ? MyColor.primaryColor : MyColor.hintTextColor,
-                                  fontSize: Dimensions.fontLarge,
-                                ),
-                              ),
-                            ),
-                          ),
-                        )
-                      : widget.isIcon
-                          ? IconButton(
-                              onPressed: widget.onSuffixTap,
-                              icon: Icon(
-                                widget.isSearch
-                                    ? Icons.search_outlined
-                                    : widget.isCountryPicker
-                                        ? Icons.arrow_drop_down_outlined
-                                        : Icons.camera_alt_outlined,
-                                size: 25,
-                                color: MyColor.getPrimaryColor(),
-                              ),
-                            )
-                          : widget.suffixWidget
+                  ? GestureDetector(
+                onTap: _toggle,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 5.0),
+                  child: Center(
+                    child: Text(
+                      obscureText ? MyStrings.show.tr : MyStrings.hide.tr,
+                      style: boldDefault.copyWith(
+                        color: obscureText ? MyColor.primaryColor : MyColor.hintTextColor,
+                        fontSize: Dimensions.fontLarge,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+                  : widget.isIcon
+                  ? IconButton(
+                onPressed: widget.onSuffixTap,
+                icon: Icon(
+                  widget.isSearch
+                      ? Icons.search_outlined
+                      : widget.isCountryPicker
+                      ? Icons.arrow_drop_down_outlined
+                      : Icons.camera_alt_outlined,
+                  size: 25,
+                  color: MyColor.getPrimaryColor(),
+                ),
+              )
+                  : widget.suffixWidget
                   : null,
             ),
             onFieldSubmitted: (text) {
