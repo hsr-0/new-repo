@@ -588,7 +588,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // 1. أنا زبون -> أرسل للمزود
         // نستخدم رابط إشعار الأدمن/المزود
         await http.post(
-            Uri.parse('https://iraqed.beytei.com/wp-json/beytei-chat/v1/notify-admin-on-reply'),
+            Uri.parse(' https://iraqed.beytei.com/chat-api.php?action=notify-admin-on-reply'),
             headers: {'Content-Type': 'application/json', 'X-Auth-Token': secretKey},
             body: jsonEncode({
               'userName': 'زبون', // أو جلب الاسم الحقيقي

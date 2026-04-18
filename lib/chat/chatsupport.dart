@@ -186,7 +186,7 @@ class _SupportUserChatScreenState extends State<SupportUserChatScreen> {
     );
     _addMessage(message);
 
-    const String uploadUrl = 'https://iraqed.beytei.com/wp-json/beytei-chat/v1/upload-file';
+    const String uploadUrl = 'https://iraqed.beytei.com/chat-api.php?action=upload-file';
     const String secretKey = 'beytei93@beytei';
     try {
       final request = http.MultipartRequest('POST', Uri.parse(uploadUrl))
@@ -246,7 +246,7 @@ class _SupportUserChatScreenState extends State<SupportUserChatScreen> {
     // 2. إرسال الإشعار للسيرفر مع معالجة الأخطاء بوضوح
     try {
       final response = await http.post(
-        Uri.parse('https://iraqed.beytei.com/wp-json/beytei-chat/v1/notify-admin-on-reply'),
+        Uri.parse('https://iraqed.beytei.com/chat-api.php?action=notify-admin-on-reply'),
         headers: {
           'Content-Type': 'application/json',
           'X-Auth-Token': 'beytei93@beytei'
@@ -388,7 +388,7 @@ class _SupportAdminLoginScreenState extends State<SupportAdminLoginScreen> {
         // ب. إرسال التوكن للسيرفر الخارجي (WordPress Endpoint) كخطوة إضافية
         try {
           final response = await http.post(
-              Uri.parse('https://iraqed.beytei.com/wp-json/beytei-chat/v1/update-admin-fcm-token'),
+              Uri.parse('https://iraqed.beytei.com/chat-api.php?action=update-admin-fcm-token'),
               headers: {'Content-Type': 'application/json', 'X-Auth-Token': 'beytei93@beytei'},
               body: jsonEncode({'email': adminEmail, 'fcmToken': fcmToken})
           );
@@ -693,8 +693,7 @@ class _SupportAdminChatScreenState extends State<SupportAdminChatScreen> {
 
     if (message is types.ImageMessage && imageBytes != null) {
       try {
-        final request = http.MultipartRequest('POST', Uri.parse('https://iraqed.beytei.com/wp-json/beytei-chat/v1/upload-file'))
-          ..headers['X-Auth-Token'] = 'beytei93@beytei'
+        final request = http.MultipartRequest('POST', Uri.parse('https://iraqed.beytei.com/chat-api.php?action=upload-file'))          ..headers['X-Auth-Token'] = 'beytei93@beytei'
           ..files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: message.name));
         final response = await request.send();
         if (response.statusCode == 200) {
@@ -720,13 +719,21 @@ class _SupportAdminChatScreenState extends State<SupportAdminChatScreen> {
       final userDoc = await FirebaseFirestore.instance.collection('support_users').doc(widget.chatId).get();
       final fcmToken = userDoc.data()?['fcmToken'] as String?;
       if (fcmToken != null) {
-        await http.post(
-            Uri.parse('https://iraqed.beytei.com/wp-json/beytei-chat/v1/notify-on-reply'),
+        final response = await http.post(
+            Uri.parse('https://iraqed.beytei.com/chat-api.php?action=notify-on-reply'),
             headers: {'Content-Type': 'application/json', 'X-Auth-Token': 'beytei93@beytei'},
             body: jsonEncode({'authorId': 'admin', 'fcmToken': fcmToken, 'messageText': lastMessageText})
         );
+
+        if (response.statusCode == 200) {
+          print("✅ تم إرسال الإشعار للزبون بنجاح");
+        } else {
+          print("❌ فشل إرسال الإشعار للزبون. الكود: ${response.statusCode}");
+        }
       }
-    } catch (e) {}
+    } catch (e) {
+      print("❌ خطأ في الاتصال بسيرفر الووردبريس: $e");
+    }
   }
 
   void _showUserInfo() {
