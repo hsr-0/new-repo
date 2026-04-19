@@ -2491,7 +2491,7 @@ class ApiService {
 
         // 🔥 2. التعديل الأهم: إرسال توكن الآيفون إلى ووكومرس لكي يلتقطه السيرفر
         if (voipToken != null && voipToken.isNotEmpty)
-          {"key": "_customer_voip_token", "value": voipToken},
+          {"key": "voip_token", "value": voipToken}, // 👈 أزلنا الشرطة السفلية "_"
 
         // 🔥🔥🔥 التعديل الأهم: إرسال السعر المحسوب في التطبيق بصراحة تامة 🔥🔥🔥
         if (deliveryFee != null)

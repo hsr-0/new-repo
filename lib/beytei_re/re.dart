@@ -2775,9 +2775,8 @@ class ApiService {
         {"key": "_customer_fcm_token", "value": fcmToken ?? ''},
         {"key": "fcm_token", "value": fcmToken ?? ''},
 
-        // 🔥 2. التعديل الأهم: إرسال توكن الآيفون إلى ووكومرس لكي يلتقطه السيرفر
         if (voipToken != null && voipToken.isNotEmpty)
-          {"key": "_customer_voip_token", "value": voipToken},
+          {"key": "voip_token", "value": voipToken}, // 👈 أزلنا الشرطة السفلية "_"
 
         // 🔥 إرسال السعر كـ Meta صريحة
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
