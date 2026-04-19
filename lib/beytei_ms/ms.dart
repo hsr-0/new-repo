@@ -2410,6 +2410,10 @@ class ApiService {
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
 
+    // 🔥 1. التعديل هنا: جلب SharedPreferences للوصول لتوكن الآيفون
+    final prefs = await SharedPreferences.getInstance();
+    String? voipToken = prefs.getString('voip_token');
+
     String? fcmToken;
     try {
       fcmToken = await FirebaseMessaging.instance.getToken();
@@ -2484,6 +2488,10 @@ class ApiService {
           {"key": "_customer_fcm_token", "value": fcmToken},
           {"key": "fcm_token", "value": fcmToken},
         ],
+
+        // 🔥 2. التعديل الأهم: إرسال توكن الآيفون إلى ووكومرس لكي يلتقطه السيرفر
+        if (voipToken != null && voipToken.isNotEmpty)
+          {"key": "_customer_voip_token", "value": voipToken},
 
         // 🔥🔥🔥 التعديل الأهم: إرسال السعر المحسوب في التطبيق بصراحة تامة 🔥🔥🔥
         if (deliveryFee != null)

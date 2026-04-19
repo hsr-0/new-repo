@@ -2713,6 +2713,7 @@ class ApiService {
 // ✅ التعديل: إضافة zoneId كمعامل مطلوب
   // ✅ التعديل: دالة إرسال الطلب مع تحسين منطق التوكن
 // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة
+// ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -2722,7 +2723,6 @@ class ApiService {
     geolocator.Position? position,
     double? deliveryFee,
     required int zoneId,
-    // 👇 هنا أضفنا المتغيرات التي كانت تسبب الخطأ الأحمر
     int? restaurantId,
     int? regionId,
   }) async {
@@ -2734,7 +2734,10 @@ class ApiService {
         : [];
 
     final prefs = await SharedPreferences.getInstance();
+
     String? fcmToken = prefs.getString('fcm_token');
+    // 🔥 1. التعديل هنا: جلب توكن الآيفون (VoIP) من الذاكرة المحلية
+    String? voipToken = prefs.getString('voip_token');
 
     if (fcmToken == null) {
       fcmToken = await FirebaseMessaging.instance.getToken();
@@ -2772,13 +2775,16 @@ class ApiService {
         {"key": "_customer_fcm_token", "value": fcmToken ?? ''},
         {"key": "fcm_token", "value": fcmToken ?? ''},
 
+        // 🔥 2. التعديل الأهم: إرسال توكن الآيفون إلى ووكومرس لكي يلتقطه السيرفر
+        if (voipToken != null && voipToken.isNotEmpty)
+          {"key": "_customer_voip_token", "value": voipToken},
+
         // 🔥 إرسال السعر كـ Meta صريحة
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
 
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
 
-        // 👇 هنا نقوم بإرسال المطعم والمنطقة للسيرفر
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
         if (regionId != null) {"key": "_region_id", "value": regionId.toString()},
       ],
