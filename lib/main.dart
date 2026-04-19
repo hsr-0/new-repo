@@ -187,25 +187,43 @@ Future<void> _saveAndRegisterToken(String token) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString('fcm_token', token);
 
+  String? voipToken = '';
+
+  // 🔥 1. جلب توكن المكالمات (VoIP) الخاص بآبل إذا كان النظام iOS فقط
+  if (Platform.isIOS) {
+    try {
+      voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+      print("🍏 [Apple PushKit] VoIP Token: $voipToken");
+
+      if (voipToken != null) {
+        await prefs.setString('voip_token', voipToken);
+      }
+    } catch (e) {
+      print("⚠️ فشل جلب توكن VoIP: $e");
+    }
+  }
+
+  // 🔥 2. إرسال البيانات إلى السيرفر
   try {
     final response = await http.post(
       Uri.parse('https://re.beytei.com/wp-json/restaurant-app/v1/register-device'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'token': token,
+        'token': token,             // توكن FCM العادي (يعمل للاندرويد، وللإشعارات النصية في الايفون)
+        'voip_token': voipToken,    // توكن المكالمات (سيكون فارغاً في الاندرويد، وسيحتوي على قيمة في الايفون)
         'platform': Platform.isAndroid ? 'android' : 'ios',
       }),
     );
+
     if (response.statusCode == 200) {
-      print("✅ [FCM] Token registered successfully");
+      print("✅ [Tokens] Registered successfully (Android FCM / iOS FCM+VoIP)");
     } else {
-      print("⚠️ [FCM] Server responded with status: ${response.statusCode}");
+      print("⚠️ [Server] responded with status: ${response.statusCode}");
     }
   } catch (e) {
-    print("⚠️ [FCM] Failed to register token: $e");
+    print("⚠️ Failed to register tokens: $e");
   }
 }
-
 // =======================================================================
 // 🔥 4. الدالة الرئيسية (MAIN)
 // =======================================================================
