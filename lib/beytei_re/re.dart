@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
 
 
@@ -6627,6 +6628,7 @@ class _CartScreenState extends State<CartScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('سلتي')),
+      floatingActionButton: const TokenDebuggerFAB(), // 👈 أضفنا الزر هنا
       body: Consumer<CartProvider>(
         builder: (ctx, cart, child) {
           if (cart.items.isEmpty) {
@@ -8212,7 +8214,157 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
     );
   }
 }
+// =======================================================================
+// 🐞 أداة فحص التوكنات المباشرة (Token Debugger)
+// =======================================================================
+class TokenDebuggerFAB extends StatefulWidget {
+  const TokenDebuggerFAB({super.key});
 
+  @override
+  State<TokenDebuggerFAB> createState() => _TokenDebuggerFABState();
+}
+
+class _TokenDebuggerFABState extends State<TokenDebuggerFAB> {
+  void _showDebugDialog() async {
+    // عرض رسالة تحميل
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 15),
+            Text("جاري الفحص المباشر..."),
+          ],
+        ),
+      ),
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. نظام التشغيل
+    String platform = Platform.isIOS ? "🍏 iOS (آيفون)" : "🤖 Android (أندرويد)";
+
+    // 2. فحص FCM العادي
+    String fcmPrefs = prefs.getString('fcm_token') ?? "NULL (غير محفوظ)";
+    String fcmLive = "جاري الجلب...";
+    try {
+      fcmLive = await FirebaseMessaging.instance.getToken() ?? "NULL (لم يتم التوليد)";
+    } catch (e) {
+      fcmLive = "Error: $e";
+    }
+
+    // 3. فحص VoIP (مكالمات الآيفون)
+    String voipPrefs = prefs.getString('voip_token') ?? "NULL (غير محفوظ)";
+    String voipLive = "غير مدعوم (هذا أندرويد)";
+
+    if (Platform.isIOS) {
+      try {
+        String? token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+        if (token != null && token.isNotEmpty) {
+          voipLive = token;
+          // إجبار الحفظ إذا وجدناه
+          await prefs.setString('voip_token', token);
+        } else {
+          voipLive = "NULL (آبل لم تعطنا التوكن!)";
+        }
+      } catch (e) {
+        voipLive = "Error: $e";
+      }
+    }
+
+    // إغلاق رسالة التحميل
+    if (mounted) Navigator.pop(context);
+
+    // عرض النتيجة
+    if (mounted) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: const Row(
+            children: [
+              Icon(Icons.bug_report, color: Colors.red, size: 28),
+              SizedBox(width: 10),
+              Text("نتائج الفحص الداخلي", style: TextStyle(fontSize: 16)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildRow("نظام التشغيل:", platform),
+                const Divider(),
+                _buildRow("FCM Token (في الذاكرة):", fcmPrefs),
+                _buildRow("FCM Token (مباشر من جوجل):", fcmLive),
+                const Divider(color: Colors.red),
+                _buildRow("VoIP Token (في الذاكرة):", voipPrefs, isVoip: true),
+                _buildRow("VoIP Token (مباشر من آبل):", voipLive, isVoip: true),
+
+                const SizedBox(height: 15),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  color: Colors.yellow.shade100,
+                  child: const Text(
+                    "💡 ملاحظة: إذا كان (مباشر من آبل) يساوي NULL، فهذا يعني أن الخلل في إعدادات الآيفون نفسها (Xcode Capabilities) والتطبيق غير قادر على قراءة التوكن من نظام آبل.",
+                    style: TextStyle(fontSize: 11, color: Colors.black87),
+                  ),
+                )
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("إغلاق"),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _showDebugDialog(); // إعادة الفحص
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              child: const Text("تحديث الفحص", style: TextStyle(color: Colors.white)),
+            )
+          ],
+        ),
+      );
+    }
+  }
+
+  Widget _buildRow(String title, String value, {bool isVoip = false}) {
+    Color valColor = (value.contains("NULL") || value.startsWith("Error")) ? Colors.red : Colors.green;
+    if (!Platform.isIOS && isVoip) valColor = Colors.grey;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black87)),
+          const SizedBox(height: 4),
+          SelectableText(
+            value,
+            style: TextStyle(color: valColor, fontSize: 11, fontFamily: 'monospace'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton.extended(
+      heroTag: "token_debugger_btn",
+      onPressed: _showDebugDialog,
+      backgroundColor: Colors.red.shade700,
+      icon: const Icon(Icons.bug_report, color: Colors.white),
+      label: const Text("فحص الآيفون", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+    );
+  }
+}
 
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================
