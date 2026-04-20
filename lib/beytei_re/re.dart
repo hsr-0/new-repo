@@ -8217,7 +8217,6 @@ class _RestaurantDashboardScreenState extends State<RestaurantDashboardScreen> w
     );
   }
 }
-
 class DeepTokenDebuggerFAB extends StatefulWidget {
   const DeepTokenDebuggerFAB({super.key});
 
@@ -8236,7 +8235,7 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
           children: [
             CircularProgressIndicator(),
             SizedBox(width: 15),
-            Text("جاري استجواب نظام iOS... 🕵️‍♂️"),
+            Text("جاري سحب سجلات آبل... 🕵️‍♂️"),
           ],
         ),
       ),
@@ -8245,35 +8244,32 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
     String diagnosticLog = "";
 
     if (!Platform.isIOS) {
-      diagnosticLog = "هذا الجهاز ليس آيفون. أداة فحص VoIP مخصصة لآبل فقط.";
+      diagnosticLog = "هذا الجهاز ليس آيفون.";
     } else {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 🔥 1. قراءة الخطأ السري القادم من كود الـ Swift!
+      String iosNativeError = prefs.getString('ios_native_error') ?? "لم يسجل نظام iOS أي رد حتى الآن.";
+
       diagnosticLog += "📱 النظام: iOS\n";
-      diagnosticLog += "⏳ جاري الاتصال بخوادم Apple (APNs)...\n";
+      diagnosticLog += "-----------------------\n";
+      diagnosticLog += "🔴 رد سيرفرات آبل الأصلي (Swift Log):\n";
+      diagnosticLog += "$iosNativeError\n";
+      diagnosticLog += "-----------------------\n\n";
+
+      diagnosticLog += "⏳ جاري محاولة جلب توكن المكالمات...\n";
 
       try {
-        // نحاول جلب التوكن
         String? token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
 
         if (token != null && token.isNotEmpty) {
-          diagnosticLog += "\n✅ النتيجة: نجاح باهر!\nآبل منحتك التوكن:\n$token";
-
-          // حفظه إجبارياً لكي يتم إرساله في الطلب القادم
-          final prefs = await SharedPreferences.getInstance();
+          diagnosticLog += "\n✅ النتيجة: تم استلام التوكن بنجاح!\n$token";
           await prefs.setString('voip_token', token);
         } else {
-          diagnosticLog += "\n⚠️ النتيجة: NULL\nالدالة عملت ولم ترجع خطأ، لكن آبل لم تسلمنا التوكن. هذا يعني غالباً أن عملية (PushRegistry) لم تكتمل في الخلفية (تأخر في الاستجابة).";
+          diagnosticLog += "\n⚠️ النتيجة: NULL\nآبل رفضت إعطاء التوكن. اقرأ (رد سيرفرات آبل) بالأعلى لمعرفة السبب الدقيق.";
         }
-
-      } on PlatformException catch (e) {
-        // 🔥🔥🔥 هنا السحر: صيد خطأ آبل الحقيقي 🔥🔥🔥
-        diagnosticLog += "\n❌ تم رفض الطلب من قبل iOS!\n";
-        diagnosticLog += "-----------------------\n";
-        diagnosticLog += "نوع الخطأ (Code): ${e.code}\n";
-        diagnosticLog += "رسالة الخطأ (Message): ${e.message}\n";
-        diagnosticLog += "التفاصيل (Details): ${e.details}\n";
-        diagnosticLog += "-----------------------\n";
       } catch (e) {
-        diagnosticLog += "\n❌ خطأ غير معروف في الفلاتر:\n$e";
+        diagnosticLog += "\n❌ خطأ داخلي في الفلاتر:\n$e";
       }
     }
 
@@ -8292,7 +8288,7 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
           children: [
             Icon(Icons.monitor_heart, color: Colors.red, size: 28),
             SizedBox(width: 10),
-            Text("التقرير السري لـ iOS", style: TextStyle(fontSize: 16)),
+            Text("السبب الحقيقي للمشكلة", style: TextStyle(fontSize: 16)),
           ],
         ),
         content: SingleChildScrollView(
@@ -8330,10 +8326,11 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
       onPressed: _runDeepDiagnostic,
       backgroundColor: Colors.red.shade900,
       icon: const Icon(Icons.radar, color: Colors.white),
-      label: const Text("فحص جذور آبل", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      label: const Text("معرفة سبب الـ NULL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
     );
   }
 }
+
 // --- ✨ شاشة جديدة: تبويب إدارة المنتجات ---
 // =======================================================================
 // استبدل كلاس ProductManagementTab بهذا الكود
