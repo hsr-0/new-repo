@@ -2,12 +2,11 @@ import UIKit
 import Flutter
 import Firebase
 import CoreLocation
-import PushKit // 🔥 السر الأكبر: إضافة مكتبة مكالمات آبل الأصلية
+import PushKit
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
 
-    // ✅ تعريف مدير الموقع لضمان تهيئة الخدمة قبل طلب الخريطة لها
     let locationManager = CLLocationManager()
 
     override func application(
@@ -46,14 +45,10 @@ import PushKit // 🔥 السر الأكبر: إضافة مكتبة مكالما
         let voipRegistry = PKPushRegistry(queue: .main)
         voipRegistry.delegate = self
         voipRegistry.desiredPushTypes = [.voIP]
-        // ---------------------------------------------------------
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // ---------------------------------------------------------
-    // 🔥 كود اصطياد أخطاء آبل السرية للإشعارات العادية
-    // ---------------------------------------------------------
     override func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         UserDefaults.standard.set(error.localizedDescription, forKey: "flutter.ios_native_error")
         super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
@@ -66,20 +61,18 @@ import PushKit // 🔥 السر الأكبر: إضافة مكتبة مكالما
 }
 
 // ---------------------------------------------------------
-// 🔥 التقاط توكن المكالمات (VoIP) من نظام آبل الأصلي وحفظه للفلاتر
+// 🔥 التقاط توكن المكالمات (VoIP) من نظام آبل الأصلي
 // ---------------------------------------------------------
 extension AppDelegate: PKPushRegistryDelegate {
 
-    // عند استلام توكن المكالمات بنجاح من آبل
-    func pushRegistry(_ registry: PKPushRegistry, didUpdatePushCredentials for type: PKPushType, credentials: PKPushCredentials) {
+    // ✅ تم تصحيح طريقة كتابة الدالة لتتوافق مع Swift الحديثة
+    func pushRegistry(_ registry: PKPushRegistry, didUpdatePushCredentials credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
 
-        // حفظ التوكن الأخضر لكي يقرأه تطبيق الفلاتر فوراً
         UserDefaults.standard.set("SUCCESS_NATIVE:\n" + tokenHex, forKey: "flutter.ios_native_voip_token")
         print("✅ VoIP Token Native: \(tokenHex)")
     }
 
-    // عند حدوث خطأ أو إبطال للتوكن من آبل
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         UserDefaults.standard.set("ERROR_NATIVE: تم إبطال التوكن من آبل", forKey: "flutter.ios_native_voip_token")
     }
