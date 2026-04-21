@@ -14,23 +14,17 @@ import PushKit
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
 
-        // 1. تهيئة Firebase أولاً
         FirebaseApp.configure()
-
-        // 2. طلب إذن الموقع بشكل مبدئي
         locationManager.requestWhenInUseAuthorization()
-
-        // 3. تسجيل الإضافات (Plugins)
         GeneratedPluginRegistrant.register(with: self)
 
-        // 4. إعدادات الإشعارات العادية
         if #available(iOS 10.0, *) {
             UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
         }
         application.registerForRemoteNotifications()
 
         // ---------------------------------------------------------
-        // 🕵️‍♂️ كود التجسس على ملف Info.plist المدمج داخل الآيفون
+        // 🕵️‍♂️ كود التجسس على ملف Info.plist المدمج
         // ---------------------------------------------------------
         if let bgModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] {
             let modesStr = bgModes.joined(separator: ", ")
@@ -40,7 +34,7 @@ import PushKit
         }
 
         // ---------------------------------------------------------
-        // 🔥 تشغيل خدمة مكالمات آبل (PushKit) بالقوة واستخراج التوكن
+        // 🔥 تشغيل خدمة مكالمات آبل (PushKit)
         // ---------------------------------------------------------
         let voipRegistry = PKPushRegistry(queue: .main)
         voipRegistry.delegate = self
@@ -65,8 +59,8 @@ import PushKit
 // ---------------------------------------------------------
 extension AppDelegate: PKPushRegistryDelegate {
 
-    // ✅ تم تصحيح طريقة كتابة الدالة لتتوافق مع Swift الحديثة
-    func pushRegistry(_ registry: PKPushRegistry, didUpdatePushCredentials credentials: PKPushCredentials, for type: PKPushType) {
+    // ✅ التعديل هنا: استخدام didUpdate بدلاً من didUpdatePushCredentials كما طلبت آبل
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
 
         UserDefaults.standard.set("SUCCESS_NATIVE:\n" + tokenHex, forKey: "flutter.ios_native_voip_token")
