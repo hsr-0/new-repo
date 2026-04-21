@@ -9,36 +9,35 @@ import PushKit
 
     let locationManager = CLLocationManager()
 
+    // 🔥 التعديل الجذري: تعريف المتغير هنا لكي لا يمسحه النظام من الذاكرة
+    var voipRegistry: PKPushRegistry?
+
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
 
+        // ---------------------------------------------------------
+        // 🔥 1. تشغيل خدمة مكالمات آبل (PushKit) أولاً وقبل كل شيء!
+        // ---------------------------------------------------------
+        self.voipRegistry = PKPushRegistry(queue: .main)
+        self.voipRegistry?.delegate = self
+        self.voipRegistry?.desiredPushTypes = [.voIP]
+
+        // 2. تهيئة Firebase بعد PushKit لمنع التعارض
         FirebaseApp.configure()
+
+        // 3. طلب إذن الموقع
         locationManager.requestWhenInUseAuthorization()
+
+        // 4. تسجيل الإضافات
         GeneratedPluginRegistrant.register(with: self)
 
+        // 5. إعدادات الإشعارات العادية
         if #available(iOS 10.0, *) {
             UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
         }
         application.registerForRemoteNotifications()
-
-        // ---------------------------------------------------------
-        // 🕵️‍♂️ كود التجسس على ملف Info.plist المدمج
-        // ---------------------------------------------------------
-        if let bgModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] {
-            let modesStr = bgModes.joined(separator: ", ")
-            UserDefaults.standard.set(modesStr, forKey: "flutter.ios_bg_modes")
-        } else {
-            UserDefaults.standard.set("المصفوفة غير موجودة نهائياً ❌", forKey: "flutter.ios_bg_modes")
-        }
-
-        // ---------------------------------------------------------
-        // 🔥 تشغيل خدمة مكالمات آبل (PushKit)
-        // ---------------------------------------------------------
-        let voipRegistry = PKPushRegistry(queue: .main)
-        voipRegistry.delegate = self
-        voipRegistry.desiredPushTypes = [.voIP]
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
@@ -55,11 +54,10 @@ import PushKit
 }
 
 // ---------------------------------------------------------
-// 🔥 التقاط توكن المكالمات (VoIP) من نظام آبل الأصلي
+// 🔥 التقاط توكن المكالمات (VoIP)
 // ---------------------------------------------------------
 extension AppDelegate: PKPushRegistryDelegate {
 
-    // ✅ التعديل هنا: استخدام didUpdate بدلاً من didUpdatePushCredentials كما طلبت آبل
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
 
