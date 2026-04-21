@@ -32,6 +32,7 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../beytei_re/OrderTracking.dart';
+import 'package:flutter/foundation.dart';
 
 // =======================================================================
 // --- إعدادات وثوابت عامة للوحدة ---
@@ -137,6 +138,37 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     return; // 👈 إيقاف التنفيذ هنا حتى لا يظهر كإشعار نصي عادي
   }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    final data = message.data;
+    final type = data['type'];
+
+  if (type == 'refresh_delivery_config') {
+    print("📡 [Miswak] استلام إشارة تحديث ملف التسعير...");
+    final configProvider = MiswakDeliveryConfigProvider(); // 🔥 البروفايدر الصحيح
+    await configProvider.fetchAndCacheConfig();
+    return;
+  }
+
+
+
+
+
+
+
+
 
   // إذا لم يكن مكالمة، سيتم عرضه كإشعار عادي
   await NotificationService.display(message);
@@ -2392,6 +2424,7 @@ class ApiService {
   // =================================================================
   // 🔥🔥🔥 دالة إرسال الطلب المعدلة (مع دعم الأوزان والكسور) 🔥🔥🔥
   // =================================================================
+  // 🔥🔥 دالة إرسال الطلب النهائية (مكتملة التعديلات)
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -2399,64 +2432,67 @@ class ApiService {
     required List<FoodItem> cartItems,
     String? couponCode,
     geolocator.Position? position,
-    double? deliveryFee,
+    double? deliveryFee, // ✅ السعر المحسوب محلياً
     required int? restaurantId,
     required int? regionId,
   }) async {
-    List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
-
-    // إرسال رسوم التوصيل كـ Shipping Line قياسي
-    List<Map<String, dynamic>> shippingLines = deliveryFee != null
-        ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
+    // 1. تجهيز كوبون الخصم
+    List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty
+        ? [{"code": couponCode}]
         : [];
 
-    // 🔥 1. التعديل هنا: جلب SharedPreferences للوصول لتوكن الآيفون
+    // 2. ✅ تجهيز خط الشحن بالسعر المحسوب
+    List<Map<String, dynamic>> shippingLines = deliveryFee != null
+        ? [{
+      "method_id": "flat_rate",
+      "method_title": "توصيل",
+      "total": deliveryFee.toString()
+    }]
+        : [];
+
+    // 3. 🔥 جلب التوكنات الحيوية
     final prefs = await SharedPreferences.getInstance();
     String? voipToken = prefs.getString('voip_token');
 
     String? fcmToken;
     try {
       fcmToken = await FirebaseMessaging.instance.getToken();
-      print("🚀 [SubmitOrder] Sending FCM Token with Order: $fcmToken");
+      if (kDebugMode) print("🚀 [SubmitOrder] FCM Token: $fcmToken");
     } catch (e) {
-      print("⚠️ [SubmitOrder] Failed to get FCM token: $e");
+      if (kDebugMode) print("⚠️ [SubmitOrder] Failed to get FCM token: $e");
     }
 
-    // 🔥🔥🔥 تجهيز المنتجات لـ WooCommerce وحفظ الأوزان والأسعار 🔥🔥🔥
+    // 4. 🔥🔥 تجهيز المنتجات مع الأوزان والكسور
     List<Map<String, dynamic>> preparedLineItems = cartItems.map((item) {
       Map<String, dynamic> lineItem = {
         "product_id": item.id,
         "quantity": item.quantity,
-        // نرسل السعر الصافي المضروب في الوزن ليقبله السيرفر
         "subtotal": (item.displayPrice * item.quantity).toString(),
         "total": (item.displayPrice * item.quantity).toString(),
       };
 
-      // إذا كان الزبون قد اختار كسراً أو وزناً مختلفاً
-      if (item.selectedWeight != 1.0) {
+      // معالجة الوزن المختار
+      if (item.selectedWeight != null && item.selectedWeight != 1.0) {
         String weightText = "";
-        if (item.selectedWeight == 0.25) weightText = "ربع كيلو";
-        else if (item.selectedWeight == 0.5) weightText = "نصف كيلو";
+        if (item.selectedWeight == 0.25) weightText = "ربع كيلو (250غم)";
+        else if (item.selectedWeight == 0.5) weightText = "نصف كيلو (500غم)";
         else if (item.selectedWeight == 0.75) weightText = "كيلو إلا ربع";
         else if (item.selectedWeight == 1.25) weightText = "كيلو وربع";
-        else if (item.selectedWeight == 1.5) weightText = "كيلو ونصف";
+        else if (item.selectedWeight == 1.5) weightText = "كيلو ونصف (1.5 كغم)";
         else if (item.selectedWeight == 1.75) weightText = "كيلو و 750 غرام";
         else if (item.selectedWeight == 2.25) weightText = "كيلوين وربع";
         else if (item.selectedWeight == 2.5) weightText = "كيلوين ونصف";
-        else if (item.selectedWeight % 1 == 0) weightText = "${item.selectedWeight.toInt()} كيلو";
+        else if (item.selectedWeight! % 1 == 0) weightText = "${item.selectedWeight!.toInt()} كيلو";
         else weightText = "${item.selectedWeight} كيلو";
 
         lineItem["meta_data"] = [
-          {
-            "key": "الوزن المختار",
-            "value": weightText
-          }
+          {"key": "الوزن المختار", "value": weightText}
         ];
       }
       return lineItem;
     }).toList();
-    // 🔥🔥🔥 ======================================================= 🔥🔥🔥
 
+    // 5. 🔥🔥🔥 بناء جسم الطلب مع الميتا داتا الكاملة
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
       "payment_method_title": "الدفع عند الاستلام",
@@ -2478,48 +2514,62 @@ class ApiService {
         "city": "Default",
         "postcode": "10001"
       },
-      // ✅ نستخدم المصفوفة المجهزة هنا
       "line_items": preparedLineItems,
       "coupon_lines": couponLines,
       "shipping_lines": shippingLines,
 
+      // ✅ الميتا داتا: السعر المنفصل، التوكنات، الإحداثيات
       "meta_data": [
+        // أ) توكنات الإشعارات والمكالمات
         if (fcmToken != null) ...[
           {"key": "_customer_fcm_token", "value": fcmToken},
           {"key": "fcm_token", "value": fcmToken},
         ],
-
-        // 🔥 2. التعديل الأهم: إرسال توكن الآيفون إلى ووكومرس لكي يلتقطه السيرفر
         if (voipToken != null && voipToken.isNotEmpty)
-          {"key": "voip_token", "value": voipToken}, // 👈 أزلنا الشرطة السفلية "_"
+          {"key": "voip_token", "value": voipToken},
 
-        // 🔥🔥🔥 التعديل الأهم: إرسال السعر المحسوب في التطبيق بصراحة تامة 🔥🔥🔥
+        // ب) 🔥 السعر المحسوب محلياً (الأهم للتكسي)
         if (deliveryFee != null)
           {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
 
+        // ج) إحداثيات الزبون الدقيقة
         if (position != null) ...[
           {"key": "_customer_destination_lat", "value": position.latitude.toString()},
           {"key": "_customer_destination_lng", "value": position.longitude.toString()},
         ],
-        if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
-        if (regionId != null) {"key": "_region_id", "value": regionId.toString()},
-        if (regionId != null) {"key": "_area_id", "value": regionId.toString()},
+
+        // د) معرفات المتجر والمنطقة
+        if (restaurantId != null)
+          {"key": "_restaurant_id", "value": restaurantId.toString()},
+        if (regionId != null) ...[
+          {"key": "_region_id", "value": regionId.toString()},
+          {"key": "_area_id", "value": regionId.toString()},
+        ],
       ],
     };
 
-    final response = await _executeWithRetry(() => http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
-        headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
-        body: json.encode(bodyPayload)
-    ));
+    // 6. الإرسال للسيرفر
+    try {
+      final response = await _executeWithRetry(() => http.post(
+          Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
+          headers: {
+            'Authorization': _authString,
+            'Content-Type': 'application/json'
+          },
+          body: json.encode(bodyPayload)
+      ));
 
-    if (response.statusCode == 201) {
-      final createdOrder = Order.fromJson(json.decode(response.body));
-      await OrderHistoryService().saveOrder(createdOrder);
-      return createdOrder;
-    } else {
-      throw Exception('Failed to submit order: ${response.body}');
+      if (response.statusCode == 201) {
+        final createdOrder = Order.fromJson(json.decode(response.body));
+        await OrderHistoryService().saveOrder(createdOrder);
+        return createdOrder;
+      } else {
+        throw Exception('فشل إنشاء الطلب: ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('خطأ في الاتصال: $e');
     }
+
   }
   Future<bool> submitReview({required int productId, required double rating, required String review, required String author, required String email}) async {
     final response = await _executeWithRetry(() => http.post(
@@ -3783,8 +3833,8 @@ class _MiswakModuleState extends State<MiswakModule> {
         ChangeNotifierProvider(create: (_) => StoreCustomerProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
+        ChangeNotifierProvider(create: (_) => MiswakDeliveryConfigProvider()),
 
-        // 🔥🔥🔥 المزودات المعتمدة (Proxy) 🔥🔥🔥
 
         // 1. داشبورد المسواك
         ChangeNotifierProxyProvider<StoreAuthProvider, MiswakDashboardProvider>(
@@ -4622,6 +4672,170 @@ class _MiswakStoreHomeScreenState extends State<MiswakStoreHomeScreen> {
     );
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class MiswakDeliveryConfigProvider with ChangeNotifier {
+  // 🔥 مفاتيح مستقلة تماماً لتجنب التعارض
+  static const String KEY_CONFIG = "miswak_delivery_config_json";
+  static const String KEY_VERSION = "miswak_delivery_config_version";
+  static const String ENDPOINT = "https://re.beytei.com/wp-json/restaurant-app/v1/miswak-delivery-config";
+
+  Map<String, dynamic>? _cachedConfig;
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
+
+  Map<String, dynamic>? get config => _cachedConfig;
+
+  // 1. جلب الملف وحفظه في الكاش
+  Future<void> fetchAndCacheConfig() async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final response = await http.get(Uri.parse(ENDPOINT)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        _cachedConfig = data;
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(KEY_CONFIG, jsonEncode(data));
+        await prefs.setInt(KEY_VERSION, data['version'] ?? DateTime.now().millisecondsSinceEpoch);
+
+        if (kDebugMode) print("✅ [MiswakConfig] تم تحديث ملف التسعير بنجاح.");
+      }
+    } catch (e) {
+      if (kDebugMode) print("⚠️ [MiswakConfig] فشل الجلب، سيتم استخدام الكاش: $e");
+      // محاولة تحميل الكاش عند الفشل
+      await _loadFromCache();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // 2. تحميل الكاش عند البدء
+  Future<void> _loadFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString(KEY_CONFIG);
+    if (cached != null) {
+      _cachedConfig = jsonDecode(cached);
+    }
+  }
+
+  // 3. 🔥 دالة الحساب المحلي الذكي (المناطق أولاً، ثم المسافة)
+  double calculateFee({
+    required double userLat,
+    required double userLng,
+    required int storeId,
+  }) {
+    if (_cachedConfig == null) return 1000.0; // قيمة افتراضية آمنة
+
+    final zones = _cachedConfig!['zones'] as List<dynamic>? ?? [];
+    final pricing = _cachedConfig!['pricing'] as Map<String, dynamic>? ?? {};
+    final locations = _cachedConfig!['locations'] as List<dynamic>? ?? [];
+
+    final userPos = LatLng(userLat, userLng);
+
+    // أ) فحص المناطق المرسومة
+    for (var zone in zones) {
+      final latlngs = zone['latlngs'] as List<dynamic>?;
+      if (latlngs != null && _isPointInPolygon(userPos, latlngs)) {
+        final price = double.tryParse(zone['price'].toString()) ?? 1000.0;
+        return price;
+      }
+    }
+
+    // ب) الحساب بالمسافة إذا لم يكن في منطقة
+    final baseFee = double.tryParse(pricing['base_fee'].toString()) ?? 1000.0;
+    final baseDist = double.tryParse(pricing['base_distance_km'].toString()) ?? 5.0;
+    final extraFee = double.tryParse(pricing['extra_km_fee'].toString()) ?? 250.0;
+    final maxFee = double.tryParse(pricing['max_fee'].toString()) ?? 5000.0;
+
+    // إيجاد موقع المتجر
+    final storeData = locations.firstWhere(
+          (loc) => loc['id'] == storeId,
+      orElse: () => {'lat': 0.0, 'lng': 0.0},
+    );
+
+    if (storeData['lat'] == 0.0) return baseFee; // لا يوجد إحداثيات
+
+    final storePos = LatLng(
+      double.tryParse(storeData['lat'].toString()) ?? 0.0,
+      double.tryParse(storeData['lng'].toString()) ?? 0.0,
+    );
+
+    final distance = Geolocator.distanceBetween(
+      userLat, userLng, storePos.latitude, storePos.longitude,
+    ) / 1000; // بالمتر إلى كم
+
+    double fee = baseFee;
+    if (distance > baseDist) {
+      fee += (distance - baseDist) * extraFee;
+    }
+
+    // التقريب والسقف
+    fee = (fee / 250).ceil() * 250.0;
+    if (fee > maxFee) fee = maxFee;
+    if (fee < 1000) fee = 1000;
+
+    return fee;
+  }
+
+  // خوارزمية فحص النقطة داخل المضلع
+  bool _isPointInPolygon(LatLng point, List<dynamic> polygon) {
+    bool inside = false;
+    for (int i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      final p1 = polygon[i];
+      final p2 = polygon[j];
+      final xi = double.tryParse(p1['lat'].toString()) ?? 0.0;
+      final yi = double.tryParse(p1['lng'].toString()) ?? 0.0;
+      final xj = double.tryParse(p2['lat'].toString()) ?? 0.0;
+      final yj = double.tryParse(p2['lng'].toString()) ?? 0.0;
+
+      if (((yi > point.longitude) != (yj > point.longitude)) &&
+          (point.latitude < (xj - xi) * (point.longitude - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+}
+
+
+
+
+
+
+
 
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
@@ -5502,6 +5716,8 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 }
+
+
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
 
@@ -5526,7 +5742,7 @@ class _CartScreenState extends State<CartScreen> {
     super.dispose();
   }
 
-  // ✨ دالة مساعدة لعرض الوزن بشكل جميل في السلة
+  // ✨ دالة مساعدة لعرض الوزن بشكل جميل
   String _getWeightDisplayText(double weight) {
     if (weight == 0.25) return "ربع كيلو (250غم)";
     if (weight == 0.5) return "نصف كيلو (500غم)";
@@ -5538,7 +5754,6 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ حفظ السياق الرئيسي للصفحة في متغير لاستخدامه لاحقاً بأمان
     final mainContext = context;
 
     return Scaffold(
@@ -5589,7 +5804,6 @@ class _CartScreenState extends State<CartScreen> {
         ],
       ),
       body: Consumer<CartProvider>(
-        // ✅ قمنا بتغيير اسم المتغير هنا إلى (ctx) لتجنب التضارب مع (context) الرئيسي
         builder: (ctx, cart, child) {
           if (cart.items.isEmpty) {
             return Center(
@@ -5633,7 +5847,6 @@ class _CartScreenState extends State<CartScreen> {
                     _buildCartItemCard(mainContext, cart, cart.items[index]),
               ),
             ),
-            // ✅ نمرر mainContext الثابت هنا بدلاً من ctx المتغير
             _buildCheckoutSection(mainContext, cart),
           ]);
         },
@@ -5641,7 +5854,6 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  // (دالة بناء ملخص السعر - محسّنة)
   Widget _buildPriceSummary(CartProvider cart, double? deliveryFee,
       bool isCalculatingFee, String feeMessage) {
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
@@ -5709,7 +5921,9 @@ class _CartScreenState extends State<CartScreen> {
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: deliveryFee == null && !isCalculatingFee ? Colors.red : Colors.black),
+                      color: deliveryFee == null && !isCalculatingFee
+                          ? Colors.red
+                          : Colors.black),
                 ),
               ),
             ],
@@ -5759,8 +5973,9 @@ class _CartScreenState extends State<CartScreen> {
     bool isSubmitting = false;
 
     geolocator.Position? _capturedPosition;
-    // 1. تبدأ الرسالة بحالة "جاري الحساب" والسعر بـ 0
-    String _locationMessage = "جاري حساب تكلفة التوصيل من السيرفر...";
+
+    // 🔥 الحالة الأولية: جاري الحساب المحلي
+    String _locationMessage = "جاري حساب التوصيل...";
     double _deliveryFee = 0.0;
     bool _isCalcFinished = false;
 
@@ -5769,11 +5984,12 @@ class _CartScreenState extends State<CartScreen> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
-          // 2. 🔥 محرك الحساب التلقائي (يتصل بالسيرفر فور فتح النافذة)
+
+          // 🔥🔥 محرك الحساب المحلي الذكي
           if (!_isCalcFinished) {
             Future.delayed(Duration.zero, () async {
               try {
-                // جلب إحداثيات الزبون الحالية
+                // 1. جلب الموقع
                 bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
                 if (serviceEnabled) {
                   geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
@@ -5788,34 +6004,44 @@ class _CartScreenState extends State<CartScreen> {
                   }
                 }
 
-                // طلب السعر من السيرفر بناءً على الموقع المكتشف
                 if (_capturedPosition != null && cart.items.isNotEmpty) {
-                  final int storeIdForCalc = cart.items.first.categoryId;
-                  final deliveryProvider = Provider.of<DeliveryProvider>(cartScreenContext, listen: false);
+                  // 2. استخدام البروفايدر المستقل للمسواك
+                  final configProvider = Provider.of<MiswakDeliveryConfigProvider>(cartScreenContext, listen: false);
 
-                  // استدعاء دالة السيرفر
-                  await deliveryProvider.calculateDeliveryFee(
-                      restaurantId: storeIdForCalc,
-                      userLat: _capturedPosition!.latitude,
-                      userLng: _capturedPosition!.longitude);
+                  // ضمان وجود الملف (يحمّل من الكاش فوراً، أو يجلب من السيرفر إذا لم يوجد)
+                  if (configProvider.config == null) {
+                    await configProvider.fetchAndCacheConfig();
+                  }
+
+                  final int storeId = cart.items.first.categoryId;
+
+                  // 3. الحساب المحلي الفوري
+                  final fee = configProvider.calculateFee(
+                    userLat: _capturedPosition!.latitude,
+                    userLng: _capturedPosition!.longitude,
+                    storeId: storeId,
+                  );
 
                   if (context.mounted) {
                     setDialogState(() {
-                      // ✅ تحديث السعر والرسالة بناءً على رد السيرفر (3000 أو 1000 إلخ)
-                      _deliveryFee = deliveryProvider.deliveryFee;
-                      _locationMessage = deliveryProvider.message;
+                      _deliveryFee = fee;
+                      _locationMessage = "✅ تم حساب التوصيل: ${fee.toInt()} د.ع";
                       _isCalcFinished = true;
                     });
                   }
                 } else {
+                  // فشل جلب الموقع
                   setDialogState(() {
-                    _locationMessage = "تعذر تحديد الموقع، يرجى تفعيل GPS";
+                    _deliveryFee = 1000.0; // سعر افتراضي آمن
+                    _locationMessage = "⚠️ تعذر تحديد الموقع، تم تطبيق السعر الأساسي";
                     _isCalcFinished = true;
                   });
                 }
               } catch (e) {
+                // أي خطأ = شبكة أمان
                 setDialogState(() {
-                  _locationMessage = "خطأ في الاتصال بالسيرفر";
+                  _deliveryFee = 1000.0;
+                  _locationMessage = "⚠️ حدث خطأ، تم تطبيق السعر الأساسي (1000 د.ع)";
                   _isCalcFinished = true;
                 });
               }
@@ -5873,7 +6099,7 @@ class _CartScreenState extends State<CartScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // 3. 📦 عرض السعر الذي حسبه السيرفر (الديناميكي)
+                    // 📦 عرض السعر المحسوب محلياً
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
@@ -5885,12 +6111,10 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                             const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                            // يعرض السعر القادم من السيرفر (مثلاً 3,000 د.ع)
                             Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع",
                                 style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 16)),
                           ]),
                           const SizedBox(height: 5),
-                          // يعرض اسم المنطقة أو المسافة التي أرجعها السيرفر
                           Text(_locationMessage, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                         ],
                       ),
@@ -5921,6 +6145,7 @@ class _CartScreenState extends State<CartScreen> {
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
+                // منع الإرسال حتى يكتمل الحساب
                 onPressed: (isSubmitting || !_isCalcFinished) ? null : () async {
                   if (!_formKey.currentState!.validate()) return;
 
@@ -5933,7 +6158,7 @@ class _CartScreenState extends State<CartScreen> {
 
                     if (currentZoneId == 0) throw Exception("يرجى تحديد المنطقة من الصفحة الرئيسية.");
 
-                    // 4. 🚀 إرسال الطلب النهائي مع السعر المحسوب من السيرفر
+                    // 🚀 إرسال الطلب مع السعر المحسوب محلياً
                     final createdOrder = await _apiService.submitOrder(
                       name: _nameController.text,
                       phone: _phoneController.text,
@@ -5941,7 +6166,7 @@ class _CartScreenState extends State<CartScreen> {
                       cartItems: cart.items,
                       couponCode: cart.appliedCoupon,
                       position: _capturedPosition,
-                      deliveryFee: _deliveryFee, // السعر المحسوب ديناميكياً
+                      deliveryFee: _deliveryFee, // ✅ السعر المحسوب محلياً
                       restaurantId: storeId,
                       regionId: currentZoneId,
                     );
@@ -6017,7 +6242,6 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  // ✨✨✨ دالة بناء بطاقة المنتج في السلة - محسّنة مع عرض الوزن ✨✨✨
   Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
     return Card(
       margin: const EdgeInsets.only(bottom: 15),
@@ -6028,7 +6252,6 @@ class _CartScreenState extends State<CartScreen> {
         padding: const EdgeInsets.all(12.0),
         child: Row(
           children: [
-            // صورة المنتج
             ClipRRect(
               borderRadius: BorderRadius.circular(15),
               child: CachedNetworkImage(
@@ -6045,8 +6268,6 @@ class _CartScreenState extends State<CartScreen> {
               ),
             ),
             const SizedBox(width: 15),
-
-            // تفاصيل المنتج
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -6062,8 +6283,6 @@ class _CartScreenState extends State<CartScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 6),
-
-                  // ✨ عرض الوزن بشكل واضح ومميز
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
@@ -6090,7 +6309,6 @@ class _CartScreenState extends State<CartScreen> {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 8),
                   Text(
                     item.formattedPrice,
@@ -6103,11 +6321,8 @@ class _CartScreenState extends State<CartScreen> {
                 ],
               ),
             ),
-
-            // أزرار الكمية + حذف
             Column(
               children: [
-                // أزرار +/-
                 Container(
                   decoration: BoxDecoration(
                     color: Colors.grey.shade100,
@@ -6140,7 +6355,6 @@ class _CartScreenState extends State<CartScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                // زر الحذف
                 IconButton(
                   icon: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 22),
                   onPressed: () {
@@ -6273,6 +6487,7 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 }
+
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
   @override
