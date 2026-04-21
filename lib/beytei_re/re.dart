@@ -5355,7 +5355,6 @@ class _RestaurantModuleState extends State<RestaurantModule> {
 
 
 
-
 class DeepTokenDebuggerFAB extends StatefulWidget {
   const DeepTokenDebuggerFAB({super.key});
 
@@ -5369,65 +5368,37 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => const AlertDialog(
-        content: Row(
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 15),
-            Text("جاري فحص جذور iOS... 🕵️‍♂️"),
-          ],
-        ),
-      ),
+      builder: (ctx) => const AlertDialog(content: Row(children: [CircularProgressIndicator(), SizedBox(width: 15), Text("جلب التوكن من جذور آبل...")])),
     );
 
-    String diagnosticLog = "";
-
     if (!Platform.isIOS) {
-      diagnosticLog = "هذا الجهاز ليس آيفون.";
-    } else {
-      final prefs = await SharedPreferences.getInstance();
+      Navigator.pop(context);
+      _showResultDialog("هذا الجهاز ليس آيفون.");
+      return;
+    }
 
-      // قراءة الردود من Swift
-      String iosNativeError = prefs.getString('ios_native_error') ?? "لم يسجل نظام iOS أي رد.";
-      String iosBgModes = prefs.getString('ios_bg_modes') ?? "غير قادر على قراءة الملف.";
+    final prefs = await SharedPreferences.getInstance();
 
-      diagnosticLog += "📱 النظام: iOS\n";
-      diagnosticLog += "-----------------------\n";
-      diagnosticLog += "🔴 رد سيرفر آبل (APNs):\n$iosNativeError\n";
-      diagnosticLog += "-----------------------\n";
-      diagnosticLog += "⚙️ الصلاحيات المدمجة فعلياً (Background Modes):\n$iosBgModes\n";
-      diagnosticLog += "-----------------------\n\n";
+    // ⏳ ننتظر ثانيتين للتأكد من أن iOS أصدر التوكن في الخلفية
+    await Future.delayed(const Duration(seconds: 2));
 
-      diagnosticLog += "⏳ جاري محاولة جلب التوكن (قد يستغرق 5 ثوانٍ)...\n";
+    // 🔥 قراءة التوكن المستخرج بقوة الـ Swift مباشرة!
+    String nativeVoipToken = prefs.getString('ios_native_voip_token') ?? "NULL_NATIVE: لم يقم نظام PushKit بالرد.";
 
-      try {
-        String? finalToken;
-        // 🔥 محاولة جلب التوكن 5 مرات بفاصل ثانية (لحل مشكلة التأخير)
-        for (int i = 1; i <= 5; i++) {
-          finalToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-          if (finalToken != null && finalToken.isNotEmpty) {
-            diagnosticLog += "\n✅ تم التقاط التوكن في المحاولة رقم ($i)!\n$finalToken";
-            await prefs.setString('voip_token', finalToken);
-            break;
-          }
-          await Future.delayed(const Duration(seconds: 1));
-        }
+    String diagnosticLog = "📱 النظام: iOS\n";
+    diagnosticLog += "-----------------------\n";
+    diagnosticLog += "🟢 نتيجة الاتصال المباشر بنظام مكالمات آبل (PushKit):\n\n";
+    diagnosticLog += "$nativeVoipToken\n";
+    diagnosticLog += "-----------------------\n";
 
-        if (finalToken == null || finalToken.isEmpty) {
-          diagnosticLog += "\n⚠️ النتيجة النهائية: NULL\n";
-          if (!iosBgModes.contains("voip")) {
-            diagnosticLog += "السبب الحقيقي: Codemagic قام بحذف كلمة 'voip' من ملف Info.plist أثناء البناء!";
-          } else {
-            diagnosticLog += "السبب: التطبيق يمتلك الصلاحية لكن الآيفون يرفض توليد التوكن (تأكد أن الهاتف به شريحة SIM أو متصل بـ Wi-Fi قوي، وأعد تشغيل الهاتف).";
-          }
-        }
-      } catch (e) {
-        diagnosticLog += "\n❌ خطأ داخلي في الفلاتر:\n$e";
-      }
+    // 💡 إذا وجدنا التوكن، نحفظه في المتغير الذي يستخدمه تطبيقك لكي يعمل بشكل طبيعي
+    if (nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
+      String cleanToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:\n", "").trim();
+      await prefs.setString('voip_token', cleanToken);
     }
 
     if (mounted) {
-      Navigator.pop(context); // إغلاق التحميل
+      Navigator.pop(context);
       _showResultDialog(diagnosticLog);
     }
   }
@@ -5483,8 +5454,6 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
     );
   }
 }
-
-
 
 
 
