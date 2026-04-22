@@ -173,7 +173,7 @@ void _showLocalNotification(RemoteMessage message) {
 }
 
 // =======================================================================
-// 🔥 3. دوال إدارة التوكن
+// 🔥 3. دوال إدارة التوكن (السر هنا!)
 // =======================================================================
 
 Future<void> _handleTokenRefresh() async {
@@ -189,14 +189,25 @@ Future<void> _saveAndRegisterToken(String token) async {
 
   String? voipToken = '';
 
-  // 🔥 1. جلب توكن المكالمات (VoIP) الخاص بآبل إذا كان النظام iOS فقط
+  // 🔥 1. التعديل الجذري: سحب التوكن من الذاكرة التي زرعناها بلغة Swift
   if (Platform.isIOS) {
     try {
-      voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-      print("🍏 [Apple PushKit] VoIP Token: $voipToken");
+      // ننتظر 3 ثواني للتأكد من أن نظام آبل أصدر التوكن في الخلفية عند فتح التطبيق
+      await Future.delayed(const Duration(seconds: 3));
 
-      if (voipToken != null) {
+      // قراءة التوكن المستخرج يدوياً
+      String? nativeVoipToken = prefs.getString('ios_native_voip_token');
+
+      if (nativeVoipToken != null && nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
+        // تنظيف النص للحصول على التوكن الصافي فقط (بدون الكلمات الإضافية والمسافات)
+        voipToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:", "").replaceAll("\n", "").trim();
         await prefs.setString('voip_token', voipToken);
+        print("🍏 [Apple PushKit] تم التقاط التوكن الأصلي بنجاح: $voipToken");
+      } else {
+        print("⚠️ توكن الآيفون الأصلي غير جاهز: $nativeVoipToken");
+        // شبكة أمان: محاولة أخيرة من المكتبة في حال تأخر النظام
+        voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+        if(voipToken != null) await prefs.setString('voip_token', voipToken);
       }
     } catch (e) {
       print("⚠️ فشل جلب توكن VoIP: $e");
@@ -210,7 +221,7 @@ Future<void> _saveAndRegisterToken(String token) async {
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'token': token,             // توكن FCM العادي (يعمل للاندرويد، وللإشعارات النصية في الايفون)
-        'voip_token': voipToken,    // توكن المكالمات (سيكون فارغاً في الاندرويد، وسيحتوي على قيمة في الايفون)
+        'voip_token': voipToken,    // توكن المكالمات (تم سحبه بقوة Swift للآيفون)
         'platform': Platform.isAndroid ? 'android' : 'ios',
       }),
     );
@@ -224,6 +235,7 @@ Future<void> _saveAndRegisterToken(String token) async {
     print("⚠️ Failed to register tokens: $e");
   }
 }
+
 // =======================================================================
 // 🔥 4. الدالة الرئيسية (MAIN)
 // =======================================================================

@@ -4230,6 +4230,113 @@ class _OrderCardState extends State<OrderCard> {
     );
   }
 }
+
+
+class DeepTokenDebuggerFAB extends StatefulWidget {
+  const DeepTokenDebuggerFAB({super.key});
+
+  @override
+  State<DeepTokenDebuggerFAB> createState() => _DeepTokenDebuggerFABState();
+}
+
+class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
+
+  void _runDeepDiagnostic() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(content: Row(children: [CircularProgressIndicator(), SizedBox(width: 15), Text("جلب التوكن من جذور آبل...")])),
+    );
+
+    if (!Platform.isIOS) {
+      Navigator.pop(context);
+      _showResultDialog("هذا الجهاز ليس آيفون.");
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // ⏳ ننتظر ثانيتين للتأكد من أن iOS أصدر التوكن في الخلفية
+    await Future.delayed(const Duration(seconds: 2));
+
+    // 🔥 قراءة التوكن المستخرج بقوة الـ Swift مباشرة!
+    String nativeVoipToken = prefs.getString('ios_native_voip_token') ?? "NULL_NATIVE: لم يقم نظام PushKit بالرد.";
+
+    String diagnosticLog = "📱 النظام: iOS\n";
+    diagnosticLog += "-----------------------\n";
+    diagnosticLog += "🟢 نتيجة الاتصال المباشر بنظام مكالمات آبل (PushKit):\n\n";
+    diagnosticLog += "$nativeVoipToken\n";
+    diagnosticLog += "-----------------------\n";
+
+    // 💡 إذا وجدنا التوكن، نحفظه في المتغير الذي يستخدمه تطبيقك لكي يعمل بشكل طبيعي
+    if (nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
+      String cleanToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:\n", "").trim();
+      await prefs.setString('voip_token', cleanToken);
+    }
+
+    if (mounted) {
+      Navigator.pop(context);
+      _showResultDialog(diagnosticLog);
+    }
+  }
+
+  void _showResultDialog(String logText) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: const Row(
+          children: [
+            Icon(Icons.radar, color: Colors.red, size: 28),
+            SizedBox(width: 10),
+            Text("تحليل جذور المشكلة", style: TextStyle(fontSize: 16)),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              logText,
+              style: const TextStyle(
+                color: Colors.greenAccent,
+                fontSize: 13,
+                fontFamily: 'monospace',
+                height: 1.5,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("إغلاق"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton.extended(
+      heroTag: "deep_debugger_btn",
+      onPressed: _runDeepDiagnostic,
+      backgroundColor: Colors.red.shade900,
+      icon: const Icon(Icons.radar, color: Colors.white),
+      label: const Text("تحليل سبب الـ NULL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+    );
+  }
+}
+
+
+
+
+
+
 class OrderHistoryCard extends StatelessWidget {
   final Order order;
   const OrderHistoryCard({super.key, required this.order});
@@ -5354,106 +5461,6 @@ class _RestaurantModuleState extends State<RestaurantModule> {
 
 
 
-
-class DeepTokenDebuggerFAB extends StatefulWidget {
-  const DeepTokenDebuggerFAB({super.key});
-
-  @override
-  State<DeepTokenDebuggerFAB> createState() => _DeepTokenDebuggerFABState();
-}
-
-class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
-
-  void _runDeepDiagnostic() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const AlertDialog(content: Row(children: [CircularProgressIndicator(), SizedBox(width: 15), Text("جلب التوكن من جذور آبل...")])),
-    );
-
-    if (!Platform.isIOS) {
-      Navigator.pop(context);
-      _showResultDialog("هذا الجهاز ليس آيفون.");
-      return;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-
-    // ⏳ ننتظر ثانيتين للتأكد من أن iOS أصدر التوكن في الخلفية
-    await Future.delayed(const Duration(seconds: 2));
-
-    // 🔥 قراءة التوكن المستخرج بقوة الـ Swift مباشرة!
-    String nativeVoipToken = prefs.getString('ios_native_voip_token') ?? "NULL_NATIVE: لم يقم نظام PushKit بالرد.";
-
-    String diagnosticLog = "📱 النظام: iOS\n";
-    diagnosticLog += "-----------------------\n";
-    diagnosticLog += "🟢 نتيجة الاتصال المباشر بنظام مكالمات آبل (PushKit):\n\n";
-    diagnosticLog += "$nativeVoipToken\n";
-    diagnosticLog += "-----------------------\n";
-
-    // 💡 إذا وجدنا التوكن، نحفظه في المتغير الذي يستخدمه تطبيقك لكي يعمل بشكل طبيعي
-    if (nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
-      String cleanToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:\n", "").trim();
-      await prefs.setString('voip_token', cleanToken);
-    }
-
-    if (mounted) {
-      Navigator.pop(context);
-      _showResultDialog(diagnosticLog);
-    }
-  }
-
-  void _showResultDialog(String logText) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        title: const Row(
-          children: [
-            Icon(Icons.radar, color: Colors.red, size: 28),
-            SizedBox(width: 10),
-            Text("تحليل جذور المشكلة", style: TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.black87,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: SelectableText(
-              logText,
-              style: const TextStyle(
-                color: Colors.greenAccent,
-                fontSize: 13,
-                fontFamily: 'monospace',
-                height: 1.5,
-              ),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("إغلاق"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FloatingActionButton.extended(
-      heroTag: "deep_debugger_btn",
-      onPressed: _runDeepDiagnostic,
-      backgroundColor: Colors.red.shade900,
-      icon: const Icon(Icons.radar, color: Colors.white),
-      label: const Text("تحليل سبب الـ NULL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-    );
-  }
-}
 
 
 
@@ -6897,12 +6904,7 @@ class _CartScreenState extends State<CartScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('سلتي')),
 
-      // 🔥 التعديل هنا: إجبار الزر على الظهور فوق قسم الدفع بوضوح
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      floatingActionButton: const Padding(
-        padding: EdgeInsets.only(bottom: 220.0), // رفعه للأعلى لكي لا يختفي
-        child: DeepTokenDebuggerFAB(),
-      ),
+
 
       body: Consumer<CartProvider>(
         builder: (ctx, cart, child) {
