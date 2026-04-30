@@ -63,16 +63,14 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
 
-  // 🔥 فحص نوع الإشعار
   final messageType = message.data['type'];
 
+  // 📞 مكالمات VoIP
   if (messageType == 'voip_call') {
-    // معالجة مكالمة VoIP في الخلفية
     final channelName = message.data['channel_name'];
     final driverName = message.data['driver_name'] ?? 'الكابتن';
     final orderId = message.data['order_id'];
 
-    // حفظ البيانات للتعامل معها عند فتح التطبيق
     await SharedPreferences.getInstance().then((prefs) async {
       await prefs.setString('pending_call_channel', channelName ?? '');
       await prefs.setString('pending_call_driver', driverName);
@@ -80,21 +78,48 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       await prefs.setBool('pending_call_available', true);
     });
 
-    // عرض إشعار محلي
     await NotificationService.display(message);
-
     return;
   }
-// داخل _firebaseMessagingBackgroundHandler و _handleBackgroundMessage
+
+  // 🔄 تحديث ملف التسعير
   if (messageType == 'refresh_delivery_config') {
     print("📡 [SilentPush] استلام إشارة تحديث ملف التسعير...");
-    // تحديث البروفايدر في الخلفية
     final configProvider = DeliveryConfigProvider();
     await configProvider.fetchAndCacheConfig();
     return;
   }
 
-  // معالجة الإشعارات العادية
+  // ❌ إشعار إلغاء الطلب من السائق (في الخلفية)
+  if (messageType == 'driver_cancelled_order') {
+    final orderId = message.data['order_id'] ?? 'غير معروف';
+    print("🚨 [Background] تم إلغاء الطلب #$orderId من قبل السائق");
+
+    // عرض إشعار محلي فوري للتيم ليدر
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'high_importance_channel',
+        'إشعارات الطلبات العاجلة',
+        channelDescription: 'تنبيه عند إلغاء طلب من السائق',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound('woo_sound'),
+        enableVibration: true,
+      ),
+    );
+
+    await FlutterLocalNotificationsPlugin().show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      '⚠️ إلغاء طلب!',
+      'المندوب قام بإلغاء الطلب #$orderId. راجع لوحة تحكم الطلبات.',
+      details,
+      payload: orderId,
+    );
+    return;
+  }
+
+  // 📬 باقي الإشعارات العادية
   await NotificationService.display(message);
 }
 
@@ -336,7 +361,7 @@ class CustomerProvider with ChangeNotifier {
     // 🔥 أ) محاولة العرض الفوري من الكاش (حتى لو كان قديماً)
     if (!isRefresh) {
       // هنا نستخدم مدة طويلة (24 ساعة) لأننا سنحدث الحالة في الخلفية
-      bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 1440);
+      bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 2);
 
       if (isCacheAvailable) {
         await _loadHomeFromCache(areaId);
@@ -630,8 +655,6 @@ class DashboardProvider with ChangeNotifier {
   Map<int, String> _pickupCodes = {};
   bool _isLoading = false;
   Timer? _timer;
-
-  // ➕ 1. متغير جديد للتحكم في التحديث الذكي
   Timer? _debounceTimer;
 
   Map<String, List<Order>> get orders => _orders;
@@ -639,39 +662,26 @@ class DashboardProvider with ChangeNotifier {
   Map<int, String> get pickupCodes => _pickupCodes;
   bool get isLoading => _isLoading;
 
-  // ➕ 2. دالة التحديث الذكي (استخدم هذه عند وصول الإشعارات)
   void triggerSmartRefresh(String token) {
-    // إذا وصل إشعار جديد وكان هناك مؤقت يعمل، قم بإلغائه (تصفير العداد)
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-
-    print("⏳ وصل إشعار.. انتظار 3 ثواني قبل التحديث لتجميع الطلبات...");
-
-    // انتظر 3 ثواني، ثم نفذ التحديث مرة واحدة فقط
     _debounceTimer = Timer(const Duration(seconds: 3), () {
-      print("🚀 تنفيذ التحديث المجمع الآن!");
       fetchDashboardData(token, silent: true);
     });
   }
 
   void startAutoRefresh(String token) {
     _timer?.cancel();
-    // نكتفي بطلب أولي، ثم نعتمد على الإشعارات والتحديث اليدوي لتخفيف الحمل
     fetchDashboardData(token, silent: true);
   }
 
   void stopAutoRefresh() {
     _timer?.cancel();
-    _debounceTimer?.cancel(); // إيقاف المؤقت الذكي أيضاً
+    _debounceTimer?.cancel();
   }
 
   void setPickupCode(int orderId, String code) {
     _pickupCodes[orderId] = code;
     notifyListeners();
-  }
-
-  // إيقاف الأتمتة القديمة
-  Future<void> checkAndAutoRequestDelivery(String token) async {
-    // 🚫 Disabled
   }
 
   Future<void> fetchDashboardData(String? token, {bool silent = false}) async {
@@ -683,7 +693,7 @@ class DashboardProvider with ChangeNotifier {
     try {
       final ApiService api = ApiService();
 
-      // جلب الكل
+      // 1. جلب الكل من سيرفر المطعم الأساسي
       final activeFromServer = await api.getRestaurantOrders(status: 'active', token: token);
       final completedFromServer = await api.getRestaurantOrders(status: 'completed', token: token);
 
@@ -694,24 +704,83 @@ class DashboardProvider with ChangeNotifier {
       List<Order> finalActive = [];
       List<Order> finalCompleted = [];
 
-      // ⛔ القائمة السوداء (الحالات المنتهية فقط)
+      // 🔥 التعديل الجذري: هنا أضفنا حالات الاستلام والتوصيل لكي تنتقل للمكتملة وتختفي من النشطة 🔥
       final List<String> archiveStatuses = [
-        'completed', 'cancelled', 'refunded', 'failed', 'trash'
+        'completed',
+        'cancelled',
+        'refunded',
+        'failed',
+        'trash',
+        'picked_up',        // الكابتن استلم الطلب من المطعم
+        'out-for-delivery', // في الطريق للزبون
+        'delivered'         // تم التوصيل
       ];
 
       for (var order in allOrders) {
-        // ✅ إذا لم يكن منتهياً، اعرضه في النشط فوراً
-        if (!archiveStatuses.contains(order.status)) {
+        if (!archiveStatuses.contains(order.status.toLowerCase())) {
           finalActive.add(order);
         } else {
           finalCompleted.add(order);
         }
       }
 
-      finalCompleted.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
-      finalActive.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+      // =================================================================
+      // 🔥 الخدعة الذكية: جلب بيانات السائق من التكسي للطلبات النشطة 🔥
+      // =================================================================
+      List<Order> syncedActiveOrders = [];
 
-      _orders['active'] = finalActive;
+      for (var order in finalActive) {
+        try {
+          // اتصال سريع ومفتوح بسيرفر التكسي لجلب الحالة الحية واسم السائق
+          final response = await http.get(
+              Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/status-by-source/${order.id}')
+          ).timeout(const Duration(seconds: 3));
+
+          if (response.statusCode == 200) {
+            final data = json.decode(response.body);
+
+            // جلب الحالة من التكسي
+            String currentStatus = data['status'] ?? order.status;
+
+            // إنشاء نسخة جديدة من الطلب بالبيانات المدمجة
+            Order syncedOrder = Order(
+              id: order.id,
+              status: currentStatus,
+              dateCreated: order.dateCreated,
+              total: order.total,
+              customerName: order.customerName,
+              address: order.address,
+              phone: order.phone,
+              lineItems: order.lineItems,
+              destinationLat: order.destinationLat,
+              destinationLng: order.destinationLng,
+              shippingTotal: order.shippingTotal,
+              driverName: data['driver_name'] ?? order.driverName,
+              driverPhone: data['driver_phone'] ?? order.driverPhone,
+            );
+
+            // 🛑 فحص أخير: إذا أصبحت الحالة بعد جلبها من التكسي (تم الاستلام)، ننقلها للمكتملة
+            if (archiveStatuses.contains(currentStatus.toLowerCase())) {
+              finalCompleted.add(syncedOrder);
+            } else {
+              syncedActiveOrders.add(syncedOrder);
+            }
+            continue;
+          }
+        } catch (e) {
+          print("⚠️ لم نتمكن من جلب بيانات التكسي للطلب ${order.id}");
+        }
+
+        // إذا فشل الاتصال بالتكسي، نعرض الطلب كما جاء من المطعم
+        syncedActiveOrders.add(order);
+      }
+      // =================================================================
+
+      finalCompleted.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+      syncedActiveOrders.sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+
+      // استخدام القوائم المحدثة والمفلترة
+      _orders['active'] = syncedActiveOrders;
       _orders['completed'] = finalCompleted;
 
       final ratings = await api.getDashboardRatings(token);
@@ -728,16 +797,10 @@ class DashboardProvider with ChangeNotifier {
   @override
   void dispose() {
     _timer?.cancel();
-    _debounceTimer?.cancel(); // تنظيف الذاكرة
+    _debounceTimer?.cancel();
     super.dispose();
   }
 }
-
-
-
-
-
-
 
 
 
@@ -754,6 +817,7 @@ class DeliveryConfigProvider with ChangeNotifier {
 
   bool get isLoading => _isLoading;
   String get errorMessage => _errorMessage;
+  Map<String, dynamic>? get cachedConfig => _cachedConfig; // ✅ للتصحيح الخارجي إذا لزم
 
   // 🔥 جلب وتحديث الملف من السيرفر
   Future<void> fetchAndCacheConfig() async {
@@ -797,48 +861,103 @@ class DeliveryConfigProvider with ChangeNotifier {
     }
   }
 
-  // 🔥 دالة الحساب الموحدة (تضمن عدم رجوع 0 أبداً)
-  double calculateFee({required double userLat, required double userLng, required int restaurantId}) {
-    const double FALLBACK_FEE = 1000.0;
+  // 🔥 دالة الحساب الموحدة (ديناميكية مع سعر احتياطي ذكي + إعدادات من السيرفر)
+  double calculateFee({
+    required double userLat,
+    required double userLng,
+    required int restaurantId,
+    required int areaId
+  }) {
+
+    // 🌟 التحديد الذكي للسعر الاحتياطي في حال الفشل 🌟
+    // إذا كانت المنطقة 84 (الكوت) السعر الاحتياطي 2000، وإلا 1000
+    final double fallbackFee = (areaId == 84) ? 2000.0 : 1000.0;
+
     try {
-      if (_cachedConfig == null) return FALLBACK_FEE;
+      // إذا لم يتم تحميل الملف من السيرفر، نعطي السعر الاحتياطي فوراً
+      if (_cachedConfig == null) return fallbackFee;
 
       final zones = List<Map<String, dynamic>>.from(_cachedConfig!['geo_zones'] ?? []);
       final pricing = Map<String, dynamic>.from(_cachedConfig!['pricing'] ?? {});
       final locations = List<Map<String, dynamic>>.from(_cachedConfig!['locations'] ?? []);
 
-      // 1. فحص المناطق المرسومة (أولوية قصوى)
-      for (var zone in zones) {
-        final points = List<Map<String, dynamic>>.from(zone['latlngs'] ?? []);
-        if (_isPointInPolygon(userLat, userLng, points)) {
-          double zonePrice = double.tryParse(zone['price'].toString()) ?? FALLBACK_FEE;
-          return zonePrice < 1000 ? 1000 : zonePrice; // منع الأسعار الأقل من 1000
+      // 🌟 استخراج إعدادات الدوائر من السيرفر (الكوت) 🌟
+      final List<dynamic> rawRadiusAreas = pricing['radius_areas'] ?? [];
+      final List<int> radiusBasedAreas = rawRadiusAreas
+          .map((e) => int.tryParse(e.toString()) ?? 0)
+          .where((id) => id > 0)
+          .toList();
+      final bool isRadiusArea = radiusBasedAreas.contains(areaId);
+
+      // 1. فحص المناطق المرسومة (للنعمانية وغيرها - غير المشمولة بنظام الدوائر)
+      if (!isRadiusArea) {
+        for (var zone in zones) {
+          final points = List<Map<String, dynamic>>.from(zone['latlngs'] ?? []);
+          if (_isPointInPolygon(userLat, userLng, points)) {
+            double zonePrice = double.tryParse(zone['price'].toString()) ?? fallbackFee;
+            return zonePrice < 1000 ? 1000 : zonePrice;
+          }
         }
       }
 
-      // 2. حساب المسافة (عند الخروج عن المناطق)
-      final restLoc = locations.firstWhere((l) => l['id'] == restaurantId, orElse: () => {});
-      if (restLoc.isEmpty) return FALLBACK_FEE;
+      // 2. حساب المسافة بالكيلومتر
+      final restLoc = locations.firstWhere(
+              (l) => l['id'] == restaurantId,
+          orElse: () => {}
+      );
+      // إذا المطعم ليس له إحداثيات، نعطي السعر الاحتياطي للمدينة (2000 أو 1000)
+      if (restLoc.isEmpty) return fallbackFee;
 
-      final distKm = _haversineDistance(userLat, userLng, restLoc['lat'], restLoc['lng']);
-      double baseDist = double.tryParse(pricing['base_distance_km'].toString()) ?? 5.0;
-      double baseFee = double.tryParse(pricing['base_fee'].toString()) ?? 1000.0;
-      double extraFee = double.tryParse(pricing['extra_km_fee'].toString()) ?? 250.0;
-      double maxFee = double.tryParse(pricing['max_delivery_fee'].toString()) ?? 25000.0;
+      // حساب المسافة بمعامل الطريق (1.3)
+      final distKm = _haversineDistance(
+          userLat,
+          userLng,
+          restLoc['lat'],
+          restLoc['lng']
+      ) * 1.3;
 
-      double calculated = baseFee;
-      if (distKm > baseDist) {
-        calculated += (distKm - baseDist) * extraFee;
+      // 3. فرز التسعيرة حسب نوع المنطقة
+      if (isRadiusArea) {
+        // --- نظام الكوت (الدوائر الجغرافية) ---
+        final List<dynamic> radiusPricing = pricing['radius_pricing'] ?? [];
+        if (radiusPricing.isEmpty) return fallbackFee;
+
+        // البحث عن الشريحة المناسبة للمسافة
+        for (var tier in radiusPricing) {
+          double maxKm = double.tryParse(tier['max_km'].toString()) ?? 999.0;
+          double price = double.tryParse(tier['price'].toString()) ?? fallbackFee;
+
+          if (distKm <= maxKm) {
+            return price;
+          }
+        }
+        // إذا تجاوزت كل الشرائح، نرجع أعلى سعر
+        return 7000.0;
+
+      } else {
+        // --- نظام باقي المناطق (المضلعات + المسافة) ---
+        double baseDist = double.tryParse(pricing['base_distance_km'].toString()) ?? 5.0;
+        double baseFee = double.tryParse(pricing['base_fee'].toString()) ?? 1000.0;
+        double extraFee = double.tryParse(pricing['extra_km_fee'].toString()) ?? 250.0;
+        double maxFee = double.tryParse(pricing['max_delivery_fee'].toString()) ?? 3000.0;
+
+        double calculated = baseFee;
+        if (distKm > baseDist) {
+          calculated += (distKm - baseDist) * extraFee;
+        }
+
+        // تقريب لأقرب 250
+        calculated = (calculated / 250).ceil() * 250.0;
+        if (calculated > maxFee) calculated = maxFee;
+        if (calculated < 1000) calculated = 1000;
+
+        return calculated;
       }
-      // تقريب لأقرب 250
-      calculated = (calculated / 250).ceil() * 250;
-      if (calculated > maxFee) calculated = maxFee;
-      if (calculated < 1000) calculated = 1000;
 
-      return calculated;
     } catch (e) {
-      print("❌ [DeliveryConfig] خطأ أثناء الحساب، تطبيق السعر الاحتياطي: $e");
-      return FALLBACK_FEE; // 🔥 شبكة الأمان النهائية
+      print("❌ [DeliveryConfig] خطأ أثناء الحساب: $e");
+      // في حال انهيار الكود لأي سبب، نضمن رجوع 2000 للكوت و 1000 لغيرها
+      return fallbackFee;
     }
   }
 
@@ -860,20 +979,16 @@ class DeliveryConfigProvider with ChangeNotifier {
   }
 
   double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-    const double R = 6371;
+    const double R = 6371; // نصف قطر الأرض بالكيلومتر
     double dLat = _deg2rad(lat2 - lat1);
     double dLon = _deg2rad(lon2 - lon1);
     double a = sin(dLat / 2) * sin(dLat / 2) +
         cos(_deg2rad(lat1)) * cos(_deg2rad(lat2)) * sin(dLon / 2) * sin(dLon / 2);
     return R * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
+
   double _deg2rad(double deg) => deg * (3.141592653589793 / 180);
 }
-
-
-
-
-
 
 
 
@@ -1572,6 +1687,134 @@ class DeliveryProvider with ChangeNotifier {
     notifyListeners();
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TeamOrdersScreen extends StatefulWidget {
+  final String token;
+  const TeamOrdersScreen({super.key, required this.token});
+
+  @override
+  State<TeamOrdersScreen> createState() => _TeamOrdersScreenState();
+}
+
+class _TeamOrdersScreenState extends State<TeamOrdersScreen> {
+  late Future<List<UnifiedDeliveryOrder>> _ordersFuture;
+  final ApiService _apiService = ApiService();
+
+  @override
+  void initState() {
+    super.initState();
+    _ordersFuture = _fetchTeamOrders();
+  }
+
+  Future<List<UnifiedDeliveryOrder>> _fetchTeamOrders() async {
+    try {
+      // 🔥 الحل هنا: جلب توكن التاكسي المحفوظ محلياً بدلاً من استخدام توكن المطعم الممرر في widget.token
+      final prefs = await SharedPreferences.getInstance();
+      final taxiToken = prefs.getString('taxi_jwt_token');
+
+      if (taxiToken == null || taxiToken.isEmpty) {
+        throw Exception("لم يتم العثور على صلاحية دخول سيرفر التكسي (401)");
+      }
+
+      // 🔥 إرسال توكن التاكسي الصحيح للـ API
+      final response = await _apiService.getTeamLeaderAssignedOrders(taxiToken);
+      return response.map((json) => UnifiedDeliveryOrder.fromJson(json)).toList();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("فشل تحميل الطلبات: ${e.toString()}")),
+        );
+      }
+      return [];
+    }
+  }
+
+  void _refreshOrders() {
+    setState(() {
+      _ordersFuture = _fetchTeamOrders();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("طلبات فريقي", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: Colors.black,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshOrders,
+          ),
+        ],
+      ),
+      body: FutureBuilder<List<UnifiedDeliveryOrder>>(
+        future: _ordersFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError || !snapshot.hasData) {
+            return const Center(child: Text("حدث خطأ أثناء التحميل."));
+          }
+          final orders = snapshot.data!;
+          if (orders.isEmpty) {
+            return const Center(child: Text("لا توجد طلبات لفريقك حالياً 😴"));
+          }
+          return RefreshIndicator(
+            onRefresh: () => _ordersFuture = _fetchTeamOrders(),
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: orders.length,
+              itemBuilder: (context, index) {
+                return TeamLeaderOrderCard(
+                  order: orders[index],
+                  token: widget.token,
+                  onActionComplete: _refreshOrders,
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+
+
+
+
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
@@ -2335,9 +2578,43 @@ class ApiService {
     });
   }
 
+// 🔥 دالة إشعار السائق بأن الطلب جاهز
+  Future<bool> notifyDriverOrderReady(int sourceOrderId) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$TAXI_URL/wp-json/taxi/v3/delivery/notify-ready'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'source_order_id': sourceOrderId.toString(),
+          'secret_key': 'BEYTEI_SECURE_2025' // مفتاح الأمان للتواصل المباشر
+        }),
+      );
+      final data = json.decode(response.body);
+      if (data['success'] == true) {
+        return true;
+      } else {
+        throw Exception(data['message'] ?? ' فشل إرسال اتصل برقم الهاتف للسائق ');
+      }
+    });
+  }
 
+// ✅ الحل: دالة جديدة في ملف api_service.dart
+  Future<List<dynamic>> getTeamLeaderAssignedOrders(String token) async {
+    final response = await http.get(
+      Uri.parse('$TAXI_URL/wp-json/taxi/v3/leader/my-team-orders'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
 
-
+    if (response.statusCode == 200) {
+      final jsonResponse = json.decode(response.body);
+      return jsonResponse['orders'] ?? [];
+    } else {
+      throw Exception('فشل تحميل طلبات الفريق: ${response.statusCode}');
+    }
+  }
 
   // ============================================================
   // 🔥 دالة الفحص الخلفي الخفيف (Light Check)
@@ -2370,7 +2647,59 @@ class ApiService {
 
 
 
+// 1. جلب الأقسام الفرعية لمطعم معين
+  Future<List<dynamic>> getSubcategories(int restaurantId) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/restaurant/$restaurantId/subcategories'),
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return [];
+    });
+  }
 
+  // 2. إنشاء قسم جديد (للمدير)
+  Future<bool> createSubcategory(String token, String name, String icon) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-subcategory'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'name': name,
+          'icon': icon,
+          'display_order': 0
+        }),
+      );
+      return response.statusCode == 201 || response.statusCode == 200;
+    });
+  }
+
+  // 3. إضافة منتج وربطه بالقسم
+  Future<bool> createProductWithSubcategory(String token, String name, String price, String? salePrice, String description, File? imageFile, int subcategoryId) async {
+    return _executeWithRetry(() async {
+      String? imageBase64;
+      if (imageFile != null) {
+        List<int> imageBytes = await imageFile.readAsBytes();
+        imageBase64 = base64Encode(imageBytes);
+      }
+
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product-with-category'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: json.encode({
+          'name': name,
+          'price': price,
+          'sale_price': salePrice,
+          'description': description,
+          'image_base64': imageBase64,
+          'subcategory_id': subcategoryId, // 👈 الربط مع القسم
+        }),
+      );
+      return response.statusCode == 201 || response.statusCode == 200;
+    });
+  }
 
 
   // =================================================================
@@ -2409,7 +2738,6 @@ class ApiService {
 // داخل ApiService
 
   Future<List<UnifiedDeliveryOrder>> getMiswakOrdersByRegion(int areaId, String token) async {
-    // نرسل الطلب بدون تحديد حالة (ليجلب الافتراضي) أو نحدد active
     final url = '$MISWAK_URL/wp-json/restaurant-app/v1/region-orders?area_id=$areaId&status=active';
     print("🟡 [1] طلب المسواك جاري الإرسال إلى: $url");
 
@@ -2422,49 +2750,41 @@ class ApiService {
         },
       );
 
-      print("🟡 [2] استجابة المسواك: كود ${response.statusCode}");
-
       if (response.statusCode == 200) {
         try {
           final List<dynamic> data = json.decode(response.body);
 
-          if (data.isEmpty) {
-            print("⚠️ [4] قائمة المسواك فارغة");
-            return [];
-          }
+          if (data.isEmpty) return [];
 
           List<UnifiedDeliveryOrder> parsedOrders = data.map<UnifiedDeliveryOrder>((json) {
-            // دوال مساعدة للقراءة الآمنة
             double safeDouble(dynamic val) => val == null ? 0.0 : (double.tryParse(val.toString()) ?? 0.0);
 
+            // 🔥 استخدام المتغيرات الصحيحة من المسواك
             return UnifiedDeliveryOrder(
               id: json['id'],
-              status: json['status'] ?? 'unknown',
+              // جلب الحالة الدقيقة للمسواك (تجنب القيمة الافتراضية الخاطئة)
+              status: json['delivery_status'] ?? json['status'] ?? 'unknown',
               description: "مسواك: ${json['store_name'] ?? ''}",
-
-              // محاولة قراءة سعر التوصيل (shipping_total) أو وضعه 0
               deliveryFee: safeDouble(json['shipping_total']),
-
-              // ✨ [جديد 1] قراءة السعر الكلي (total)
               orderTotal: safeDouble(json['total']),
-
               pickupName: json['store_name'] ?? 'متجر مسواك',
-              sourceType: 'market', // 🛒 تحديد المصدر
-              destinationAddress: json['billing']?['address_1'] ?? '',
-              pickupLat: "0", // يحتاج تعديل من الباك اند لإرسال موقع المتجر
+              sourceType: 'market',
+              destinationAddress: json['billing']?['address_1'] ?? json['customer_address'] ?? '',
+              pickupLat: "0",
               pickupLng: "0",
               destLat: json['destination_lat']?.toString() ?? "0",
               destLng: json['destination_lng']?.toString() ?? "0",
               itemsSummary: "${json['line_items']?.length ?? 0} منتجات",
               dateCreated: DateTime.parse(json['date_created']).millisecondsSinceEpoch ~/ 1000,
               customerPhone: json['billing']?['phone'] ?? '',
-
-              // ✨ [جديد 2] قراءة تفاصيل المنتجات
               lineItems: json['line_items'] is List ? json['line_items'] : [],
+
+              // 🔥🔥 تم إضافة اسم السائق الذي كان مفقوداً هنا 🔥🔥
+              driverName: json['driver_name'],
+              driverPhone: json['driver_phone'],
             );
           }).toList();
 
-          print("✅ [5] تم تحليل ${parsedOrders.length} طلب مسواك بنجاح");
           return parsedOrders;
 
         } catch (e) {
@@ -2472,13 +2792,13 @@ class ApiService {
           return [];
         }
       } else {
-        print("❌ [خطأ سيرفر المسواك]: ${response.body}");
         return [];
       }
     });
   }
 
-  // 1. جلب بيانات المحفظة والتحديات (حقيقي)
+
+
   Future<Map<String, dynamic>> getTeamLeaderRewards(String token) async {
     return _executeWithRetry(() async {
       // نستخدم نفس نقطة النهاية للمطعم والتيم ليدر، السيرفر يميز بينهم
@@ -3086,6 +3406,8 @@ class ApiService {
     ));
     return response.statusCode == 200;
   }
+
+// في ملف api_service.dart
 }
 
 class AuthService {
@@ -4095,36 +4417,67 @@ class OrderCard extends StatefulWidget {
 }
 
 class _OrderCardState extends State<OrderCard> {
-  bool _isRetrying = false; // للتحميل
+  bool _isNotifyingDriver = false;
 
-  // دالة الطوارئ (نفس الدالة الموجودة لديك)
-  Future<void> _manualDispatchTaxi() async {
-    setState(() => _isRetrying = true);
+  // 🔥 دالة إشعار المندوب بتجهيز الطلب
+  Future<void> _notifyDriverReady() async {
+    setState(() => _isNotifyingDriver = true);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('jwt_token');
-      final response = await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/manual-dispatch-taxi'),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-        body: json.encode({'order_id': widget.order.id}),
-      );
-      if (response.statusCode == 200) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ تم إرسال إشارة الطوارئ'), backgroundColor: Colors.green));
-        widget.onStatusChanged();
-      } else {
-        throw Exception("فشل الإرسال");
+      final apiService = ApiService();
+      final success = await apiService.notifyDriverOrderReady(widget.order.id);
+
+      if (success && mounted) {
+        showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              title: const Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green),
+                  SizedBox(width: 10),
+                  Text("تم إرسال الإشعار", style: TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: Text("تم إرسال إشعار للكابتن (${widget.order.driverName}) للتوجه إليك واستلام الطلب."),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))],
+            ));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
+      if (mounted) scaffoldMessenger.showSnackBar(SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red));
     } finally {
-      if (mounted) setState(() => _isRetrying = false);
+      if (mounted) setState(() => _isNotifyingDriver = false);
     }
   }
 
-  // دالة الاتصال (نفس الموجودة)
   Future<void> _makePhoneCall(String phoneNumber) async {
+    if (phoneNumber.isEmpty || phoneNumber == 'N/A') return;
     final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
     if (await canLaunchUrl(launchUri)) await launchUrl(launchUri);
+  }
+
+  // تصميم عصري لحالات الطلب
+  Map<String, dynamic> _getStatusDetails(String status) {
+    switch (status.toLowerCase()) {
+      case 'processing':
+      case 'pending':
+        return {'text': 'جاري البحث عن مندوب ⏳', 'color': Colors.orange.shade700, 'icon': Icons.search, 'bgColor': Colors.orange.shade50};
+      case 'driver-assigned':
+      case 'accepted':
+        return {'text': 'المندوب في الطريق إليك 🛵', 'color': Colors.blue.shade700, 'icon': Icons.check_circle_outline, 'bgColor': Colors.blue.shade50};
+      case 'picked_up':
+      case 'out-for-delivery':
+        return {'text': 'تم استلام الطلب من المطعم 🚀', 'color': Colors.teal.shade700, 'icon': Icons.delivery_dining, 'bgColor': Colors.teal.shade50};
+      case 'completed':
+      case 'delivered':
+        return {'text': 'تم التوصيل للزبون 🎉', 'color': Colors.green.shade700, 'icon': Icons.check_circle, 'bgColor': Colors.green.shade50};
+      case 'cancelled':
+      case 'failed':
+      case 'trash':
+        return {'text': 'تم إلغاء الطلب ❌', 'color': Colors.red.shade700, 'icon': Icons.cancel, 'bgColor': Colors.red.shade50};
+      default:
+        return {'text': status, 'color': Colors.grey.shade700, 'icon': Icons.info_outline, 'bgColor': Colors.grey.shade100};
+    }
   }
 
   @override
@@ -4132,105 +4485,218 @@ class _OrderCardState extends State<OrderCard> {
     final formatter = DateFormat('yyyy-MM-dd – hh:mm a', 'ar');
     final formattedDate = formatter.format(widget.order.dateCreated.toLocal());
 
-    // 🔥 1. هل الطلب منتهي؟
-    bool isFinished = ['completed', 'cancelled', 'refunded', 'failed', 'trash'].contains(widget.order.status);
-
-    // 🔥 2. هل يوجد سائق؟
+    bool isFinished = ['completed', 'cancelled', 'refunded', 'failed', 'trash', 'picked_up', 'out-for-delivery', 'delivered'].contains(widget.order.status.toLowerCase());
     bool hasDriver = widget.order.driverName != null && widget.order.driverName!.isNotEmpty;
+    bool isCancelled = widget.order.status.toLowerCase() == 'cancelled';
 
-    // 🔥 3. شرط ظهور زر الطوارئ (نشط + لا يوجد سائق)
-    bool showEmergencyBtn = !isFinished && !hasDriver;
+    final statusDetails = _getStatusDetails(widget.order.status);
 
     return Card(
-      elevation: 4,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 3,
+      margin: const EdgeInsets.only(bottom: 15),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(15),
+        side: isCancelled ? BorderSide(color: Colors.red.shade200, width: 1.5) : BorderSide.none,
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // الرأس
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Chip(label: Text("#${widget.order.id}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), backgroundColor: isFinished ? Colors.green : Colors.orange),
-              Text(formattedDate, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ]),
-            const Divider(),
-
-            // تفاصيل الزبون
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(backgroundColor: Colors.teal, child: Icon(Icons.person, color: Colors.white, size: 20)),
-              title: Text(widget.order.customerName, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(widget.order.address),
-              trailing: IconButton(icon: const Icon(Icons.call, color: Colors.green), onPressed: () => _makePhoneCall(widget.order.phone)),
+            // 1. الرأس (تاريخ ورقم الطلب)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                      color: isCancelled ? Colors.grey.shade300 : Colors.teal.shade600,
+                      borderRadius: BorderRadius.circular(8)
+                  ),
+                  child: Text("#${widget.order.id}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+                Text(formattedDate, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
             ),
+            const Divider(height: 25),
 
-            // المنتجات والسعر
-            Container(
-                width: double.infinity, padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widget.order.lineItems.map((item) => Text("• ${item.quantity} x ${item.name}")).toList())
+            // 2. تفاصيل الزبون (تم إخفاء رقم الهاتف)
+            Row(
+              children: [
+                CircleAvatar(backgroundColor: isCancelled ? Colors.grey.shade300 : Colors.teal.shade50, child: Icon(Icons.person, color: isCancelled ? Colors.grey : Colors.teal)),
+                const SizedBox(width: 15),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.order.customerName, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, decoration: isCancelled ? TextDecoration.lineThrough : null)),
+                      const SizedBox(height: 4),
+                      Text("العنوان: ${widget.order.address}", style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              const Text("الإجمالي:", style: TextStyle(fontWeight: FontWeight.bold)),
-              Text("${widget.order.total} د.ع", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green)),
-            ]),
             const SizedBox(height: 15),
 
-            // 🔥 المنطقة الذكية (حالة السائق + الطوارئ)
-            if (!isFinished)
-              Container(
+            // 3. محتويات الطلب
+            Container(
+                width: double.infinity,
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                    color: hasDriver ? Colors.green.shade50 : Colors.orange.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: hasDriver ? Colors.green.shade200 : Colors.orange.shade200)
-                ),
+                decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)),
                 child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Icon(hasDriver ? Icons.check_circle : Icons.sync, color: hasDriver ? Colors.green : Colors.orange),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            hasDriver
-                                ? "المندوب: ${widget.order.driverName} في الطريق 🛵"
-                                : "جاري البحث عن سائق تلقائياً...",
-                            style: TextStyle(fontWeight: FontWeight.bold, color: hasDriver ? Colors.green.shade800 : Colors.orange.shade800),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: widget.order.lineItems.map((item) => Text("• ${item.quantity} x ${item.name}", style: const TextStyle(fontWeight: FontWeight.w500))).toList()
+                )
+            ),
+
+            const SizedBox(height: 10),
+            Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("المطلوب من المندوب:", style: TextStyle(color: Colors.grey, fontSize: 14)),
+                  Text("${widget.order.total} د.ع", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isCancelled ? Colors.grey : Colors.green)),
+                ]
+            ),
+            const SizedBox(height: 15),
+
+            // 🔥🔥🔥 4. شريط الحالة والمندوب (تصميم سمائي عصري مع رقم الهاتف) 🔥🔥🔥
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                  color: statusDetails['bgColor'],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: statusDetails['color'].withOpacity(0.3))
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // الجزء العلوي: حالة الطلب
+                  Row(
+                    children: [
+                      Icon(statusDetails['icon'], color: statusDetails['color'], size: 28),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                            statusDetails['text'],
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: statusDetails['color'])
+                        ),
+                      ),
+
+                      // زر الاتصال بالمندوب (دائري أخضر)
+                      if (hasDriver && widget.order.driverPhone != null && widget.order.driverPhone!.isNotEmpty)
+                        Container(
+                          decoration: BoxDecoration(
+                            color: isCancelled ? Colors.grey.shade300 : Colors.green.shade50,
+                            shape: BoxShape.circle,
+                          ),
+                          child: IconButton(
+                            icon: Icon(Icons.call, color: isCancelled ? Colors.grey : Colors.green.shade700),
+                            tooltip: "اتصال بالمندوب",
+                            onPressed: () => _makePhoneCall(widget.order.driverPhone!),
                           ),
                         ),
-                      ],
+                    ],
+                  ),
+
+                  // الجزء السفلي: بطاقة المندوب السمائية 💎 (تظهر فقط إذا وافق السائق)
+                  if (hasDriver)
+                    Container(
+                      margin: const EdgeInsets.only(top: 12.0),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isCancelled ? Colors.grey.shade200 : const Color(0xFFE3F2FD), // لون سمائي فاتح جداً
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: isCancelled ? Colors.grey.shade300 : const Color(0xFF90CAF9)), // إطار سمائي
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: isCancelled ? Colors.grey.shade300 : const Color(0xFFBBDEFB),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(Icons.two_wheeler, size: 20, color: isCancelled ? Colors.grey : const Color(0xFF1565C0)),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "الكابتن: ${widget.order.driverName}",
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: isCancelled ? Colors.grey : const Color(0xFF0D47A1), // أزرق كحلي
+                                      decoration: isCancelled ? TextDecoration.lineThrough : null
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                // إضافة رقم الهاتف للسائق باحترافية
+                                if (widget.order.driverPhone != null && widget.order.driverPhone!.isNotEmpty)
+                                  Row(
+                                    children: [
+                                      Icon(Icons.phone_android, size: 12, color: isCancelled ? Colors.grey : const Color(0xFF1976D2)),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        widget.order.driverPhone!,
+                                        style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: isCancelled ? Colors.grey : const Color(0xFF1976D2),
+                                            decoration: isCancelled ? TextDecoration.lineThrough : null
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-
-                    // زر الطوارئ يظهر فقط إذا لم يكن هناك سائق
-                    if (showEmergencyBtn) ...[
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: _isRetrying ? null : _manualDispatchTaxi,
-                          icon: const Icon(Icons.bolt, color: Colors.white),
-                          label: Text(_isRetrying ? "جاري الإرسال..." : "زر الطوارئ: إعادة طلب سائق"),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                        ),
-                      )
-                    ]
-                  ],
-                ),
+                ],
               ),
+            ),
 
-            // كود التسليم (إذا وجد)
+            // 🔥 5. زر (تم تجهيز الطلب) يظهر فقط للمطعم عندما يكون الطلب قيد التنفيذ ولم يستلمه السائق بعد 🔥
+            if (!isFinished && hasDriver && !['picked_up', 'out-for-delivery', 'delivered'].contains(widget.order.status.toLowerCase())) ...[
+              const SizedBox(height: 15),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: _isNotifyingDriver ? null : _notifyDriverReady,
+                  icon: _isNotifyingDriver
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.notifications_active, color: Colors.white),
+                  label: Text(_isNotifyingDriver ? "جاري الإرسال..." : "تم تجهيز الطلب - إرسال تنبيه للمندوب"),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.indigo.shade600,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                  ),
+                ),
+              )
+            ],
+
+            // كود التسليم (إن وجد)
             if (widget.pickupCode != null && !isFinished)
-              Container(margin: const EdgeInsets.only(top: 10), padding: const EdgeInsets.all(8), color: Colors.grey.shade200, child: Text("كود التسليم: ${widget.pickupCode}", style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2))),
+              Container(
+                  margin: const EdgeInsets.only(top: 10),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: Colors.amber.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.amber.shade200)),
+                  child: Text("كود التسليم للمندوب: ${widget.pickupCode}", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold, color: Colors.amber.shade900, letterSpacing: 1.5))
+              ),
           ],
         ),
       ),
     );
   }
 }
-
 
 class DeepTokenDebuggerFAB extends StatefulWidget {
   const DeepTokenDebuggerFAB({super.key});
@@ -4536,7 +5002,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
   bool _isLoading = false;
   final ApiService _apiService = ApiService();
 
-  // عرض التفاصيل (كما هي)
+  // عرض التفاصيل (محدث ومحسن)
   void _showOrderDetails(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -4587,7 +5053,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
                 const SizedBox(height: 20),
 
                 // معلومات السائق في التفاصيل
-                if (widget.order.driverName != null) ...[
+                if (widget.order.driverName != null && widget.order.driverName!.isNotEmpty) ...[
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10)),
@@ -4596,7 +5062,8 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
                         const Icon(Icons.delivery_dining, color: Colors.blue),
                         const SizedBox(width: 10),
                         Expanded(child: Text("المندوب: ${widget.order.driverName}", style: const TextStyle(fontWeight: FontWeight.bold))),
-                        IconButton(icon: const Icon(Icons.phone, color: Colors.green), onPressed: () => _makePhoneCall(widget.order.driverPhone ?? '')),
+                        if (widget.order.driverPhone != null && widget.order.driverPhone!.isNotEmpty)
+                          IconButton(icon: const Icon(Icons.phone, color: Colors.green), onPressed: () => _makePhoneCall(widget.order.driverPhone!)),
                       ],
                     ),
                   ),
@@ -4624,11 +5091,10 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     setState(() => _isLoading = true);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
-      // نستخدم نفس Endpoint الطوارئ الموجود في السيرفر
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/manual-dispatch-taxi'),
         headers: {
-          'Authorization': 'Bearer ${widget.token}', // نستخدم توكن الليدر
+          'Authorization': 'Bearer ${widget.token}',
           'Content-Type': 'application/json'
         },
         body: json.encode({'order_id': widget.order.id}),
@@ -4659,17 +5125,45 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     if (await canLaunchUrl(launchUri)) await launchUrl(launchUri);
   }
 
+  // دالة مساعدة للحصول على تفاصيل الحالة بشكل عصري
+  Map<String, dynamic> _getStatusDetails(String status) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+      case 'processing':
+        return {'text': 'جاري البحث عن سائق ⏳', 'color': Colors.orange.shade700, 'icon': Icons.search, 'bgColor': Colors.orange.shade50};
+      case 'accepted':
+      case 'driver-assigned':
+        return {'text': 'تم القبول (في الطريق للمصدر)', 'color': Colors.blue.shade700, 'icon': Icons.check_circle_outline, 'bgColor': Colors.blue.shade50};
+      case 'at_store':
+        return {'text': 'الكابتن وصل للمصدر 📍', 'color': Colors.indigo.shade700, 'icon': Icons.storefront, 'bgColor': Colors.indigo.shade50};
+      case 'picked_up':
+      case 'out-for-delivery':
+        return {'text': 'تم الاستلام (في الطريق للزبون) 🛵', 'color': Colors.teal.shade700, 'icon': Icons.delivery_dining, 'bgColor': Colors.teal.shade50};
+      case 'completed':
+      case 'delivered':
+        return {'text': 'تم التوصيل بنجاح 🎉', 'color': Colors.green.shade700, 'icon': Icons.check_circle, 'bgColor': Colors.green.shade50};
+      case 'cancelled':
+      case 'failed':
+      case 'refunded':
+      case 'trash':
+        return {'text': 'تم الإلغاء ❌', 'color': Colors.red.shade700, 'icon': Icons.cancel, 'bgColor': Colors.red.shade50};
+      default:
+        return {'text': status, 'color': Colors.grey.shade700, 'icon': Icons.info_outline, 'bgColor': Colors.grey.shade100};
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    Color color = Colors.blue;
-    IconData icon = Icons.info;
-    if (widget.order.sourceType == 'restaurant') { color = Colors.orange; icon = Icons.restaurant; }
-    else if (widget.order.sourceType == 'market') { color = Colors.purple; icon = Icons.shopping_basket; }
+    Color sourceTypeColor = Colors.blue;
+    IconData sourceTypeIcon = Icons.info;
+    if (widget.order.sourceType == 'restaurant') { sourceTypeColor = Colors.orange; sourceTypeIcon = Icons.restaurant; }
+    else if (widget.order.sourceType == 'market') { sourceTypeColor = Colors.purple; sourceTypeIcon = Icons.shopping_basket; }
 
-    bool isActive = !['completed', 'cancelled', 'refunded', 'failed', 'trash', 'out-for-delivery'].contains(widget.order.status);
+    bool isActive = !['completed', 'delivered', 'cancelled', 'refunded', 'failed', 'trash'].contains(widget.order.status.toLowerCase());
 
-    // في النظام الآلي، completed تعني أن الطلب تم استلامه من المطعم وبانتظار السائق
-    // driver-assigned تعني السائق استلم
+    // جلب تفاصيل الحالة العصرية
+    final statusDetails = _getStatusDetails(widget.order.status);
+    final bool isCancelled = widget.order.status.toLowerCase() == 'cancelled';
 
     double grandTotal = widget.order.orderTotal + widget.order.deliveryFee;
 
@@ -4701,15 +5195,23 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Chip(
-                  avatar: Icon(icon, size: 16, color: Colors.white),
+                  avatar: Icon(sourceTypeIcon, size: 16, color: Colors.white),
                   label: Text("#${widget.order.id}"),
-                  backgroundColor: color,
+                  backgroundColor: isCancelled ? Colors.grey : sourceTypeColor, // تبهيت اللون إذا ألغي
                   labelStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text("${NumberFormat('#,###').format(grandTotal)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
+                    Text(
+                        "${NumberFormat('#,###').format(grandTotal)} د.ع",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: isCancelled ? Colors.grey : Colors.green,
+                            decoration: isCancelled ? TextDecoration.lineThrough : null // شطب السعر إذا ألغي
+                        )
+                    ),
                     Text("توصيل: ${NumberFormat('#,###').format(widget.order.deliveryFee)}", style: TextStyle(fontSize: 10, color: Colors.grey[600])),
                   ],
                 ),
@@ -4720,33 +5222,37 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
             // 3. العناوين
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text("من: ${widget.order.pickupName}", style: const TextStyle(fontWeight: FontWeight.bold)),
+              title: Text("من: ${widget.order.pickupName}", style: TextStyle(fontWeight: FontWeight.bold, color: isCancelled ? Colors.grey : Colors.black)),
               subtitle: Text("إلى: ${widget.order.destinationAddress}", maxLines: 1, overflow: TextOverflow.ellipsis),
-              trailing: IconButton(icon: const Icon(Icons.phone, color: Colors.green), onPressed: () => _makePhoneCall(widget.order.customerPhone)),
+              trailing: IconButton(icon: Icon(Icons.phone, color: isCancelled ? Colors.grey : Colors.green), onPressed: () => _makePhoneCall(widget.order.customerPhone)),
             ),
 
-            // 4. عرض معلومات المندوب (إذا وجد)
+            // 🔥 4. عرض معلومات المندوب (احترافي ودائم الظهور إن وجد) 🔥
             if (widget.order.driverName != null && widget.order.driverName!.isNotEmpty)
               Container(
                 margin: const EdgeInsets.symmetric(vertical: 8),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(color: Colors.amber.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.amber.shade200)),
+                decoration: BoxDecoration(
+                    color: isCancelled ? Colors.grey.shade100 : Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: isCancelled ? Colors.grey.shade300 : Colors.amber.shade200)
+                ),
                 child: Row(
                   children: [
-                    const Icon(Icons.motorcycle, color: Colors.orange),
+                    Icon(Icons.motorcycle, color: isCancelled ? Colors.grey : Colors.orange),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text("تم الاستلام بواسطة:", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                          Text(widget.order.driverName!, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                          const Text("الكابتن المستلم:", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                          Text(widget.order.driverName!, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isCancelled ? Colors.grey : Colors.black)),
                         ],
                       ),
                     ),
-                    if (widget.order.driverPhone != null)
+                    if (widget.order.driverPhone != null && widget.order.driverPhone!.isNotEmpty)
                       IconButton(
-                        icon: const Icon(Icons.call, color: Colors.green),
+                        icon: Icon(Icons.call, color: isCancelled ? Colors.grey : Colors.green),
                         onPressed: () => _makePhoneCall(widget.order.driverPhone!),
                         tooltip: "اتصل بالسائق",
                       ),
@@ -4756,9 +5262,7 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
 
             const SizedBox(height: 10),
 
-            // 🔥🔥🔥 5. منطقة التحكم الآلي للتيم ليدر 🔥🔥🔥
-            // استبدلنا الأزرار القديمة بهذا القسم
-
+            // 🔥🔥🔥 5. منطقة التحكم الآلي والحالة العصرية 🔥🔥🔥
             Column(
               children: [
                 // زر التفاصيل (دائماً موجود)
@@ -4778,39 +5282,37 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
 
                 const SizedBox(height: 8),
 
-                // شريط الحالة الآلي
+                // شريط الحالة الآلي (العصري)
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
+                      color: statusDetails['bgColor'],
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade300)
+                      border: Border.all(color: statusDetails['color'].withOpacity(0.5))
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.smart_toy, color: Colors.purple), // أيقونة النظام الآلي
+                      Icon(statusDetails['icon'], color: statusDetails['color']),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text("حالة النظام الآلي:", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                            const Text("الحالة الحالية:", style: TextStyle(fontSize: 10, color: Colors.grey)),
                             Text(
-                                widget.order.driverName != null
-                                    ? "✅ السائق في الطريق"
-                                    : "⏳ جاري البحث عن سائق...", // يظهر هذا تلقائياً لأن الطلب Processing
+                                statusDetails['text'],
                                 style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 13,
-                                    color: widget.order.driverName != null ? Colors.green : Colors.orange
+                                    color: statusDetails['color']
                                 )
                             ),
                           ],
                         ),
                       ),
 
-                      // زر التدخل (طوارئ) - يظهر فقط إذا لم يكن هناك سائق بعد
-                      if (widget.order.driverName == null && isActive)
+                      // زر التدخل (طوارئ) - يظهر فقط إذا لم يكن هناك سائق والطلب ما زال معلقاً
+                      if ((widget.order.driverName == null || widget.order.driverName!.isEmpty) && isActive && !isCancelled)
                         IconButton(
                           icon: _isLoading
                               ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -4829,7 +5331,6 @@ class _TeamLeaderOrderCardState extends State<TeamLeaderOrderCard> {
     );
   }
 }
-
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
@@ -5901,6 +6402,9 @@ class HomeScreenState extends State<HomeScreen> {
     _selectedAreaId = prefs.getInt('selectedAreaId');
     _selectedAreaName = prefs.getString('selectedAreaName');
 
+    // 🌟 التعديل: جلب ملف التسعير في الخلفية بمجرد فتح التطبيق ليكون جاهزاً للسلة
+    Provider.of<DeliveryConfigProvider>(context, listen: false).fetchAndCacheConfig();
+
     // جلب بيانات الصفحة الرئيسية بناءً على المنطقة
     if (_selectedAreaId != null) {
       final provider = Provider.of<CustomerProvider>(context, listen: false);
@@ -5908,7 +6412,7 @@ class HomeScreenState extends State<HomeScreen> {
       // 1. جلب المطاعم
       provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
 
-      // 2. 🔥 إضافة: جلب العروض النشطة لهذه المنطقة
+      // 2. 🔥 جلب العروض النشطة لهذه المنطقة
       provider.fetchOffers(_selectedAreaId!);
     }
     setState(() {});
@@ -6217,6 +6721,9 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+
+
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
   const SelectLocationScreen({super.key, this.isCancellable = false});
@@ -6379,6 +6886,7 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
     );
   }
 }
+
 class RestaurantsScreen extends StatefulWidget {
   const RestaurantsScreen({super.key});
   @override
@@ -6879,7 +7387,6 @@ class CartScreen extends StatefulWidget {
   @override
   State<CartScreen> createState() => _CartScreenState();
 }
-
 class _CartScreenState extends State<CartScreen> {
   final _apiService = ApiService();
   final _nameController = TextEditingController();
@@ -6903,8 +7410,6 @@ class _CartScreenState extends State<CartScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('سلتي')),
-
-
 
       body: Consumer<CartProvider>(
         builder: (ctx, cart, child) {
@@ -6939,12 +7444,10 @@ class _CartScreenState extends State<CartScreen> {
       final localOrders = await OrderHistoryService().getOrders();
       final activeStatuses = ['pending', 'processing', 'on-hold', 'driver-assigned', 'out-for-delivery', 'accepted', 'at_store', 'picked_up'];
 
-      // 🔥 التعديل الذكي: تصفية الطلبات النشطة التي لم يمر عليها أكثر من 4 ساعات فقط
       final activeOrders = localOrders.where((o) {
         bool isStatusActive = activeStatuses.contains(o.status.toLowerCase());
         int hoursPassed = DateTime.now().difference(o.dateCreated).inHours;
         bool isRecent = hoursPassed < 4;
-
         return isStatusActive && isRecent;
       }).toList();
 
@@ -7007,9 +7510,10 @@ class _CartScreenState extends State<CartScreen> {
 
     bool isSubmitting = false;
     geolocator.Position? _capturedPosition;
-    double _deliveryFee = 1000.0; // 🔥 القيمة الافتراضية الآمنة
+    double _deliveryFee = 1000.0;
     String _locationMessage = "جاري تحديد الموقع وحساب التكلفة...";
     bool _isCalcFinished = false;
+    bool _isLocationError = false;
 
     bool _hasStartedCalculation = false;
     Future<void>? _calculationFuture;
@@ -7035,6 +7539,7 @@ class _CartScreenState extends State<CartScreen> {
                     _isCalcFinished = true;
                     _deliveryFee = fee;
                     _locationMessage = message;
+                    _isLocationError = hasError;
                   });
                 }
               },
@@ -7118,7 +7623,7 @@ class _CartScreenState extends State<CartScreen> {
                 style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).primaryColor,
                     foregroundColor: Colors.white),
-                onPressed: (isSubmitting || !_isCalcFinished)
+                onPressed: (isSubmitting || !_isCalcFinished || _isLocationError)
                     ? null
                     : () async {
                   if (!_formKey.currentState!.validate()) return;
@@ -7188,7 +7693,78 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  /// 🔥🔥🔥 الدالة المحدثة: حساب آمن مع شبكة حماية 1000 د.ع 🔥🔥🔥
+  // ============================================================
+  // 🔥 دالة إجبارية صارمة: لا طلب بدون موقع (GPS + Permission) 🔥
+  // ============================================================
+  Future<bool> _ensureLocationPermissionWithRetry(BuildContext context) async {
+    bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      bool? turnOn = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              title: const Row(children: [Icon(Icons.gps_off, color: Colors.red), SizedBox(width: 10), Text('تفعيل الـ GPS إجباري')]),
+              content: const Text('عذراً، لا يمكننا حساب أجرة التوصيل وإتمام طلبك بدون تحديد موقعك بدقة. يرجى تشغيل الـ GPS للمتابعة.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('تراجع عن الطلب', style: TextStyle(color: Colors.grey))),
+                ElevatedButton(
+                  onPressed: () async {
+                    await geolocator.Geolocator.openLocationSettings();
+                    Navigator.pop(ctx, true);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor),
+                  child: const Text('تفعيل الآن', style: TextStyle(color: Colors.white)),
+                )
+              ]
+          )
+      );
+
+      if (turnOn != true) return false;
+      serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return false;
+    }
+
+    geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+
+    if (permission == geolocator.LocationPermission.denied) {
+      permission = await geolocator.Geolocator.requestPermission();
+    }
+
+    if (permission == geolocator.LocationPermission.denied || permission == geolocator.LocationPermission.deniedForever) {
+      bool? openSettings = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              title: const Row(children: [Icon(Icons.security, color: Colors.orange), SizedBox(width: 10), Text('صلاحية الموقع مطلوبة')]),
+              content: const Text('التطبيق يحتاج إلى صلاحية الوصول للموقع لكي يحدد كروة التوصيل بشكل عادل. يرجى منح الصلاحية من إعدادات الهاتف.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء الطلب', style: TextStyle(color: Colors.grey))),
+                ElevatedButton(
+                  onPressed: () async {
+                    await geolocator.Geolocator.openAppSettings();
+                    Navigator.pop(ctx, true);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor),
+                  child: const Text('فتح الإعدادات', style: TextStyle(color: Colors.white)),
+                )
+              ]
+          )
+      );
+
+      if (openSettings == true) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("بعد منح الصلاحية، اضغط على 'إتمام الطلب' مرة أخرى.")));
+        }
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  /// 🔥🔥🔥 الدالة المحدثة: حساب التكلفة (بدون قيود مسافة - يدعم VPN والمسافات البعيدة) 🔥🔥🔥
   Future<void> _calculateDeliveryFeeAsync({
     required CartProvider cart,
     required BuildContext cartScreenContext,
@@ -7196,27 +7772,31 @@ class _CartScreenState extends State<CartScreen> {
     required Function(double, String, bool) onFeeCalculated,
     required Function(String) onMessageUpdate,
   }) async {
-    const double FALLBACK_FEE = 1000.0;
+
+    int currentZoneId = 0;
+
     try {
-      onMessageUpdate("جاري تحديد الموقع...");
-      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        onFeeCalculated(FALLBACK_FEE, "خدمات الموقع غير مفعلة، تم تطبيق السعر الأساسي", false);
+      final prefs = await SharedPreferences.getInstance();
+      currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
+
+      final List<int> radiusBasedAreas = [84]; // الكوت
+      final double fallbackFee = radiusBasedAreas.contains(currentZoneId) ? 2000.0 : 1000.0;
+
+      onMessageUpdate("جاري فحص صلاحيات الموقع...");
+
+      // 🌟 استدعاء الدالة الصارمة 🌟
+      bool hasPermission = await _ensureLocationPermissionWithRetry(cartScreenContext);
+
+      if (!hasPermission) {
+        // 🚨 إرسال (true) في المعامل الأخير يعطل زر "تأكيد الطلب" في الواجهة
+        onFeeCalculated(0.0, "❌ يرجى تفعيل الموقع ومنح الصلاحية للمتابعة.", true);
         return;
       }
 
-      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-      if (permission == geolocator.LocationPermission.denied) {
-        permission = await geolocator.Geolocator.requestPermission();
-      }
-      if (permission != geolocator.LocationPermission.whileInUse && permission != geolocator.LocationPermission.always) {
-        onFeeCalculated(FALLBACK_FEE, "تم رفض إذن الموقع، تم تطبيق السعر الأساسي", false);
-        return;
-      }
-
+      onMessageUpdate("جاري تحديد الموقع بدقة...");
       final position = await geolocator.Geolocator.getCurrentPosition(
         desiredAccuracy: geolocator.LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
+        timeLimit: const Duration(seconds: 10),
       );
       onPositionCaptured(position);
 
@@ -7224,32 +7804,36 @@ class _CartScreenState extends State<CartScreen> {
         onMessageUpdate("جاري حساب أجرة التوصيل...");
         final int restaurantId = cart.items.first.categoryId;
 
-        // 🔥 استخدام البروفايدر الموحد (كاش + تحديث صامت + حساب محلي)
         final configProvider = Provider.of<DeliveryConfigProvider>(cartScreenContext, listen: false);
 
-        // ضمان وجود الملف محلياً
-        if (configProvider._cachedConfig == null) {
+        if (configProvider.cachedConfig == null) {
           await configProvider.fetchAndCacheConfig();
         }
 
-        // 🔥 الحساب المحلي السريع (يضمن عدم رجوع 0 أبداً)
+        // 🔥 حساب الرسوم مع تمرير areaId لدعم التسعير الديناميكي
         double fee = configProvider.calculateFee(
           userLat: position.latitude,
           userLng: position.longitude,
           restaurantId: restaurantId,
+          areaId: currentZoneId,
         );
 
-        // شبكة أمان أخيرة
-        if (fee <= 0) fee = FALLBACK_FEE;
+        // ✅ تم إزالة شرط (fee == -1.0) للسماح بالطلبات من أي مسافة (حتى 18 كم أو أكثر مع VPN)
 
-        onFeeCalculated(fee, "✅ تم حساب التوصيل بنجاح", false);
+        // شبكة أمان: منع السعر 0 أو السالب فقط
+        if (fee <= 0) fee = fallbackFee;
+
+        String msg = radiusBasedAreas.contains(currentZoneId)
+            ? "✅ تم حساب أجرة التوصيل بدقة"
+            : "✅ تم حساب التوصيل بنجاح";
+
+        onFeeCalculated(fee, msg, false);
       } else {
-        onFeeCalculated(FALLBACK_FEE, "السلة فارغة، تم تطبيق السعر الأساسي", false);
+        onFeeCalculated(fallbackFee, "السلة فارغة", false);
       }
     } catch (e) {
-      print("❌ خطأ في حساب التوصيل: $e");
-      // 🔥 أي خطأ غير متوقع = 1000 دينار (يسمح بإتمام الطلب دون تعطيل الزبون)
-      onFeeCalculated(FALLBACK_FEE, "تعذر الحساب، تم تطبيق السعر الأساسي (1000 د.ع)", false);
+      print("❌ خطأ في حساب التوصيل أو الـ GPS: $e");
+      onFeeCalculated(0.0, "حدث خطأ في تحديد الموقع، تأكد من وجودك في مكان مفتوح.", true);
     }
   }
 
@@ -8342,8 +8926,6 @@ class ProductManagementTab extends StatefulWidget {
 
 class _ProductManagementTabState extends State<ProductManagementTab> {
   final TextEditingController _searchController = TextEditingController();
-
-  // 🔥 متغير جديد للتحكم في عرض العروض فقط
   bool _showOffersOnly = false;
 
   @override
@@ -8374,7 +8956,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     }
   }
 
-  // دالة الانتقال لشاشة الإضافة
   void _navigateToAddScreen() async {
     final productProvider = Provider.of<RestaurantProductsProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -8396,32 +8977,94 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     }
   }
 
+  // 🔥 نافذة إضافة قسم جديد
+  void _showAddCategoryDialog(BuildContext context) {
+    final nameCtrl = TextEditingController();
+    final iconCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              title: const Row(
+                children: [
+                  Icon(Icons.create_new_folder, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Text("إضافة قسم جديد"),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: "اسم القسم (مثال: بركر)", border: OutlineInputBorder()),
+                  ),
+                  const SizedBox(height: 15),
+                  TextField(
+                    controller: iconCtrl,
+                    decoration: const InputDecoration(labelText: "أيقونة القسم (مثال: 🍔)", border: OutlineInputBorder()),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: isSubmitting ? null : () => Navigator.pop(ctx), child: const Text("إلغاء")),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, foregroundColor: Colors.white),
+                  onPressed: isSubmitting ? null : () async {
+                    if (nameCtrl.text.isEmpty) return;
+                    setState(() => isSubmitting = true);
+                    final token = Provider.of<AuthProvider>(context, listen: false).token!;
+
+                    final success = await ApiService().createSubcategory(token, nameCtrl.text, iconCtrl.text);
+
+                    if (mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text(success ? "تم إضافة القسم '${nameCtrl.text}' بنجاح" : "فشل إضافة القسم"),
+                              backgroundColor: success ? Colors.green : Colors.red
+                          )
+                      );
+                    }
+                  },
+                  child: isSubmitting
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Text("حفظ القسم"),
+                )
+              ],
+            );
+          }
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
 
     return Consumer<RestaurantProductsProvider>(
       builder: (context, provider, child) {
-
-        // 🔥 منطق الفلترة: تحديد القائمة المعروضة
         List<FoodItem> displayedProducts = provider.products;
         if (_showOffersOnly) {
-          // عرض فقط المنتجات التي لها سعر خصم (Sale Price)
           displayedProducts = provider.products.where((p) => p.salePrice != null && p.salePrice! > 0).toList();
         }
 
         return Scaffold(
-          // ✅ تحديد موقع الزر العائم ليكون في اليسار
           floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
-
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _navigateToAddScreen,
-            label: const Text("إضافة منتج / عرض"),
-            icon: const Icon(Icons.add),
+            label: const Text("إضافة وجبة"),
+            icon: const Icon(Icons.fastfood),
             backgroundColor: Theme.of(context).primaryColor,
             foregroundColor: Colors.white,
           ),
           appBar: AppBar(
+            automaticallyImplyLeading: false,
             title: TextField(
               controller: _searchController,
               decoration: const InputDecoration(
@@ -8431,7 +9074,17 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
               ),
               onChanged: (query) => provider.search(query),
             ),
-            // 🔥 إضافة أزرار الفلترة في أسفل الـ AppBar
+            actions: [
+              // 🔥 أيقونة إضافة القسم في الأعلى
+              Padding(
+                padding: const EdgeInsets.only(left: 8.0),
+                child: IconButton(
+                  icon: const Icon(Icons.create_new_folder, color: Colors.orange, size: 28),
+                  tooltip: "إضافة قسم جديد",
+                  onPressed: () => _showAddCategoryDialog(context),
+                ),
+              )
+            ],
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(60.0),
               child: Column(
@@ -8460,22 +9113,15 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
               if (provider.errorMessage != null && provider.products.isEmpty) {
                 return NetworkErrorWidget(message: provider.errorMessage!, onRetry: () => provider.fetchProducts(auth.token));
               }
-
-              // حالة القائمة الفارغة (مع رسالة مخصصة حسب الفلتر)
               if (displayedProducts.isEmpty) {
                 return Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                          _showOffersOnly ? Icons.local_fire_department_outlined : Icons.fastfood_outlined,
-                          size: 60, color: Colors.grey
-                      ),
+                      Icon(_showOffersOnly ? Icons.local_fire_department_outlined : Icons.fastfood_outlined, size: 60, color: Colors.grey),
                       const SizedBox(height: 10),
                       Text(
-                        _showOffersOnly
-                            ? "لا توجد عروض نشطة حالياً.\nأضف خصماً لأي منتج ليظهر هنا."
-                            : "لم يتم العثور على منتجات. أضف منتجك الأول!",
+                        _showOffersOnly ? "لا توجد عروض نشطة حالياً." : "لم يتم العثور على منتجات. أضف منتجك الأول!",
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.grey, fontSize: 16),
                       ),
@@ -8485,20 +9131,17 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
               }
 
               return ListView.builder(
-                padding: const EdgeInsets.only(bottom: 80, top: 10), // مسافة للزر العائم
+                padding: const EdgeInsets.only(bottom: 80, top: 10),
                 itemCount: displayedProducts.length,
                 itemBuilder: (context, index) {
                   final product = displayedProducts[index];
-
-                  // التحقق هل هذا المنتج يعتبر عرضاً؟
                   final bool isOffer = product.salePrice != null && product.salePrice! > 0;
 
                   return Card(
                     margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    elevation: isOffer ? 3 : 1, // ظل أكبر للعروض
+                    elevation: isOffer ? 3 : 1,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
-                      // حدود ذهبية للعروض لتمييزها
                       side: isOffer ? const BorderSide(color: Colors.amber, width: 1) : BorderSide.none,
                     ),
                     child: ListTile(
@@ -8507,16 +9150,13 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
                         borderRadius: BorderRadius.circular(8),
                         child: CachedNetworkImage(
                           imageUrl: product.imageUrl,
-                          width: 60,
-                          height: 60,
-                          fit: BoxFit.cover,
+                          width: 60, height: 60, fit: BoxFit.cover,
                           errorWidget: (c, u, e) => Container(color: Colors.grey[200], child: const Icon(Icons.fastfood, color: Colors.grey)),
                         ),
                       ),
                       title: Row(
                         children: [
                           Expanded(child: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold))),
-                          // شارة العرض
                           if (isOffer)
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -8529,7 +9169,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 4),
-                          // عرض السعر بذكاء (إذا كان عرض يظهر السعر القديم مشطوب)
                           isOffer
                               ? Row(
                             children: [
@@ -8541,10 +9180,7 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
                               : Text("السعر: ${NumberFormat('#,###').format(product.price)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                         ],
                       ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.edit_outlined, color: Colors.blue),
-                        onPressed: () => _navigateToEditScreen(product),
-                      ),
+                      trailing: IconButton(icon: const Icon(Icons.edit_outlined, color: Colors.blue), onPressed: () => _navigateToEditScreen(product)),
                       onTap: () => _navigateToEditScreen(product),
                     ),
                   );
@@ -8557,7 +9193,6 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
     );
   }
 
-  // --- ويدجت مساعد لأزرار الفلترة ---
   Widget _buildFilterChip(String label, bool isSelected, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
@@ -8568,19 +9203,11 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: isSelected ? Colors.amber.shade700 : Colors.transparent),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? Colors.black : Colors.grey[700],
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        child: Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.grey[700], fontWeight: FontWeight.bold)),
       ),
     );
   }
 }
-
-
 // =======================================================================
 // --- ✨ شاشة جديدة: تعديل المنتج ---
 // =======================================================================
@@ -9160,7 +9787,6 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
 
 
 
-
 class AddProductScreen extends StatefulWidget {
   final RestaurantProductsProvider productProvider;
   final AuthProvider authProvider;
@@ -9185,6 +9811,38 @@ class _AddProductScreenState extends State<AddProductScreen> {
   bool _isLoading = false;
   final ImagePicker _picker = ImagePicker();
 
+  // 🔥 المتغيرات الخاصة بالأقسام
+  List<dynamic> _categories = [];
+  int? _selectedCategoryId;
+  bool _isLoadingCategories = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCategories();
+  }
+
+  // 🔥 جلب الأقسام من السيرفر
+  Future<void> _fetchCategories() async {
+    try {
+      // نعتمد على رقم المطعم الموجود في أول منتج تم جلبه مسبقاً
+      if (widget.productProvider.products.isNotEmpty) {
+        int restaurantId = widget.productProvider.products.first.categoryId;
+        final cats = await ApiService().getSubcategories(restaurantId);
+        if (mounted) {
+          setState(() {
+            _categories = cats;
+            _isLoadingCategories = false;
+          });
+        }
+      } else {
+        setState(() => _isLoadingCategories = false);
+      }
+    } catch (e) {
+      setState(() => _isLoadingCategories = false);
+    }
+  }
+
   @override
   void dispose() {
     _nameController.dispose();
@@ -9206,30 +9864,38 @@ class _AddProductScreenState extends State<AddProductScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // يفضل أن تكون الصورة إلزامية عند الإنشاء
     if (_selectedImage == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء اختيار صورة للمنتج")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء اختيار صورة للوجبة")));
+      return;
+    }
+
+    if (_selectedCategoryId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("الرجاء اختيار القسم الخاص بالوجبة")));
       return;
     }
 
     setState(() => _isLoading = true);
 
-    final success = await widget.productProvider.addProduct(
+    // 🔥 استدعاء دالة API الجديدة التي تربط الوجبة بالقسم
+    final success = await ApiService().createProductWithSubcategory(
       widget.authProvider.token!,
       _nameController.text,
       _priceController.text,
       _salePriceController.text.isEmpty ? null : _salePriceController.text,
       _descController.text,
       _selectedImage,
+      _selectedCategoryId!, // 👈 تمرير القسم
     );
 
     if (mounted) {
       setState(() => _isLoading = false);
       if (success) {
+        // تحديث قائمة المنتجات بعد الإضافة
+        widget.productProvider.fetchProducts(widget.authProvider.token);
         Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(widget.productProvider.errorMessage ?? "فشل إضافة المنتج"), backgroundColor: Colors.red),
+          const SnackBar(content: Text("فشل إضافة الوجبة"), backgroundColor: Colors.red),
         );
       }
     }
@@ -9238,7 +9904,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("إضافة منتج جديد")),
+      appBar: AppBar(title: const Text("إضافة وجبة جديدة")),
       body: Stack(
         children: [
           Form(
@@ -9276,9 +9942,33 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
                 TextFormField(
                   controller: _nameController,
-                  decoration: const InputDecoration(labelText: 'اسم المنتج', border: OutlineInputBorder()),
+                  decoration: const InputDecoration(labelText: 'اسم الوجبة', border: OutlineInputBorder()),
                   validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
                 ),
+                const SizedBox(height: 16),
+
+                // 🔥 القائمة المنسدلة لاختيار القسم
+                if (_isLoadingCategories)
+                  const Center(child: Padding(padding: EdgeInsets.all(8.0), child: CircularProgressIndicator()))
+                else if (_categories.isNotEmpty)
+                  DropdownButtonFormField<int>(
+                    decoration: const InputDecoration(labelText: 'اختر القسم (مطلوب)', border: OutlineInputBorder()),
+                    value: _selectedCategoryId,
+                    items: _categories.map<DropdownMenuItem<int>>((cat) {
+                      return DropdownMenuItem<int>(
+                        value: cat['id'],
+                        child: Text("${cat['icon'] ?? ''} ${cat['name']}"),
+                      );
+                    }).toList(),
+                    onChanged: (val) => setState(() => _selectedCategoryId = val),
+                    validator: (v) => v == null ? 'يجب اختيار قسم' : null,
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
+                    child: const Text("يرجى إنشاء قسم أولاً من شاشة المنتجات لتتمكن من إضافة وجبات.", style: TextStyle(color: Colors.red)),
+                  ),
                 const SizedBox(height: 16),
 
                 Row(
@@ -9305,20 +9995,20 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
                 TextFormField(
                   controller: _descController,
-                  decoration: const InputDecoration(labelText: 'وصف المنتج', border: OutlineInputBorder()),
+                  decoration: const InputDecoration(labelText: 'وصف الوجبة والمكونات', border: OutlineInputBorder()),
                   maxLines: 3,
                 ),
                 const SizedBox(height: 30),
 
                 ElevatedButton(
-                  onPressed: _isLoading ? null : _submit,
+                  onPressed: (_isLoading || _categories.isEmpty) ? null : _submit,
                   style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                       textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
                   ),
-                  child: const Text('إضافة المنتج'),
+                  child: const Text('حفظ الوجبة'),
                 ),
               ],
             ),
@@ -9330,7 +10020,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     );
   }
 }
-
 class OrdersListScreen extends StatefulWidget {
   final String status;
   const OrdersListScreen({super.key, required this.status});
@@ -9442,7 +10131,6 @@ class UnifiedDeliveryOrder {
   final String customerPhone;
   final List<dynamic> lineItems;
 
-  // ✨ [جديد] بيانات السائق (المندوب)
   final String? driverName;
   final String? driverPhone;
 
@@ -9463,7 +10151,6 @@ class UnifiedDeliveryOrder {
     required this.dateCreated,
     required this.customerPhone,
     required this.lineItems,
-    // ✨
     this.driverName,
     this.driverPhone,
   });
@@ -9472,30 +10159,49 @@ class UnifiedDeliveryOrder {
     String safeString(dynamic val) => val == null ? '' : val.toString();
     double safeDouble(dynamic val) => val == null ? 0.0 : (double.tryParse(val.toString()) ?? 0.0);
 
+    // 🔥 1. قراءة الحالة من جميع السيرفرات (المطعم يستخدم delivery_status والتكسي يستخدم order_status)
+    String parsedStatus = json['delivery_status'] ?? json['order_status'] ?? json['status'] ?? 'pending';
+
+    // 🔥 2. قراءة بيانات السائق (سواء كان كائن أو حقل مسطح)
+    String? dName = json['driver_name'];
+    String? dPhone = json['driver_phone'];
+
+    if (json['driver'] != null && json['driver'] is Map) {
+      dName = json['driver']['name'] ?? dName;
+      dPhone = json['driver']['phone'] ?? dPhone;
+    }
+
     return UnifiedDeliveryOrder(
       id: json['id'] is int ? json['id'] : int.tryParse(json['id'].toString()) ?? 0,
-      status: safeString(json['order_status']),
-      description: safeString(json['order_description']),
-      deliveryFee: safeDouble(json['delivery_fee']),
-      orderTotal: safeDouble(json['order_total']),
-      pickupName: safeString(json['pickup_location_name']),
-      sourceType: safeString(json['source_type']),
-      destinationAddress: safeString(json['destination_address']),
+      status: parsedStatus, // استخدام الحالة الذكية
+      description: safeString(json['order_description'] ?? json['items_description']),
+      deliveryFee: safeDouble(json['delivery_fee'] ?? json['shipping_total']),
+      orderTotal: safeDouble(json['order_total'] ?? json['total_to_collect'] ?? json['total']),
+
+      // مطابقة أسماء الأماكن من المطعم، التكسي، أو المسواك
+      pickupName: safeString(json['restaurant_name'] ?? json['store_name'] ?? json['pickup_location_name'] ?? json['pickup_location']),
+      sourceType: safeString(json['source_type'] ?? json['source'] ?? 'restaurant'),
+      destinationAddress: safeString(json['destination_address'] ?? json['customer_address']),
       pickupLat: safeString(json['pickup_lat']),
       pickupLng: safeString(json['pickup_lng']),
       destLat: safeString(json['destination_lat']),
       destLng: safeString(json['destination_lng']),
-      itemsSummary: safeString(json['items_summary']),
-      dateCreated: json['date_created'] is int ? json['date_created'] : 0,
-      customerPhone: safeString(json['customer_phone']),
+      itemsSummary: safeString(json['items_summary'] ?? json['items_description']),
+
+      dateCreated: json['date_created'] is int
+          ? json['date_created']
+          : (DateTime.tryParse(safeString(json['date_created']))?.millisecondsSinceEpoch ?? 0) ~/ 1000,
+
+      customerPhone: safeString(json['end_customer_phone'] ?? json['customer_phone']),
       lineItems: json['line_items'] is List ? json['line_items'] : [],
 
-      // ✨ قراءة بيانات السائق (يجب أن يرسلها الباك إند)
-      driverName: json['driver_name'],
-      driverPhone: json['driver_phone'],
+      driverName: dName,
+      driverPhone: dPhone,
     );
   }
 }
+
+
 
 class TeamLeaderLoginScreen extends StatefulWidget {
   const TeamLeaderLoginScreen({super.key});
@@ -9680,6 +10386,17 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     // 1. تحميل البيانات لأول مرة
     _loadData();
 
+
+
+
+
+
+
+
+
+
+
+
     // 2. الاستماع للإشعارات لتحديث القائمة تلقائياً
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (mounted) {
@@ -9789,7 +10506,8 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
             Tab(text: "الكل"),
             Tab(text: "🍔 مطاعم"),
             Tab(text: "🛒 مسواك"),
-            Tab(text: "🚕 تكسي"),
+            Tab(text: "👥 السائقين "), // <-- تم التغيير
+
           ],
         ),
       ),
@@ -9806,7 +10524,8 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
           _buildFutureOrdersList(type: 'market'),
 
           // 4. 🔥 تبويب التاكسي (منفصل ويستخدم التوكن الخاص به)
-          TaxiLeaderTab(token: auth.taxiToken),
+          // تبويب طلبات الفريق الجديد
+          TeamOrdersScreen(token: widget.token),
         ],
       ),
     );
@@ -9865,117 +10584,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                 onActionComplete: () => _loadData(),
               );
             },
-          );
-        },
-      ),
-    );
-  }
-}
-class TaxiLeaderTab extends StatefulWidget {
-  final String? token;
-  const TaxiLeaderTab({super.key, required this.token});
-
-  @override
-  State<TaxiLeaderTab> createState() => _TaxiLeaderTabState();
-}
-
-class _TaxiLeaderTabState extends State<TaxiLeaderTab> {
-  bool _isLoading = true;
-  List<dynamic> _rides = [];
-  String _regionName = "";
-
-  @override
-  void initState() {
-    super.initState();
-    _loadTaxiData();
-  }
-
-  Future<void> _loadTaxiData() async {
-    if (widget.token == null) {
-      setState(() => _isLoading = false);
-      return;
-    }
-
-    try {
-      final response = await http.get(
-        Uri.parse('$TAXI_URL/wp-json/taxi/v2/leader/dashboard-rides'), // الرابط الجديد
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
-
-      print("🚕 [Taxi Tab] Response: ${response.body}");
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (mounted) {
-          setState(() {
-            _rides = data['rides'] ?? [];
-            _regionName = data['region'] ?? "";
-            _isLoading = false;
-          });
-        }
-      }
-    } catch (e) {
-      print("❌ Error loading taxi data: $e");
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.token == null) return const Center(child: Text("فشل المصادقة مع سيرفر التاكسي"));
-    if (_isLoading) return const Center(child: CircularProgressIndicator());
-
-    if (_rides.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(Icons.local_taxi, size: 60, color: Colors.grey),
-            SizedBox(height: 10),
-            Text("لا توجد طلبات تكسي نشطة في منطقتك"),
-          ],
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadTaxiData,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _rides.length,
-        itemBuilder: (context, index) {
-          final ride = _rides[index];
-          return Card(
-            elevation: 3,
-            margin: const EdgeInsets.only(bottom: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: Colors.amber.shade100,
-                child: const Icon(Icons.local_taxi, color: Colors.black87),
-              ),
-              title: Text("${ride['price']} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.green)),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 5),
-                  Text("من: ${ride['pickup_name']}"),
-                  Text("إلى: ${ride['destination_name']}"),
-                  const SizedBox(height: 5),
-                  Row(
-                    children: [
-                      Icon(Icons.person, size: 14, color: Colors.grey[600]),
-                      const SizedBox(width: 4),
-                      Text("السائق: ${ride['driver_name']}", style: TextStyle(color: ride['is_accepted'] ? Colors.blue : Colors.grey)),
-                    ],
-                  ),
-                  Text("الحالة: ${ride['status']}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                ],
-              ),
-              trailing: ride['is_accepted']
-                  ? const Icon(Icons.check_circle, color: Colors.green)
-                  : const Icon(Icons.hourglass_empty, color: Colors.orange),
-            ),
           );
         },
       ),

@@ -25,4 +25,6 @@ class MyImages {
   //social
   static const String google = "assets/images/social/google.png";
   static const String apple = "assets/images/social/apple.png";
+
+  static String get facebookIcon => "assets/images/social/facebook.png";
 }

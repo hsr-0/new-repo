@@ -91,6 +91,14 @@
           }
         },
         {
+          "client_id": "266994090766-g9attsfk86a72m0rbku4sbgo4g8i8r0f.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "co.median.android.wqwnby",
+            "certificate_hash": "6b1f1c539941338672f82f520b2a0885680921c1"
+          }
+        },
+        {
           "client_id": "266994090766-6c1kpde2if3ume5i7l6hkubmtc72859l.apps.googleusercontent.com",
           "client_type": 3
         }

@@ -8,6 +8,8 @@ import 'package:cosmetic_store/taxi/lib/data/model/global/response_model/respons
 import 'package:cosmetic_store/taxi/lib/data/repo/auth/social_auth_repo.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/components/snack_bar/show_custom_snackbar.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
+// إضافة حزمة فيسبوك هنا
+import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 
 class SocialAuthController extends GetxController {
   SocialAuthRepo authRepo;
@@ -39,7 +41,6 @@ class SocialAuthController extends GetxController {
       );
     } catch (e) {
       printX(e.toString());
-      // CustomSnackBar.error(errorList: [e.toString()]);
     }
 
     isGoogleSignInLoading = false;
@@ -57,23 +58,52 @@ class SocialAuthController extends GetxController {
           AppleIDAuthorizationScopes.fullName,
         ],
       );
-      printX(credential.email);
-      printX(credential.givenName);
-      printX(credential.familyName);
-      printX(credential.authorizationCode);
-      printX(credential.identityToken);
       socialLoginUser(
         provider: 'apple',
         accessToken: credential.identityToken ?? '',
       );
     } catch (e) {
       printX(e.toString());
-      // CustomSnackBar.error(errorList: [e.toString()]);
     } finally {
       isAppleSignInLoading = false;
       update();
     }
   }
+
+  // ==========================================================
+  // إضافة منطق تسجيل الدخول عبر فيسبوك
+  // ==========================================================
+  bool isFacebookSignInLoading = false;
+
+  Future<void> signInWithFacebook() async {
+    try {
+      isFacebookSignInLoading = true;
+      update();
+
+      // طلب تسجيل الدخول من فيسبوك
+      final LoginResult result = await FacebookAuth.instance.login();
+
+      if (result.status == LoginStatus.success) {
+        // الحصول على التوكن
+        final AccessToken accessToken = result.accessToken!;
+
+        // إرسال التوكن إلى السيرفر الخاص ببيتي
+        await socialLoginUser(
+          provider: 'facebook',
+          accessToken: accessToken.tokenString,
+        );
+      } else {
+        printX("Facebook Login Status: ${result.status}");
+        printX("Facebook Login Message: ${result.message}");
+      }
+    } catch (e) {
+      printX("Facebook Login Error: ${e.toString()}");
+    } finally {
+      isFacebookSignInLoading = false;
+      update();
+    }
+  }
+  // ==========================================================
 
   Future socialLoginUser({String accessToken = '', String? provider}) async {
     try {

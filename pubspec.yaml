@@ -27,6 +27,7 @@ dependencies:
   custom_marker_builder: ^0.0.4
   geolocator: ^13.0.0
   geocoding: ^3.0.0
+  scroll_to_index: ^3.0.1
   flutter_ringtone_player: ^4.0.0+4  # ==========================================
   #  مكتبات Firebase (تم تحرير النسخ لحل التعارض تلقائياً)
   # ==========================================
@@ -195,6 +196,7 @@ dependencies:
   mailer: ^6.4.0
   flutter_local_notifications: ^17.0.0
   crypto: ^3.0.7
+  flutter_facebook_auth: ^7.1.5
 
 dev_dependencies:
   flutter_test:

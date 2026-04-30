@@ -1039,4 +1039,6 @@ class MyStrings {
   static const String runningRideAlertTitle = "Complete your ride";
   static const String runningRideAlertSubTitle = "You've reached your destination. Please confirm to end the ride";
   static const String arriveAtMsg = "Arrived at your destination!";
+
+  static const String signInWithFacebook = 'تسجيل عبر فيسبوك ';
 }

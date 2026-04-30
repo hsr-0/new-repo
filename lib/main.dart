@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert'; // للمعالجة JSON
 import 'dart:io';      // لمعرفة نوع النظام Platform
+import 'package:cosmetic_store/taxi/lib/presentation/screens/inbox/ride_message_screen.dart';
 import 'package:http/http.dart' as http; // للتعامل مع الطلبات
 import 'package:shared_preferences/shared_preferences.dart'; // لحفظ التوكن محلياً
 
@@ -42,20 +43,29 @@ import 'index.dart';
 final ValueNotifier<Map<String, dynamic>?> activeCallNotifier = ValueNotifier(null);
 final ValueNotifier<Map<String, dynamic>?> activeChatNotifier = ValueNotifier(null);
 final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifier(null);
+final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifier(null);
 
-// دالة التوجيه الموحدة (تعمل عند الضغط على الإشعار من أي مكان)
+// دالة التوجيه الموحدة (آمنة تماماً ولا تعطل الإشعارات الأخرى)
 void handleNotificationClick(Map<String, dynamic> data) {
+  // 1. مسار المكالمات الصوتية (يعمل فوراً بدون تأخير)
   if (data['type'] == 'voip_call') {
-    showIncomingCall(data); // 👈 لم نلمس نظام المكالمات نهائياً، آمن 100%
-  } else if (data['type'] == 'chat_message') {
-    print("🚀 [Routing] توجيه مباشر إلى شاشة الدردشة!");
-    // 🔥 زيادة الوقت إلى 1500 لضمان بناء الواجهة عند فتح التطبيق وهو مغلق تماماً
+    showIncomingCall(data);
+  }
+  // 2. 🚀 مسار دردشة التاكسي (تمت إضافة التأخير لمنع الشاشة البيضاء)
+  else if (data['type'] == 'taxi_chat_message' || data['act'] == 'NEW_MESSAGE') {
+    print("🚀 [Routing] توجيه لدردشة التاكسي - الرحلة: ${data['ride_id']}");
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      activeTaxiChatNotifier.value = data;
+    });
+  }
+  // 3. مسار دردشة الدعم الفني
+  else if (data['type'] == 'chat_message') {
     Future.delayed(const Duration(milliseconds: 1500), () {
       activeChatNotifier.value = data;
     });
-  } else if (data['type'] == 'status_update' || data['type'] == 'driver_assigned' || data['type'] == 'new_order') {
-    print("🚀 [Routing] توجيه مباشر إلى شاشة تتبع الطلب!");
-    // 🔥 زيادة الوقت إلى 1500 هنا أيضاً
+  }
+  // 4. مسار تتبع الطلبات
+  else if (data['type'] == 'status_update') {
     Future.delayed(const Duration(milliseconds: 1500), () {
       activeTrackingNotifier.value = data;
     });
@@ -138,13 +148,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (message.data['type'] == 'voip_call') {
     await showIncomingCall(message.data);
   }
-  // 🔥 تم إزالة _showLocalNotification من هنا لمنع الإشعار المكرر وإصلاح النافذة المنبثقة
 }
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void _showLocalNotification(RemoteMessage message) {
-  // حماية إضافية لعدم إظهار إشعار عادي للمكالمات
   if (message.data['type'] == 'voip_call') return;
 
   final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث من منصة بيتي';
@@ -168,12 +176,12 @@ void _showLocalNotification(RemoteMessage message) {
     title,
     body,
     platformChannelSpecifics,
-    payload: jsonEncode(message.data), // 🔥 يضمن قراءة التطبيق لنوع الإشعار عند النقر
+    payload: jsonEncode(message.data),
   );
 }
 
 // =======================================================================
-// 🔥 3. دوال إدارة التوكن (السر هنا!)
+// 🔥 3. دوال إدارة التوكن
 // =======================================================================
 
 Future<void> _handleTokenRefresh() async {
@@ -189,23 +197,18 @@ Future<void> _saveAndRegisterToken(String token) async {
 
   String? voipToken = '';
 
-  // 🔥 1. التعديل الجذري: سحب التوكن من الذاكرة التي زرعناها بلغة Swift
   if (Platform.isIOS) {
     try {
-      // ننتظر 3 ثواني للتأكد من أن نظام آبل أصدر التوكن في الخلفية عند فتح التطبيق
       await Future.delayed(const Duration(seconds: 3));
 
-      // قراءة التوكن المستخرج يدوياً
       String? nativeVoipToken = prefs.getString('ios_native_voip_token');
 
       if (nativeVoipToken != null && nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
-        // تنظيف النص للحصول على التوكن الصافي فقط (بدون الكلمات الإضافية والمسافات)
         voipToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:", "").replaceAll("\n", "").trim();
         await prefs.setString('voip_token', voipToken);
         print("🍏 [Apple PushKit] تم التقاط التوكن الأصلي بنجاح: $voipToken");
       } else {
         print("⚠️ توكن الآيفون الأصلي غير جاهز: $nativeVoipToken");
-        // شبكة أمان: محاولة أخيرة من المكتبة في حال تأخر النظام
         voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
         if(voipToken != null) await prefs.setString('voip_token', voipToken);
       }
@@ -214,14 +217,13 @@ Future<void> _saveAndRegisterToken(String token) async {
     }
   }
 
-  // 🔥 2. إرسال البيانات إلى السيرفر
   try {
     final response = await http.post(
       Uri.parse('https://re.beytei.com/wp-json/restaurant-app/v1/register-device'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'token': token,             // توكن FCM العادي (يعمل للاندرويد، وللإشعارات النصية في الايفون)
-        'voip_token': voipToken,    // توكن المكالمات (تم سحبه بقوة Swift للآيفون)
+        'token': token,
+        'voip_token': voipToken,
         'platform': Platform.isAndroid ? 'android' : 'ios',
       }),
     );
@@ -244,10 +246,8 @@ void main() async {
   GoRouter.optionURLReflectsImperativeAPIs = true;
   usePathUrlStrategy();
 
-  // تهيئة الفايربيس
   await initFirebase();
 
-  // 🔥 2. الحل القاطع لمشكلة الدردشة: إعطاء الزبون هوية مخفية في Firebase
   try {
     if (FirebaseAuth.instance.currentUser == null) {
       await FirebaseAuth.instance.signInAnonymously();
@@ -257,7 +257,6 @@ void main() async {
     print("⚠️ خطأ في مصادقة فايربيس للزبون: $e");
   }
 
-  // 1. الحصول على التوكن الحالي وتسجيله
   try {
     String? initialToken = await FirebaseMessaging.instance.getToken();
     if (initialToken != null) {
@@ -267,7 +266,6 @@ void main() async {
     print("⚠️ Error fetching initial FCM token: $e");
   }
 
-  // 2. الاستماع لتغيير التوكن
   _handleTokenRefresh();
 
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -284,7 +282,6 @@ void main() async {
     onDidReceiveNotificationResponse: (NotificationResponse response) {
       if (response.payload != null) {
         try {
-          // استخراج البيانات وتوجيه المستخدم عند النقر (التطبيق مفتوح)
           handleNotificationClick(jsonDecode(response.payload!));
         } catch (e) {
           print("Error parsing local notification payload: $e");
@@ -382,7 +379,6 @@ class _MyAppState extends State<MyApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTerminatedCall();
 
-      // 🔥 ضمان التقاط الإشعار وتوجيهه إذا كان التطبيق مغلقاً تماماً
       FirebaseMessaging.instance.getInitialMessage().then((message) {
         if (message != null) {
           print("🚀 [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
@@ -578,6 +574,27 @@ class _MyAppState extends State<MyApp> {
                         print("لم يتم العثور على الطلب محلياً: $e");
                         activeTrackingNotifier.value = null;
                       }
+                    });
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+
+              // 4. الاستماع لفتح دردشة التاكسي
+              ValueListenableBuilder<Map<String, dynamic>?>(
+                valueListenable: activeTaxiChatNotifier,
+                builder: (context, data, _) {
+                  if (data != null) {
+                    Future.microtask(() {
+                      _router.routerDelegate.navigatorKey.currentState?.push(
+                        MaterialPageRoute(
+                          builder: (_) => RideMessageScreen(
+                            rideID: data['ride_id']?.toString() ?? '-1',
+                          ),
+                        ),
+                      ).then((_) {
+                        activeTaxiChatNotifier.value = null;
+                      });
                     });
                   }
                   return const SizedBox.shrink();

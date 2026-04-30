@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../utils/my_color.dart';
 
 ThemeData lightThemeData = ThemeData.light().copyWith(
-  primaryColor: const Color.fromRGBO(81, 78, 183, 1),
+  primaryColor: const Color.fromRGBO(5, 121, 237, 1.0),
   primaryColorDark: MyColor.primaryColor,
   secondaryHeaderColor: Colors.yellow,
 

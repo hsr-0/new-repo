@@ -66,7 +66,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   AuthBackgroundWidget(
                     child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: Dimensions.space20, vertical: Dimensions.space10),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: Dimensions.space20,
+                        vertical: Dimensions.space10,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.start,
@@ -112,24 +115,89 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: MyColor.colorBlack.withValues(alpha: 0.05), // soft top shadow
-                            offset: const Offset(0, -30), // ⬆️ Shadow goes up
+                            color: MyColor.colorBlack.withValues(alpha: 0.05),
+                            offset: const Offset(0, -30),
                             blurRadius: 15,
                             spreadRadius: -3,
                           ),
                         ],
                       ),
-                      padding: EdgeInsets.symmetric(horizontal: Dimensions.space15, vertical: Dimensions.space15),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: Dimensions.space15,
+                        vertical: Dimensions.space15,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
                           spaceDown(Dimensions.space15),
 
-                          // ✅ 1. قسم أزرار جوجل وأبل سيبقى ظاهراً
+                          // ✅ 1. قسم أزرار التواصل الاجتماعي (جوجل، أبل، فيسبوك)
                           SocialAuthSection(),
 
-                          // 🔥 2. إخفاء حقول تسجيل الدخول التقليدية
+                          // ✅ 2. زر فيسبوك الاحترافي
+                          spaceDown(Dimensions.space15),
+                          GetBuilder<SocialAuthController>(
+                            builder: (socialController) => SizedBox(
+                              width: double.infinity,
+                              height: 55,
+                              child: socialController.isFacebookSignInLoading
+                                  ? Center(
+                                child: CircularProgressIndicator(
+                                  color: MyColor.primaryColor,
+                                  strokeWidth: 3,
+                                ),
+                              )
+                                  : InkWell(
+                                onTap: () {
+                                  socialController.signInWithFacebook();
+                                },
+                                borderRadius: BorderRadius.circular(Dimensions.radius25),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1877F2), // لون فيسبوك الرسمي
+                                    borderRadius: BorderRadius.circular(Dimensions.radius25),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: const Color(0xFF1877F2).withValues(alpha: 0.3),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      // أيقونة فيسبوك
+                                      Container(
+                                        padding: EdgeInsets.all(Dimensions.space8),
+                                        decoration: BoxDecoration(
+                                          color: MyColor.colorWhite,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Image.asset(
+                                          MyImages.facebookIcon,
+                                          height: 24,
+                                          width: 24,
+                                        ),
+                                      ),
+                                      spaceSide(Dimensions.space12),
+                                      Text(
+                                        MyStrings.signInWithFacebook.tr,
+                                        style: boldDefault.copyWith(
+                                          color: MyColor.colorWhite,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          // 🔥 3. إخفاء حقول تسجيل الدخول التقليدية
                           Visibility(
                             visible: false,
                             child: Form(
@@ -147,7 +215,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                     textInputType: TextInputType.emailAddress,
                                     inputAction: TextInputAction.next,
                                     prefixIcon: Padding(
-                                      padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
+                                      padding: EdgeInsetsDirectional.only(
+                                        start: Dimensions.space12,
+                                        end: Dimensions.space8,
+                                      ),
                                       child: CustomSvgPicture(
                                         image: MyIcons.user,
                                         color: MyColor.primaryColor,
@@ -173,7 +244,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                     textInputType: TextInputType.text,
                                     inputAction: TextInputAction.done,
                                     prefixIcon: Padding(
-                                      padding: EdgeInsetsDirectional.only(start: Dimensions.space12, end: Dimensions.space8),
+                                      padding: EdgeInsetsDirectional.only(
+                                        start: Dimensions.space12,
+                                        end: Dimensions.space8,
+                                      ),
                                       child: CustomSvgPicture(
                                         image: MyIcons.password,
                                         color: MyColor.primaryColor,
@@ -209,7 +283,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                               side: WidgetStateBorderSide.resolveWith(
                                                     (states) => BorderSide(
                                                   width: 2.0,
-                                                  color: controller.remember ? MyColor.getTextFieldEnableBorder() : MyColor.getTextFieldDisableBorder(),
+                                                  color: controller.remember
+                                                      ? MyColor.getTextFieldEnableBorder()
+                                                      : MyColor.getTextFieldDisableBorder(),
                                                 ),
                                               ),
                                               onChanged: (value) {
@@ -241,7 +317,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                         child: DefaultText(
                                           text: MyStrings.forgotPassword.tr,
                                           textColor: MyColor.redCancelTextColor,
-                                          textStyle: boldDefault.copyWith(fontSize: Dimensions.fontLarge),
+                                          textStyle: boldDefault.copyWith(
+                                            fontSize: Dimensions.fontLarge,
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -261,40 +339,76 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
 
-                          // ✅ 3. رابط إنشاء الحساب الجديد (موجود خارج الإخفاء)
+                          // ✅ 4. قسم إنشاء حساب جديد - مُحسّن ومُكبّر
                           spaceDown(Dimensions.space30),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                MyStrings.doNotHaveAccount.tr,
-                                overflow: TextOverflow.ellipsis,
-                                style: boldLarge.copyWith(
-                                  color: MyColor.getBodyTextColor(),
-                                  fontWeight: FontWeight.normal,
-                                ),
+                          Container(
+                            width: double.infinity,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: Dimensions.space20,
+                              vertical: Dimensions.space20,
+                            ),
+                            decoration: BoxDecoration(
+                              color: MyColor.primaryColor.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(Dimensions.radius25),
+                              border: Border.all(
+                                color: MyColor.primaryColor.withValues(alpha: 0.2),
+                                width: 1.5,
                               ),
-                              const SizedBox(
-                                width: Dimensions.space5,
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  Get.offAndToNamed(
-                                    RouteHelper.registrationScreen,
-                                  );
-                                },
-                                child: Text(
-                                  MyStrings.register.tr,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  MyStrings.doNotHaveAccount.tr,
                                   style: boldLarge.copyWith(
-                                    color: MyColor.getPrimaryColor(),
+                                    color: MyColor.getBodyTextColor(),
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                              ),
-                            ],
+                                spaceDown(Dimensions.space12),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 55,
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      Get.offAndToNamed(
+                                        RouteHelper.registrationScreen,
+                                      );
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: MyColor.primaryColor,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(Dimensions.radius25),
+                                      ),
+                                      elevation: 4,
+                                      shadowColor: MyColor.primaryColor.withValues(alpha: 0.4),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.person_add_alt_1_rounded,
+                                          color: MyColor.colorWhite,
+                                          size: 24,
+                                        ),
+                                        spaceSide(Dimensions.space10),
+                                        Text(
+                                          'سجّل حساب جديد', // ✅ النص بالعربي
+                                          style: boldDefault.copyWith(
+                                            color: MyColor.colorWhite,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                          spaceDown(Dimensions.space20),
                         ],
                       ),
                     ),
