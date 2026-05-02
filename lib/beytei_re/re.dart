@@ -809,7 +809,6 @@ class DashboardProvider with ChangeNotifier {
 
 
 
-
 class DeliveryConfigProvider with ChangeNotifier {
   Map<String, dynamic>? _cachedConfig;
   bool _isLoading = false;
@@ -817,9 +816,9 @@ class DeliveryConfigProvider with ChangeNotifier {
 
   bool get isLoading => _isLoading;
   String get errorMessage => _errorMessage;
-  Map<String, dynamic>? get cachedConfig => _cachedConfig; // ✅ للتصحيح الخارجي إذا لزم
+  Map<String, dynamic>? get cachedConfig => _cachedConfig;
 
-  // 🔥 جلب وتحديث الملف من السيرفر
+  // 🔥 جلب وتحديث الملف من السيرفر (يحدث مرة واحدة عند فتح التطبيق)
   Future<void> fetchAndCacheConfig() async {
     _isLoading = true;
     _errorMessage = "";
@@ -836,22 +835,15 @@ class DeliveryConfigProvider with ChangeNotifier {
         final data = json.decode(response.body);
         final serverVersion = data['version'] ?? 0;
 
-        // تحديث الكاش فقط إذا كان هناك إصدار جديد أو الكاش فارغ
         if (serverVersion > lastVersion || _cachedConfig == null) {
           _cachedConfig = data;
           await prefs.setString('delivery_config_json', json.encode(data));
           await prefs.setInt('delivery_config_version', serverVersion);
-          print("✅ [DeliveryConfig] تم تحميل/تحديث ملف التسعير بنجاح.");
-        } else {
-          print("ℹ️ [DeliveryConfig] الملف محدّث محلياً، لا داعي للتحميل.");
+          print("✅ [DeliveryConfig] تم التحديث بنجاح. الإصدار: $serverVersion");
         }
-      } else {
-        throw Exception("فشل جلب ملف التسعير: ${response.statusCode}");
       }
     } catch (e) {
-      print("⚠️ [DeliveryConfig] خطأ في التحديث: $e");
-      _errorMessage = e.toString();
-      // 🔥 عند الفشل، نعتمد على الكاش القديم إن وجد
+      print("⚠️ [DeliveryConfig] خطأ أو لا يوجد إنترنت، سنعتمد على الكاش: $e");
       final prefs = await SharedPreferences.getInstance();
       final cached = prefs.getString('delivery_config_json');
       if (cached != null) _cachedConfig = json.decode(cached);
@@ -861,7 +853,7 @@ class DeliveryConfigProvider with ChangeNotifier {
     }
   }
 
-  // 🔥 دالة الحساب الموحدة (ديناميكية مع سعر احتياطي ذكي + إعدادات من السيرفر)
+  // 🔥 دالة الحساب الفورية (تعمل محلياً Offline بالكامل)
   double calculateFee({
     required double userLat,
     required double userLng,
@@ -869,19 +861,15 @@ class DeliveryConfigProvider with ChangeNotifier {
     required int areaId
   }) {
 
-    // 🌟 التحديد الذكي للسعر الاحتياطي في حال الفشل 🌟
-    // إذا كانت المنطقة 84 (الكوت) السعر الاحتياطي 2000، وإلا 1000
     final double fallbackFee = (areaId == 84) ? 2000.0 : 1000.0;
 
     try {
-      // إذا لم يتم تحميل الملف من السيرفر، نعطي السعر الاحتياطي فوراً
       if (_cachedConfig == null) return fallbackFee;
 
       final zones = List<Map<String, dynamic>>.from(_cachedConfig!['geo_zones'] ?? []);
       final pricing = Map<String, dynamic>.from(_cachedConfig!['pricing'] ?? {});
       final locations = List<Map<String, dynamic>>.from(_cachedConfig!['locations'] ?? []);
 
-      // 🌟 استخراج إعدادات الدوائر من السيرفر (الكوت) 🌟
       final List<dynamic> rawRadiusAreas = pricing['radius_areas'] ?? [];
       final List<int> radiusBasedAreas = rawRadiusAreas
           .map((e) => int.tryParse(e.toString()) ?? 0)
@@ -889,97 +877,115 @@ class DeliveryConfigProvider with ChangeNotifier {
           .toList();
       final bool isRadiusArea = radiusBasedAreas.contains(areaId);
 
-      // 1. فحص المناطق المرسومة (للنعمانية وغيرها - غير المشمولة بنظام الدوائر)
+      // ========================================================
+      // 1. فحص المناطق المرسومة (النعمانية، العزيزية، إلخ)
+      // ========================================================
       if (!isRadiusArea) {
         for (var zone in zones) {
-          final points = List<Map<String, dynamic>>.from(zone['latlngs'] ?? []);
-          if (_isPointInPolygon(userLat, userLng, points)) {
+          List<Map<String, double>> parsedPoints = [];
+          var rawPoints = zone['latlngs'];
+
+          // 🔥 معالجة متقدمة لفك تداخل المصفوفات القادمة من Leaflet
+          if (rawPoints is List && rawPoints.isNotEmpty) {
+            List flatList = rawPoints;
+            // فك التداخل حتى نصل للمستوى الذي يحتوي على الخرائط (Maps)
+            while (flatList.isNotEmpty && flatList.first is List) {
+              flatList = flatList.first;
+            }
+
+            for (var pt in flatList) {
+              if (pt is Map) {
+                double plat = double.tryParse(pt['lat'].toString()) ?? 0.0;
+                double plng = double.tryParse(pt['lng'].toString()) ?? 0.0;
+                if (plat != 0 && plng != 0) {
+                  parsedPoints.add({'lat': plat, 'lng': plng});
+                }
+              }
+            }
+          }
+
+          // فحص موقع الزبون
+          if (parsedPoints.isNotEmpty && _isPointInPolygon(userLat, userLng, parsedPoints)) {
+            print("🎯 الزبون يقع داخل المنطقة المرسومة: ${zone['name']}");
             double zonePrice = double.tryParse(zone['price'].toString()) ?? fallbackFee;
-            return zonePrice < 1000 ? 1000 : zonePrice;
+            return zonePrice < 1000 ? 1000.0 : zonePrice; // لا يقل عن 1000
           }
         }
       }
 
-      // 2. حساب المسافة بالكيلومتر
+      // ========================================================
+      // 2. إذا لم يكن في منطقة مرسومة -> حساب المسافة بالكيلومتر
+      // ========================================================
       final restLoc = locations.firstWhere(
               (l) => l['id'] == restaurantId,
           orElse: () => {}
       );
-      // إذا المطعم ليس له إحداثيات، نعطي السعر الاحتياطي للمدينة (2000 أو 1000)
+
       if (restLoc.isEmpty) return fallbackFee;
 
-      // حساب المسافة بمعامل الطريق (1.3)
       final distKm = _haversineDistance(
           userLat,
           userLng,
-          restLoc['lat'],
-          restLoc['lng']
+          double.tryParse(restLoc['lat'].toString()) ?? 0.0,
+          double.tryParse(restLoc['lng'].toString()) ?? 0.0
       ) * 1.3;
 
-      // 3. فرز التسعيرة حسب نوع المنطقة
       if (isRadiusArea) {
-        // --- نظام الكوت (الدوائر الجغرافية) ---
+        // --- تسعيرة الكوت (منطقة 84) ---
         final List<dynamic> radiusPricing = pricing['radius_pricing'] ?? [];
         if (radiusPricing.isEmpty) return fallbackFee;
 
-        // البحث عن الشريحة المناسبة للمسافة
         for (var tier in radiusPricing) {
           double maxKm = double.tryParse(tier['max_km'].toString()) ?? 999.0;
           double price = double.tryParse(tier['price'].toString()) ?? fallbackFee;
-
-          if (distKm <= maxKm) {
-            return price;
-          }
+          if (distKm <= maxKm) return price;
         }
-        // إذا تجاوزت كل الشرائح، نرجع أعلى سعر
         return 7000.0;
 
       } else {
-        // --- نظام باقي المناطق (المضلعات + المسافة) ---
+        // --- تسعيرة الطوارئ لباقي المناطق (خارج المضلع) ---
         double baseDist = double.tryParse(pricing['base_distance_km'].toString()) ?? 5.0;
         double baseFee = double.tryParse(pricing['base_fee'].toString()) ?? 1000.0;
         double extraFee = double.tryParse(pricing['extra_km_fee'].toString()) ?? 250.0;
-        double maxFee = double.tryParse(pricing['max_delivery_fee'].toString()) ?? 3000.0;
 
         double calculated = baseFee;
         if (distKm > baseDist) {
           calculated += (distKm - baseDist) * extraFee;
         }
-
-        // تقريب لأقرب 250
         calculated = (calculated / 250).ceil() * 250.0;
-        if (calculated > maxFee) calculated = maxFee;
-        if (calculated < 1000) calculated = 1000;
-
-        return calculated;
+        if (calculated > 7000.0) calculated = 7000.0;
+        return calculated < 1000 ? 1000.0 : calculated;
       }
 
     } catch (e) {
-      print("❌ [DeliveryConfig] خطأ أثناء الحساب: $e");
-      // في حال انهيار الكود لأي سبب، نضمن رجوع 2000 للكوت و 1000 لغيرها
+      print("❌ [DeliveryConfig] خطأ داخلي: $e");
       return fallbackFee;
     }
   }
 
-  // خوارزمية Ray-Casting للفحص داخل المضلع
-  bool _isPointInPolygon(double lat, double lng, List<Map<String, dynamic>> polygon) {
+  // 🔥 الخوارزمية الهندسية الصارمة والمطابقة 100% لكود الـ PHP
+  bool _isPointInPolygon(double lat, double lng, List<Map<String, double>> polygon) {
     if (polygon.isEmpty) return false;
     bool inside = false;
-    for (int i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      double yi = polygon[i]['lat'] ?? 0.0;
-      double xi = polygon[i]['lng'] ?? 0.0;
-      double yj = polygon[j]['lat'] ?? 0.0;
-      double xj = polygon[j]['lng'] ?? 0.0;
+    int j = polygon.length - 1;
 
-      bool intersect = ((yi > lng) != (yj > lng)) &&
-          (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi);
+    for (int i = 0; i < polygon.length; i++) {
+      double xi = polygon[i]['lng']!;
+      double yi = polygon[i]['lat']!;
+      double xj = polygon[j]['lng']!;
+      double yj = polygon[j]['lat']!;
+
+      bool intersect = ((yi > lat) != (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+
       if (intersect) inside = !inside;
+      j = i;
     }
     return inside;
   }
 
   double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-    const double R = 6371; // نصف قطر الأرض بالكيلومتر
+    const double R = 6371;
     double dLat = _deg2rad(lat2 - lat1);
     double dLon = _deg2rad(lon2 - lon1);
     double a = sin(dLat / 2) * sin(dLat / 2) +
@@ -989,8 +995,6 @@ class DeliveryConfigProvider with ChangeNotifier {
 
   double _deg2rad(double deg) => deg * (3.141592653589793 / 180);
 }
-
-
 
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
@@ -3208,8 +3212,15 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
 
+    // 🔥 1. توليد وحفظ معرف الجهاز الفريد (Device ID) لمنع الطلبات الوهمية
+    String? deviceId = prefs.getString('unique_device_id');
+    if (deviceId == null) {
+      deviceId = const Uuid().v4(); // يتم توليد رقم فريد جديد لهذا الجهاز
+      await prefs.setString('unique_device_id', deviceId);
+    }
+
     String? fcmToken = prefs.getString('fcm_token');
-    // 🔥 1. التعديل هنا: جلب توكن الآيفون (VoIP) من الذاكرة المحلية
+    // جلب توكن الآيفون (VoIP) من الذاكرة المحلية
     String? voipToken = prefs.getString('voip_token');
 
     if (fcmToken == null) {
@@ -3248,10 +3259,13 @@ class ApiService {
         {"key": "_customer_fcm_token", "value": fcmToken ?? ''},
         {"key": "fcm_token", "value": fcmToken ?? ''},
 
+        // 🔥 2. إرسال معرف الجهاز مع بيانات الطلب ليتمكن السيرفر من التعرف عليه وحظره
+        {"key": "_device_id", "value": deviceId},
+
         if (voipToken != null && voipToken.isNotEmpty)
           {"key": "voip_token", "value": voipToken}, // 👈 أزلنا الشرطة السفلية "_"
 
-        // 🔥 إرسال السعر كـ Meta صريحة
+        // إرسال السعر كـ Meta صريحة
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
 
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},

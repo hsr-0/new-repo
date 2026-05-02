@@ -133,9 +133,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           spaceDown(Dimensions.space15),
 
                           // ✅ 1. قسم أزرار التواصل الاجتماعي (جوجل، أبل، فيسبوك)
-                          SocialAuthSection(),
+                          const SocialAuthSection(),
 
-                          // ✅ 2. زر فيسبوك الاحترافي
+                          /*
+                          // ❌ تم إخفاء زر فيسبوك حالياً
                           spaceDown(Dimensions.space15),
                           GetBuilder<SocialAuthController>(
                             builder: (socialController) => SizedBox(
@@ -196,6 +197,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
                           ),
+                          */
 
                           // 🔥 3. إخفاء حقول تسجيل الدخول التقليدية
                           Visibility(
@@ -339,7 +341,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
 
-                          // ✅ 4. قسم إنشاء حساب جديد - مُحسّن ومُكبّر
+                          // ✅ 4. قسم إنشاء حساب جديد
                           spaceDown(Dimensions.space30),
                           Container(
                             width: double.infinity,
@@ -394,7 +396,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                         ),
                                         spaceSide(Dimensions.space10),
                                         Text(
-                                          'سجّل حساب جديد', // ✅ النص بالعربي
+                                          'سجّل حساب جديد',
                                           style: boldDefault.copyWith(
                                             color: MyColor.colorWhite,
                                             fontSize: 18,
