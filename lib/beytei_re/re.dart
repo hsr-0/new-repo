@@ -216,7 +216,8 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
 
   Future<List<ZoneRide>> _fetchRides() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('taxi_jwt_token');
+    // 🔥 تغيير هنا: نقرأ توكن المراقبة بدلاً من توكن التاكسي القديم
+    final token = prefs.getString('taxi_monitoring_token');
     final zoneId = prefs.getInt('leader_zone_id');
     final zName = prefs.getString('leader_zone_name');
 
@@ -225,13 +226,11 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
     }
 
     if (token == null || zoneId == null) {
-      print("🔴 [UI] التوكن أو رقم المنطقة مفقود!");
       throw Exception("بيانات الدخول غير مكتملة، يرجى تسجيل الدخول مجدداً.");
     }
 
     return await _apiService.getTeamLeaderZoneRides(token, zoneId);
   }
-
   Widget _buildStatusBadge(int status) {
     switch (status) {
       case 0: return _badge("معلقة", Colors.orange);
@@ -406,68 +405,37 @@ class AuthProvider with ChangeNotifier {
   }
 
   // 🔥 دالة تسجيل الدخول الموحدة (المطورة)
+// 🔥 دالة تسجيل الدخول الموحدة (مطاعم + مسواك + سائقين Banner)
   Future<bool> login(String username, String password, String role, {String? restaurantLat, String? restaurantLng}) async {
     final authService = AuthService();
-    print("🚀 [AuthProvider] بدء تسجيل الدخول بصلاحية: $role");
-
-    // 1. محاولة تسجيل الدخول في سيرفر المطاعم (الأساسي للجميع)
     _token = await authService.loginToServer(BEYTEI_URL, username, password);
 
-    // 2. إذا كان المستخدم "تيم ليدر"، نحاول تسجيل الدخول في السيرفرات الأخرى
     if (role == 'leader') {
-      // أ) سيرفر المسواك
       try {
         _miswakToken = await authService.loginToServer(MISWAK_URL, username, password);
-        if (_miswakToken != null) print("✅ تم تسجيل دخول المسواك");
-      } catch (e) {
-        print("⚠️ فشل دخول المسواك: $e");
-      }
+      } catch (e) {}
 
-      // ب) 🚕 سيرفر التاكسي (الجديد)
+      // 🔥 تسجيل دخول Banner لكي تعمل شاشة "فريقي"
       try {
         _taxiToken = await authService.loginToTaxiServer(username, password);
-        if (_taxiToken != null) print("✅ تم تسجيل دخول التاكسي");
-      } catch (e) {
-        print("⚠️ فشل دخول التاكسي: $e");
-      }
+      } catch (e) {}
     }
 
-    // 3. إذا نجح الدخول للسيرفر الرئيسي على الأقل
     if (_token != null) {
       final prefs = await SharedPreferences.getInstance();
-
-      // حفظ البيانات الأساسية
       await prefs.setString('jwt_token', _token!);
       await prefs.setString('user_role', role);
 
-      // حفظ توكن المسواك إن وجد
-      if (_miswakToken != null) {
-        await prefs.setString('miswak_jwt_token', _miswakToken!);
-      }
+      if (_miswakToken != null) await prefs.setString('miswak_jwt_token', _miswakToken!);
+      if (_taxiToken != null) await prefs.setString('taxi_jwt_token', _taxiToken!); // هذا للـ Banner
 
-      // 🔥 حفظ توكن التاكسي إن وجد
-      if (_taxiToken != null) {
-        await prefs.setString('taxi_jwt_token', _taxiToken!);
-      }
-
-      // 🔥 تسجيل جهاز التيم ليدر في السيرفرات الثلاثة (Triple Registration)
-      // نمرر التوكنات الثلاثة لضمان وصول الإشعارات من أي مصدر
       await authService.registerDeviceTokenTriple(_token, _miswakToken, _taxiToken);
-
-      // حفظ الإحداثيات (للمطاعم فقط)
-      if (restaurantLat != null && restaurantLng != null) {
-        await prefs.setDouble('restaurant_lat', double.tryParse(restaurantLat) ?? 0.0);
-        await prefs.setDouble('restaurant_lng', double.tryParse(restaurantLng) ?? 0.0);
-      }
 
       notifyListeners();
       return true;
     }
-
-    // فشل الدخول للسيرفر الرئيسي
     return false;
   }
-
   // تسجيل الخروج
   Future<void> logout(BuildContext context) async {
     final authService = AuthService();
@@ -504,61 +472,43 @@ class AuthProvider with ChangeNotifier {
 
 
 // 🔥 دالة تسجيل الدخول المخصصة للتيم ليدر (مراقبة التكسي)
+// 🔥 دالة مخصصة فقط لسيرفر المراقبة الحية (taxi.beytei.com)
   Future<bool> loginTeamLeader(String username, String password) async {
-    final url = 'https://taxi.beytei.com/api/team-leader/login';
-    print("🟡 [AUTH] جاري محاولة دخول التيم ليدر: $username");
-
+    final url = 'https://taxi.beytei.com/team-leader-login';
     _isLoading = true;
     notifyListeners();
 
     try {
       final response = await http.post(
         Uri.parse(url),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: json.encode({
-          'username': username,
-          'password': password
-        }),
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: json.encode({'username': username, 'password': password}),
       ).timeout(const Duration(seconds: 15));
-
-      print("🟢 [AUTH] رد سيرفر الدخول: ${response.body}");
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == 'success') {
           final prefs = await SharedPreferences.getInstance();
 
-          _taxiToken = data['token'];
-          _userRole = 'leader';
-
-          // حفظ التوكن ورقم المنطقة في الجهاز
-          await prefs.setString('taxi_jwt_token', _taxiToken!);
-          await prefs.setString('user_role', 'leader');
+          // 🔥 نحفظه باسم مختلف كي لا يتضارب مع توكن الـ Banner
+          await prefs.setString('taxi_monitoring_token', data['token']);
           await prefs.setInt('leader_zone_id', data['user']['zone_id']);
           await prefs.setString('leader_zone_name', data['user']['name']);
-
-          print("✅ [AUTH] تم الدخول بنجاح! Zone ID: ${data['user']['zone_id']}");
 
           _isLoading = false;
           notifyListeners();
           return true;
         }
       }
-      print("❌ [AUTH] فشل الدخول.");
       _isLoading = false;
       notifyListeners();
       return false;
     } catch (e) {
-      print("🔴 [AUTH] خطأ في اتصال الدخول: $e");
       _isLoading = false;
       notifyListeners();
       return false;
     }
   }
-
 }
 
 class CustomerProvider with ChangeNotifier {
@@ -3764,29 +3714,24 @@ class AuthService {
   // 2. 🔥 [جديد] تسجيل الدخول لسيرفر التاكسي
   // يعتمد على Endpoint مخصص: /taxi-auth/v1/login
 // 2. 🔥 [تحديث] تسجيل الدخول لسيرفر التاكسي بالرابط الجديد الناجح
+// 2. 🔥 [تحديث] تسجيل الدخول لسيرفر التاكسي (Banner) لتبويب السائقين
   Future<String?> loginToTaxiServer(String username, String password) async {
     try {
-      print("🚕 [Taxi Auth] محاولة الدخول لسيرفر التاكسي بالرابط الجديد...");
+      print("🚕 [Taxi Auth] محاولة الدخول لسيرفر التاكسي (Banner)...");
 
       final response = await http.post(
-          Uri.parse('https://taxi.beytei.com/team-leader-login'), // 🔥 الرابط السحري
+          Uri.parse('$TAXI_URL/wp-json/taxi-auth/v1/login'), // 👈 رجعناه للـ Banner
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
-            'username': username, // استخدمنا username بدلاً من phone_number
+            'phone_number': username, // 👈 هنا يطلب رقم الهاتف وليس username
             'password': password
           })
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success' && data['token'] != null) {
-          print("✅ [Taxi Auth] نجح دخول التاكسي! Token received.");
-
-          // 🔥 حفظ بيانات المنطقة لكي تستخدمها شاشة (مراقبة رحلات التكسي) لاحقاً
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setInt('leader_zone_id', data['user']['zone_id']);
-          await prefs.setString('leader_zone_name', data['user']['name']);
-
+        if (data['success'] == true && data['token'] != null) {
+          print("✅ [Taxi Auth] نجح دخول التاكسي (Banner)! Token received.");
           return data['token'];
         }
       }
@@ -3798,6 +3743,7 @@ class AuthService {
       return null;
     }
   }
+
   // 3. 🔥 [تحديث] تسجيل الجهاز في السيرفرات الثلاثة (Triple Registration)
   // هذه الدالة تضمن وصول الإشعارات من أي جهة (مطعم، مسواك، تكسي)
   Future<void> registerDeviceTokenTriple(String? restToken, String? miswakToken, String? taxiToken) async {
@@ -3906,6 +3852,11 @@ class AuthService {
     await prefs.remove('jwt_token');       // مطاعم
     await prefs.remove('miswak_jwt_token'); // مسواك
     await prefs.remove('taxi_jwt_token');   // تكسي
+    await prefs.remove('taxi_monitoring_token');
+    await prefs.remove('leader_zone_id');
+    await prefs.remove('leader_zone_name');
+
+    await prefs.remove('user_role');
     await prefs.remove('user_role');
     await prefs.remove('selectedAreaId');
     await prefs.remove('selectedAreaName');
@@ -11537,6 +11488,94 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     }
   }
 
+  // 🔥 نافذة تسجيل دخول التكسي المستقلة (On-Demand)
+  void _showTaxiLoginDialog(BuildContext context) {
+    final usernameCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    bool isLoading = false;
+
+    showDialog(
+        context: context,
+        barrierDismissible: false, // لا تغلق عند الضغط خارجها
+        builder: (ctx) => StatefulBuilder(
+            builder: (context, setDialogState) {
+              return AlertDialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                title: const Row(
+                  children: [
+                    Icon(Icons.local_taxi, color: Colors.amber, size: 28),
+                    SizedBox(width: 10),
+                    Text("دخول مراقبة التكسي", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text("يجب تسجيل الدخول لنظام التكسي للوصول لرحلات منطقتك الحية.", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                    const SizedBox(height: 15),
+                    TextField(
+                      controller: usernameCtrl,
+                      decoration: InputDecoration(
+                        labelText: "اسم المستخدم",
+                        prefixIcon: const Icon(Icons.person),
+                        filled: true, fillColor: Colors.grey.shade100,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: passwordCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: "كلمة المرور",
+                        prefixIcon: const Icon(Icons.lock),
+                        filled: true, fillColor: Colors.grey.shade100,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: isLoading ? null : () => Navigator.pop(ctx),
+                    child: const Text("إلغاء", style: TextStyle(color: Colors.grey)),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                    ),
+                    onPressed: isLoading ? null : () async {
+                      if (usernameCtrl.text.isEmpty || passwordCtrl.text.isEmpty) return;
+
+                      setDialogState(() => isLoading = true);
+                      final auth = Provider.of<AuthProvider>(context, listen: false);
+
+                      // استخدام الدالة المخصصة لسيرفر التكسي
+                      bool success = await auth.loginTeamLeader(usernameCtrl.text, passwordCtrl.text);
+
+                      setDialogState(() => isLoading = false);
+
+                      if (success && mounted) {
+                        Navigator.pop(ctx); // إغلاق النافذة
+                        // فتح شاشة الرحلات
+                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderZoneRidesScreen()));
+                      } else if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل الدخول، تأكد من البيانات"), backgroundColor: Colors.red));
+                      }
+                    },
+                    child: isLoading
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                        : const Text("دخول", style: TextStyle(fontWeight: FontWeight.bold)),
+                  )
+                ],
+              );
+            }
+        )
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -11555,16 +11594,22 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
 
         // أزرار الشريط العلوي
         actions: [
-          // 🔥 الزر الجديد: للذهاب إلى شاشة مراقبة الرحلات المباشرة (التكسي)
+          // 🔥 زر التكسي الذكي (يفحص الدخول أولاً)
           IconButton(
             icon: const Icon(Icons.local_taxi, color: Colors.white),
             tooltip: "مراقبة التكسي الحية",
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const TeamLeaderZoneRidesScreen(),
-                ),
-              );
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              // قراءة التوكن المخصص لسيرفر المراقبة
+              final monitoringToken = prefs.getString('taxi_monitoring_token');
+
+              if (monitoringToken != null && monitoringToken.isNotEmpty) {
+                // مسجل دخول مسبقاً -> افتح شاشة التكسي فوراً
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderZoneRidesScreen()));
+              } else {
+                // غير مسجل -> إظهار نافذة تسجيل دخول التكسي
+                _showTaxiLoginDialog(context);
+              }
             },
           ),
 
@@ -11608,8 +11653,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
           // 3. تبويب المسواك
           _buildFutureOrdersList(type: 'market'),
 
-          // 4. 🔥 تبويب التاكسي (منفصل ويستخدم التوكن الخاص به)
-          // تبويب طلبات الفريق الجديد
+          // 4. 🔥 تبويب طلبات السائقين (منفصل ويستخدم التوكن الخاص به taxi_jwt_token للـ Banner)
           TeamOrdersScreen(token: widget.token),
         ],
       ),
@@ -11675,6 +11719,8 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     );
   }
 }
+
+
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
   @override
   Widget build(BuildContext context) {
