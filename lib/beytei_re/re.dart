@@ -11513,6 +11513,7 @@ class RegionDashboardScreen extends StatefulWidget {
   State<RegionDashboardScreen> createState() => _RegionDashboardScreenState();
 }
 
+
 class _RegionDashboardScreenState extends State<RegionDashboardScreen> with SingleTickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   late TabController _tabController;
@@ -11598,7 +11599,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     }
   }
 
-  // 🔥 نافذة تسجيل دخول التكسي المستقلة (On-Demand) - النسخة المصححة
+  // 🔥 نافذة تسجيل دخول التكسي المستقلة (On-Demand)
   void _showTaxiLoginDialog(BuildContext context) {
     final usernameCtrl = TextEditingController();
     final passwordCtrl = TextEditingController();
@@ -11681,7 +11682,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                       });
 
                       try {
-                        // ✅ نستخدم authProvider الذي عرفناه في بداية الدالة
                         bool success = await authProvider.loginTeamLeader(usernameCtrl.text, passwordCtrl.text);
 
                         if (success) {
@@ -11716,69 +11716,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("غرفة عمليات ${widget.areaName}"),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: "الكل"),
-            Tab(text: "مطاعم"),
-            Tab(text: "مسواك"),
-            Tab(text: "تكسي"),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildFutureOrdersList(type: 'all'),
-          _buildFutureOrdersList(type: 'restaurant'),
-          _buildFutureOrdersList(type: 'market'),
-          Center(
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.local_taxi),
-              label: const Text("دخول مراقبة التكسي"),
-              onPressed: () => _showTaxiLoginDialog(context),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // دالة مساعدة لبناء القوائم
-  Widget _buildFutureOrdersList({required String type}) {
-    return RefreshIndicator(
-      onRefresh: () async => _loadData(),
-      child: FutureBuilder<List<UnifiedDeliveryOrder>>(
-        future: _ordersFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError || !snapshot.hasData) {
-            return const Center(child: Text("خطأ في تحميل البيانات"));
-          }
-
-          List<UnifiedDeliveryOrder> orders = snapshot.data!;
-          if (type != 'all') {
-            orders = orders.where((o) => o.sourceType == type).toList();
-          }
-
-          return ListView.builder(
-            itemCount: orders.length,
-            itemBuilder: (context, index) => TeamLeaderOrderCard(order: orders[index], token: widget.token),
-          );
-        },
-      ),
-    );
-  }
-}
-  @override
-  Widget build(BuildContext context) {
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-
-    return Scaffold(
-      appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -11789,7 +11726,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
         backgroundColor: const Color(0xFF1E3C72),
         foregroundColor: Colors.white,
 
-        // أزرار الشريط العلوي
         actions: [
           // 🔥 زر التكسي الذكي (يفحص الدخول أولاً)
           IconButton(
@@ -11797,20 +11733,16 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
             tooltip: "مراقبة التكسي الحية",
             onPressed: () async {
               final prefs = await SharedPreferences.getInstance();
-              // قراءة التوكن المخصص لسيرفر المراقبة
               final monitoringToken = prefs.getString('taxi_monitoring_token');
 
               if (monitoringToken != null && monitoringToken.isNotEmpty) {
-                // مسجل دخول مسبقاً -> افتح شاشة التكسي فوراً
                 Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderZoneRidesScreen()));
               } else {
-                // غير مسجل -> إظهار نافذة تسجيل دخول التكسي
                 _showTaxiLoginDialog(context);
               }
             },
           ),
 
-          // زر المحفظة والمكافآت
           IconButton(
             icon: const Icon(Icons.account_balance_wallet, color: Colors.amber),
             tooltip: "المكافآت والرصيد",
@@ -11841,23 +11773,16 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
       body: TabBarView(
         controller: _tabController,
         children: [
-          // 1. تبويب الكل (يعرض مطاعم + مسواك)
           _buildFutureOrdersList(type: 'all'),
-
-          // 2. تبويب المطاعم
           _buildFutureOrdersList(type: 'restaurant'),
-
-          // 3. تبويب المسواك
           _buildFutureOrdersList(type: 'market'),
-
-          // 4. 🔥 تبويب طلبات السائقين (منفصل ويستخدم التوكن الخاص به taxi_jwt_token للـ Banner)
           TeamOrdersScreen(token: widget.token),
         ],
       ),
     );
   }
 
-  // دالة مساعدة لبناء القوائم (مطاعم ومسواك) لتجنب التكرار
+  // دالة مساعدة لبناء القوائم (تم إصلاحها وإضافة onActionComplete)
   Widget _buildFutureOrdersList({required String type}) {
     return RefreshIndicator(
       onRefresh: () async {
@@ -11885,7 +11810,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
 
           List<UnifiedDeliveryOrder> orders = snapshot.data ?? [];
 
-          // فلترة حسب النوع المختار
           if (type != 'all') {
             orders = orders.where((o) => o.sourceType == type).toList();
           }
@@ -11907,7 +11831,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
               return TeamLeaderOrderCard(
                 order: orders[index],
                 token: widget.token,
-                onActionComplete: () => _loadData(),
+                onActionComplete: () => _loadData(), // ✅ تم الإصلاح هنا
               );
             },
           );
