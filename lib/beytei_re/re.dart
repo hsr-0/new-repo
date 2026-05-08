@@ -11567,7 +11567,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     super.dispose();
   }
 
-  // 🔥🔥🔥 الدالة الجوهرية: دمج طلبات المطاعم والمسواك فقط (التاكسي له تبويب منفصل) 🔥🔥🔥
+  // 🔥🔥🔥 الدالة الجوهرية: دمج طلبات المطاعم والمسواك فقط 🔥🔥🔥
   Future<List<UnifiedDeliveryOrder>> _fetchAllOrdersCombined() async {
     final auth = Provider.of<AuthProvider>(context, listen: false);
 
@@ -11594,23 +11594,25 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
       return allOrders;
     } catch (e) {
       print("Error merging orders: $e");
-      // في حال حدوث خطأ، نعيد قائمة فارغة لعدم إيقاف التطبيق
       return [];
     }
   }
 
-  // 🔥 نافذة تسجيل دخول التكسي المستقلة (On-Demand)
+  // 🔥 نافذة تسجيل دخول التكسي المستقلة (On-Demand) - النسخة المصححة
   void _showTaxiLoginDialog(BuildContext context) {
     final usernameCtrl = TextEditingController();
     final passwordCtrl = TextEditingController();
     bool isLoading = false;
-    String errorMessage = ""; // متغير جديد لعرض الخطأ بوضوح
+    String errorMessage = "";
+
+    // ✅ الحل الأكيد: جلب الـ Provider هنا قبل الدخول في StatefulBuilder
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
     showDialog(
         context: context,
-        barrierDismissible: false, // لا تغلق عند الضغط خارجها
-        builder: (ctx) => StatefulBuilder(
-            builder: (context, setDialogState) {
+        barrierDismissible: false,
+        builder: (dialogCtx) => StatefulBuilder(
+            builder: (innerContext, setDialogState) {
               return AlertDialog(
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 title: const Row(
@@ -11645,7 +11647,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
                       ),
                     ),
-                    // ظهور رسالة الخطأ إن وجدت
                     if (errorMessage.isNotEmpty) ...[
                       const SizedBox(height: 10),
                       Text(errorMessage, style: const TextStyle(color: Colors.red, fontSize: 13, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
@@ -11655,8 +11656,8 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                 actions: [
                   TextButton(
                     onPressed: isLoading ? null : () {
-                      FocusManager.instance.primaryFocus?.unfocus(); // إغلاق الكيبورد في حال الإلغاء أيضاً
-                      Navigator.pop(ctx);
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      Navigator.pop(dialogCtx);
                     },
                     child: const Text("إلغاء", style: TextStyle(color: Colors.grey)),
                   ),
@@ -11667,7 +11668,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
                     ),
                     onPressed: isLoading ? null : () async {
-                      // 👈 1. التعديل هنا: إخفاء الكيبورد فوراً عند الضغط
                       FocusManager.instance.primaryFocus?.unfocus();
 
                       if (usernameCtrl.text.isEmpty || passwordCtrl.text.isEmpty) {
@@ -11681,25 +11681,22 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                       });
 
                       try {
-                        final auth = Provider.of<AuthProvider>(context, listen: false);
-                        bool success = await auth.loginTeamLeader(usernameCtrl.text, passwordCtrl.text);
+                        // ✅ نستخدم authProvider الذي عرفناه في بداية الدالة
+                        bool success = await authProvider.loginTeamLeader(usernameCtrl.text, passwordCtrl.text);
 
                         if (success) {
-                          if (ctx.mounted) Navigator.pop(ctx); // إغلاق النافذة
-
-                          // 👈 2. التعديل هنا: تأخير بسيط جداً لمنع تضارب الأنيميشن مع الكيبورد
+                          if (innerContext.mounted) Navigator.pop(innerContext);
                           await Future.delayed(const Duration(milliseconds: 100));
 
                           if (mounted) Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderZoneRidesScreen()));
                         } else {
-                          setDialogState(() => errorMessage = "البيانات غير صحيحة، تأكد من اسم المستخدم وكلمة المرور.");
+                          setDialogState(() => errorMessage = "البيانات غير صحيحة، تأكد من البيانات.");
                         }
                       } catch (e) {
-                        setDialogState(() => errorMessage = "تفاصيل الخطأ: ${e.toString()}");
+                        setDialogState(() => errorMessage = "حدث خطأ: ${e.toString()}");
                       }
                       finally {
-                        // ضمان إيقاف الدوران دائماً مهما حدث
-                        if (ctx.mounted) {
+                        if (innerContext.mounted) {
                           setDialogState(() => isLoading = false);
                         }
                       }
@@ -11715,6 +11712,67 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     );
   }
 
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("غرفة عمليات ${widget.areaName}"),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: "الكل"),
+            Tab(text: "مطاعم"),
+            Tab(text: "مسواك"),
+            Tab(text: "تكسي"),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildFutureOrdersList(type: 'all'),
+          _buildFutureOrdersList(type: 'restaurant'),
+          _buildFutureOrdersList(type: 'market'),
+          Center(
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.local_taxi),
+              label: const Text("دخول مراقبة التكسي"),
+              onPressed: () => _showTaxiLoginDialog(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // دالة مساعدة لبناء القوائم
+  Widget _buildFutureOrdersList({required String type}) {
+    return RefreshIndicator(
+      onRefresh: () async => _loadData(),
+      child: FutureBuilder<List<UnifiedDeliveryOrder>>(
+        future: _ordersFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError || !snapshot.hasData) {
+            return const Center(child: Text("خطأ في تحميل البيانات"));
+          }
+
+          List<UnifiedDeliveryOrder> orders = snapshot.data!;
+          if (type != 'all') {
+            orders = orders.where((o) => o.sourceType == type).toList();
+          }
+
+          return ListView.builder(
+            itemCount: orders.length,
+            itemBuilder: (context, index) => TeamLeaderOrderCard(order: orders[index], token: widget.token),
+          );
+        },
+      ),
+    );
+  }
+}
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
