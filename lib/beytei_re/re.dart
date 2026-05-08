@@ -473,10 +473,12 @@ class AuthProvider with ChangeNotifier {
 
 // 🔥 دالة تسجيل الدخول المخصصة للتيم ليدر (مراقبة التكسي)
 // 🔥 دالة مخصصة فقط لسيرفر المراقبة الحية (taxi.beytei.com)
+// 🔥 دالة مخصصة فقط لسيرفر المراقبة الحية (taxi.beytei.com)
   Future<bool> loginTeamLeader(String username, String password) async {
     final url = 'https://taxi.beytei.com/team-leader-login';
     _isLoading = true;
-    notifyListeners();
+    // نستخدم microtask لتجنب تضارب التحديث مع بناء الواجهة
+    Future.microtask(() => notifyListeners());
 
     try {
       final response = await http.post(
@@ -486,30 +488,49 @@ class AuthProvider with ChangeNotifier {
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
+        // 🔥 التعديل هنا: طباعة الرد القادم من السيرفر لمعرفة شكل البيانات وأين يوجد رقم المنطقة
+        print("📥 [رد السيرفر عند تسجيل الدخول]: ${response.body}");
+
         final data = json.decode(response.body);
-        if (data['status'] == 'success') {
+        if (data['status'] == 'success' || data['token'] != null) {
           final prefs = await SharedPreferences.getInstance();
 
-          // 🔥 نحفظه باسم مختلف كي لا يتضارب مع توكن الـ Banner
           await prefs.setString('taxi_monitoring_token', data['token']);
-          await prefs.setInt('leader_zone_id', data['user']['zone_id']);
-          await prefs.setString('leader_zone_name', data['user']['name']);
+
+          // حماية آمنة لقراءة الـ zone_id سواء كان نص أو رقم
+          int zoneId = 0;
+          if (data['user'] != null && data['user']['zone_id'] != null) {
+            zoneId = int.tryParse(data['user']['zone_id'].toString()) ?? 0;
+          }
+          await prefs.setInt('leader_zone_id', zoneId);
+
+          String zoneName = data['user'] != null ? (data['user']['name'] ?? 'منطقتي') : 'منطقتي';
+          await prefs.setString('leader_zone_name', zoneName);
 
           _isLoading = false;
           notifyListeners();
           return true;
         }
       }
+
+      print("⚠️ فشل الدخول للسيرفر: ${response.body}");
       _isLoading = false;
       notifyListeners();
       return false;
+
     } catch (e) {
+      print("❌ خطأ في الاتصال بسيرفر التكسي: $e");
       _isLoading = false;
       notifyListeners();
       return false;
     }
   }
+
+
 }
+
+
+
 
 class CustomerProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
@@ -1059,6 +1080,7 @@ class DeliveryConfigProvider with ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final lastVersion = prefs.getInt('delivery_config_version') ?? 0;
 
+      print("🚀 [Config] جاري جلب ملف التسعير من السيرفر...");
       final response = await http.get(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/delivery-config-geo'),
       ).timeout(const Duration(seconds: 8));
@@ -1071,9 +1093,13 @@ class DeliveryConfigProvider with ChangeNotifier {
           _cachedConfig = data;
           await prefs.setString('delivery_config_json', json.encode(data));
           await prefs.setInt('delivery_config_version', serverVersion);
+          print("✅ [Config] تم تحديث ملف التسعير بنجاح (نسخة: $serverVersion)");
+        } else {
+          print("⚡ [Config] الملف المحلي محدث مسبقاً (نسخة: $serverVersion)");
         }
       }
     } catch (e) {
+      print("⚠️ [Config] فشل جلب الملف، سيتم استخدام الكاش: $e");
       final prefs = await SharedPreferences.getInstance();
       final cached = prefs.getString('delivery_config_json');
       if (cached != null) _cachedConfig = json.decode(cached);
@@ -1083,33 +1109,48 @@ class DeliveryConfigProvider with ChangeNotifier {
     }
   }
 
-  // 🔥 الدالة الجديدة: تحسب السعر وتطبع كيف تم الحساب
+  // 🔥 الدالة الجديدة: تحسب السعر وتطبع كيف تم الحساب في الكونسول
   Map<String, dynamic> calculateFeeDetails({
     required double userLat,
     required double userLng,
     required int restaurantId,
     required int areaId,
-    required String areaName, // لمعرفة اسم المنطقة وعرضه
+    required String areaName,
   }) {
-    final double fallbackFee = (areaId == 84 || areaId == 85) ? 1500.0 : 1000.0;
+    print("==================================================");
+    print("📍 [Calc Start] بدأ الحساب المحلي لتسعيرة التوصيل");
+    print("📍 المطعم ID: $restaurantId");
+    print("📍 المنطقة: $areaName (ID: $areaId)");
+    print("📍 إحداثيات الزبون: Lat: $userLat, Lng: $userLng");
+
+    // 1. تحديد المنطقة (الكوت 84 أو الصويرة 85)
+    bool isKut = (areaId == 84);
+    bool isSuwaira = (areaId == 85);
+    double fallbackFee = isSuwaira ? 1500.0 : (isKut ? 1500.0 : 1000.0);
+
+    print("📍 حالة المنطقة: هل هي الكوت؟ $isKut | هل هي الصويرة؟ $isSuwaira");
+
+    // حماية: التأكد من وجود ملف التسعير
+    if (_cachedConfig == null) {
+      print("⚠️ [Calc Error] ملف التسعير غير موجود! سيتم تطبيق السعر الافتراضي: $fallbackFee");
+      return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة (أوفلاين)'};
+    }
+
+    // حماية: إذا كان الـ GPS مغلق أو لم يتم جلبه
+    if (userLat == 0.0 || userLng == 0.0) {
+      print("⚠️ [Calc Error] إحداثيات الزبون صفرية! سيتم تطبيق السعر الافتراضي: $fallbackFee");
+      return {'fee': fallbackFee, 'message': '📌 تم تطبيق تسعيرة ($areaName) الموحدة'};
+    }
 
     try {
-      if (_cachedConfig == null) {
-        return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة (أوفلاين)'};
-      }
-
       final zones = List<Map<String, dynamic>>.from(_cachedConfig!['geo_zones'] ?? []);
-      final pricing = Map<String, dynamic>.from(_cachedConfig!['pricing'] ?? {});
       final locations = List<Map<String, dynamic>>.from(_cachedConfig!['locations'] ?? []);
 
-      final List<dynamic> rawRadiusAreas = pricing['radius_areas'] ?? [];
-      final List<int> radiusBasedAreas = rawRadiusAreas.map((e) => int.tryParse(e.toString()) ?? 0).where((id) => id > 0).toList();
-      final bool isRadiusArea = radiusBasedAreas.contains(areaId);
-
       // ========================================================
-      // 1. فحص المناطق المرسومة (النعمانية، العزيزية، إلخ)
+      // 2. فحص المناطق المرسومة (إذا لم تكن الكوت ولم تكن الصويرة)
       // ========================================================
-      if (!isRadiusArea) {
+      if (!isKut && !isSuwaira) {
+        print("🗺️ [Calc Check] جاري فحص المناطق المرسومة...");
         for (var zone in zones) {
           List<Map<String, double>> parsedPoints = [];
           var rawPoints = zone['latlngs'];
@@ -1130,61 +1171,95 @@ class DeliveryConfigProvider with ChangeNotifier {
 
           if (parsedPoints.isNotEmpty && _isPointInPolygon(userLat, userLng, parsedPoints)) {
             double zonePrice = double.tryParse(zone['price'].toString()) ?? fallbackFee;
-            zonePrice = zonePrice < 1000 ? 1000.0 : zonePrice;
+            if (zonePrice < 1000.0) zonePrice = 1000.0;
+            print("✅ [Calc Success] الزبون داخل منطقة مرسومة: ${zone['name']} | السعر: $zonePrice");
             return {'fee': zonePrice, 'message': '🎯 داخل المنطقة المرسومة: ${zone['name']}'};
           }
         }
+        print("ℹ️ [Calc Info] الزبون خارج جميع المناطق المرسومة، سيتم حساب المسافة...");
       }
 
       // ========================================================
-      // 2. إذا كان الـ GPS مغلق أو غير متوفر (السرعة)
-      // ========================================================
-      if (userLat == 0.0 || userLng == 0.0) {
-        return {'fee': fallbackFee, 'message': '📌 تم تطبيق تسعيرة ($areaName) الموحدة'};
-      }
-
-      // ========================================================
-      // 3. حساب المسافة الذكية (للكوت والصويرة)
+      // 3. حساب المسافة (للكوت والصويرة أو الطوارئ)
       // ========================================================
       final restLoc = locations.firstWhere((l) => l['id'] == restaurantId, orElse: () => {});
-      if (restLoc.isEmpty) return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة'};
-
-      final distKm = _haversineDistance(
-          userLat, userLng,
-          double.tryParse(restLoc['lat'].toString()) ?? 0.0,
-          double.tryParse(restLoc['lng'].toString()) ?? 0.0
-      ) * 1.3; // معامل الطرق
-
-      if (isRadiusArea) {
-        final List<dynamic> radiusPricing = pricing['radius_pricing'] ?? [];
-        if (radiusPricing.isEmpty) return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة'};
-
-        for (var tier in radiusPricing) {
-          double maxKm = double.tryParse(tier['max_km'].toString()) ?? 999.0;
-          double price = double.tryParse(tier['price'].toString()) ?? fallbackFee;
-          if (distKm <= maxKm) {
-            return {'fee': price, 'message': '📏 تسعيرة ($areaName) الذكية (المسافة: ${distKm.toStringAsFixed(1)} كم)'};
-          }
-        }
-        return {'fee': 7000.0, 'message': '📏 مسافة بعيدة جداً (الحد الأقصى)'};
-      } else {
-        // إذا كان خارج المضلع
-        double baseDist = double.tryParse(pricing['base_distance_km'].toString()) ?? 5.0;
-        double baseFee = double.tryParse(pricing['base_fee'].toString()) ?? 1000.0;
-        double extraFee = double.tryParse(pricing['extra_km_fee'].toString()) ?? 250.0;
-
-        double calculated = baseFee;
-        if (distKm > baseDist) calculated += (distKm - baseDist) * extraFee;
-        calculated = (calculated / 250).ceil() * 250.0;
-        if (calculated > 7000.0) calculated = 7000.0;
-        return {'fee': calculated < 1000 ? 1000.0 : calculated, 'message': '📏 خارج المركز (المسافة: ${distKm.toStringAsFixed(1)} كم)'};
+      if (restLoc.isEmpty) {
+        print("⚠️ [Calc Error] لم يتم العثور على إحداثيات للمطعم! سيتم تطبيق السعر الافتراضي: $fallbackFee");
+        return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة'};
       }
+
+      double restLat = double.tryParse(restLoc['lat'].toString()) ?? 0.0;
+      double restLng = double.tryParse(restLoc['lng'].toString()) ?? 0.0;
+
+      print("📍 إحداثيات المطعم: Lat: $restLat, Lng: $restLng");
+
+      // حساب المسافة بخوارزمية هافيرسين مع ضربها بمعامل انحراف الطرق (1.3)
+      double rawDistance = _haversineDistance(userLat, userLng, restLat, restLng);
+      double distanceKm = rawDistance * 1.3;
+      print("📏 المسافة الجوية: ${rawDistance.toStringAsFixed(2)} كم | المسافة بعد معامل الطرق (1.3): ${distanceKm.toStringAsFixed(2)} كم");
+
+      double finalPrice = 1000.0;
+
+      // ========================================================
+      // 4. تطبيق شرائح الأسعار المطابقة للسيرفر 100%
+      // ========================================================
+      if (isKut) {
+        print("🔢 [Calc Logic] تطبيق تسعيرة الكوت الذكية...");
+        if (distanceKm <= 2.5) {
+          finalPrice = 1500.0;
+        } else if (distanceKm <= 4.0) {
+          finalPrice = 2500.0;
+        } else if (distanceKm <= 5.5) {
+          finalPrice = 3000.0;
+        } else if (distanceKm <= 7.0) {
+          finalPrice = 3500.0;
+        } else if (distanceKm <= 8.5) {
+          finalPrice = 4000.0;
+        } else if (distanceKm <= 15.0) {
+          finalPrice = 5000.0;
+        } else {
+          finalPrice = 7000.0;
+        }
+        print("✅ [Calc Success] السعر النهائي للكوت: $finalPrice د.ع");
+        print("==================================================");
+        return {'fee': finalPrice, 'message': '📏 تسعيرة الكوت الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
+
+      } else if (isSuwaira) {
+        print("🔢 [Calc Logic] تطبيق تسعيرة الصويرة...");
+        if (distanceKm <= 2.5) {
+          finalPrice = 1500.0;
+        } else if (distanceKm <= 5.0) {
+          finalPrice = 2000.0;
+        } else {
+          finalPrice = 2500.0;
+        }
+        print("✅ [Calc Success] السعر النهائي للصويرة: $finalPrice د.ع");
+        print("==================================================");
+        return {'fee': finalPrice, 'message': '📏 تسعيرة الصويرة (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
+
+      } else {
+        print("🔢 [Calc Logic] تطبيق تسعيرة الطوارئ للمسافات (خارج المناطق المرسومة)...");
+        finalPrice = 1000.0;
+        if (distanceKm > 5.0) {
+          finalPrice += (distanceKm - 5.0) * 250.0;
+        }
+        // تقريب لأقرب 250
+        finalPrice = (finalPrice / 250.0).ceil() * 250.0;
+        if (finalPrice > 7000.0) finalPrice = 7000.0;
+
+        print("✅ [Calc Success] السعر النهائي للطوارئ: $finalPrice د.ع");
+        print("==================================================");
+        return {'fee': finalPrice < 1000 ? 1000.0 : finalPrice, 'message': '📏 تسعيرة المسافة الاحتياطية (${distanceKm.toStringAsFixed(2)} كم)'};
+      }
+
     } catch (e) {
+      print("❌ [Calc Fatal Error] حدث خطأ أثناء الحساب: $e");
+      print("==================================================");
       return {'fee': fallbackFee, 'message': '⚠️ تم تطبيق السعر الافتراضي لـ ($areaName)'};
     }
   }
 
-  // دوال الحساب الهندسية
+  // خوارزمية فحص النقطة داخل المضلع (Ray Casting)
   bool _isPointInPolygon(double lat, double lng, List<Map<String, double>> polygon) {
     if (polygon.isEmpty) return false;
     bool inside = false;
@@ -1199,15 +1274,18 @@ class DeliveryConfigProvider with ChangeNotifier {
     return inside;
   }
 
+  // خوارزمية حساب المسافة (Haversine)
   double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-    const double R = 6371;
+    const double R = 6371.0; // نصف قطر الأرض بالكيلومتر
     double dLat = _deg2rad(lat2 - lat1);
     double dLon = _deg2rad(lon2 - lon1);
     double a = sin(dLat / 2) * sin(dLat / 2) + cos(_deg2rad(lat1)) * cos(_deg2rad(lat2)) * sin(dLon / 2) * sin(dLon / 2);
     return R * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
-  double _deg2rad(double deg) => deg * (3.141592653589793 / 180);
+
+  double _deg2rad(double deg) => deg * (3.141592653589793 / 180.0);
 }
+
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -3648,8 +3726,10 @@ class ApiService {
 // 🔥 دالة جلب رحلات التكسي الخاصة بمنطقة التيم ليدر
 // 🔥 دالة جلب رحلات التكسي الخاصة بمنطقة التيم ليدر
   Future<List<ZoneRide>> getTeamLeaderZoneRides(String token, int zoneId) async {
-    final url = 'https://taxi.beytei.com/team-leader-rides?zone_id=$zoneId'; // 👈 الرابط الجديد
-    print("🟡 [API - TeamLeader] جاري طلب الرحلات من: $url");
+    final url = 'https://taxi.beytei.com/team-leader-rides?zone_id=$zoneId';
+
+    // 🔥 التعديل الأول: طباعة واضحة توضح رقم المنطقة الذي يرسله التطبيق
+    print("🟡 [API - TeamLeader] جاري طلب الرحلات من: $url (Zone ID: $zoneId)");
 
     try {
       final response = await http.get(
@@ -3674,13 +3754,14 @@ class ApiService {
 
         return ridesData.map((json) => ZoneRide.fromJson(json)).toList();
       } else {
+        // 🔥 التعديل الثاني: طباعة محتوى الخطأ القادم من الباك إند (مهم جداً للمبرمج)
+        print("❌ [Server Error ${response.statusCode}] محتوى الرد من السيرفر: ${response.body}");
         throw Exception("فشل جلب الرحلات: ${response.statusCode}");
       }
     } catch (e) {
       throw Exception("حدث خطأ في الاتصال: $e");
     }
-  }// في ملف api_service.dart
-}
+  }}
 
 class AuthService {
   // 1. تسجيل الدخول للسيرفرات القياسية (مطاعم + مسواك)
@@ -7874,28 +7955,45 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   // 🔥 دالة القفز عند الضغط على قسم
+// 🔥 دالة القفز عند الضغط على قسم
   void _scrollToCategory(int id) async {
     setState(() {
       _selectedCategoryId = id;
-      _isAutoScrolling = true;
+      _isAutoScrolling = true; // إيقاف التتبع التلقائي أثناء النزول
     });
 
     _scrollCategoryBarToActive(id);
 
     final key = _categoryKeys[id];
     if (key != null && key.currentContext != null) {
-      Scrollable.ensureVisible(
-        key.currentContext!,
+
+      // 1. الحصول على موقع القسم في الشاشة حالياً
+      final RenderBox renderBox = key.currentContext!.findRenderObject() as RenderBox;
+      final double yPosition = renderBox.localToGlobal(Offset.zero).dy;
+
+      // 2. حساب مسافة السكرول المطلوبة بدقة:
+      // (موقع السكرول الحالي + موقع القسم في الشاشة - ارتفاع الهيدر الثابت)
+      // وضعنا 150.0 كقيمة لخصم ارتفاع الـ AppBar وشريط الأقسام معاً
+      double targetOffset = _scrollController.offset + yPosition - 150.0;
+
+      // 3. حماية السكرول من تجاوز الحدود (الأعلى والأسفل)
+      if (targetOffset < 0) targetOffset = 0;
+      if (_scrollController.hasClients && targetOffset > _scrollController.position.maxScrollExtent) {
+        targetOffset = _scrollController.position.maxScrollExtent;
+      }
+
+      // 4. تنفيذ النزول السلس
+      _scrollController.animateTo(
+        targetOffset,
         duration: const Duration(milliseconds: 500),
         curve: Curves.easeInOut,
-        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
       );
     }
 
+    // الانتظار حتى يكتمل النزول قبل إعادة تفعيل التتبع التلقائي (ScrollSpy)
     await Future.delayed(const Duration(milliseconds: 600));
     _isAutoScrolling = false;
   }
-
   void _scrollCategoryBarToActive(int id) {
     if (!_categoryScrollController.hasClients) return;
 
@@ -8732,13 +8830,26 @@ class _CartScreenState extends State<CartScreen> {
       double uLat = 0.0, uLng = 0.0;
       geolocator.Position? capturedPos;
 
-      // محاولة جلب آخر موقع معروف بصمت (بدون نوافذ طلب صلاحية)
+      // 1. جلب الموقع بدقة عالية وحل مشكلة الـ Null
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
       if (serviceEnabled) {
         geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+        if (permission == geolocator.LocationPermission.denied) {
+          permission = await geolocator.Geolocator.requestPermission();
+        }
+
         if (permission == geolocator.LocationPermission.whileInUse || permission == geolocator.LocationPermission.always) {
-          // استخدام آخر موقع لعدم تأخير الزبون
-          capturedPos = await geolocator.Geolocator.getLastKnownPosition();
+          try {
+            // نطلب الموقع المباشر الآن مع مهلة 5 ثواني
+            capturedPos = await geolocator.Geolocator.getCurrentPosition(
+              desiredAccuracy: geolocator.LocationAccuracy.bestForNavigation,
+              timeLimit: const Duration(seconds: 5),
+            );
+          } catch (e) {
+            // إذا فشل (بسبب التواجد داخل مبنى)، نأخذ آخر موقع كخطة طوارئ
+            capturedPos = await geolocator.Geolocator.getLastKnownPosition();
+          }
+
           if (capturedPos != null) {
             uLat = capturedPos.latitude;
             uLng = capturedPos.longitude;
@@ -8746,7 +8857,7 @@ class _CartScreenState extends State<CartScreen> {
         }
       }
 
-      // جلب البروفايدر وحساب النتيجة
+      // 2. الحساب السريع المباشر (Client-Side) 100% بدون السيرفر
       final configProvider = Provider.of<DeliveryConfigProvider>(cartScreenContext, listen: false);
       if (configProvider.cachedConfig == null) await configProvider.fetchAndCacheConfig();
 
@@ -8761,7 +8872,7 @@ class _CartScreenState extends State<CartScreen> {
       onResult(result['fee'], result['message'], capturedPos);
 
     } catch (e) {
-      onResult(1500.0, "تم تطبيق السعر الافتراضي.", null);
+      onResult(1000.0, "تم تطبيق السعر الافتراضي بسبب خطأ داخلي.", null);
     }
   }
 
@@ -11493,6 +11604,7 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     final usernameCtrl = TextEditingController();
     final passwordCtrl = TextEditingController();
     bool isLoading = false;
+    String errorMessage = ""; // متغير جديد لعرض الخطأ بوضوح
 
     showDialog(
         context: context,
@@ -11533,11 +11645,19 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
                       ),
                     ),
+                    // ظهور رسالة الخطأ إن وجدت
+                    if (errorMessage.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(errorMessage, style: const TextStyle(color: Colors.red, fontSize: 13, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                    ]
                   ],
                 ),
                 actions: [
                   TextButton(
-                    onPressed: isLoading ? null : () => Navigator.pop(ctx),
+                    onPressed: isLoading ? null : () {
+                      FocusManager.instance.primaryFocus?.unfocus(); // إغلاق الكيبورد في حال الإلغاء أيضاً
+                      Navigator.pop(ctx);
+                    },
                     child: const Text("إلغاء", style: TextStyle(color: Colors.grey)),
                   ),
                   ElevatedButton(
@@ -11547,22 +11667,41 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
                     ),
                     onPressed: isLoading ? null : () async {
-                      if (usernameCtrl.text.isEmpty || passwordCtrl.text.isEmpty) return;
+                      // 👈 1. التعديل هنا: إخفاء الكيبورد فوراً عند الضغط
+                      FocusManager.instance.primaryFocus?.unfocus();
 
-                      setDialogState(() => isLoading = true);
-                      final auth = Provider.of<AuthProvider>(context, listen: false);
+                      if (usernameCtrl.text.isEmpty || passwordCtrl.text.isEmpty) {
+                        setDialogState(() => errorMessage = "يرجى ملء جميع الحقول!");
+                        return;
+                      }
 
-                      // استخدام الدالة المخصصة لسيرفر التكسي
-                      bool success = await auth.loginTeamLeader(usernameCtrl.text, passwordCtrl.text);
+                      setDialogState(() {
+                        isLoading = true;
+                        errorMessage = "";
+                      });
 
-                      setDialogState(() => isLoading = false);
+                      try {
+                        final auth = Provider.of<AuthProvider>(context, listen: false);
+                        bool success = await auth.loginTeamLeader(usernameCtrl.text, passwordCtrl.text);
 
-                      if (success && mounted) {
-                        Navigator.pop(ctx); // إغلاق النافذة
-                        // فتح شاشة الرحلات
-                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderZoneRidesScreen()));
-                      } else if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل الدخول، تأكد من البيانات"), backgroundColor: Colors.red));
+                        if (success) {
+                          if (ctx.mounted) Navigator.pop(ctx); // إغلاق النافذة
+
+                          // 👈 2. التعديل هنا: تأخير بسيط جداً لمنع تضارب الأنيميشن مع الكيبورد
+                          await Future.delayed(const Duration(milliseconds: 100));
+
+                          if (mounted) Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderZoneRidesScreen()));
+                        } else {
+                          setDialogState(() => errorMessage = "البيانات غير صحيحة، تأكد من اسم المستخدم وكلمة المرور.");
+                        }
+                      } catch (e) {
+                        setDialogState(() => errorMessage = "تفاصيل الخطأ: ${e.toString()}");
+                      }
+                      finally {
+                        // ضمان إيقاف الدوران دائماً مهما حدث
+                        if (ctx.mounted) {
+                          setDialogState(() => isLoading = false);
+                        }
                       }
                     },
                     child: isLoading
@@ -11719,7 +11858,6 @@ class _RegionDashboardScreenState extends State<RegionDashboardScreen> with Sing
     );
   }
 }
-
 
 class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
   @override
