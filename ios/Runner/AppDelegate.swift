@@ -57,7 +57,6 @@ extension AppDelegate: PKPushRegistryDelegate {
         writeLog("تم حفظ التوكن")
     }
 
-    // 🔥 الحل النهائي والقاطع: إطلاق شاشة الرنين إجبارياً 🔥
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
 
         writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
@@ -68,7 +67,6 @@ extension AppDelegate: PKPushRegistryDelegate {
             let orderId = dict["order_id"] as? String ?? ""
             let channelName = dict["channel_name"] as? String ?? UUID().uuidString
 
-            // تجهيز البيانات للصيغة التي تفهمها الشاشة مباشرة
             let callkitData: [String: Any] = [
                 "id": channelName,
                 "nameCaller": callerName,
@@ -81,19 +79,15 @@ extension AppDelegate: PKPushRegistryDelegate {
 
             let data = flutter_callkit_incoming.Data(args: callkitData)
 
-            // ضرب الشاشة مباشرة لعرض الرنة
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.showCallkitIncoming(data)
-                writeLog("✅ الشاشة رنت (المكتبة كانت مستيقظة).")
+                // 🔥 التعديل هنا: إضافة fromPushKit: true ليتطابق مع شروط المكتبة الجديدة
+                plugin.showCallkitIncoming(data, fromPushKit: true)
+                writeLog("✅ الشاشة رنت بنجاح.")
             } else {
-                let newPlugin = SwiftFlutterCallkitIncomingPlugin()
-                SwiftFlutterCallkitIncomingPlugin.sharedInstance = newPlugin
-                newPlugin.showCallkitIncoming(data)
-                writeLog("✅ الشاشة رنت (تم إيقاظ المكتبة إجبارياً).")
+                writeLog("❌ المكتبة غير جاهزة.")
             }
         }
 
-        // الإبلاغ الفوري لآبل لتجنب الكراش
         completion()
     }
 
