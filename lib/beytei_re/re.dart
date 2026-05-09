@@ -16,6 +16,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:provider/provider.dart';
+import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -156,6 +157,13 @@ class ZoneRide {
   final String customerPhone;
   final String? driverName;
   final String? driverPhone;
+  final String? createdAt; // 🔥 الحقل الجديد لوقت الرحلة
+
+  // الإحداثيات
+  final String? pickupLat;
+  final String? pickupLng;
+  final String? destLat;
+  final String? destLng;
 
   ZoneRide({
     required this.id,
@@ -167,6 +175,11 @@ class ZoneRide {
     required this.customerPhone,
     this.driverName,
     this.driverPhone,
+    this.createdAt, // 🔥
+    this.pickupLat,
+    this.pickupLng,
+    this.destLat,
+    this.destLng,
   });
 
   factory ZoneRide.fromJson(Map<String, dynamic> json) {
@@ -185,11 +198,21 @@ class ZoneRide {
       status: int.tryParse(json['status'].toString()) ?? 0,
       customerName: customerName.isNotEmpty ? customerName : 'زبون',
       customerPhone: user['mobile'] ?? 'لا يوجد رقم',
-      driverName: driver != null ? driver['firstname'] : null,
+      driverName: driver != null ? "${driver['firstname'] ?? ''} ${driver['lastname'] ?? ''}".trim() : null,
       driverPhone: driver != null ? driver['mobile'] : null,
+
+      // 🔥 قراءة وقت إنشاء الرحلة من السيرفر
+      createdAt: json['created_at'],
+
+      // قراءة الإحداثيات
+      pickupLat: json['pickup_latitude']?.toString(),
+      pickupLng: json['pickup_longitude']?.toString(),
+      destLat: json['destination_latitude']?.toString(),
+      destLng: json['destination_longitude']?.toString(),
     );
   }
 }
+
 class TeamLeaderZoneRidesScreen extends StatefulWidget {
   const TeamLeaderZoneRidesScreen({super.key});
 
@@ -205,6 +228,8 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
   @override
   void initState() {
     super.initState();
+    // إعداد اللغة العربية لمكتبة timeago لمرة واحدة عند تشغيل الشاشة
+    timeago.setLocaleMessages('ar', timeago.ArMessages());
     _loadData();
   }
 
@@ -214,9 +239,28 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
     });
   }
 
+  // 🔥 دالة ذكية لتنسيق الوقت (منذ 5 دقائق + الساعة الفعلية)
+  String _formatRideTime(String? createdAt) {
+    if (createdAt == null || createdAt.isEmpty) return "وقت غير محدد";
+
+    try {
+      // تحويل النص إلى DateTime (السيرفر يرسل UTC عادةً لذا نحوله لـ Local)
+      DateTime dateTime = DateTime.parse(createdAt).toLocal();
+
+      // الحصول على صيغة "منذ..."
+      String ago = timeago.format(dateTime, locale: 'ar');
+
+      // الحصول على الساعة الفعلية
+      String clock = DateFormat('hh:mm a', 'ar').format(dateTime);
+
+      return "$ago ($clock)";
+    } catch (e) {
+      return "خطأ في الوقت";
+    }
+  }
+
   Future<List<ZoneRide>> _fetchRides() async {
     final prefs = await SharedPreferences.getInstance();
-    // 🔥 تغيير هنا: نقرأ توكن المراقبة بدلاً من توكن التاكسي القديم
     final token = prefs.getString('taxi_monitoring_token');
     final zoneId = prefs.getInt('leader_zone_id');
     final zName = prefs.getString('leader_zone_name');
@@ -231,12 +275,45 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
 
     return await _apiService.getTeamLeaderZoneRides(token, zoneId);
   }
+
+  Future<void> _makePhoneCall(String phone) async {
+    if (phone.isEmpty || phone == 'لا يوجد رقم') return;
+    final Uri launchUri = Uri(scheme: 'tel', path: phone);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    }
+  }
+
+  Future<void> _openMapRoute(String? pLat, String? pLng, String? dLat, String? dLng) async {
+    if (pLat == null || pLng == null || dLat == null || dLng == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('الإحداثيات غير متوفرة لهذه الرحلة.')),
+      );
+      return;
+    }
+    final String url = 'https://www.google.com/maps/dir/?api=1&origin=$pLat,$pLng&destination=$dLat,$dLng&travelmode=driving';
+    final Uri launchUri = Uri.parse(url);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  void _notifyDriver(int rideId, String? driverName) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('تم إرسال تنبيه للسائق $driverName (قيد الربط مع السيرفر)'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
   Widget _buildStatusBadge(int status) {
     switch (status) {
       case 0: return _badge("معلقة", Colors.orange);
-      case 1: return _badge("جارية", Colors.blue);
-      case 2: return _badge("مكتملة", Colors.green);
-      default: return _badge("ملغاة", Colors.red);
+      case 1:
+      case 2: return _badge("مقبولة", Colors.blue);
+      case 9: return _badge("ملغاة", Colors.red);
+      default: return _badge("مكتملة", Colors.green);
     }
   }
 
@@ -248,7 +325,7 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withOpacity(0.5)),
       ),
-      child: Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold)),
+      child: Text(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
     );
   }
 
@@ -292,6 +369,8 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
               itemCount: rides.length,
               itemBuilder: (context, index) {
                 final ride = rides[index];
+                final hasDriver = ride.driverName != null;
+
                 return Card(
                   margin: const EdgeInsets.only(bottom: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -301,45 +380,40 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // الرأس: الحالة والسعر
+                        // الرأس: الحالة والسعر + الوقت المنقضي
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text("#${ride.id}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("#${ride.id}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                                const SizedBox(height: 2),
+                                // 🔥 عرض الوقت (منذ X دقيقة)
+                                Text(
+                                  _formatRideTime(ride.createdAt),
+                                  style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontWeight: FontWeight.w500),
+                                ),
+                              ],
+                            ),
                             _buildStatusBadge(ride.status),
                             Text("${ride.amount} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 16)),
                           ],
                         ),
-                        const Divider(),
+                        const Divider(height: 20),
 
                         // معلومات الزبون
                         Row(
                           children: [
                             const Icon(Icons.person, color: Colors.blueGrey, size: 20),
                             const SizedBox(width: 8),
-                            Text("${ride.customerName} - ${ride.customerPhone}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                            Expanded(child: Text("${ride.customerName} - ${ride.customerPhone}", style: const TextStyle(fontWeight: FontWeight.bold))),
+                            IconButton(
+                              icon: const Icon(Icons.call, color: Colors.green),
+                              onPressed: () => _makePhoneCall(ride.customerPhone),
+                            )
                           ],
                         ),
-                        const SizedBox(height: 8),
-
-                        // المسار
-                        Row(
-                          children: [
-                            const Icon(Icons.my_location, color: Colors.green, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(child: Text("من: ${ride.pickupLocation}", maxLines: 1, overflow: TextOverflow.ellipsis)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on, color: Colors.red, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(child: Text("إلى: ${ride.destination}", maxLines: 1, overflow: TextOverflow.ellipsis)),
-                          ],
-                        ),
-
-                        const Divider(),
 
                         // معلومات السائق
                         Row(
@@ -348,13 +422,36 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                ride.driverName != null
-                                    ? "الكابتن: ${ride.driverName} - ${ride.driverPhone}"
-                                    : "لا يوجد سائق للرحلة حتى الآن",
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: ride.driverName != null ? Colors.indigo : Colors.grey
-                                ),
+                                hasDriver ? "الكابتن: ${ride.driverName} - ${ride.driverPhone}" : "لا يوجد سائق حتى الآن",
+                                style: TextStyle(fontWeight: FontWeight.bold, color: hasDriver ? Colors.indigo : Colors.grey),
+                              ),
+                            ),
+                            if (hasDriver && ride.driverPhone != null)
+                              IconButton(
+                                icon: const Icon(Icons.call, color: Colors.green),
+                                onPressed: () => _makePhoneCall(ride.driverPhone!),
+                              )
+                          ],
+                        ),
+                        const Divider(height: 20),
+
+                        // أزرار العمليات
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                icon: const Icon(Icons.map, size: 18),
+                                label: const Text("المسار", style: TextStyle(fontSize: 12)),
+                                onPressed: () => _openMapRoute(ride.pickupLat, ride.pickupLng, ride.destLat, ride.destLng),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                icon: const Icon(Icons.notifications_active, size: 18),
+                                label: const Text("تنبيه الكابتن", style: TextStyle(fontSize: 12)),
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                                onPressed: hasDriver ? () => _notifyDriver(ride.id, ride.driverName) : null,
                               ),
                             ),
                           ],
@@ -371,6 +468,7 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
     );
   }
 }
+
 
 class AuthProvider with ChangeNotifier {
   String? _token;       // توكن سيرفر المطاعم (re.beytei.com)
@@ -488,7 +586,6 @@ class AuthProvider with ChangeNotifier {
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        // 🔥 التعديل هنا: طباعة الرد القادم من السيرفر لمعرفة شكل البيانات وأين يوجد رقم المنطقة
         print("📥 [رد السيرفر عند تسجيل الدخول]: ${response.body}");
 
         final data = json.decode(response.body);
@@ -506,6 +603,17 @@ class AuthProvider with ChangeNotifier {
 
           String zoneName = data['user'] != null ? (data['user']['name'] ?? 'منطقتي') : 'منطقتي';
           await prefs.setString('leader_zone_name', zoneName);
+
+          // 🔥🔥🔥 التعديل الجديد: الاشتراك في إشعارات المنطقة 🔥🔥🔥
+          try {
+            if (zoneId != 0) { // نتأكد أن المنطقة صحيحة وليست 0
+              await FirebaseMessaging.instance.subscribeToTopic('taxi_zone_$zoneId');
+              print("🔔 [FCM] تم الاشتراك بنجاح في إشعارات المنطقة: taxi_zone_$zoneId");
+            }
+          } catch (e) {
+            print("⚠️ [FCM] فشل الاشتراك في الإشعارات: $e");
+          }
+          // 🔥🔥🔥 نهاية التعديل 🔥🔥🔥
 
           _isLoading = false;
           notifyListeners();
@@ -525,7 +633,6 @@ class AuthProvider with ChangeNotifier {
       return false;
     }
   }
-
 
 }
 
@@ -2837,7 +2944,6 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
 class ApiService {
   final String _authString = 'Basic ${base64Encode(utf8.encode('$CONSUMER_KEY:$CONSUMER_SECRET'))}';
   final CacheService _cacheService = CacheService();
-// 🔥 دالة جديدة: إنشاء طلب إعلان (يظهر كطلب في ووكومرس ولدى التيم ليدر)
   Future<bool> createMarketingOrder({
     required String token,
     required String title,
@@ -2879,7 +2985,38 @@ class ApiService {
     });
   }
 
-// 🔥 دالة إشعار السائق بأن الطلب جاهز
+// =================================================================
+  // 🔥 دوال نظام الكاش باك الذكي V2 (الجديد)
+  // =================================================================
+  Future<Map<String, dynamic>> getCashbackStatus(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/cashback-status'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      throw Exception('فشل تحميل حالة الكاش باك');
+    });
+  }
+
+  Future<Map<String, dynamic>> claimDiscountCoupon(String token) async {
+    return _executeWithRetry(() async {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/claim-discount'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 15));
+
+      final data = json.decode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return data;
+      }
+      throw Exception(data['message'] ?? 'فشل إصدار الكوبون');
+    });
+  }
+
   Future<bool> notifyDriverOrderReady(int sourceOrderId) async {
     return _executeWithRetry(() async {
       final response = await http.post(
@@ -5097,65 +5234,63 @@ class DeepTokenDebuggerFAB extends StatefulWidget {
 }
 
 class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
+  static const platform = MethodChannel('beytei_deep_debugger');
 
-  void _runDeepDiagnostic() async {
+  Future<void> _fetchLogs() async {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => const AlertDialog(content: Row(children: [CircularProgressIndicator(), SizedBox(width: 15), Text("جلب التوكن من جذور آبل...")])),
+      builder: (ctx) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 15),
+            Text("جاري سحب السجلات من جذور آبل..."),
+          ],
+        ),
+      ),
     );
 
     if (!Platform.isIOS) {
       Navigator.pop(context);
-      _showResultDialog("هذا الجهاز ليس آيفون.");
+      _showConsole("هذه الأداة مخصصة لمعرفة أخطاء الآيفون فقط.");
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      final Map<dynamic, dynamic> result = await platform.invokeMethod('getLogs');
+      final String logs = result['logs'] ?? "لا توجد سجلات بعد.";
+      final String token = result['token'] ?? "لم يتم استلام توكن.";
 
-    // ⏳ ننتظر ثانيتين للتأكد من أن iOS أصدر التوكن في الخلفية
-    await Future.delayed(const Duration(seconds: 2));
-
-    // 🔥 قراءة التوكن المستخرج بقوة الـ Swift مباشرة!
-    String nativeVoipToken = prefs.getString('ios_native_voip_token') ?? "NULL_NATIVE: لم يقم نظام PushKit بالرد.";
-
-    String diagnosticLog = "📱 النظام: iOS\n";
-    diagnosticLog += "-----------------------\n";
-    diagnosticLog += "🟢 نتيجة الاتصال المباشر بنظام مكالمات آبل (PushKit):\n\n";
-    diagnosticLog += "$nativeVoipToken\n";
-    diagnosticLog += "-----------------------\n";
-
-    // 💡 إذا وجدنا التوكن، نحفظه في المتغير الذي يستخدمه تطبيقك لكي يعمل بشكل طبيعي
-    if (nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
-      String cleanToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:\n", "").trim();
-      await prefs.setString('voip_token', cleanToken);
-    }
-
-    if (mounted) {
-      Navigator.pop(context);
-      _showResultDialog(diagnosticLog);
+      if (mounted) {
+        Navigator.pop(context); // إغلاق التحميل
+        _showConsole("🔑 VoIP Token:\n$token\n\n\n📝 سجلات النظام (Log):\n\n$logs");
+      }
+    } on PlatformException catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        _showConsole("❌ خطأ في الاتصال بالكود الأصلي: ${e.message}");
+      }
     }
   }
 
-  void _showResultDialog(String logText) {
+  void _showConsole(String logText) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        backgroundColor: const Color(0xFF1E1E1E), // لون يشبه الكونسول
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Row(
           children: [
-            Icon(Icons.radar, color: Colors.red, size: 28),
+            Icon(Icons.terminal, color: Colors.greenAccent, size: 28),
             SizedBox(width: 10),
-            Text("تحليل جذور المشكلة", style: TextStyle(fontSize: 16)),
+            Text("In-App Console", style: TextStyle(color: Colors.white, fontSize: 16)),
           ],
         ),
-        content: SingleChildScrollView(
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.black87,
-              borderRadius: BorderRadius.circular(8),
-            ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400, // ارتفاع الشاشة
+          child: SingleChildScrollView(
             child: SelectableText(
               logText,
               style: const TextStyle(
@@ -5164,13 +5299,23 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
                 fontFamily: 'monospace',
                 height: 1.5,
               ),
+              textDirection: TextDirection.ltr,
             ),
           ),
         ),
         actions: [
           TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: logText));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("تم نسخ السجلات")),
+              );
+            },
+            child: const Text("نسخ الكل", style: TextStyle(color: Colors.blue)),
+          ),
+          TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("إغلاق"),
+            child: const Text("إغلاق", style: TextStyle(color: Colors.redAccent)),
           ),
         ],
       ),
@@ -5180,15 +5325,14 @@ class _DeepTokenDebuggerFABState extends State<DeepTokenDebuggerFAB> {
   @override
   Widget build(BuildContext context) {
     return FloatingActionButton.extended(
-      heroTag: "deep_debugger_btn",
-      onPressed: _runDeepDiagnostic,
-      backgroundColor: Colors.red.shade900,
-      icon: const Icon(Icons.radar, color: Colors.white),
-      label: const Text("تحليل سبب الـ NULL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      heroTag: "console_debugger_btn",
+      onPressed: _fetchLogs,
+      backgroundColor: Colors.black87,
+      icon: const Icon(Icons.terminal, color: Colors.greenAccent),
+      label: const Text("Console", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
     );
   }
 }
-
 
 
 
@@ -6685,7 +6829,6 @@ class WelcomeScreen extends StatelessWidget {
     );
   }
 }
-
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
   @override
@@ -6717,6 +6860,10 @@ class _MainScreenState extends State<MainScreen> {
           children: <Widget>[_buildOffstageNavigator(0), _buildOffstageNavigator(1), _buildOffstageNavigator(2), _buildOffstageNavigator(3)],
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
+
+        // 👇👇👇 التعديل هنا: إضافة الزر العائم للفحص 👇👇👇
+        floatingActionButton: const DeepTokenDebuggerFAB(),
+        // 👆👆👆 نهاية التعديل 👆👆👆
       ),
     );
   }
@@ -6761,9 +6908,7 @@ class _MainScreenState extends State<MainScreen> {
       onTap: navProvider.changeTab,
     );
   }
-}
-
-class CustomerWalletScreen extends StatefulWidget {
+}class CustomerWalletScreen extends StatefulWidget {
   const CustomerWalletScreen({super.key});
 
   @override
@@ -6771,20 +6916,119 @@ class CustomerWalletScreen extends StatefulWidget {
 }
 
 class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
+  int _areaId = 0;
+  bool _isCheckingArea = true;
+
   @override
   void initState() {
     super.initState();
-    // جلب البيانات فور فتح الشاشة إذا كان مسجل دخول
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final auth = Provider.of<AuthProvider>(context, listen: false);
-      if (auth.isLoggedIn && auth.token != null) {
-        Provider.of<SmartWalletProvider>(context, listen: false).fetchWalletStatus(auth.token!);
-      }
+    _checkAreaAndLoadData();
+  }
+
+  Future<void> _checkAreaAndLoadData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _areaId = prefs.getInt('selectedAreaId') ?? 0;
+      _isCheckingArea = false;
     });
+
+    // إذا كانت المنطقة الكوت (84)، نقوم بجلب البيانات
+    if (_areaId == 84) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final auth = Provider.of<AuthProvider>(context, listen: false);
+        if (auth.isLoggedIn && auth.token != null) {
+          Provider.of<SmartWalletProvider>(context, listen: false).fetchWalletStatus(auth.token!);
+        }
+      });
+    }
+  }
+
+  void _showCouponDialog(String code, double amount) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Column(
+          children: [
+            Icon(Icons.celebration, color: Colors.amber, size: 60),
+            SizedBox(height: 10),
+            Text("مبروك! 🎉", style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("لقد حصلت على خصم بقيمة ${NumberFormat('#,###').format(amount)} د.ع", textAlign: TextAlign.center),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                border: Border.all(color: Theme.of(context).primaryColor, width: 2),                borderRadius: BorderRadius.circular(10),
+              ),
+              child: SelectableText(
+                code,
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor, letterSpacing: 2),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text("انسخ الكود واستخدمه في سلة المشتريات للطلب القادم.", style: TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: code));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تم نسخ الكود بنجاح! 📋"), backgroundColor: Colors.green));
+              },
+              child: const Text("نسخ الكود وإغلاق", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          )
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isCheckingArea) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    // 🛑 حالة: الزبون في منطقة غير الكوت (84)
+    if (_areaId != 84) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(title: const Text('كاش باك بيتي'), centerTitle: true, elevation: 0),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(30.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Image.network('https://cdn-icons-png.flaticon.com/512/7465/7465691.png', width: 150, color: Colors.grey.shade400),
+                const SizedBox(height: 20),
+                const Text("قريباً في منطقتك! 🚀", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                Text(
+                  "نظام الكاش باك الذكي متاح حالياً حصرياً في محافظة واسط (الكوت) فقط. نعمل على توسيع الخدمة لتشمل منطقتك قريباً.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 15, color: Colors.grey.shade600, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // --- إذا كانت المنطقة 84 (الكوت) ---
     final auth = Provider.of<AuthProvider>(context);
     final wallet = Provider.of<SmartWalletProvider>(context);
 
@@ -6792,19 +7036,19 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
     if (!auth.isLoggedIn) {
       return Scaffold(
         backgroundColor: Colors.white,
-        appBar: AppBar(title: const Text('محفظتي'), centerTitle: true, elevation: 0),
+        appBar: AppBar(title: const Text('كاش باك بيتي'), centerTitle: true, elevation: 0),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(30.0),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.lock_outline, size: 100, color: Colors.grey.shade300),
+                const Icon(Icons.wallet_giftcard_rounded, size: 100, color: Colors.amber),
                 const SizedBox(height: 20),
-                const Text("سجل دخولك لتبدأ التحدي! 🚀", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                const Text("سجل دخولك لتبدأ التجميع! 💰", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 10),
                 Text(
-                  "احصل على كاش باك 10% على كل طلب! جمع 5 طلبات وافتح قفل رصيدك لتحصل على وجبة مجانية.",
+                  "اطلب 4 مرات من مطاعم بيتي في الكوت، واحصل على 10% كاش باك كود خصم لطلبك الخامس!",
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 15, color: Colors.grey.shade600, height: 1.5),
                 ),
@@ -6816,7 +7060,6 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
                   ),
                   onPressed: () {
-                    // انتقل لشاشة تسجيل دخول الزبون (أنشئها أو استخدم الموجودة)
                     Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerLoginScreen()));
                   },
                   child: const Text("تسجيل الدخول / إنشاء حساب", style: TextStyle(fontSize: 18, color: Colors.white)),
@@ -6828,11 +7071,11 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
       );
     }
 
-    // 🟢 حالة: الزبون مسجل دخول
+    // 🟢 حالة: الزبون مسجل دخول وفي الكوت
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: const Color(0xFFF8F9FD),
       appBar: AppBar(
-        title: const Text('تحدي بيتي 🏆', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('كاش باك بيتي 🎁', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -6844,36 +7087,45 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            // --- 1. البطاقة الذهبية (الرصيد المتاح للاستخدام فوراً) ---
-            if (wallet.unlockedBalance > 0)
-              Container(
-                margin: const EdgeInsets.only(bottom: 20),
-                padding: const EdgeInsets.all(25),
-                decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFFFFD700), Color(0xFFFFA500)]),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [BoxShadow(color: Colors.orange.withOpacity(0.4), blurRadius: 15, offset: const Offset(0, 5))]
-                ),
-                child: Column(
-                  children: [
-                    const Icon(Icons.check_circle, color: Colors.white, size: 40),
-                    const SizedBox(height: 10),
-                    const Text("مبروك! رصيدك جاهز للاستخدام 🎉", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 5),
-                    Text("${NumberFormat('#,###').format(wallet.unlockedBalance)} د.ع", style: const TextStyle(color: Colors.white, fontSize: 35, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 10),
-                    const Text("يمكنك خصم هذا المبلغ بالكامل في طلبك القادم!", style: TextStyle(color: Colors.white, fontSize: 13)),
-                  ],
-                ),
+            // --- 1. بطاقة الرصيد المتراكم العصرية ---
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(25),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                borderRadius: BorderRadius.circular(25),
+                boxShadow: [BoxShadow(color: const Color(0xFF2575FC).withOpacity(0.4), blurRadius: 15, offset: const Offset(0, 8))],
               ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.savings_outlined, color: Colors.white70, size: 24),
+                      SizedBox(width: 8),
+                      Text("رصيد الكاش باك المتراكم", style: TextStyle(color: Colors.white70, fontSize: 16)),
+                    ],
+                  ),
+                  const SizedBox(height: 15),
+                  Text(
+                    "${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
+                    style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 5),
+                  const Text("يتم احتساب 10% من قيمة الوجبات لطلباتك المنجزة.", style: TextStyle(color: Colors.white60, fontSize: 12)),
+                ],
+              ),
+            ),
 
-            // --- 2. بطاقة التحدي (الرصيد المقفل وشريط التقدم) ---
+            const SizedBox(height: 30),
+
+            // --- 2. شريط التقدم العصري ---
             Container(
               padding: const EdgeInsets.all(25),
               decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10)]
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(25),
+                boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.08), blurRadius: 15, offset: const Offset(0, 5))],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -6881,55 +7133,96 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text("رصيدك المخفي 🔒", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
+                      const Text("تقدمك الحالي", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(10)),
-                        child: Text("يختفي بعد: ${wallet.daysLeft} يوم", style: TextStyle(color: Colors.red.shade700, fontSize: 12, fontWeight: FontWeight.bold)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(20)),
+                        child: Text("${wallet.currentOrders} / ${wallet.targetOrders} طلبات", style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold)),
                       )
                     ],
                   ),
-                  const SizedBox(height: 15),
-                  Text("${NumberFormat('#,###').format(wallet.lockedBalance)} د.ع", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.grey.shade400)),
                   const SizedBox(height: 25),
 
-                  // شريط التقدم العصري (Gamification)
-                  const Text("تقدم التحدي:", style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: LinearProgressIndicator(
-                      value: wallet.ordersCount / 5, // نسبة التقدم من 5 طلبات
-                      minHeight: 15,
-                      backgroundColor: Colors.grey.shade200,
-                      color: Theme.of(context).primaryColor,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
+                  // تصميم دوائر التقدم
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("${wallet.ordersCount} طلبات", style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
-                      const Text("الهدف: 5 طلبات", style: TextStyle(color: Colors.grey)),
-                    ],
+                    children: List.generate(wallet.targetOrders, (index) {
+                      bool isCompleted = index < wallet.currentOrders;
+                      return Expanded(
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: isCompleted ? Colors.green : Colors.grey.shade200,
+                                shape: BoxShape.circle,
+                                boxShadow: isCompleted ? [BoxShadow(color: Colors.green.withOpacity(0.4), blurRadius: 8)] : [],
+                              ),
+                              child: Center(
+                                child: isCompleted
+                                    ? const Icon(Icons.check, color: Colors.white, size: 20)
+                                    : Text("${index + 1}", style: TextStyle(color: Colors.grey.shade500, fontWeight: FontWeight.bold, fontSize: 16)),
+                              ),
+                            ),
+                            if (index < wallet.targetOrders - 1)
+                              Expanded(
+                                child: Container(
+                                  height: 4,
+                                  color: isCompleted ? Colors.green : Colors.grey.shade200,
+                                ),
+                              )
+                          ],
+                        ),
+                      );
+                    }),
                   ),
-                  const Divider(height: 30),
-                  Text(
-                    "أكمل ${5 - wallet.ordersCount} طلبات إضافية، أو اجعل رصيدك يصل إلى 10,000 د.ع ليتم فتح القفل واستخدام المبلغ!",
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 13, height: 1.5),
-                  )
+
+                  const SizedBox(height: 30),
+
+                  // رسالة التحفيز
+                  Center(
+                    child: Text(
+                      wallet.message,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: wallet.canClaim ? Colors.green.shade700 : Colors.grey.shade600, fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                  ),
+
+                  const SizedBox(height: 25),
+
+                  // --- 3. زر المطالبة بالكوبون ---
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton(
+                      onPressed: (!wallet.canClaim || wallet.isClaiming) ? null : () async {
+                        bool success = await wallet.claimDiscount(auth.token!, context);
+                        if (success && wallet.lastCouponCode != null) {
+                          _showCouponDialog(wallet.lastCouponCode!, wallet.accumulatedDiscount);
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber.shade600,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: Colors.grey.shade300,
+                        elevation: wallet.canClaim ? 5 : 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                      ),
+                      child: wallet.isClaiming
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : const Text("استخراج كود الخصم 🎁", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
                 ],
               ),
-            )
+            ),
           ],
         ),
       ),
     );
   }
 }
-
-
-
 
 
 
@@ -8553,8 +8846,6 @@ class _CartScreenState extends State<CartScreen> {
   final _couponController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
-  bool _useSmartWallet = false;
-
   @override
   void dispose() {
     _nameController.dispose();
@@ -8756,7 +9047,6 @@ class _CartScreenState extends State<CartScreen> {
                       couponCode: cart.appliedCoupon, position: _capturedPosition,
                       deliveryFee: _deliveryFee, zoneId: currentZoneId,
                       restaurantId: firstRestaurantId, regionId: currentZoneId,
-                      useSmartWallet: _useSmartWallet,
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -8765,13 +9055,6 @@ class _CartScreenState extends State<CartScreen> {
                     await cart._recordSuccessfulOrder();
                     Navigator.of(dialogContext).pop();
                     cart.clearCart();
-
-                    if (_useSmartWallet) {
-                      final auth = Provider.of<AuthProvider>(cartScreenContext, listen: false);
-                      if (auth.isLoggedIn && auth.token != null) {
-                        Provider.of<SmartWalletProvider>(cartScreenContext, listen: false).fetchWalletStatus(auth.token!);
-                      }
-                    }
 
                     Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
 
@@ -8902,7 +9185,6 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Widget _buildCheckoutSection(BuildContext context, CartProvider cart) {
-    final wallet = Provider.of<SmartWalletProvider>(context);
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
     final discountedTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.discountedTotal);
 
@@ -8914,48 +9196,16 @@ class _CartScreenState extends State<CartScreen> {
             boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), blurRadius: 10, spreadRadius: 5)]),
         child: Column(children: [
 
-          if (wallet.unlockedBalance > 0)
-            Container(
-              margin: const EdgeInsets.only(bottom: 15),
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-              decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: Colors.green.shade300)
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("رصيد المحفظة متاح 🎉", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 16)),
-                        Text("سيتم خصم ${NumberFormat('#,###').format(min(wallet.unlockedBalance, cart.totalPrice))} د.ع من الأكل", style: TextStyle(fontSize: 12, color: Colors.green.shade800)),
-                      ],
-                    ),
-                  ),
-                  Switch(
-                    value: _useSmartWallet,
-                    activeColor: Colors.green,
-                    onChanged: (val) {
-                      setState(() { _useSmartWallet = val; });
-                    },
-                  )
-                ],
-              ),
-            ),
-
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             const Text('المجموع', style: TextStyle(fontSize: 18, color: Colors.grey)),
             Text('$totalFormatted د.ع',
                 style: TextStyle(
                     fontSize: 18,
                     color: Colors.grey,
-                    decoration: (cart.appliedCoupon != null || _useSmartWallet) ? TextDecoration.lineThrough : TextDecoration.none))
+                    decoration: (cart.appliedCoupon != null) ? TextDecoration.lineThrough : TextDecoration.none))
           ]),
 
-          if (cart.appliedCoupon != null && !_useSmartWallet)
+          if (cart.appliedCoupon != null)
             Padding(
                 padding: const EdgeInsets.only(top: 8.0),
                 child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -8978,13 +9228,10 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee, String feeMessage) {
-    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
     final double foodTotal = cart.totalPrice;
 
     double discountAmount = 0.0;
-    if (_useSmartWallet) {
-      discountAmount = min(wallet.unlockedBalance, foodTotal);
-    } else if (cart.appliedCoupon != null) {
+    if (cart.appliedCoupon != null) {
       discountAmount = cart.totalDiscountAmount;
     }
 
@@ -9007,7 +9254,7 @@ class _CartScreenState extends State<CartScreen> {
           if (discountAmount > 0) ...[
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text(_useSmartWallet ? 'خصم المحفظة' : 'خصم الكوبون', style: TextStyle(fontSize: 14, color: Theme.of(context).primaryColor)),
+              Text('خصم الكوبون', style: TextStyle(fontSize: 14, color: Theme.of(context).primaryColor)),
               Text('- $discountFormatted د.ع', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor))
             ])
           ],
@@ -9047,8 +9294,6 @@ class _CartScreenState extends State<CartScreen> {
         ]));
   }
 }
-
-
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
 
@@ -10497,48 +10742,68 @@ class _EditProductScreenState extends State<EditProductScreen> {
 
 
 
-
 class SmartWalletProvider with ChangeNotifier {
-  double _lockedBalance = 0.0;
-  double _unlockedBalance = 0.0;
-  int _ordersCount = 0;
-  int _daysLeft = 30;
+  int _currentOrders = 0;
+  int _targetOrders = 4;
+  double _accumulatedDiscount = 0.0;
+  bool _canClaim = false;
+  String _message = '';
   bool _isLoading = false;
+  bool _isClaiming = false;
+  String? _lastCouponCode;
 
-  double get lockedBalance => _lockedBalance;
-  double get unlockedBalance => _unlockedBalance;
-  int get ordersCount => _ordersCount;
-  int get daysLeft => _daysLeft;
+  int get currentOrders => _currentOrders;
+  int get targetOrders => _targetOrders;
+  double get accumulatedDiscount => _accumulatedDiscount;
+  bool get canClaim => _canClaim;
+  String get message => _message;
   bool get isLoading => _isLoading;
+  bool get isClaiming => _isClaiming;
+  String? get lastCouponCode => _lastCouponCode;
+
+  final ApiService _apiService = ApiService();
 
   Future<void> fetchWalletStatus(String token) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      final response = await http.get(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/smart-wallet-status'),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        _lockedBalance = double.tryParse(data['locked_balance'].toString()) ?? 0.0;
-        _unlockedBalance = double.tryParse(data['unlocked_balance'].toString()) ?? 0.0;
-        _ordersCount = int.tryParse(data['orders_count'].toString()) ?? 0;
-        _daysLeft = int.tryParse(data['days_left'].toString()) ?? 30;
-      }
+      final data = await _apiService.getCashbackStatus(token);
+      _currentOrders = data['current_orders'] ?? 0;
+      _targetOrders = data['target_orders'] ?? 4;
+      _accumulatedDiscount = double.tryParse(data['accumulated_discount'].toString()) ?? 0.0;
+      _canClaim = data['can_claim'] ?? false;
+      _message = data['message'] ?? '';
     } catch (e) {
-      print("⚠️ خطأ في جلب بيانات المحفظة: $e");
+      print("⚠️ خطأ في جلب بيانات الكاش باك: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
+
+  Future<bool> claimDiscount(String token, BuildContext context) async {
+    _isClaiming = true;
+    notifyListeners();
+
+    try {
+      final data = await _apiService.claimDiscountCoupon(token);
+      _lastCouponCode = data['coupon_code'];
+
+      // تحديث الحالة فوراً بعد النجاح (تصفير العداد)
+      await fetchWalletStatus(token);
+      return true;
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red),
+      );
+      return false;
+    } finally {
+      _isClaiming = false;
+      notifyListeners();
+    }
+  }
 }
-
-
-
 
 
 
