@@ -65,22 +65,23 @@ extension AppDelegate: PKPushRegistryDelegate {
 
             let callerName = dict["driver_name"] as? String ?? "الكابتن"
             let orderId = dict["order_id"] as? String ?? ""
-            let channelName = dict["channel_name"] as? String ?? UUID().uuidString
+
+            // 🔥 الحل الجذري هنا: يجب توليد UUID حقيقي ترضى عنه آبل
+            let validCallKitId = UUID().uuidString
 
             let callkitData: [String: Any] = [
-                "id": channelName,
+                "id": validCallKitId, // 👈 كود آبل الرسمي (يمنع الكراش)
                 "nameCaller": callerName,
                 "appName": "مطاعم بيتي",
                 "handle": "طلب رقم \(orderId)",
                 "type": 0,
                 "duration": 30000,
-                "extra": dict
+                "extra": dict // 👈 بياناتك (channel_name وغيرها) محفوظة هنا بأمان وتصل لـ Flutter
             ]
 
             let data = flutter_callkit_incoming.Data(args: callkitData)
 
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                // 🔥 التعديل هنا: إضافة fromPushKit: true ليتطابق مع شروط المكتبة الجديدة
                 plugin.showCallkitIncoming(data, fromPushKit: true)
                 writeLog("✅ الشاشة رنت بنجاح.")
             } else {

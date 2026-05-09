@@ -200,14 +200,14 @@ Future<void> _saveAndRegisterToken(String token) async {
 
   if (Platform.isIOS) {
     try {
-      // 🍏 جلب توكن المكالمات للآيفون من المكتبة مباشرة (نظيف وبدون مشاكل)
+      // 🔥 الطريقة الرسمية والاحترافية لجلب توكن الآيفون من المكتبة
       voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-      if (voipToken != null) {
+      if (voipToken != null && voipToken.isNotEmpty) {
         await prefs.setString('voip_token', voipToken);
-        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: \$voipToken");
+        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: $voipToken");
       }
     } catch (e) {
-      print("⚠️ فشل جلب توكن VoIP: \$e");
+      print("⚠️ فشل جلب توكن VoIP: $e");
     }
   }
 
@@ -223,7 +223,7 @@ Future<void> _saveAndRegisterToken(String token) async {
     );
 
     if (response.statusCode == 200) {
-      print("✅ [Tokens] Registered successfully (Android FCM / iOS FCM+VoIP)");
+      print("✅ [Tokens] Registered successfully");
     } else {
       print("⚠️ [Server] responded with status: ${response.statusCode}");
     }

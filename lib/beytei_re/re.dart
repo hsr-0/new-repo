@@ -3626,6 +3626,7 @@ class ApiService {
 // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة
 // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
   // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
+  // ✅ دالة إرسال الطلب الاحترافية
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -3641,14 +3642,15 @@ class ApiService {
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
 
-    // إرسال رسوم التوصيل كـ Shipping Line قياسي لووكومرس
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
 
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. توليد وحفظ معرف الجهاز الفريد (Device ID) لمنع الطلبات الوهمية
+    // تحديث الذاكرة لضمان قراءة أحدث البيانات
+    await prefs.reload();
+
     String? deviceId = prefs.getString('unique_device_id');
     if (deviceId == null) {
       deviceId = const Uuid().v4();
@@ -3658,27 +3660,22 @@ class ApiService {
     String? fcmToken = prefs.getString('fcm_token');
     String? voipToken = prefs.getString('voip_token');
 
-    // 🔥 جلب توكن الأندرويد إذا كان مفقوداً
     if (fcmToken == null) {
       fcmToken = await FirebaseMessaging.instance.getToken();
-      if (fcmToken != null) {
-        await prefs.setString('fcm_token', fcmToken);
-      }
+      if (fcmToken != null) await prefs.setString('fcm_token', fcmToken);
     }
 
-    // 🔥🔥🔥 الحل هنا: جلب توكن الآيفون (VoIP) من النظام مباشرة إذا كان مفقوداً في الذاكرة 🔥🔥🔥
+    // 🔥 ضمان جلب توكن الآيفون قبل إرسال الطلب إذا كان مفقوداً
     if (Platform.isIOS && (voipToken == null || voipToken.isEmpty)) {
       try {
         voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
         if (voipToken != null && voipToken.isNotEmpty) {
           await prefs.setString('voip_token', voipToken);
-          print("🍏 [SubmitOrder] تم إجبار سحب توكن الآيفون قبل الطلب: $voipToken");
         }
       } catch (e) {
-        print("⚠️ [SubmitOrder] فشل جلب توكن VoIP أثناء الطلب: $e");
+        print("⚠️ [SubmitOrder] خطأ في جلب توكن الآيفون: $e");
       }
     }
-    // 🔥🔥🔥 نهاية الحل 🔥🔥🔥
 
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
@@ -3712,7 +3709,7 @@ class ApiService {
 
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
 
-        // 👈 إرسال توكن الآيفون بعد التأكد من جلبه!
+        // 👈 سيرسل توكن الآيفون الصحيح
         if (voipToken != null && voipToken.isNotEmpty)
           {"key": "voip_token", "value": voipToken},
 
