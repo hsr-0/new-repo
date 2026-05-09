@@ -191,6 +191,7 @@ Future<void> _handleTokenRefresh() async {
   });
 }
 
+// 👇👇👇 التعديل الجذري تم هنا: طريقة موثوقة لجلب التوكن الخاص بالآيفون فقط 👇👇👇
 Future<void> _saveAndRegisterToken(String token) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString('fcm_token', token);
@@ -199,21 +200,14 @@ Future<void> _saveAndRegisterToken(String token) async {
 
   if (Platform.isIOS) {
     try {
-      await Future.delayed(const Duration(seconds: 3));
-
-      String? nativeVoipToken = prefs.getString('ios_native_voip_token');
-
-      if (nativeVoipToken != null && nativeVoipToken.startsWith("SUCCESS_NATIVE:")) {
-        voipToken = nativeVoipToken.replaceAll("SUCCESS_NATIVE:", "").replaceAll("\n", "").trim();
+      // 🍏 جلب توكن المكالمات للآيفون من المكتبة مباشرة (نظيف وبدون مشاكل)
+      voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+      if (voipToken != null) {
         await prefs.setString('voip_token', voipToken);
-        print("🍏 [Apple PushKit] تم التقاط التوكن الأصلي بنجاح: $voipToken");
-      } else {
-        print("⚠️ توكن الآيفون الأصلي غير جاهز: $nativeVoipToken");
-        voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-        if(voipToken != null) await prefs.setString('voip_token', voipToken);
+        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: \$voipToken");
       }
     } catch (e) {
-      print("⚠️ فشل جلب توكن VoIP: $e");
+      print("⚠️ فشل جلب توكن VoIP: \$e");
     }
   }
 
@@ -223,7 +217,7 @@ Future<void> _saveAndRegisterToken(String token) async {
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'token': token,
-        'voip_token': voipToken,
+        'voip_token': voipToken, // 👈 سيتم إرساله مع الطلب دائماً
         'platform': Platform.isAndroid ? 'android' : 'ios',
       }),
     );
@@ -237,6 +231,7 @@ Future<void> _saveAndRegisterToken(String token) async {
     print("⚠️ Failed to register tokens: $e");
   }
 }
+// 👆👆👆 نهاية التعديل 👆👆👆
 
 // =======================================================================
 // 🔥 4. الدالة الرئيسية (MAIN)

@@ -3625,6 +3625,7 @@ class ApiService {
   // ✅ التعديل: دالة إرسال الطلب مع تحسين منطق التوكن
 // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة
 // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
+  // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -3636,7 +3637,7 @@ class ApiService {
     required int zoneId,
     int? restaurantId,
     int? regionId,
-    bool useSmartWallet = false, // 👈 1. تمت إضافة المتغير هنا
+    bool useSmartWallet = false,
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
 
@@ -3647,23 +3648,37 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
 
-    // 🔥 1. توليد وحفظ معرف الجهاز الفريد (Device ID) لمنع الطلبات الوهمية
+    // 1. توليد وحفظ معرف الجهاز الفريد (Device ID) لمنع الطلبات الوهمية
     String? deviceId = prefs.getString('unique_device_id');
     if (deviceId == null) {
-      deviceId = const Uuid().v4(); // يتم توليد رقم فريد جديد لهذا الجهاز
+      deviceId = const Uuid().v4();
       await prefs.setString('unique_device_id', deviceId);
     }
 
     String? fcmToken = prefs.getString('fcm_token');
-    // جلب توكن الآيفون (VoIP) من الذاكرة المحلية
     String? voipToken = prefs.getString('voip_token');
 
+    // 🔥 جلب توكن الأندرويد إذا كان مفقوداً
     if (fcmToken == null) {
       fcmToken = await FirebaseMessaging.instance.getToken();
       if (fcmToken != null) {
         await prefs.setString('fcm_token', fcmToken);
       }
     }
+
+    // 🔥🔥🔥 الحل هنا: جلب توكن الآيفون (VoIP) من النظام مباشرة إذا كان مفقوداً في الذاكرة 🔥🔥🔥
+    if (Platform.isIOS && (voipToken == null || voipToken.isEmpty)) {
+      try {
+        voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+        if (voipToken != null && voipToken.isNotEmpty) {
+          await prefs.setString('voip_token', voipToken);
+          print("🍏 [SubmitOrder] تم إجبار سحب توكن الآيفون قبل الطلب: $voipToken");
+        }
+      } catch (e) {
+        print("⚠️ [SubmitOrder] فشل جلب توكن VoIP أثناء الطلب: $e");
+      }
+    }
+    // 🔥🔥🔥 نهاية الحل 🔥🔥🔥
 
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
@@ -3693,22 +3708,17 @@ class ApiService {
         {"key": "zone_id", "value": zoneId.toString()},
         {"key": "_customer_fcm_token", "value": fcmToken ?? ''},
         {"key": "fcm_token", "value": fcmToken ?? ''},
-
-        // 🔥 2. إرسال معرف الجهاز مع بيانات الطلب ليتمكن السيرفر من التعرف عليه وحظره
         {"key": "_device_id", "value": deviceId},
 
-        // 👈 2. إضافة إرسال حالة استخدام المحفظة الذكية للسيرفر
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
 
+        // 👈 إرسال توكن الآيفون بعد التأكد من جلبه!
         if (voipToken != null && voipToken.isNotEmpty)
-          {"key": "voip_token", "value": voipToken}, // 👈 أزلنا الشرطة السفلية "_"
+          {"key": "voip_token", "value": voipToken},
 
-        // إرسال السعر كـ Meta صريحة
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
-
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
-
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
         if (regionId != null) {"key": "_region_id", "value": regionId.toString()},
       ],
