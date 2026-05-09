@@ -2,26 +2,12 @@ import UIKit
 import Flutter
 import Firebase
 import PushKit
-import flutter_callkit_incoming
+import flutter_callkit_incoming // 👈 استدعاء المكتبة بشكل صريح
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
     var voipRegistry: PKPushRegistry?
-
-    // 📝 دالة لكتابة السجلات داخل ذاكرة الهاتف لكي لا تضيع إذا حدث كراش
-    func writeLog(_ message: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        let timeString = formatter.string(from: Date())
-        let logMessage = "[\(timeString)] 🍏 \(message)"
-
-        var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
-        logs.append(logMessage)
-        // نحتفظ بآخر 30 رسالة فقط
-        if logs.count > 30 { logs.removeFirst() }
-        UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
-    }
 
     override func application(
         _ application: UIApplication,
@@ -31,25 +17,7 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        // 1. مسح السجلات القديمة عند فتح التطبيق
-        UserDefaults.standard.set([], forKey: "ios_debug_logs")
-        writeLog("بدء تشغيل التطبيق وتسجيل PushKit...")
-
-        // 2. إعداد قناة الاتصال مع Flutter لإرسال السجلات للزر العائم
-        let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
-        let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
-
-        debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
-            if call.method == "getLogs" {
-                let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
-                let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
-                result(["logs": logs.joined(separator: "\n\n"), "token": token])
-            } else {
-                result(FlutterMethodNotImplemented)
-            }
-        })
-
-        // 3. تفعيل VoIP
+        // تفعيل استقبال مكالمات VoIP
         self.voipRegistry = PKPushRegistry(queue: .main)
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
@@ -60,40 +28,46 @@ import flutter_callkit_incoming
 
 extension AppDelegate: PKPushRegistryDelegate {
 
-    // ✅ استلام توكن المكالمات
+    // 1. استلام وحفظ توكن الآيفون
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
-        writeLog("تم استلام VoIP Token بنجاح طوله \(tokenHex.count) حرف")
-
-        // حفظه ليقرأه فلاتر
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
     }
 
-    // 📞 استلام الرنة (هنا يحدث الكراش عادة)
+    // 2. ⚡ لحظة استلام الرنة في الخلفية (هنا الحل)
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
 
-        writeLog("⚠️ إنذار: تم استلام إشعار مكالمة (VoIP Push) في الخلفية!")
-
         if let dict = payload.dictionaryPayload as? [String: Any] {
-            writeLog("📦 البيانات المستلمة: \(dict.keys)")
+
+            // أ. استخراج بيانات السيرفر
+            let callerName = dict["driver_name"] as? String ?? "الكابتن"
+            let orderId = dict["order_id"] as? String ?? ""
+            let channelName = dict["channel_name"] as? String ?? UUID().uuidString
+
+            // ب. 💡 تحويلها للصيغة القياسية التي تتطلبها مكتبة CallKit لكي تعمل
+            let callkitData: [String: Any] = [
+                "id": channelName,
+                "nameCaller": callerName,
+                "appName": "مطاعم بيتي",
+                "handle": "طلب رقم \(orderId)",
+                "type": 0, // 0 يعني مكالمة صوتية
+                "duration": 30000, // الرنين لمدة 30 ثانية
+                "extra": dict // نمرر كل البيانات الإضافية ليقرأها Flutter عند الرد
+            ]
+
+            // ج. 🚀 إطلاق شاشة الرنين الأصلية فوراً!
+            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                // استخدام الكلاس الداخلي للمكتبة (Data)
+                let data = flutter_callkit_incoming.Data(args: callkitData)
+                plugin.showCallkitIncoming(data)
+            }
         }
 
-        // محاولة تشغيل CallKit
-        if let pluginDelegate = SwiftFlutterCallkitIncomingPlugin.sharedInstance as? PKPushRegistryDelegate {
-            writeLog("⚡ جاري تمرير المكالمة لمكتبة CallKit لترن الشاشة...")
-
-            // تمرير الإشعار للمكتبة
-            pluginDelegate.pushRegistry?(registry, didReceiveIncomingPushWith: payload, for: type, completion: {
-                self.writeLog("✅ مكتبة CallKit أبلغت iOS بنجاح إظهار شاشة الاتصال.")
-                completion()
-            })
-        } else {
-            writeLog("❌ خطأ قاتل: لم يتم العثور على مكتبة CallKit، سيتم إجهاض المكالمة لتجنب الحظر.")
-            completion()
-        }
+        // د. إبلاغ آبل أننا انتهينا خلال ثانية واحدة (لتجنب الكراش والحظر)
+        completion()
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
-        writeLog("🚫 قامت Apple بإبطال التوكن (Invalidated). غالباً بسبب فشل إظهار شاشة الاتصال سابقاً.")
+        // تم إبطال التوكن
     }
 }
