@@ -722,7 +722,6 @@ class CustomerProvider with ChangeNotifier {
 
     // 🔥 أ) محاولة العرض الفوري من الكاش (حتى لو كان قديماً)
     if (!isRefresh) {
-      // هنا نستخدم مدة طويلة (24 ساعة) لأننا سنحدث الحالة في الخلفية
       bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 2);
 
       if (isCacheAvailable) {
@@ -731,7 +730,7 @@ class CustomerProvider with ChangeNotifier {
         if (_allRestaurants.isNotEmpty) {
           print("🚀 عرض فوري للبيانات من الكاش (مع فحص خلفي للحالة)");
           _isLoadingHome = false;
-          notifyListeners(); // إظهار البيانات للزبون فوراً
+          notifyListeners();
 
           // 🔥 إطلاق الفحص الخلفي السريع (لتحديث حالة الفتح/الإغلاق)
           _updateStatusesInBackground();
@@ -740,7 +739,6 @@ class CustomerProvider with ChangeNotifier {
       }
     }
 
-    // ب) إذا لم يوجد كاش أو طلبنا تحديث، نسحب من السيرفر كالمعتاد
     if (_homeData.isEmpty) {
       _isLoadingHome = true;
       notifyListeners();
@@ -776,10 +774,7 @@ class CustomerProvider with ChangeNotifier {
     try {
       print("🕵️ [Background Check] فحص حالة المطاعم في الخلفية...");
 
-      // 1. جمع أرقام المطاعم المعروضة حالياً
       List<int> ids = _allRestaurants.map((r) => r.id).toList();
-
-      // 2. طلب الحالة الخفيفة من السيرفر
       final statuses = await _apiService.checkRestaurantsStatusLight(ids);
 
       bool somethingChanged = false;
@@ -790,16 +785,12 @@ class CustomerProvider with ChangeNotifier {
         final String newAutoOpen = status['auto_open'] ?? '09:00';
         final String newAutoClose = status['auto_close'] ?? '22:00';
 
-        // البحث عن المطعم محلياً
         final index = _allRestaurants.indexWhere((r) => r.id == id);
 
         if (index != -1) {
-          // مقارنة الحالة الحالية بالحالة الجديدة
           if (_allRestaurants[index].isOpen != serverIsOpen) {
-
             print("🔄 تحديث حالة المطعم ${_allRestaurants[index].name}: من ${_allRestaurants[index].isOpen} إلى $serverIsOpen");
 
-            // إنشاء نسخة جديدة من المطعم مع الحالة المحدثة
             _allRestaurants[index] = Restaurant(
               id: _allRestaurants[index].id,
               name: _allRestaurants[index].name,
@@ -809,11 +800,10 @@ class CustomerProvider with ChangeNotifier {
               ratingCount: _allRestaurants[index].ratingCount,
               latitude: _allRestaurants[index].latitude,
               longitude: _allRestaurants[index].longitude,
-
-              // 🔥 تحديث البيانات الحساسة
               isOpen: serverIsOpen,
               autoOpenTime: newAutoOpen,
               autoCloseTime: newAutoClose,
+              storeType: _allRestaurants[index].storeType, // تمرير النوع
             );
 
             somethingChanged = true;
@@ -821,10 +811,9 @@ class CustomerProvider with ChangeNotifier {
         }
       }
 
-      // 3. إذا تغيرت أي حالة، نحدث الواجهة فوراً
       if (somethingChanged) {
         _homeData['restaurants'] = _allRestaurants;
-        notifyListeners(); // سيتم تلوين المطعم أو تعتيمه فوراً أمام الزبون
+        notifyListeners();
       }
 
     } catch (e) {
@@ -836,11 +825,9 @@ class CustomerProvider with ChangeNotifier {
   // 🔥 [NEW] دالة تحديث حالة مطعم واحد (تستخدم للفحص الفوري)
   // ============================================================
   void updateSingleRestaurantStatus(int id, bool isOpen, String? autoOpen, String? autoClose) {
-    // 1. البحث عن المطعم في القائمة
     final index = _allRestaurants.indexWhere((r) => r.id == id);
 
     if (index != -1) {
-      // 2. إنشاء نسخة جديدة من المطعم مع الحالة المحدثة
       _allRestaurants[index] = Restaurant(
         id: _allRestaurants[index].id,
         name: _allRestaurants[index].name,
@@ -850,17 +837,13 @@ class CustomerProvider with ChangeNotifier {
         ratingCount: _allRestaurants[index].ratingCount,
         latitude: _allRestaurants[index].latitude,
         longitude: _allRestaurants[index].longitude,
-
-        // ⬇️ هنا التحديث الجديد
         isOpen: isOpen,
         autoOpenTime: autoOpen ?? _allRestaurants[index].autoOpenTime,
         autoCloseTime: autoClose ?? _allRestaurants[index].autoCloseTime,
+        storeType: _allRestaurants[index].storeType, // تمرير النوع
       );
 
-      // 3. تحديث خريطة البيانات الرئيسية
       _homeData['restaurants'] = _allRestaurants;
-
-      // 4. إبلاغ الواجهة بالتغيير
       notifyListeners();
     }
   }
@@ -877,7 +860,12 @@ class CustomerProvider with ChangeNotifier {
       final Set<int> deliverableIds = deliverableList.map<int>((item) => item['id']).toSet();
 
       final restaurantsList = json.decode(restaurantsJson) as List;
-      List<Restaurant> parsedRestaurants = restaurantsList.map((json) => Restaurant.fromJson(json)).toList();
+
+      List<Restaurant> parsedRestaurants = restaurantsList.map((jsonObj) {
+        // 🔥🔥🔥 سطر الفحص الذكي لمعرفة ما إذا كان الـ API يرسل البيانات بشكل صحيح 🔥🔥🔥
+        print("🕵️ فحص المتجر: ${jsonObj['name']} | نوعه القادم من السيرفر: ${jsonObj['beytei_store_type']}");
+        return Restaurant.fromJson(jsonObj);
+      }).toList();
 
       for (var r in parsedRestaurants) {
         r.isDeliverable = deliverableIds.contains(r.id);
@@ -931,7 +919,6 @@ class CustomerProvider with ChangeNotifier {
       notifyListeners();
     }
 
-    // كاش المنيو يبقى كما هو (10 ساعات مثلاً)
     if (!isRefresh && _menuItems.containsKey(restaurantId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', minutes: 600)) {
       print("✅ استخدام الكاش للمنيو (البيانات حديثة)");
       _isLoadingMenu = false;
@@ -958,7 +945,7 @@ class CustomerProvider with ChangeNotifier {
   void _processAndSetMenu(int restaurantId, String jsonStr) {
     try {
       final List<dynamic> decoded = json.decode(jsonStr);
-      List<FoodItem> items = decoded.map((json) => FoodItem.fromJson(json)).toList();
+      List<FoodItem> items = decoded.map((jsonObj) => FoodItem.fromJson(jsonObj)).toList();
 
       Restaurant? restaurant = _allRestaurants.firstWhere(
               (r) => r.id == restaurantId,
@@ -1011,6 +998,7 @@ class CustomerProvider with ChangeNotifier {
     return minutesDiff < minutes;
   }
 }
+
 class DashboardProvider with ChangeNotifier {
   Map<String, List<Order>> _orders = {};
   RestaurantRatingsDashboard? _ratingsDashboard;
@@ -1587,25 +1575,20 @@ class Area {
   factory Area.fromJson(Map<String, dynamic> json) => Area(id: json['id'], name: json['name'], parentId: json['parent']);
 }
 
-// في ملف re.dart (داخل قسم MODELS)
-// استبدل الكلاس Restaurant القديم بهذا:
 
-// (الصق هذا بدلاً من Restaurant القديم)
 class Restaurant {
   final int id;
   final String name;
   final String imageUrl;
-  bool isDeliverable; // Flag indicating if it delivers to the selected area
+  bool isDeliverable;
   final double averageRating;
   final int ratingCount;
-  // ✨ الحقول الجديدة لحالة المطعم وأوقات العمل
-  final bool isOpen; // <<< الحالة النهائية المحسوبة من الخادم (يدوي + تلقائي)
-  final String autoOpenTime; // <<< وقت الفتح التلقائي (للعرض فقط)
-  final String autoCloseTime; // <<< وقت الإغلاق التلقائي (للعرض فقط)
-
-  // ✨ [إضافة جديدة] إحداثيات المطعم لحساب سعر التوصيل
+  final bool isOpen;
+  final String autoOpenTime;
+  final String autoCloseTime;
   final double latitude;
   final double longitude;
+  final String storeType; // 🔥 [جديد] نوع المتجر (restaurant أو market)
 
   Restaurant({
     required this.id,
@@ -1617,15 +1600,11 @@ class Restaurant {
     required this.isOpen,
     required this.autoOpenTime,
     required this.autoCloseTime,
-    // ✨ إضافة الإحداثيات
     required this.latitude,
     required this.longitude,
+    this.storeType = 'restaurant', // افتراضي مطعم
   });
 
-  // ✨ --- تم حذف الـ Getter `isCurrentlyOpen` بالكامل ---
-  // ✨ --- تم حذف الدالة المساعدة `_parseTime` بالكامل ---
-
-  // --- toJson() Method ---
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -1637,21 +1616,26 @@ class Restaurant {
       {'key': '_restaurant_is_open_final_state_received', 'value': isOpen ? '1' : '0'},
       {'key': '_restaurant_auto_open_time', 'value': autoOpenTime},
       {'key': '_restaurant_auto_close_time', 'value': autoCloseTime},
-      // ✨ إضافة الإحداثيات
       {'key': 'restaurant_latitude', 'value': latitude.toString()},
       {'key': 'restaurant_longitude', 'value': longitude.toString()},
+      {'key': 'store_type', 'value': storeType}, // حفظ النوع
     ],
   };
 
-  // --- Factory fromJson (هذا هو الإصلاح الأهم) ---
   factory Restaurant.fromJson(Map<String, dynamic> json) {
     double avgRating = 0.0;
     int rCount = 0;
     String openTime = '00:00';
     String closeTime = '23:59';
-    bool finalIsOpenStatus = true; // الافتراضي: مفتوح
+    bool finalIsOpenStatus = true;
     double lat = 0.0;
     double lng = 0.0;
+    String sType = 'restaurant'; // افتراضي مطعم
+
+    // 🔥 الجديد: قراءة الحقل المباشر إذا أرسله السيرفر كحقل مستقل
+    if (json['beytei_store_type'] != null) {
+      sType = json['beytei_store_type'].toString();
+    }
 
     if (json['meta_data'] != null && json['meta_data'] is List) {
       final metaData = json['meta_data'] as List;
@@ -1662,13 +1646,8 @@ class Restaurant {
       var countMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_wc_rating_count', orElse: () => null);
       if (countMeta != null) rCount = int.tryParse(countMeta['value'].toString()) ?? 0;
 
-      // ✨ --- [ الإصلاح 1: قراءة الحالة من الخادم ] ---
-      // هذا يقرأ النتيجة التي أرسلها الخادم (CLOSED)
       var isOpenMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_is_open', orElse: () => null);
-      if (isOpenMeta != null) {
-        finalIsOpenStatus = isOpenMeta['value'].toString() == '1';
-      }
-      // --- نهاية الإصلاح ---
+      if (isOpenMeta != null) finalIsOpenStatus = isOpenMeta['value'].toString() == '1';
 
       var openMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_auto_open_time', orElse: () => null);
       if (openMeta != null) openTime = openMeta['value'].toString();
@@ -1676,28 +1655,33 @@ class Restaurant {
       var closeMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_auto_close_time', orElse: () => null);
       if (closeMeta != null) closeTime = closeMeta['value'].toString();
 
-      // ✨ --- [ الإصلاح 2: قراءة الإحداثيات لسعر التوصيل ] ---
       var latMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_latitude', orElse: () => null);
       if (latMeta != null) lat = double.tryParse(latMeta['value'].toString()) ?? 0.0;
 
       var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
       if (lngMeta != null) lng = double.tryParse(lngMeta['value'].toString()) ?? 0.0;
-      // --- نهاية الإصلاح ---
+
+      // 🔥 قراءة النوع من الميتا كاحتياط قوي (يبحث عن store_type أو _store_type)
+      var typeMeta = metaData.firstWhere((m) => m is Map && (m['key'] == 'store_type' || m['key'] == '_store_type'), orElse: () => null);
+      if (typeMeta != null && typeMeta['value'] != null && typeMeta['value'].toString().isNotEmpty) {
+        sType = typeMeta['value'].toString();
+      }
     }
 
     return Restaurant(
-      id: json['id'],
+      id: json['id'] ?? 0,
       name: json['name'] ?? 'اسم غير معروف',
       imageUrl: json['image'] != null && json['image']['src'] != false
           ? json['image']['src']
           : 'https://via.placeholder.com/300',
       averageRating: avgRating,
       ratingCount: rCount,
-      isOpen: finalIsOpenStatus, // <-- استخدام الحالة القادمة من الخادم
+      isOpen: finalIsOpenStatus,
       autoOpenTime: openTime,
       autoCloseTime: closeTime,
-      latitude: lat, // <-- إضافة الإحداثيات
-      longitude: lng, // <-- إضافة الإحداثيات
+      latitude: lat,
+      longitude: lng,
+      storeType: sType, // تعيين النوع بنجاح
     );
   }
 }
@@ -1710,12 +1694,16 @@ class FoodItem {
   final String imageUrl;
   int quantity;
   final int categoryId;
-  final List<int> allCategoryIds; // ✨ جديد: يفيدنا بفلترة الأقسام الفرعية
+  final List<int> allCategoryIds;
   bool isDeliverable;
   final double averageRating;
   final int ratingCount;
   final double restaurantLat;
   final double restaurantLng;
+
+  // 🔥 الحقول الجديدة للوزن والملاحظات
+  double selectedWeight;
+  String customNote;
 
   FoodItem({
     required this.id,
@@ -1726,13 +1714,31 @@ class FoodItem {
     required this.imageUrl,
     this.quantity = 1,
     required this.categoryId,
-    required this.allCategoryIds, // ✨
+    required this.allCategoryIds,
     this.isDeliverable = false,
     this.averageRating = 0.0,
     this.ratingCount = 0,
     this.restaurantLat = 0.0,
     this.restaurantLng = 0.0,
+    this.selectedWeight = 1.0,
+    this.customNote = '',
   });
+
+  FoodItem copyWith({
+    double? selectedWeight,
+    String? customNote,
+    int? quantity,
+  }) {
+    return FoodItem(
+      id: id, name: name, description: description, price: price, salePrice: salePrice,
+      imageUrl: imageUrl, categoryId: categoryId, allCategoryIds: allCategoryIds,
+      isDeliverable: isDeliverable, averageRating: averageRating, ratingCount: ratingCount,
+      restaurantLat: restaurantLat, restaurantLng: restaurantLng,
+      selectedWeight: selectedWeight ?? this.selectedWeight,
+      customNote: customNote ?? this.customNote,
+      quantity: quantity ?? this.quantity,
+    );
+  }
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
     double safeParseDouble(dynamic value, [double defaultValue = 0.0]) {
@@ -1741,19 +1747,16 @@ class FoodItem {
       if (value is int) return value.toDouble();
       return double.tryParse(value.toString().trim()) ?? defaultValue;
     }
-
     int safeParseInt(dynamic value, [int defaultValue = 0]) {
       if (value == null) return defaultValue;
       return int.tryParse(value.toString()) ?? defaultValue;
     }
-
     String extractImageUrl(dynamic images) {
       if (images is List && images.isNotEmpty && images[0] is Map && images[0]['src'] != null) {
         return images[0]['src'];
       }
       return 'https://via.placeholder.com/150';
     }
-
     int extractRestaurantId(Map<String, dynamic> json) {
       if (json['meta_data'] != null && json['meta_data'] is List) {
         final metaData = json['meta_data'] as List;
@@ -1768,44 +1771,46 @@ class FoodItem {
       }
       return 0;
     }
-
-    // ✨ استخراج جميع الـ IDs الخاصة بالأقسام لهذه الوجبة
     List<int> catIds = [];
     if (json['categories'] != null && json['categories'] is List) {
       catIds = (json['categories'] as List).map((c) => c['id'] as int).toList();
     }
 
-    double rLat = 0.0, rLng = 0.0;
-    if (json['meta_data'] != null && json['meta_data'] is List) {
-      final metaData = json['meta_data'] as List;
-      var latMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_latitude', orElse: () => null);
-      if (latMeta != null) rLat = safeParseDouble(latMeta['value']);
-      var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
-      if (lngMeta != null) rLng = safeParseDouble(lngMeta['value']);
-    }
-
     return FoodItem(
       id: json['id'] ?? 0,
-      name: json['name'] ?? 'اسم غير متوفر',
+      name: json['name'] ?? 'غير متوفر',
       description: json['short_description'] is String ? json['short_description'].replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim() : '',
       price: safeParseDouble(json['regular_price']),
       salePrice: (json['sale_price'] != '' && json['sale_price'] != null) ? safeParseDouble(json['sale_price'], -1.0) : null,
       imageUrl: extractImageUrl(json['images']),
       categoryId: extractRestaurantId(json),
-      allCategoryIds: catIds, // ✨
+      allCategoryIds: catIds,
       averageRating: safeParseDouble(json['average_rating']),
       ratingCount: safeParseInt(json['rating_count']),
-      restaurantLat: rLat,
-      restaurantLng: rLng,
     );
   }
 
-  double get displayPrice => salePrice != null && salePrice! >= 0 ? salePrice! : price;
-  String get formattedPrice => '${NumberFormat('#,###', 'ar_IQ').format(displayPrice)} د.ع';
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId};
+  // --- حساب الأسعار ---
+  double get basePrice => salePrice != null && salePrice! >= 0 ? salePrice! : price;
+  double get finalPrice => basePrice * selectedWeight;
+  String get formattedFinalPrice => '${NumberFormat('#,###', 'ar_IQ').format(finalPrice)} د.ع';
+
+  // 🔥 إضافة هذه الأسطر لحل الأخطاء القديمة (التوافقية الرجعية)
+  double get displayPrice => finalPrice;
+  String get formattedPrice => formattedFinalPrice;
+
+  String get weightLabel {
+    if (selectedWeight == 0.25) return "ربع كيلو (250غم)";
+    if (selectedWeight == 0.5) return "نصف كيلو (500غم)";
+    if (selectedWeight == 0.75) return "كيلو إلا ربع";
+    if (selectedWeight == 1.0) return "1 كيلو";
+    if (selectedWeight == 1.5) return "كيلو ونصف (1.5 كغم)";
+    if (selectedWeight % 1 == 0) return "${selectedWeight.toInt()} كيلو";
+    return "$selectedWeight كيلو";
+  }
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId, 'selectedWeight': selectedWeight};
 }
-
-
 
 class Order {
   final int id;
@@ -2377,41 +2382,40 @@ class Offer {
 // ==========================================
 // ==========================================
 // 2. ويدجت بطاقة العرض العصرية (Modern Offer Card) - النسخة المحسنة
-// ==========================================
+// =======================================================================
+// --- بطاقة الوجبة المخفضة (ModernOfferCard) - متوافقة مع الشبكة ---
+// =======================================================================
+// =======================================================================
+// --- بطاقة الوجبة المخفضة (ModernOfferCard) - متوافقة ومضغوطة ---
+// =======================================================================
 class ModernOfferCard extends StatelessWidget {
   final Offer offer;
-  final VoidCallback onTap;
-  final VoidCallback onOrderNow;
+  final List<Restaurant> allStores;
 
   const ModernOfferCard({
-    Key? key,
+    super.key,
     required this.offer,
-    required this.onTap,
-    required this.onOrderNow,
-  }) : super(key: key);
+    required this.allStores,
+  });
 
   @override
   Widget build(BuildContext context) {
-    // 1. تنظيف الوصف من أكواد HTML والفراغات الزائدة
-    String cleanDescription = offer.description
-        .replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '')
-        .trim();
-
-    // 2. نص افتراضي في حال كان الوصف فارغاً
-    if (cleanDescription.isEmpty) {
-      cleanDescription = "عرض مميز لفترة محدودة 🔥";
-    }
+    String cleanDescription = offer.description.replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim();
+    if (cleanDescription.isEmpty) cleanDescription = "عرض مميز لفترة محدودة 🔥";
 
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        try {
+          final restaurant = allStores.firstWhere((r) => r.id == offer.restaurantId);
+          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('المتجر غير متاح حالياً')));
+        }
+      },
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        width: 300,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: const [
-            BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4))
-          ],
+          borderRadius: BorderRadius.circular(15),
+          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
           image: DecorationImage(
             image: CachedNetworkImageProvider(offer.imageUrl),
             fit: BoxFit.cover,
@@ -2419,139 +2423,97 @@ class ModernOfferCard extends StatelessWidget {
         ),
         child: Stack(
           children: [
-            // طبقة التدرج اللوني (لجعل النص مقروءاً)
+            // التدرج اللوني للنص لحمايته وإبرازه
             Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(15),
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withOpacity(0.6),
-                    Colors.black.withOpacity(0.9)
-                  ],
-                  stops: const [0.4, 0.7, 1.0],
+                  colors: [Colors.transparent, Colors.black.withOpacity(0.5), Colors.black.withOpacity(0.95)],
+                  stops: const [0.2, 0.6, 1.0],
                 ),
               ),
             ),
 
-            // المحتوى النصي والأزرار
+            // شارة "عرض نار" في الزاوية
+            Positioned(
+              top: 6,
+              left: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.local_fire_department, color: Colors.white, size: 10),
+                    SizedBox(width: 2),
+                    Text("عرض نار", style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+
+            // المحتوى السفلي (النصوص والأسعار)
             Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(8.0),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // العنوان
                   Text(
                     offer.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold
-                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                   ),
-
-                  const SizedBox(height: 4),
-
-                  // الوصف (تم تحسينه ليظهر سطرين)
+                  const SizedBox(height: 2),
                   Text(
                     cleanDescription,
-                    maxLines: 2,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        color: Colors.grey[300],
-                        fontSize: 13,
-                        height: 1.2
-                    ),
+                    style: TextStyle(color: Colors.grey[300], fontSize: 9),
                   ),
+                  const SizedBox(height: 6),
 
-                  const SizedBox(height: 10),
-
-                  // السعر وزر الطلب
+                  // السعر المربع الذهبي وزر الطلب
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                         decoration: BoxDecoration(
                           color: Colors.black54,
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(6),
                           border: Border.all(color: Colors.amber),
                         ),
                         child: Text(
-                          "${NumberFormat('#,###').format(offer.price)} د.ع",
-                          style: const TextStyle(
-                            color: Colors.amber,
-                            fontWeight: FontWeight.bold,
-                          ),
+                          NumberFormat('#,###').format(offer.price),
+                          style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 10),
                         ),
                       ),
-                      ElevatedButton(
-                        onPressed: onOrderNow,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          minimumSize: const Size(80, 36),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20)
-                          ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: const Text(
-                          "اطلب الآن",
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        ),
+                        child: const Text("اطلب", style: TextStyle(color: Colors.black, fontSize: 9, fontWeight: FontWeight.bold)),
                       )
                     ],
                   )
                 ],
               ),
             ),
-
-            // شارة "عرض نار"
-            Positioned(
-              top: 12,
-              left: 12, // الأفضل وضعه يساراً لعدم تغطية تفاصيل الصورة المهمة
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: Colors.red,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.local_fire_department, color: Colors.white, size: 14),
-                    SizedBox(width: 4),
-                    Text(
-                      "عرض نار",
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
           ],
         ),
       ),
     );
   }
 }
-
-
-
-
-
-
 
 
 
@@ -2644,14 +2606,15 @@ class CartProvider with ChangeNotifier {
   final List<FoodItem> _items = [];
   List<FoodItem> get items => _items;
   int get cartCount => _items.fold(0, (sum, item) => sum + item.quantity);
-  double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.displayPrice * item.quantity));
+
+  // السعر الكلي
+  double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.finalPrice * item.quantity));
 
   String? _appliedCoupon;
   double _discountPercentage = 0.0;
   double _discountAmount = 0.0;
   String _discountType = '';
 
-  // تتبع حالة المروج والخصم
   String? _promoterCode;
   int _usageCount = 0;
   double _loyaltyDiscountPercentage = 0.0;
@@ -2659,6 +2622,8 @@ class CartProvider with ChangeNotifier {
   String? get appliedCoupon => _appliedCoupon;
   String? get promoterCode => _promoterCode;
   int get usageCount => _usageCount;
+
+  bool _weightsAreEqual(double w1, double w2) => (w1 - w2).abs() < 0.001;
 
   double get totalDiscountAmount {
     double couponDiscount = 0.0;
@@ -2671,10 +2636,9 @@ class CartProvider with ChangeNotifier {
     return max(couponDiscount, loyaltyDiscount);
   }
 
-  double get discountedTotal {
-    return (totalPrice - totalDiscountAmount).clamp(0, double.infinity);
-  }
+  double get discountedTotal => (totalPrice - totalDiscountAmount).clamp(0, double.infinity);
 
+  // 🔥 الدوال المفقودة التي سببت الأخطاء
   Future<int> _loadUsageCount(String code) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('promoter_usage_$code') ?? 0;
@@ -2704,6 +2668,16 @@ class CartProvider with ChangeNotifier {
       'show': true,
       'message': 'أنت في مرحلة الطلب رقم (${_usageCount + 1}). تبقى لك $remaining طلب للحصول على خصم ٥٠٪!',
     };
+  }
+
+  void removeCoupon() {
+    _appliedCoupon = null;
+    _discountPercentage = 0.0;
+    _discountAmount = 0.0;
+    _discountType = '';
+    _promoterCode = null;
+    _loyaltyDiscountPercentage = 0.0;
+    notifyListeners();
   }
 
   Future<Map<String, dynamic>> applyCoupon(String code) async {
@@ -2739,109 +2713,76 @@ class CartProvider with ChangeNotifier {
     return result;
   }
 
-  void removeCoupon() {
-    _appliedCoupon = null;
-    _discountPercentage = 0.0;
-    _discountAmount = 0.0;
-    _discountType = '';
-    _promoterCode = null;
-    _loyaltyDiscountPercentage = 0.0;
-    notifyListeners();
-  }
+  // --- إدارة السلة ---
+  void addToCart(FoodItem foodItem, BuildContext context, {int quantity = 1}) {
+    if (!foodItem.isDeliverable) return;
 
-  // ============================================================
-  // 🔥🔥🔥 دالة الإضافة للسلة (المعدلة لمنع طلب من مطعمين) 🔥🔥🔥
-  // ============================================================
-// استبدل دالة addToCart بهذه:
-  Future<void> addToCart(FoodItem foodItem, BuildContext context, {int quantity = 1}) async {
     if (_items.isNotEmpty) {
       int currentRestaurantId = _items.first.categoryId;
       if (currentRestaurantId != foodItem.categoryId) {
-        bool? clearCartConfirm = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: const Row(children: [Icon(Icons.remove_shopping_cart, color: Colors.red), SizedBox(width: 10), Text("تفريغ السلة؟")]),
-            content: const Text("لا يمكنك إضافة منتجات من مطعمين مختلفين. هل تريد تفريغ السلة؟"),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text("إلغاء")),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text("نعم، تفريغ", style: TextStyle(color: Colors.white)),
-              ),
-            ],
-          ),
-        );
-        if (clearCartConfirm == true) {
-          clearCart();
-        } else {
-          return;
-        }
+        _showClearCartDialog(context, foodItem, quantity);
+        return;
       }
     }
-
-    final existingIndex = _items.indexWhere((item) => item.id == foodItem.id);
-    if (existingIndex != -1) {
-      _items[existingIndex].quantity += quantity; // ✨ تم التعديل
-    } else {
-      foodItem.quantity = quantity; // ✨ تم التعديل
-      _items.add(foodItem);
-    }
-    notifyListeners();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("تمت إضافة ${foodItem.name} إلى السلة 🛒"), backgroundColor: Colors.green, duration: const Duration(seconds: 1)),
-    );
-  }
-  void incrementQuantity(FoodItem foodItem) {
-    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
-    if (itemIndex != -1) {
-      _items[itemIndex].quantity++;
-      notifyListeners();
-    }
+    _performAddToCart(foodItem, quantity, context);
   }
 
-  void decrementQuantity(FoodItem foodItem) {
-    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id);
-    if (itemIndex != -1) {
-      if (_items[itemIndex].quantity > 1) {
-        _items[itemIndex].quantity--;
-      } else {
-        _items.removeAt(itemIndex);
-      }
-      notifyListeners();
-    }
-  }
-
-  void clearCart() {
-    _items.clear();
-    removeCoupon();
-    notifyListeners();
-  }
-
-  void _showAddToCartDialog(BuildContext context, FoodItem item) {
-    showDialog(
+  void _showClearCartDialog(BuildContext context, FoodItem foodItem, int quantity) async {
+    bool? clear = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("تمت الإضافة إلى السلة"),
-        content: Text("تمت إضافة '${item.name}' بنجاح."),
+        title: const Text("تفريغ السلة؟"),
+        content: const Text("لا يمكنك الطلب من متجرين مختلفين بوقت واحد."),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("مواصلة التسوق")),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
-            },
-            child: const Text("الذهاب للسلة"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("إلغاء")),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text("تفريغ السلة")),
         ],
       ),
     );
+    if (clear == true) {
+      clearCart();
+      _performAddToCart(foodItem, quantity, context);
+    }
   }
+
+  void _performAddToCart(FoodItem foodItem, int quantity, BuildContext context) {
+    final existingIndex = _items.indexWhere((item) =>
+    item.id == foodItem.id &&
+        _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight) &&
+        item.customNote.trim() == foodItem.customNote.trim()
+    );
+
+    if (existingIndex != -1) {
+      _items[existingIndex].quantity += quantity;
+    } else {
+      foodItem.quantity = quantity;
+      _items.add(foodItem);
+    }
+    notifyListeners();
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تمت الإضافة للسلة 🛒"), backgroundColor: Colors.green, duration: Duration(seconds: 1)));
+  }
+
+  void incrementQuantity(FoodItem foodItem) {
+    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight) && item.customNote == foodItem.customNote);
+    if (itemIndex != -1) { _items[itemIndex].quantity++; notifyListeners(); }
+  }
+
+  void decrementQuantity(FoodItem foodItem) {
+    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight) && item.customNote == foodItem.customNote);
+    if (itemIndex != -1) {
+      if (_items[itemIndex].quantity > 1) _items[itemIndex].quantity--;
+      else _items.removeAt(itemIndex);
+      notifyListeners();
+    }
+  }
+
+  void clearCart() { _items.clear(); removeCoupon(); notifyListeners(); }
 }
+
 class FoodItemBottomSheet extends StatefulWidget {
   final FoodItem foodItem;
-  const FoodItemBottomSheet({super.key, required this.foodItem});
+  final bool isMarket;
+  const FoodItemBottomSheet({super.key, required this.foodItem, this.isMarket = false});
 
   @override
   State<FoodItemBottomSheet> createState() => _FoodItemBottomSheetState();
@@ -2849,94 +2790,189 @@ class FoodItemBottomSheet extends StatefulWidget {
 
 class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
   int quantity = 1;
+  double _currentWeight = 1.0;
+  final TextEditingController _noteController = TextEditingController();
+
+  final List<double> _quickWeights = [1.5, 1.0, 0.5, 0.25];
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  bool _weightsAreEqual(double w1, double w2) => (w1 - w2).abs() < 0.001;
+
+  void _showCustomWeightDialog() {
+    final TextEditingController controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("أدخل الوزن (بالكيلو)", style: TextStyle(fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(hintText: "مثال: 5.5", suffixText: "كغم", border: OutlineInputBorder(), prefixIcon: Icon(Icons.scale)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(controller.text);
+              if (val != null && val > 0) {
+                setState(() => _currentWeight = val);
+                Navigator.pop(ctx);
+                HapticFeedback.lightImpact();
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor),
+            child: const Text("تأكيد", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    double totalPrice = widget.foodItem.displayPrice * quantity;
+    double currentItemPrice = widget.foodItem.basePrice * _currentWeight;
+    double totalPrice = currentItemPrice * quantity;
 
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // خط السحب العلوي
-          Center(child: Container(width: 40, height: 5, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)))),
-          const SizedBox(height: 20),
+      padding: EdgeInsets.only(left: 20, right: 20, top: 20, bottom: MediaQuery.of(context).viewInsets.bottom + 20),
+      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(child: Container(width: 40, height: 5, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)))),
+            const SizedBox(height: 20),
 
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(15),
-                child: CachedNetworkImage(imageUrl: widget.foodItem.imageUrl, width: 80, height: 80, fit: BoxFit.cover),
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(widget.foodItem.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 5),
-                    Text(widget.foodItem.formattedPrice, style: TextStyle(fontSize: 16, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (widget.foodItem.description.isNotEmpty) ...[
-            const SizedBox(height: 15),
-            Text(widget.foodItem.description, style: TextStyle(color: Colors.grey[600], fontSize: 13), maxLines: 3, overflow: TextOverflow.ellipsis),
-          ],
-
-          const Divider(height: 30),
-
-          // التحكم بالعدد
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                onPressed: quantity > 1 ? () => setState(() => quantity--) : null,
-                icon: const Icon(Icons.remove_circle_outline, size: 35),
-                color: quantity > 1 ? Theme.of(context).primaryColor : Colors.grey,
-              ),
-              const SizedBox(width: 20),
-              Text('$quantity', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              const SizedBox(width: 20),
-              IconButton(
-                onPressed: () => setState(() => quantity++),
-                icon: const Icon(Icons.add_circle_outline, size: 35),
-                color: Theme.of(context).primaryColor,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 20),
-
-          // زر الإضافة للسلة
-          ElevatedButton(
-            onPressed: () {
-              Provider.of<CartProvider>(context, listen: false).addToCart(widget.foodItem, context, quantity: quantity);
-              Navigator.pop(context); // غلق النافذة
-            },
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 15),
-              backgroundColor: Theme.of(context).primaryColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("إضافة للسلة", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                Text("${NumberFormat('#,###', 'ar_IQ').format(totalPrice)} د.ع", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                ClipRRect(borderRadius: BorderRadius.circular(15), child: CachedNetworkImage(imageUrl: widget.foodItem.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
+                const SizedBox(width: 15),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.foodItem.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 5),
+                      Text("${NumberFormat('#,###', 'ar_IQ').format(currentItemPrice)} د.ع", style: TextStyle(fontSize: 16, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 20),
+
+            // 🔥 أزرار اختيار الوزن (للمسواك فقط) 🔥
+            if (widget.isMarket) ...[
+              const Text("اختر الوزن:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(child: _buildWeightChip("كيلو ونصف", 1.5)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _buildWeightChip("1 كيلو", 1.0)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(child: _buildWeightChip("نصف كيلو", 0.5)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _buildWeightChip("ربع كيلو", 0.25)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: _showCustomWeightDialog,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight)) ? Theme.of(context).primaryColor : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight)) ? Theme.of(context).primaryColor : Colors.grey.shade300),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.edit_note_rounded, color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight)) ? Colors.white : Colors.grey.shade600, size: 20),
+                      const SizedBox(width: 8),
+                      Text("وزن مخصص", style: TextStyle(color: !_quickWeights.any((w) => _weightsAreEqual(w, _currentWeight)) ? Colors.white : Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+
+            // 📝 حقل الملاحظات (للجميع)
+            TextField(
+              controller: _noteController,
+              decoration: InputDecoration(
+                hintText: widget.isMarket ? 'ملاحظات (مثال: طماطة قوية، موز أصفر...)' : 'ملاحظات إضافية (بدون بصل، صوص إضافي...)',
+                prefixIcon: const Icon(Icons.edit_note, color: Colors.grey),
+                filled: true, fillColor: Colors.grey.shade100,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+              ),
+            ),
+            const Divider(height: 30),
+
+            // التحكم بالعدد
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(onPressed: quantity > 1 ? () => setState(() => quantity--) : null, icon: const Icon(Icons.remove_circle_outline, size: 35), color: quantity > 1 ? Theme.of(context).primaryColor : Colors.grey),
+                const SizedBox(width: 20),
+                Text('$quantity', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                const SizedBox(width: 20),
+                IconButton(onPressed: () => setState(() => quantity++), icon: const Icon(Icons.add_circle_outline, size: 35), color: Theme.of(context).primaryColor),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // زر الإضافة
+            ElevatedButton(
+              onPressed: () {
+                FoodItem cartItem = widget.foodItem.copyWith(
+                  selectedWeight: widget.isMarket ? _currentWeight : 1.0,
+                  customNote: _noteController.text.trim(),
+                );
+                Provider.of<CartProvider>(context, listen: false).addToCart(cartItem, context, quantity: quantity);
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), backgroundColor: Theme.of(context).primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("إضافة للسلة", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text("${NumberFormat('#,###', 'ar_IQ').format(totalPrice)} د.ع", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeightChip(String label, double weight) {
+    bool isSelected = _weightsAreEqual(_currentWeight, weight);
+    return GestureDetector(
+      onTap: () { setState(() => _currentWeight = weight); HapticFeedback.lightImpact(); },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? Theme.of(context).primaryColor : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: isSelected ? Theme.of(context).primaryColor : Colors.grey.shade300, width: 1.5),
+        ),
+        child: Text(label, textAlign: TextAlign.center, style: TextStyle(color: isSelected ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
       ),
     );
   }
@@ -2944,6 +2980,7 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
 class ApiService {
   final String _authString = 'Basic ${base64Encode(utf8.encode('$CONSUMER_KEY:$CONSUMER_SECRET'))}';
   final CacheService _cacheService = CacheService();
+
   Future<bool> createMarketingOrder({
     required String token,
     required String title,
@@ -2956,7 +2993,6 @@ class ApiService {
         {"key": "_is_ad_request", "value": "true"},
         {"key": "ad_title", "value": title},
         {"key": "ad_content", "value": body},
-        // ✅ التصحيح هنا: تمت إضافة النقطتين (:)
         if (imageUrl != null && imageUrl.isNotEmpty)
           {"key": "ad_image", "value": imageUrl},
       ];
@@ -2985,9 +3021,7 @@ class ApiService {
     });
   }
 
-// =================================================================
   // 🔥 دوال نظام الكاش باك الذكي V2 (الجديد)
-  // =================================================================
   Future<Map<String, dynamic>> getCashbackStatus(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
@@ -3024,7 +3058,7 @@ class ApiService {
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'source_order_id': sourceOrderId.toString(),
-          'secret_key': 'BEYTEI_SECURE_2025' // مفتاح الأمان للتواصل المباشر
+          'secret_key': 'BEYTEI_SECURE_2025'
         }),
       );
       final data = json.decode(response.body);
@@ -3036,7 +3070,6 @@ class ApiService {
     });
   }
 
-// ✅ الحل: دالة جديدة في ملف api_service.dart
   Future<List<dynamic>> getTeamLeaderAssignedOrders(String token) async {
     final response = await http.get(
       Uri.parse('$TAXI_URL/wp-json/taxi/v3/leader/my-team-orders'),
@@ -3054,12 +3087,7 @@ class ApiService {
     }
   }
 
-  // ============================================================
-  // 🔥 دالة الفحص الخلفي الخفيف (Light Check)
-  // هذه الدالة ترسل أرقام المطاعم وتستقبل حالتها فقط (مفتوح/مغلق)
-  // ============================================================
   Future<List<dynamic>> checkRestaurantsStatusLight(List<int> ids) async {
-    // إذا لم تكن القائمة تحتوي على أرقام، لا داعي للاتصال
     if (ids.isEmpty) return [];
 
     return _executeWithRetry(() async {
@@ -3067,25 +3095,17 @@ class ApiService {
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/check-statuses-light'),
         headers: {
           'Content-Type': 'application/json',
-          // لا نحتاج لتوكن هنا لأن النقطة عامة (__return_true)
         },
         body: json.encode({'ids': ids}),
       );
 
       if (response.statusCode == 200) {
-        // نرجع قائمة النتائج
         return json.decode(response.body);
       }
-
-      // في حال حدوث أي خطأ، نرجع قائمة فارغة لكي لا يتوقف التطبيق
       return [];
     });
   }
 
-
-
-
-// 1. جلب الأقسام الفرعية لمطعم معين
   Future<List<dynamic>> getSubcategories(int restaurantId) async {
     return _executeWithRetry(() async {
       final response = await http.get(
@@ -3098,7 +3118,6 @@ class ApiService {
     });
   }
 
-  // 2. إنشاء قسم جديد (للمدير)
   Future<bool> createSubcategory(String token, String name, String icon) async {
     return _executeWithRetry(() async {
       final response = await http.post(
@@ -3114,7 +3133,6 @@ class ApiService {
     });
   }
 
-  // 3. إضافة منتج وربطه بالقسم
   Future<bool> createProductWithSubcategory(String token, String name, String price, String? salePrice, String description, File? imageFile, int subcategoryId) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -3132,17 +3150,13 @@ class ApiService {
           'sale_price': salePrice,
           'description': description,
           'image_base64': imageBase64,
-          'subcategory_id': subcategoryId, // 👈 الربط مع القسم
+          'subcategory_id': subcategoryId,
         }),
       );
       return response.statusCode == 201 || response.statusCode == 200;
     });
   }
 
-
-  // =================================================================
-  // 🔥🔥🔥 دالة التنفيذ الذكي المعدلة (Exponential Backoff) 🔥🔥🔥
-  // =================================================================
   Future<T> _executeWithRetry<T>(Future<T> Function() action) async {
     int attempts = 0;
     while (attempts < 3) {
@@ -3152,16 +3166,13 @@ class ApiService {
         attempts++;
         String errorString = e.toString();
 
-        // 🛑 1. فحص الحظر: إذا كان الخطأ 403 (Forbidden) أو 429 (Too Many Requests)
         if (errorString.contains('403') || errorString.contains('429')) {
           print("⛔ تم إيقاف المحاولات فوراً لتجنب الحظر: $errorString");
           rethrow;
         }
 
-        // إذا وصلنا للحد الأقصى، ارمِ الخطأ
         if (attempts >= 3) rethrow;
 
-        // ⏳ 2. الانتظار التصاعدي
         int delaySeconds = pow(2, attempts).toInt();
         print("⚠️ فشل الطلب (محاولة $attempts)، انتظار $delaySeconds ثواني لتهدئة السيرفر...");
 
@@ -3170,10 +3181,6 @@ class ApiService {
     }
     throw Exception('Failed after multiple retries');
   }
-
-
-
-// داخل ApiService
 
   Future<List<UnifiedDeliveryOrder>> getMiswakOrdersByRegion(int areaId, String token) async {
     final url = '$MISWAK_URL/wp-json/restaurant-app/v1/region-orders?area_id=$areaId&status=active';
@@ -3191,35 +3198,30 @@ class ApiService {
       if (response.statusCode == 200) {
         try {
           final List<dynamic> data = json.decode(response.body);
-
           if (data.isEmpty) return [];
 
-          List<UnifiedDeliveryOrder> parsedOrders = data.map<UnifiedDeliveryOrder>((json) {
+          List<UnifiedDeliveryOrder> parsedOrders = data.map<UnifiedDeliveryOrder>((jsonObj) {
             double safeDouble(dynamic val) => val == null ? 0.0 : (double.tryParse(val.toString()) ?? 0.0);
 
-            // 🔥 استخدام المتغيرات الصحيحة من المسواك
             return UnifiedDeliveryOrder(
-              id: json['id'],
-              // جلب الحالة الدقيقة للمسواك (تجنب القيمة الافتراضية الخاطئة)
-              status: json['delivery_status'] ?? json['status'] ?? 'unknown',
-              description: "مسواك: ${json['store_name'] ?? ''}",
-              deliveryFee: safeDouble(json['shipping_total']),
-              orderTotal: safeDouble(json['total']),
-              pickupName: json['store_name'] ?? 'متجر مسواك',
+              id: jsonObj['id'],
+              status: jsonObj['delivery_status'] ?? jsonObj['status'] ?? 'unknown',
+              description: "مسواك: ${jsonObj['store_name'] ?? ''}",
+              deliveryFee: safeDouble(jsonObj['shipping_total']),
+              orderTotal: safeDouble(jsonObj['total']),
+              pickupName: jsonObj['store_name'] ?? 'متجر مسواك',
               sourceType: 'market',
-              destinationAddress: json['billing']?['address_1'] ?? json['customer_address'] ?? '',
+              destinationAddress: jsonObj['billing']?['address_1'] ?? jsonObj['customer_address'] ?? '',
               pickupLat: "0",
               pickupLng: "0",
-              destLat: json['destination_lat']?.toString() ?? "0",
-              destLng: json['destination_lng']?.toString() ?? "0",
-              itemsSummary: "${json['line_items']?.length ?? 0} منتجات",
-              dateCreated: DateTime.parse(json['date_created']).millisecondsSinceEpoch ~/ 1000,
-              customerPhone: json['billing']?['phone'] ?? '',
-              lineItems: json['line_items'] is List ? json['line_items'] : [],
-
-              // 🔥🔥 تم إضافة اسم السائق الذي كان مفقوداً هنا 🔥🔥
-              driverName: json['driver_name'],
-              driverPhone: json['driver_phone'],
+              destLat: jsonObj['destination_lat']?.toString() ?? "0",
+              destLng: jsonObj['destination_lng']?.toString() ?? "0",
+              itemsSummary: "${jsonObj['line_items']?.length ?? 0} منتجات",
+              dateCreated: DateTime.parse(jsonObj['date_created']).millisecondsSinceEpoch ~/ 1000,
+              customerPhone: jsonObj['billing']?['phone'] ?? '',
+              lineItems: jsonObj['line_items'] is List ? jsonObj['line_items'] : [],
+              driverName: jsonObj['driver_name'],
+              driverPhone: jsonObj['driver_phone'],
             );
           }).toList();
 
@@ -3235,11 +3237,8 @@ class ApiService {
     });
   }
 
-
-
   Future<Map<String, dynamic>> getTeamLeaderRewards(String token) async {
     return _executeWithRetry(() async {
-      // نستخدم نفس نقطة النهاية للمطعم والتيم ليدر، السيرفر يميز بينهم
       final response = await http.get(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/wallet'),
         headers: {'Authorization': 'Bearer $token'},
@@ -3252,9 +3251,6 @@ class ApiService {
     });
   }
 
-// داخل class ApiService
-
-  // 2. الاستجابة للتحدي (حقيقي الآن)
   Future<bool> respondToChallenge(String token, int challengeId, String action) async {
     return _executeWithRetry(() async {
       final response = await http.post(
@@ -3265,7 +3261,7 @@ class ApiService {
         },
         body: json.encode({
           'challenge_id': challengeId,
-          'action': action // 'accept' أو 'ignore'
+          'action': action
         }),
       );
 
@@ -3278,8 +3274,6 @@ class ApiService {
     });
   }
 
-
-// داخل ApiService class
   Future<Map<String, dynamic>> getWalletData(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
@@ -3306,37 +3300,23 @@ class ApiService {
     });
   }
 
-
-
-
-
-
   Future<bool> updateRestaurantStatusFull(String token, String mode, bool isOpen) async {
     return _executeWithRetry(() async {
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/update-status'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({
-          'mode': mode,       // auto أو manual
-          'is_open': isOpen ? 1 : 0 // 1 أو 0
+          'mode': mode,
+          'is_open': isOpen ? 1 : 0
         }),
       );
       return response.statusCode == 200;
     });
   }
 
-
-
-
-  // =================================================================
-
-  // ✨✨✨ دوال جديدة للتخزين المؤقت (للزبون فقط) ✨✨✨
-  // ترجع String (JSON) ليتم حفظها في SharedPreferences
-
-  // 1. جلب قائمة المطاعم كنص خام
+  // 🔥 1. التعديل الجذري هنا لإضافة beytei_store_type
   Future<String> getRawRestaurants(int areaId) async {
-    const fields = 'id,name,image,count,meta_data';
-    // نطلب عدد كبير لضمان تخزين القائمة كاملة
+    const fields = 'id,name,image,count,meta_data,beytei_store_type'; // 👈 التعديل هنا
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields&area_id=$areaId';
 
     return _executeWithRetry(() async {
@@ -3346,7 +3326,6 @@ class ApiService {
     });
   }
 
-  // 2. جلب أرقام المطاعم التي توصل للمنطقة (للفلترة) كنص خام
   Future<String> getRawDeliverableIds(int areaId) async {
     final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/restaurants-by-area?area_id=$areaId';
     return _executeWithRetry(() async {
@@ -3356,7 +3335,6 @@ class ApiService {
     });
   }
 
-  // 3. جلب المنيو كنص خام
   Future<String> getRawMenu(int restaurantId) async {
     const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products?category=$restaurantId&per_page=100&_fields=$fields';
@@ -3367,10 +3345,7 @@ class ApiService {
       throw Exception('Failed to load menu raw');
     });
   }
-  // ✨✨✨ نهاية الدوال الجديدة ✨✨✨
 
-
-  // دالة إضافة منتج جديد
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -3394,7 +3369,6 @@ class ApiService {
     });
   }
 
-  // تحديث دالة تعديل المنتج لتقبل الصورة
   Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile) async {
     return _executeWithRetry(() async {
       String? imageBase64;
@@ -3419,7 +3393,6 @@ class ApiService {
   }
 
   Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
-    // ✅ الرابط الجديد الموحد
     final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/region-orders?area_id=$areaId';
     print("🚀 [Team Leader] Fetching: $url");
 
@@ -3434,21 +3407,22 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
-        return data.map<UnifiedDeliveryOrder>((json) {
-          return UnifiedDeliveryOrder.fromJson(json);
+        return data.map<UnifiedDeliveryOrder>((jsonObj) {
+          return UnifiedDeliveryOrder.fromJson(jsonObj);
         }).toList();
       } else {
         throw Exception('Server Error: ${response.statusCode}');
       }
     });
   }
+
   Future<List<Area>> getAreas() async {
     const cacheKey = 'all_areas';
     return _executeWithRetry(() async {
       final response = await http.get(Uri.parse('$BEYTEI_URL/wp-json/wp/v2/area?per_page=100'));
       if (response.statusCode == 200) {
         await _cacheService.saveData(cacheKey, response.body);
-        return (json.decode(response.body) as List).map((json) => Area.fromJson(json)).toList();
+        return (json.decode(response.body) as List).map((jsonObj) => Area.fromJson(jsonObj)).toList();
       }
       throw Exception('Server error ${response.statusCode}');
     });
@@ -3471,8 +3445,9 @@ class ApiService {
     });
   }
 
+  // 🔥 2. التعديل الجذري هنا لإضافة beytei_store_type
   Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
-    const fields = 'id,name,image,count,meta_data';
+    const fields = 'id,name,image,count,meta_data,beytei_store_type'; // 👈 التعديل هنا
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&page=1&_fields=$fields&area_id=$areaId';
     final cacheKey = 'restaurants_area_${areaId}_page_1_limit_100';
 
@@ -3481,14 +3456,15 @@ class ApiService {
       if (response.statusCode == 200) {
         await _cacheService.saveData(cacheKey, response.body);
         final data = json.decode(response.body) as List;
-        return data.map((json) => Restaurant.fromJson(json)).toList();
+        return data.map((jsonObj) => Restaurant.fromJson(jsonObj)).toList();
       }
       throw Exception('Server error ${response.statusCode}');
     });
   }
 
+  // 🔥 3. التعديل الجذري هنا لإضافة beytei_store_type
   Future<Restaurant> getRestaurantById(int restaurantId) async {
-    const fields = 'id,name,image,count,meta_data';
+    const fields = 'id,name,image,count,meta_data,beytei_store_type'; // 👈 التعديل هنا
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories/$restaurantId?_fields=$fields';
 
     return _executeWithRetry(() async {
@@ -3511,7 +3487,7 @@ class ApiService {
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as List;
-        return data.map((json) => FoodItem.fromJson(json)).toList();
+        return data.map((jsonObj) => FoodItem.fromJson(jsonObj)).toList();
       }
       throw Exception('Failed to load restaurant products');
     });
@@ -3598,7 +3574,7 @@ class ApiService {
       final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
       if (response.statusCode == 200) {
         await _cacheService.saveData(cacheKey, response.body);
-        return (json.decode(response.body) as List).map((json) => FoodItem.fromJson(json)).toList();
+        return (json.decode(response.body) as List).map((jsonObj) => FoodItem.fromJson(jsonObj)).toList();
       }
       throw Exception('Failed to fetch products');
     });
@@ -3621,12 +3597,7 @@ class ApiService {
 
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
       _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
-// ✅ التعديل: إضافة zoneId كمعامل مطلوب
-  // ✅ التعديل: دالة إرسال الطلب مع تحسين منطق التوكن
-// ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة
-// ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
-  // ✅ التعديل: دالة إرسال الطلب مع استقبال المطعم والمنطقة وتوكن الآيفون
-  // ✅ دالة إرسال الطلب الاحترافية
+
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -3648,7 +3619,6 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
 
-    // تحديث الذاكرة لضمان قراءة أحدث البيانات
     await prefs.reload();
 
     String? deviceId = prefs.getString('unique_device_id');
@@ -3665,7 +3635,6 @@ class ApiService {
       if (fcmToken != null) await prefs.setString('fcm_token', fcmToken);
     }
 
-    // 🔥 ضمان جلب توكن الآيفون قبل إرسال الطلب إذا كان مفقوداً
     if (Platform.isIOS && (voipToken == null || voipToken.isEmpty)) {
       try {
         voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
@@ -3709,7 +3678,6 @@ class ApiService {
 
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
 
-        // 👈 سيرسل توكن الآيفون الصحيح
         if (voipToken != null && voipToken.isNotEmpty)
           {"key": "voip_token", "value": voipToken},
 
@@ -3737,12 +3705,13 @@ class ApiService {
       throw Exception('Failed to submit order: ${response.body}');
     }
   }
+
   Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
     return _executeWithRetry(() async {
       final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
       final response = await http.get(uri, headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'});
       if (response.statusCode == 200) {
-        return (json.decode(response.body) as List).map((json) => Order.fromJson(json)).toList();
+        return (json.decode(response.body) as List).map((jsonObj) => Order.fromJson(jsonObj)).toList();
       }
       throw Exception('Failed to load orders: ${response.body}');
     });
@@ -3866,13 +3835,9 @@ class ApiService {
     return response.statusCode == 200;
   }
 
-// 🔥 دالة جلب رحلات التكسي الخاصة بمنطقة التيم ليدر
-// 🔥 دالة جلب رحلات التكسي الخاصة بمنطقة التيم ليدر
-// 🔥 دالة جلب رحلات التكسي الخاصة بمنطقة التيم ليدر
   Future<List<ZoneRide>> getTeamLeaderZoneRides(String token, int zoneId) async {
     final url = 'https://taxi.beytei.com/team-leader-rides?zone_id=$zoneId';
 
-    // 🔥 التعديل الأول: طباعة واضحة توضح رقم المنطقة الذي يرسله التطبيق
     print("🟡 [API - TeamLeader] جاري طلب الرحلات من: $url (Zone ID: $zoneId)");
 
     try {
@@ -3886,27 +3851,24 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(response.body);
-
         List ridesData = [];
 
-        // قراءة البيانات من نظام الصفحات (Paginate)
         if (data.containsKey('data') && data['data'] != null) {
           if (data['data']['data'] != null) {
-            ridesData = data['data']['data']; // قراءة المصفوفة الداخلية
+            ridesData = data['data']['data'];
           }
         }
 
-        return ridesData.map((json) => ZoneRide.fromJson(json)).toList();
+        return ridesData.map((jsonObj) => ZoneRide.fromJson(jsonObj)).toList();
       } else {
-        // 🔥 التعديل الثاني: طباعة محتوى الخطأ القادم من الباك إند (مهم جداً للمبرمج)
         print("❌ [Server Error ${response.statusCode}] محتوى الرد من السيرفر: ${response.body}");
         throw Exception("فشل جلب الرحلات: ${response.statusCode}");
       }
     } catch (e) {
       throw Exception("حدث خطأ في الاتصال: $e");
     }
-  }}
-
+  }
+}
 class AuthService {
   // 1. تسجيل الدخول للسيرفرات القياسية (مطاعم + مسواك)
   // يعتمد على إضافة JWT Auth القياسية
@@ -4810,22 +4772,22 @@ class HorizontalRestaurantCard extends StatelessWidget {
     );
   }
 }
-
+// =======================================================================
+// --- بطاقة المتجر (مطعم / مسواك) الشبكية ---
+// =======================================================================
 class RestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
   const RestaurantCard({super.key, required this.restaurant});
 
   void _showClosedDialog(BuildContext context, Restaurant restaurant) {
-    String title = "المطعم مغلق حالياً";
-    String message = "لا يستقبل المطعم طلبات الآن.\n\n"
-        "يفتح تلقائياً في: ${restaurant.autoOpenTime}\n"
-        "يغلق تلقائياً في: ${restaurant.autoCloseTime}";
+    String title = "المتجر مغلق حالياً";
+    String message = "لا يستقبل المتجر طلبات الآن.\n\nيفتح تلقائياً في: ${restaurant.autoOpenTime}\nيغلق تلقائياً في: ${restaurant.autoCloseTime}";
     IconData icon = Icons.store_mall_directory_outlined;
     Color iconColor = Colors.red.shade600;
 
     if (!restaurant.isDeliverable) {
       title = "خارج منطقة التوصيل";
-      message = "عذراً، هذا المطعم لا يوصل إلى منطقتك المحددة حالياً.";
+      message = "عذراً، هذا المتجر لا يوصل إلى منطقتك المحددة حالياً.";
       icon = Icons.location_off_outlined;
       iconColor = Colors.orange.shade700;
     }
@@ -4838,36 +4800,34 @@ class RestaurantCard extends StatelessWidget {
           children: [
             Icon(icon, color: iconColor, size: 28),
             const SizedBox(width: 10),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           ],
         ),
-        content: Text(message, style: const TextStyle(fontSize: 16, height: 1.5)),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً", style: TextStyle(fontWeight: FontWeight.bold))),
-        ],
+        content: Text(message, style: const TextStyle(fontSize: 14, height: 1.5)),
+        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً", style: TextStyle(fontWeight: FontWeight.bold)))],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✨ هنا نقوم بحساب الحالة فوراً لعرض التعتيم
     final bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
 
     return Card(
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      elevation: 4,
+      elevation: 3,
       shadowColor: Colors.black.withOpacity(0.1),
       child: InkWell(
         onTap: canOrder
             ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
             : () => _showClosedDialog(context, restaurant),
         child: Opacity(
-          opacity: canOrder ? 1.0 : 0.6, // 🔥 تعتيم الكرت بالكامل إذا كان مغلقاً أو خارج المنطقة
+          opacity: canOrder ? 1.0 : 0.6,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // 1. الصورة
               Expanded(
                 flex: 3,
                 child: Stack(
@@ -4876,14 +4836,12 @@ class RestaurantCard extends StatelessWidget {
                     CachedNetworkImage(
                       imageUrl: restaurant.imageUrl,
                       fit: BoxFit.cover,
-                      placeholder: (context, url) => Shimmer.fromColors(baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!, child: Container(color: Colors.white)),
+                      placeholder: (context, url) => Container(color: Colors.grey[200]),
                       errorWidget: (context, url, error) => const Icon(Icons.storefront, color: Colors.grey, size: 40),
                     ),
-
-                    // إظهار بانر الإغلاق فوق الصورة
                     if (!canOrder)
                       Container(
-                        color: Colors.black.withOpacity(0.5),
+                        color: Colors.black.withOpacity(0.6),
                         child: Center(
                             child: Text(
                                 !restaurant.isDeliverable ? 'خارج\nمنطقتك' : 'مغلق حالياً',
@@ -4895,30 +4853,28 @@ class RestaurantCard extends StatelessWidget {
                   ],
                 ),
               ),
+              // 2. اسم المطعم والتقييم
               Expanded(
                 flex: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text(restaurant.name, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                      SizedBox(
-                        height: 30,
-                        child: ElevatedButton.icon(
-                          onPressed: canOrder
-                              ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
-                              : () => _showClosedDialog(context, restaurant),
-                          icon: const Icon(Icons.menu_book, size: 14),
-                          label: const Text(' عرض المنيو', style: TextStyle(fontSize: 12)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: canOrder ? Theme.of(context).primaryColor : Colors.grey,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                          ),
-                        ),
+                      Text(
+                          restaurant.name,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.star, color: Colors.amber, size: 16),
+                          Text(" ${restaurant.averageRating.toStringAsFixed(1)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)),
+                        ],
                       ),
                     ],
                   ),
@@ -4932,6 +4888,9 @@ class RestaurantCard extends StatelessWidget {
   }
 }
 
+// =======================================================================
+// --- بطاقة الوجبة المخفضة (ModernOfferCard) - متوافقة مع الشبكة ---
+// =======================================================================
 
 class OrderCard extends StatefulWidget {
   final Order order;
@@ -6864,13 +6823,15 @@ class _MainScreenState extends State<MainScreen> {
       child: Scaffold(
         body: IndexedStack(
           index: navProvider.currentIndex,
-          children: <Widget>[_buildOffstageNavigator(0), _buildOffstageNavigator(1), _buildOffstageNavigator(2), _buildOffstageNavigator(3)],
+          children: <Widget>[
+            _buildOffstageNavigator(0),
+            _buildOffstageNavigator(1),
+            _buildOffstageNavigator(2),
+            _buildOffstageNavigator(3)
+          ],
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
-
-        // 👇👇👇 التعديل هنا: إضافة الزر العائم للفحص 👇👇👇
-        floatingActionButton: const DeepTokenDebuggerFAB(),
-        // 👆👆👆 نهاية التعديل 👆👆👆
+        // ✅ تمت إزالة زر الفحص العائم من هنا لتنظيف الواجهة
       ),
     );
   }
@@ -6884,7 +6845,7 @@ class _MainScreenState extends State<MainScreen> {
           Widget pageBuilder;
           switch (index) {
             case 0: pageBuilder = const HomeScreen(); break;
-            case 1: pageBuilder = const CustomerWalletScreen(); break; // 👈 تم التغيير هنا
+            case 1: pageBuilder = const CustomerWalletScreen(); break;
             case 2: pageBuilder = const OrdersHistoryScreen(); break;
             case 3: pageBuilder = const CartScreen(); break;
             default: pageBuilder = const HomeScreen();
@@ -6903,8 +6864,9 @@ class _MainScreenState extends State<MainScreen> {
         const BottomNavigationBarItem(
             icon: Icon(Icons.account_balance_wallet_outlined),
             activeIcon: Icon(Icons.account_balance_wallet),
-            label: 'محفظتي' // 👈 تم التغيير هنا
-        ),        const BottomNavigationBarItem(icon: Icon(Icons.history_outlined), activeIcon: Icon(Icons.history), label: 'طلباتي'),
+            label: 'محفظتي'
+        ),
+        const BottomNavigationBarItem(icon: Icon(Icons.history_outlined), activeIcon: Icon(Icons.history), label: 'طلباتي'),
         BottomNavigationBarItem(
           icon: Consumer<CartProvider>(builder: (context, cart, child) => Badge(isLabelVisible: cart.cartCount > 0, label: Text(cart.cartCount.toString()), child: const Icon(Icons.shopping_cart_outlined))),
           activeIcon: Consumer<CartProvider>(builder: (context, cart, child) => Badge(isLabelVisible: cart.cartCount > 0, label: Text(cart.cartCount.toString()), child: const Icon(Icons.shopping_cart))),
@@ -6915,7 +6877,10 @@ class _MainScreenState extends State<MainScreen> {
       onTap: navProvider.changeTab,
     );
   }
-}class CustomerWalletScreen extends StatefulWidget {
+}
+
+
+class CustomerWalletScreen extends StatefulWidget {
   const CustomerWalletScreen({super.key});
 
   @override
@@ -7546,28 +7511,302 @@ class _CustomerLoginScreenState extends State<CustomerLoginScreen> with SingleTi
 
 
 
+// =======================================================================
+// --- البطاقات العصرية (Modern Cards) للمسواك والمطاعم ---
+// =======================================================================
+
+// 1. بطاقة العروض في قسم (المحلات الأكثر شيوعاً)
+class ModernPromoCard extends StatelessWidget {
+  final Offer offer;
+  final List<Restaurant> allStores;
+
+  const ModernPromoCard({super.key, required this.offer, required this.allStores});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        try {
+          final restaurant = allStores.firstWhere((r) => r.id == offer.restaurantId);
+          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('المتجر غير متاح حالياً')));
+        }
+      },
+      child: Container(
+        width: 260,
+        margin: const EdgeInsets.only(left: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(15),
+          image: DecorationImage(
+            image: CachedNetworkImageProvider(offer.imageUrl),
+            fit: BoxFit.cover,
+          ),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(15),
+            gradient: LinearGradient(
+              colors: [Colors.black.withOpacity(0.8), Colors.transparent],
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+            ),
+          ),
+          padding: const EdgeInsets.all(12),
+          alignment: Alignment.bottomRight,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                offer.title,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(4)
+                ),
+                child: const Text("عرض خاص", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 2. بطاقة المطعم الأفقية (لقسم أفضل المطاعم)
+// 2. بطاقة المطعم الأفقية (لقسم أفضل المطاعم)
+class ModernHorizontalRestaurantCard extends StatelessWidget {
+  final Restaurant restaurant;
+  const ModernHorizontalRestaurantCard({super.key, required this.restaurant});
+
+  @override
+  Widget build(BuildContext context) {
+    bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
+
+    return GestureDetector(
+      onTap: () {
+        if (canOrder) {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
+        } else {
+          _showClosedDialog(context, restaurant);
+        }
+      },
+      child: Opacity(
+        opacity: canOrder ? 1.0 : 0.6,
+        child: Container(
+          width: 280,
+          margin: const EdgeInsets.only(left: 12),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5)],
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: CachedNetworkImage(
+                  imageUrl: restaurant.imageUrl,
+                  width: 70,
+                  height: 70,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(color: Colors.grey[200]),
+                  errorWidget: (context, url, error) => Container(color: Colors.grey[200], child: const Icon(Icons.store)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            restaurant.name,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(4)),
+                          child: const Text("Pro", style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    Row(
+                      children: [
+                        const Icon(Icons.star, color: Colors.amber, size: 14),
+                        Text(" ${restaurant.averageRating.toStringAsFixed(1)}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    if (!canOrder)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4.0),
+                        child: Text("مغلق أو خارج التغطية", style: TextStyle(color: Colors.red, fontSize: 11, fontWeight: FontWeight.bold)),
+                      )
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showClosedDialog(BuildContext context, Restaurant restaurant) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: const Text("عذراً"),
+        content: Text(!restaurant.isDeliverable ? "هذا المتجر لا يوصل لمنطقتك المحددة حالياً." : "المتجر مغلق حالياً. يفتح في: ${restaurant.autoOpenTime}"),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))],
+      ),
+    );
+  }
+}
 
 
+// 3. بطاقة المتجر العمودية (للقائمة الرئيسية السفلية)
+class ModernVerticalRestaurantCard extends StatelessWidget {
+  final Restaurant restaurant;
+  const ModernVerticalRestaurantCard({super.key, required this.restaurant});
 
+  @override
+  Widget build(BuildContext context) {
+    bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
+
+    return GestureDetector(
+      onTap: () {
+        if (canOrder) {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
+        } else {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              title: const Text("عذراً"),
+              content: Text(!restaurant.isDeliverable ? "هذا المتجر لا يوصل لمنطقتك المحددة حالياً." : "المتجر مغلق حالياً. يفتح في: ${restaurant.autoOpenTime}"),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))],
+            ),
+          );
+        }
+      },
+      child: Opacity(
+        opacity: canOrder ? 1.0 : 0.6,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 15),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5)],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+                    child: CachedNetworkImage(
+                      imageUrl: restaurant.imageUrl,
+                      width: double.infinity,
+                      height: 150,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Container(color: Colors.grey[200], height: 150),
+                      errorWidget: (context, url, error) => Container(color: Colors.grey[200], height: 150, child: const Icon(Icons.store, size: 50)),
+                    ),
+                  ),
+                  if (!canOrder)
+                    Container(
+                      height: 150,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.5),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+                      ),
+                      child: Center(
+                          child: Text(
+                              !restaurant.isDeliverable ? 'خارج\nمنطقتك' : 'مغلق حالياً',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)
+                          )
+                      ),
+                    ),
+                  Positioned(
+                    top: 10, right: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.star, color: Colors.amber, size: 16),
+                          const SizedBox(width: 4),
+                          Text(restaurant.averageRating.toStringAsFixed(1), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  )
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(restaurant.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                    if (restaurant.storeType == 'market')
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8)),
+                        child: const Icon(Icons.shopping_basket, color: Colors.green, size: 20),
+                      )
+                  ],
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+// =======================================================================
+// --- شاشة الزبون الرئيسية (HomeScreen) ---
+// =======================================================================
+// =======================================================================
+// --- شاشة الزبون الرئيسية (HomeScreen) المحدثة مع Slivers ---
+// =======================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => HomeScreenState();
 }
+
 class HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
 
-  // صور البانر الإعلاني
-  final List<String> bannerImages = [
-    'https://beytei.com/wp-content/uploads/2023/05/banner1.jpg',
-    'https://beytei.com/wp-content/uploads/2023/05/banner2.jpg',
-    'https://beytei.com/wp-content/uploads/2023/05/banner3.jpg'
-  ];
-
-  int _currentBannerIndex = 0;
   int? _selectedAreaId;
   String? _selectedAreaName;
+
+  // فلاتر الواجهة
+  String _activeMainCategory = 'all'; // all, restaurant, market, offers
 
   @override
   void initState() {
@@ -7582,248 +7821,186 @@ class HomeScreenState extends State<HomeScreen> {
     _selectedAreaId = prefs.getInt('selectedAreaId');
     _selectedAreaName = prefs.getString('selectedAreaName');
 
-    // 🌟 التعديل: جلب ملف التسعير في الخلفية بمجرد فتح التطبيق ليكون جاهزاً للسلة
     Provider.of<DeliveryConfigProvider>(context, listen: false).fetchAndCacheConfig();
 
-    // جلب بيانات الصفحة الرئيسية بناءً على المنطقة
     if (_selectedAreaId != null) {
       final provider = Provider.of<CustomerProvider>(context, listen: false);
-
-      // 1. جلب المطاعم
       provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
-
-      // 2. 🔥 جلب العروض النشطة لهذه المنطقة
       provider.fetchOffers(_selectedAreaId!);
     }
     setState(() {});
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
   void _onSearchSubmitted(String query) {
     if (query.isNotEmpty && _selectedAreaId != null) {
       Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => SearchScreen(
-              searchQuery: query, selectedAreaId: _selectedAreaId!)));
+          builder: (_) => SearchScreen(searchQuery: query, selectedAreaId: _selectedAreaId!)));
     }
   }
 
-  // --- 🚀 بناء الواجهة ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: InkWell(
-          onTap: () async {
-            final result = await Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const SelectLocationScreen(isCancellable: true)));
-            if (result == true) {
-              final prefs = await SharedPreferences.getInstance();
-              _selectedAreaId = prefs.getInt('selectedAreaId');
-              _selectedAreaName = prefs.getString('selectedAreaName');
-              setState(() {});
-              if (_selectedAreaId != null) {
-                final provider = Provider.of<CustomerProvider>(context, listen: false);
-                provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
-                provider.fetchOffers(_selectedAreaId!); // تحديث العروض عند تغيير المنطقة
-              }
-            }
-          },
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(_selectedAreaName ?? "اختر منطقة",
-                style: const TextStyle(fontSize: 16)),
-            const Icon(Icons.keyboard_arrow_down, size: 20)
-          ]),
-        ),
-        centerTitle: true,
-
-        // ✨✨✨ المنطقة الذكية للأزرار ✨✨✨
-        actions: [
-          Consumer<AuthProvider>(
-            builder: (context, auth, child) {
-              // الحالة 1: المستخدم غير مسجل دخول (زائر)
-              if (!auth.isLoggedIn) {
-                return Row(
-                  children: [
-                    // زر دخول التيم ليدر
-                    IconButton(
-                      icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.blueGrey),
-                      tooltip: "دخول قائد الفريق",
-                      onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const TeamLeaderLoginScreen())
-                      ),
-                    ),
-                    // زر دخول مدير المطعم
-                    IconButton(
-                      icon: const Icon(Icons.store, color: Colors.teal),
-                      tooltip: "دخول مدير المطعم",
-                      onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const RestaurantLoginScreen())
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              // الحالة 2: مسجل دخول بصفة (Team Leader)
-              else if (auth.userRole == 'leader') {
-                return IconButton(
-                  icon: const Icon(Icons.dashboard_customize, color: Colors.amber, size: 28),
-                  tooltip: "لوحة المراقبة (Team Leader)",
-                  onPressed: () {
-                    if (auth.token != null) {
-                      Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => RegionDashboardScreen(
-                            token: auth.token!,
-                            areaId: 0,
-                            areaName: "منطقتك المسؤولة",
-                          ))
-                      );
-                    }
-                  },
-                );
-              }
-              // الحالة 3: مسجل دخول بصفة (Restaurant Owner)
-              else {
-                return IconButton(
-                  icon: const Icon(Icons.dashboard, color: Colors.teal, size: 28),
-                  tooltip: "لوحة تحكم المطعم",
-                  onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const RestaurantDashboardScreen())
-                  ),
-                );
-              }
-            },
-          ),
-        ],
-      ),
-
-      // --- جسم الصفحة (عرض المطاعم للعروض والجميع) ---
+      backgroundColor: const Color(0xFFF9F9F9),
+      appBar: _buildProMaxAppBar(),
       body: Consumer<CustomerProvider>(
         builder: (context, provider, child) {
           if (_selectedAreaId == null) {
-            return const Center(child: Text("يرجى تحديد منطقة لعرض المطاعم"));
+            return const Center(child: Text("يرجى تحديد منطقة لعرض المتاجر"));
           }
 
           if (provider.hasError && provider.homeData.isEmpty) {
             return NetworkErrorWidget(
-                message: 'تحقق من اتصال الانترنيت .',
+                message: 'تحقق من اتصال الانترنيت.',
                 onRetry: () => provider.fetchHomeData(_selectedAreaId!, isRefresh: true));
           }
 
-          // تجهيز البيانات
-          final restaurants = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+          final allStores = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+
+          // فلترة حسب التصنيف (مطعم / مسواك)
+          List<Restaurant> filteredStores = allStores.where((store) {
+            if (_activeMainCategory == 'restaurant' && store.storeType != 'restaurant') return false;
+            if (_activeMainCategory == 'market' && store.storeType != 'market') return false;
+            return true;
+          }).toList();
 
           return RefreshIndicator(
             onRefresh: () async {
               provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
               provider.fetchOffers(_selectedAreaId!);
             },
-            child: ListView( // ⚠️ تغيير من Column إلى ListView للسماح بالتمرير الكامل للصفحة
+            // 🔥 تم التحويل إلى CustomScrollView لدعم تثبيت الأقسام (Sticky)
+            child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: [
-                const LoyaltyChallengeWidget(),
-
-                Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                    child: _buildSearchBar()),
-
-                // 🔥🔥🔥 بداية قسم العروض (الكروت الدوارة) 🔥🔥🔥
-                if (provider.activeOffers.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                    child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              slivers: [
+                // 1. شريط البحث (يختفي عند النزول)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 15),
+                    child: _buildModernSearchBar(),
                   ),
-                  SizedBox(
-                    height: 230, // ارتفاع البطاقة
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      itemCount: provider.activeOffers.length,
-                      itemBuilder: (context, index) {
-                        final offer = provider.activeOffers[index];
-                        return ModernOfferCard(
-                          offer: offer,
-                          onTap: () {
-                            // عند الضغط على العرض: ابحث عن المطعم وافتح المنيو
-                            try {
-                              final restaurant = provider.allRestaurants.firstWhere(
-                                      (r) => r.id == offer.restaurantId,
-                                  orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '', autoCloseTime: '', latitude: 0, longitude: 0)
-                              );
-
-                              if (restaurant.id != 0) {
-                                Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("المطعم غير متاح حالياً")));
-                              }
-                            } catch (e) {
-                              print("خطأ في التنقل للعرض: $e");
-                            }
-                          },
-                          onOrderNow: () {
-                            // نفس وظيفة الضغط (الذهاب للمطعم)
-                            try {
-                              final restaurant = provider.allRestaurants.firstWhere((r) => r.id == offer.restaurantId);
-                              Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
-                            } catch(e) {}
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ],
-                // 🔥🔥🔥 نهاية قسم العروض 🔥🔥🔥
-
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 5),
-                  child: Text("المطاعم المتاحة",
-                      style:
-                      TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 ),
 
-                // عرض شبكة المطاعم (داخل ListView)
-                Builder(
-                  builder: (context) {
-                    if (provider.isLoadingHome && restaurants.isEmpty) {
-                      return SizedBox(
-                          height: 400, // ارتفاع تقريبي للشبكة
-                          child: _buildRestaurantGridShimmer()
-                      );
-                    }
-                    if (!provider.isLoadingHome && restaurants.isEmpty) {
-                      return const Padding(
-                        padding: EdgeInsets.all(50.0),
-                        child: Center(child: Text("لا توجد مطاعم متاحة حالياً في هذه المنطقة")),
-                      );
-                    }
-
-                    return GridView.builder(
-                      padding: const EdgeInsets.all(8),
-                      // تعطيل التمرير الداخلي للشبكة لأننا نستخدم ListView للصفحة كاملة
-                      physics: const NeverScrollableScrollPhysics(),
-                      shrinkWrap: true,
-                      gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        childAspectRatio: 0.7,
-                        crossAxisSpacing: 8,
-                        mainAxisSpacing: 8,
+                // 2. الأيقونات الرئيسية الثابتة (Sticky Header)
+                SliverPersistentHeader(
+                  pinned: true,
+                  floating: false,
+                  delegate: _StickyTopCategoriesDelegate(
+                    child: Container(
+                      color: const Color(0xFFF9F9F9), // نفس لون خلفية الشاشة
+                      padding: const EdgeInsets.only(bottom: 10, top: 5),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF9F9F9),
+                        border: Border(
+                          bottom: BorderSide(
+                            color: Color(0xFF00BCD4), // خط سمائي احترافي يتماشى مع هوية التطبيق
+                            width: 2.0,
+                          ),
+                        ),
                       ),
-                      itemCount: restaurants.length,
-                      itemBuilder: (context, index) {
-                        return RestaurantCard(restaurant: restaurants[index]);
-                      },
-                    );
-                  },
+                      child: _buildTopCategories(),
+                    ),
+                    height: 125.0, // الارتفاع المناسب للأيقونات
+                  ),
                 ),
 
-                // مسافة إضافية في الأسفل
-                const SizedBox(height: 20),
+                // 3. المحتوى المتغير (عروض ومطاعم)
+                SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 20),
+
+                      // 🔥🔥🔥 الحالة الأولى: تم الضغط على "عروض خاصة" 🔥🔥🔥
+                      if (_activeMainCategory == 'offers') ...[
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
+                          child: Text("جميع الوجبات المخفضة 🔥", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        ),
+                        if (provider.activeOffers.isEmpty)
+                          const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد عروض حالياً.")))
+                        else
+                          GridView.builder(
+                            physics: const NeverScrollableScrollPhysics(),
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              childAspectRatio: 0.70,
+                              crossAxisSpacing: 10,
+                              mainAxisSpacing: 10,
+                            ),
+                            itemCount: provider.activeOffers.length,
+                            itemBuilder: (ctx, i) => ModernOfferCard(
+                              offer: provider.activeOffers[i],
+                              allStores: allStores,
+                            ),
+                          ),
+                        const SizedBox(height: 30),
+                      ]
+
+                      // 🔥🔥🔥 الحالة الثانية: عرض المطاعم / المسواك / الكل 🔥🔥🔥
+                      else ...[
+                        // --- شبكة العروض الحصرية (أصبحت أصغر واحترافية) ---
+                        if (provider.activeOffers.isNotEmpty && _activeMainCategory == 'all') ...[
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16.0),
+                            child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            height: 360, // 🔥 الارتفاع الجديد الاحترافي
+                            child: GridView.builder(
+                              scrollDirection: Axis.horizontal,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 3, // 3 أسطر أفقية
+                                childAspectRatio: 0.65, // 🔥 نسبة احترافية للبطاقات الصغيرة
+                                mainAxisSpacing: 12,
+                                crossAxisSpacing: 12,
+                              ),
+                              itemCount: provider.activeOffers.length,
+                              itemBuilder: (ctx, i) => ModernOfferCard(
+                                offer: provider.activeOffers[i],
+                                allStores: allStores,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 25),
+                        ],
+
+                        // --- شبكة المطاعم / المسواك (2 في كل سطر) ---
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 5),
+                          child: Text(
+                              _activeMainCategory == 'market' ? "أسواق المسواك" : "المطاعم المتاحة",
+                              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)
+                          ),
+                        ),
+
+                        if (provider.isLoadingHome && filteredStores.isEmpty)
+                          const Center(child: Padding(padding: EdgeInsets.all(30), child: CircularProgressIndicator()))
+                        else if (filteredStores.isEmpty)
+                          const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد متاجر مطابقة.")))
+                        else
+                          GridView.builder(
+                            physics: const NeverScrollableScrollPhysics(),
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2, // مطعمين في كل سطر
+                              childAspectRatio: 0.75, // نسبة الطول للعرض
+                              crossAxisSpacing: 12,
+                              mainAxisSpacing: 12,
+                            ),
+                            itemCount: filteredStores.length,
+                            itemBuilder: (ctx, i) => RestaurantCard(restaurant: filteredStores[i]),
+                          ),
+                        const SizedBox(height: 30),
+                      ]
+                    ],
+                  ),
+                ),
               ],
             ),
           );
@@ -7832,77 +8009,199 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- الدوال المساعدة (كما هي) ---
+  // --- بناء App Bar المخصص (الأزرار السرية) ---
+  AppBar _buildProMaxAppBar() {
+    return AppBar(
+      backgroundColor: Colors.white,
+      elevation: 0,
+      leading: SecretAdminButton(
+        icon: Icons.admin_panel_settings,
+        onUnlock: () {
+          final auth = Provider.of<AuthProvider>(context, listen: false);
+          if (!auth.isLoggedIn) {
+            Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderLoginScreen()));
+          } else if (auth.userRole == 'leader') {
+            Navigator.of(context).push(MaterialPageRoute(builder: (_) => RegionDashboardScreen(token: auth.token!, areaId: 0, areaName: "منطقتك")));
+          }
+        },
+      ),
+      title: InkWell(
+        onTap: () async {
+          final result = await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SelectLocationScreen(isCancellable: true)));
+          if (result == true) _loadInitialData();
+        },
+        child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_selectedAreaName ?? "اختر منطقة", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black)),
+              const Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.black)
+            ]
+        ),
+      ),
+      centerTitle: true,
+      actions: [
+        SecretAdminButton(
+          icon: Icons.store,
+          onUnlock: () {
+            final auth = Provider.of<AuthProvider>(context, listen: false);
+            if (!auth.isLoggedIn) {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen()));
+            } else if (auth.userRole == 'owner') {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantDashboardScreen()));
+            }
+          },
+        ),
+      ],
+    );
+  }
 
-  Widget _buildBannerSlider() {
+  Widget _buildModernSearchBar() {
     return Container(
-      height: 150,
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      child: Stack(
-        alignment: Alignment.bottomCenter,
+      height: 45,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: TextField(
+        controller: _searchController,
+        textInputAction: TextInputAction.search,
+        onSubmitted: _onSearchSubmitted,
+        decoration: const InputDecoration(
+          hintText: 'ابحث عن وجبة، مطعم...',
+          hintStyle: TextStyle(fontSize: 14),
+          prefixIcon: Icon(Icons.search, color: Colors.grey),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(vertical: 10),
+        ),
+      ),
+    );
+  }
+
+  // --- بناء الأقسام باستخدام الصور החقيقية ---
+  Widget _buildTopCategories() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Positioned(
-            bottom: 10,
-            child: Row(
-              children: bannerImages.map((url) {
-                int index = bannerImages.indexOf(url);
-                return Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _currentBannerIndex == index
-                        ? Theme.of(context).primaryColor
-                        : Colors.white.withOpacity(0.7),
-                  ),
-                );
-              }).toList(),
-            ),
+          _buildCategoryImage(
+            title: "المطاعم",
+            imagePath: 'assets/icon/restaurant_icon.png',
+            isSelected: _activeMainCategory == 'restaurant',
+            onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'restaurant' ? 'all' : 'restaurant'),
+          ),
+          _buildCategoryImage(
+            title: "الفواكه\nوالخضروات",
+            imagePath: 'assets/icon/market_icon.png',
+            isSelected: _activeMainCategory == 'market',
+            onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'market' ? 'all' : 'market'),
+          ),
+          _buildCategoryImage(
+            title: "عروض\nخاصة",
+            imagePath: 'assets/icon/offer_icon.png', // تأكد من المسار الصحيح لديك
+            isSelected: _activeMainCategory == 'offers',
+            onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSearchBar() => TextField(
-      controller: _searchController,
-      textInputAction: TextInputAction.search,
-      onSubmitted: _onSearchSubmitted,
-      decoration: InputDecoration(
-          hintText: 'ابحث عن وجبة أو مطعم...',
-          prefixIcon: const Icon(Icons.search, color: Colors.grey),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(30),
-              borderSide: BorderSide.none),
-          filled: true,
-          fillColor: Colors.grey.shade100,
-          contentPadding: EdgeInsets.zero));
-
-  Widget _buildRestaurantGridShimmer() {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[300]!,
-      highlightColor: Colors.grey[100]!,
-      child: GridView.builder(
-        physics: const NeverScrollableScrollPhysics(), // تعطيل السكرول للشيمر
-        shrinkWrap: true,
-        padding: const EdgeInsets.all(10),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.7,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-        ),
-        itemCount: 6,
-        itemBuilder: (context, index) {
-          return const ShimmerRestaurantCard();
-        },
+  Widget _buildCategoryImage({required String title, required String imagePath, required bool isSelected, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 75,
+            height: 75,
+            decoration: BoxDecoration(
+              color: isSelected ? Colors.cyan.shade50 : Colors.transparent, // لون سمائي خفيف عند التحديد
+              borderRadius: BorderRadius.circular(20),
+              border: isSelected ? Border.all(color: const Color(0xFF00BCD4), width: 2) : null,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: Image.asset(
+                imagePath,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => const Icon(Icons.image_not_supported, color: Colors.grey),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, fontWeight: isSelected ? FontWeight.bold : FontWeight.w600, height: 1.2, color: Colors.black87),
+          ),
+        ],
       ),
     );
   }
 }
 
 
+
+// =======================================================================
+// --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
+// =======================================================================
+class _StickyTopCategoriesDelegate extends SliverPersistentHeaderDelegate {
+  final Widget child;
+  final double height;
+
+  _StickyTopCategoriesDelegate({required this.child, required this.height});
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return SizedBox.expand(child: child);
+  }
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  double get minExtent => height;
+
+  @override
+  bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) {
+    return true; // إعادة البناء عند التغيير
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// =======================================================================
+// --- بطاقة المتجر (مطعم / مسواك) الشبكية ---
+// =======================================================================
+
+// =======================================================================
+// --- بطاقة الوجبة المخفضة (ModernOfferCard) - متوافقة مع الشبكة ---
+// =======================================================================
 
 class SelectLocationScreen extends StatefulWidget {
   final bool isCancellable;
@@ -12176,6 +12475,56 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
             const Text("إجمالي التقييمات", style: TextStyle(color: Colors.grey)),
           ]),
         ]),
+      ),
+    );
+  }
+}
+// =======================================================================
+// --- الزر السري لدخول الإدارة (شبه شفاف + ضغط 3 ثواني) ---
+// =======================================================================
+
+
+// =======================================================================
+// --- الزر السري لدخول الإدارة (شبه شفاف + ضغط 3 ثواني) ---
+// =======================================================================
+class SecretAdminButton extends StatefulWidget {
+  final IconData icon;
+  final VoidCallback onUnlock;
+
+  const SecretAdminButton({super.key, required this.icon, required this.onUnlock});
+
+  @override
+  State<SecretAdminButton> createState() => _SecretAdminButtonState();
+}
+
+class _SecretAdminButtonState extends State<SecretAdminButton> {
+  Timer? _timer;
+
+  void _startTimer() {
+    // تفعيل المؤقت لمدة 3 ثواني
+    _timer = Timer(const Duration(seconds: 3), () {
+      // بعد 3 ثواني، اهتزاز خفيف للموبايل وتنفيذ الدخول
+      HapticFeedback.heavyImpact();
+      widget.onUnlock();
+    });
+  }
+
+  void _cancelTimer() {
+    _timer?.cancel(); // إذا رفع إصبعه قبل 3 ثواني يُلغى الأمر
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => _startTimer(),
+      onTapUp: (_) => _cancelTimer(),
+      onTapCancel: () => _cancelTimer(),
+      child: Opacity(
+        opacity: 0.2, // شبه شفاف (مخفي تقريباً)
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Icon(widget.icon, color: Colors.black, size: 24),
+        ),
       ),
     );
   }

@@ -247,7 +247,9 @@ flutter:
     - assets/pdfs/
     - assets/jsons/
     - assets/icon/icon.jpg
-
+    - assets/icon/restaurant_icon.png
+    - assets/icon/market_icon.png
+    - assets/icon/offer_icon.png
     - assets/images/car.png
     - assets/images/tuktuk.png
     - assets/images/social/

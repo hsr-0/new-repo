@@ -195,11 +195,6 @@ builder: (context, params) => HomeMainPageWidget(),
       // بدلاً من (LocationCheckWrapper) مباشرة
       builder: (context, params) => const MiswakModule(),
     ),
-    FFRoute(
-      name: 'medicalstorepage',
-      path: '/medical-store',
-      builder: (context, params) => AuthDispatcher(),
-    ),
 
 
 
