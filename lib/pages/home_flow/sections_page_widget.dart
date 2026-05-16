@@ -499,14 +499,21 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                   children: [
                     _buildGridCard(
                       context: context,
-                      title: 'منصة بيتي العقارية',
-                      imagePath: 'assets/images/beytei.png',
+                      title: 'المطاعم',
+                      imagePath: 'assets/images/re.jpg',
+                      onTap: () {
+                        GoRouter.of(context).push('/restaurants-store');
+                      },
+                    ),
+                    _buildGridCard(
+                      context: context,
+                      title: 'تكسي بيتي',
+                      imagePath: 'assets/images/taxi.png',
                       onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (context) =>
-                              const WebViewPage(url: 'https://beytei.com')),
+                              builder: (context) => const TaxiAppEntry()),
                         );
                       },
                     ),
@@ -526,18 +533,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                         context.push('/splash');
                       },
                     ),
-                    _buildGridCard(
-                      context: context,
-                      title: 'تكسي بيتي',
-                      imagePath: 'assets/images/taxi.png',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => const TaxiAppEntry()),
-                        );
-                      },
-                    ),
+
                     _buildGridCard(
                       context: context,
                       title: 'مسواك بيتي',
@@ -546,14 +542,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                         GoRouter.of(context).push('/miswak-store');
                       },
                     ),
-                    _buildGridCard(
-                      context: context,
-                      title: 'المطاعم',
-                      imagePath: 'assets/images/re.jpg',
-                      onTap: () {
-                        GoRouter.of(context).push('/restaurants-store');
-                      },
-                    ),
+
                   ],
                 ),
               ),

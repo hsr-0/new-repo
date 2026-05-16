@@ -1701,9 +1701,10 @@ class FoodItem {
   final double restaurantLat;
   final double restaurantLng;
 
-  // 🔥 الحقول الجديدة للوزن والملاحظات
+  // 🔥 الحقول الجديدة
   double selectedWeight;
   String customNote;
+  final double platformMarkup; // 👈 إضافة حقل أرباح المنصة
 
   FoodItem({
     required this.id,
@@ -1722,6 +1723,7 @@ class FoodItem {
     this.restaurantLng = 0.0,
     this.selectedWeight = 1.0,
     this.customNote = '',
+    this.platformMarkup = 0.0, // 👈 القيمة الافتراضية
   });
 
   FoodItem copyWith({
@@ -1737,6 +1739,7 @@ class FoodItem {
       selectedWeight: selectedWeight ?? this.selectedWeight,
       customNote: customNote ?? this.customNote,
       quantity: quantity ?? this.quantity,
+      platformMarkup: platformMarkup, // 👈 تمرير الحقل
     );
   }
 
@@ -1787,15 +1790,17 @@ class FoodItem {
       allCategoryIds: catIds,
       averageRating: safeParseDouble(json['average_rating']),
       ratingCount: safeParseInt(json['rating_count']),
+      // 👈 قراءة أرباح المنصة من الـ API
+      platformMarkup: safeParseDouble(json['platform_markup']),
     );
   }
 
-  // --- حساب الأسعار ---
-  double get basePrice => salePrice != null && salePrice! >= 0 ? salePrice! : price;
+  // 🔥 السر هنا: دمج السعر الأساسي مع أرباح المنصة لكي لا يلاحظ الزبون
+  double get basePrice => (salePrice != null && salePrice! >= 0 ? salePrice! : price) + platformMarkup;
+
   double get finalPrice => basePrice * selectedWeight;
   String get formattedFinalPrice => '${NumberFormat('#,###', 'ar_IQ').format(finalPrice)} د.ع';
 
-  // 🔥 إضافة هذه الأسطر لحل الأخطاء القديمة (التوافقية الرجعية)
   double get displayPrice => finalPrice;
   String get formattedPrice => formattedFinalPrice;
 
@@ -1811,7 +1816,6 @@ class FoodItem {
 
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId, 'selectedWeight': selectedWeight};
 }
-
 class Order {
   final int id;
   final String status;
@@ -2600,15 +2604,17 @@ class _LoyaltyChallengeWidgetState extends State<LoyaltyChallengeWidget> {
     );
   }
 }
-// (الصق هذا الكلاس بالكامل بدلاً من CartProvider القديم)
 
 class CartProvider with ChangeNotifier {
   final List<FoodItem> _items = [];
   List<FoodItem> get items => _items;
   int get cartCount => _items.fold(0, (sum, item) => sum + item.quantity);
 
-  // السعر الكلي
+  // السعر الكلي للوجبات (شامل الأرباح)
   double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.finalPrice * item.quantity));
+
+  // 🔥 حساب إجمالي أرباح المنصة لكل السلة لإرسالها للسيرفر
+  double get totalPlatformMarkup => _items.fold(0.0, (sum, item) => sum + (item.platformMarkup * item.selectedWeight * item.quantity));
 
   String? _appliedCoupon;
   double _discountPercentage = 0.0;
@@ -2778,7 +2784,6 @@ class CartProvider with ChangeNotifier {
 
   void clearCart() { _items.clear(); removeCoupon(); notifyListeners(); }
 }
-
 class FoodItemBottomSheet extends StatefulWidget {
   final FoodItem foodItem;
   final bool isMarket;
@@ -3610,6 +3615,7 @@ class ApiService {
     int? restaurantId,
     int? regionId,
     bool useSmartWallet = false,
+    double? platformMarkupTotal, // 👈 1. إضافة المتغير هنا
   }) async {
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
 
@@ -3682,6 +3688,11 @@ class ApiService {
           {"key": "voip_token", "value": voipToken},
 
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
+
+        // 👈 2. إرسال قيمة أرباح المنصة الكلية للسيرفر
+        if (platformMarkupTotal != null && platformMarkupTotal > 0)
+          {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
+
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
@@ -7792,6 +7803,9 @@ class ModernVerticalRestaurantCard extends StatelessWidget {
 // =======================================================================
 // --- شاشة الزبون الرئيسية (HomeScreen) المحدثة مع Slivers ---
 // =======================================================================
+// =======================================================================
+// --- شاشة الزبون الرئيسية (HomeScreen) المحدثة مع 6 أيقونات ---
+// =======================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -7806,7 +7820,7 @@ class HomeScreenState extends State<HomeScreen> {
   String? _selectedAreaName;
 
   // فلاتر الواجهة
-  String _activeMainCategory = 'all'; // all, restaurant, market, offers
+  String _activeMainCategory = 'all'; // all, restaurant, market, pastry, grocery, meat, offers
 
   @override
   void initState() {
@@ -7857,11 +7871,11 @@ class HomeScreenState extends State<HomeScreen> {
 
           final allStores = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
 
-          // فلترة حسب التصنيف (مطعم / مسواك)
+          // 🔥 فلترة ذكية حسب التصنيف
           List<Restaurant> filteredStores = allStores.where((store) {
-            if (_activeMainCategory == 'restaurant' && store.storeType != 'restaurant') return false;
-            if (_activeMainCategory == 'market' && store.storeType != 'market') return false;
-            return true;
+            if (_activeMainCategory == 'all') return true;
+            if (_activeMainCategory == 'offers') return false;
+            return store.storeType == _activeMainCategory;
           }).toList();
 
           return RefreshIndicator(
@@ -7869,11 +7883,10 @@ class HomeScreenState extends State<HomeScreen> {
               provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
               provider.fetchOffers(_selectedAreaId!);
             },
-            // 🔥 تم التحويل إلى CustomScrollView لدعم تثبيت الأقسام (Sticky)
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
-                // 1. شريط البحث (يختفي عند النزول)
+                // 1. شريط البحث
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 10, 16, 15),
@@ -7881,26 +7894,26 @@ class HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
 
-                // 2. الأيقونات الرئيسية الثابتة (Sticky Header)
+                // 2. الأيقونات الرئيسية الستة (Sticky Header)
                 SliverPersistentHeader(
                   pinned: true,
                   floating: false,
                   delegate: _StickyTopCategoriesDelegate(
                     child: Container(
-                      color: const Color(0xFFF9F9F9), // نفس لون خلفية الشاشة
-                      padding: const EdgeInsets.only(bottom: 10, top: 5),
+                      color: const Color(0xFFF9F9F9),
+                      padding: const EdgeInsets.only(bottom: 5, top: 5),
                       decoration: const BoxDecoration(
                         color: Color(0xFFF9F9F9),
                         border: Border(
                           bottom: BorderSide(
-                            color: Color(0xFF00BCD4), // خط سمائي احترافي يتماشى مع هوية التطبيق
+                            color: Color(0xFF00BCD4),
                             width: 2.0,
                           ),
                         ),
                       ),
-                      child: _buildTopCategories(),
+                      child: _buildTopCategories(), // 👈 الدالة المعدلة
                     ),
-                    height: 125.0, // الارتفاع المناسب للأيقونات
+                    height: 95.0, // 🔥 تم تقليل الارتفاع ليتناسب مع الأيقونات الصغيرة
                   ),
                 ),
 
@@ -7911,7 +7924,6 @@ class HomeScreenState extends State<HomeScreen> {
                     children: [
                       const SizedBox(height: 20),
 
-                      // 🔥🔥🔥 الحالة الأولى: تم الضغط على "عروض خاصة" 🔥🔥🔥
                       if (_activeMainCategory == 'offers') ...[
                         const Padding(
                           padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
@@ -7938,10 +7950,7 @@ class HomeScreenState extends State<HomeScreen> {
                           ),
                         const SizedBox(height: 30),
                       ]
-
-                      // 🔥🔥🔥 الحالة الثانية: عرض المطاعم / المسواك / الكل 🔥🔥🔥
                       else ...[
-                        // --- شبكة العروض الحصرية (أصبحت أصغر واحترافية) ---
                         if (provider.activeOffers.isNotEmpty && _activeMainCategory == 'all') ...[
                           const Padding(
                             padding: EdgeInsets.symmetric(horizontal: 16.0),
@@ -7949,13 +7958,13 @@ class HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(height: 10),
                           SizedBox(
-                            height: 360, // 🔥 الارتفاع الجديد الاحترافي
+                            height: 360,
                             child: GridView.builder(
                               scrollDirection: Axis.horizontal,
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 3, // 3 أسطر أفقية
-                                childAspectRatio: 0.65, // 🔥 نسبة احترافية للبطاقات الصغيرة
+                                crossAxisCount: 3,
+                                childAspectRatio: 0.65,
                                 mainAxisSpacing: 12,
                                 crossAxisSpacing: 12,
                               ),
@@ -7969,11 +7978,10 @@ class HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 25),
                         ],
 
-                        // --- شبكة المطاعم / المسواك (2 في كل سطر) ---
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 5),
                           child: Text(
-                              _activeMainCategory == 'market' ? "أسواق المسواك" : "المطاعم المتاحة",
+                              _getCategoryTitle(_activeMainCategory),
                               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)
                           ),
                         ),
@@ -7981,15 +7989,15 @@ class HomeScreenState extends State<HomeScreen> {
                         if (provider.isLoadingHome && filteredStores.isEmpty)
                           const Center(child: Padding(padding: EdgeInsets.all(30), child: CircularProgressIndicator()))
                         else if (filteredStores.isEmpty)
-                          const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد متاجر مطابقة.")))
+                          const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد متاجر مطابقة في هذا القسم.")))
                         else
                           GridView.builder(
                             physics: const NeverScrollableScrollPhysics(),
                             shrinkWrap: true,
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2, // مطعمين في كل سطر
-                              childAspectRatio: 0.75, // نسبة الطول للعرض
+                              crossAxisCount: 2,
+                              childAspectRatio: 0.75,
                               crossAxisSpacing: 12,
                               mainAxisSpacing: 12,
                             ),
@@ -8009,7 +8017,17 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- بناء App Bar المخصص (الأزرار السرية) ---
+  String _getCategoryTitle(String category) {
+    switch (category) {
+      case 'market': return "أسواق المسواك";
+      case 'pastry': return "المعجنات والحلويات";
+      case 'grocery': return "الماركت والبقالة";
+      case 'meat': return "القصابة واللحوم";
+      case 'restaurant': return "المطاعم المتاحة";
+      default: return "أفضل المتاجر";
+    }
+  }
+
   AppBar _buildProMaxAppBar() {
     return AppBar(
       backgroundColor: Colors.white,
@@ -8077,72 +8095,87 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- بناء الأقسام باستخدام الصور החقيقية ---
+  // 🔥 بناء الأقسام: تم تصغير الأيقونات وتوزيعها بمسافات متساوية لظهور 6 أيقونات معاً
   Widget _buildTopCategories() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      padding: const EdgeInsets.symmetric(horizontal: 5.0),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween, // 👈 يوزع الـ 6 أيقونات بمسافات متساوية
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildCategoryImage(
-            title: "المطاعم",
-            imagePath: 'assets/icon/restaurant_icon.png',
-            isSelected: _activeMainCategory == 'restaurant',
-            onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'restaurant' ? 'all' : 'restaurant'),
+          Expanded(
+            child: _buildCategoryImage(
+              title: "المطاعم",
+              imagePath: 'assets/icon/restaurant_icon.png',
+              isSelected: _activeMainCategory == 'restaurant',
+              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'restaurant' ? 'all' : 'restaurant'),
+            ),
           ),
-          _buildCategoryImage(
-            title: "الفواكه\nوالخضروات",
-            imagePath: 'assets/icon/market_icon.png',
-            isSelected: _activeMainCategory == 'market',
-            onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'market' ? 'all' : 'market'),
+          Expanded(
+            child: _buildCategoryImage(
+              title: "مسواك",
+              imagePath: 'assets/icon/market_icon.png',
+              isSelected: _activeMainCategory == 'market',
+              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'market' ? 'all' : 'market'),
+            ),
           ),
-          _buildCategoryImage(
-            title: "عروض\nخاصة",
-            imagePath: 'assets/icon/offer_icon.png', // تأكد من المسار الصحيح لديك
-            isSelected: _activeMainCategory == 'offers',
-            onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
+
+
+
+          Expanded(
+            child: _buildCategoryImage(
+              title: "عروض",
+              imagePath: 'assets/icon/offer_icon.png',
+              isSelected: _activeMainCategory == 'offers',
+              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
+            ),
           ),
         ],
       ),
     );
   }
 
+  // 🔥 دالة بناء الأيقونة تم تصغير الأبعاد فيها
   Widget _buildCategoryImage({required String title, required String imagePath, required bool isSelected, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 75,
-            height: 75,
+            width: 52, // 👈 تم التصغير من 75 إلى 52 ليتسع لـ 6 أيقونات
+            height: 52, // 👈 تم التصغير من 75 إلى 52
             decoration: BoxDecoration(
-              color: isSelected ? Colors.cyan.shade50 : Colors.transparent, // لون سمائي خفيف عند التحديد
-              borderRadius: BorderRadius.circular(20),
-              border: isSelected ? Border.all(color: const Color(0xFF00BCD4), width: 2) : null,
+              color: isSelected ? Colors.cyan.shade50 : Colors.transparent,
+              borderRadius: BorderRadius.circular(14),
+              border: isSelected ? Border.all(color: const Color(0xFF00BCD4), width: 1.5) : null,
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(12),
               child: Image.asset(
                 imagePath,
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => const Icon(Icons.image_not_supported, color: Colors.grey),
+                errorBuilder: (context, error, stackTrace) => const Icon(Icons.image_not_supported, color: Colors.grey, size: 24),
               ),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(
             title,
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, fontWeight: isSelected ? FontWeight.bold : FontWeight.w600, height: 1.2, color: Colors.black87),
+            maxLines: 1, // سطر واحد فقط
+            overflow: TextOverflow.visible,
+            style: TextStyle(
+                fontSize: 10, // 👈 تم التصغير ليتناسب مع الحجم الجديد
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                color: Colors.black87
+            ),
           ),
         ],
       ),
     );
   }
 }
-
-
 
 // =======================================================================
 // --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
@@ -8166,9 +8199,17 @@ class _StickyTopCategoriesDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) {
-    return true; // إعادة البناء عند التغيير
+    return true;
   }
 }
+// =======================================================================
+// --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
+// =======================================================================
+
+
+// =======================================================================
+// --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
+// =======================================================================
 
 
 
@@ -8477,9 +8518,15 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _shouldClearCart = true;
 
   final ScrollController _scrollController = ScrollController();
-  final ScrollController _categoryScrollController = ScrollController(); // لعمل سكرول لشريط الأقسام
+  final ScrollController _categoryScrollController = ScrollController();
   final Map<int, GlobalKey> _categoryKeys = {};
   bool _isAutoScrolling = false;
+
+  // 🔥 دالة ذكية لتحديد ما إذا كان المتجر يدعم نظام الأوزان (سوق، خضروات، قصابة)
+  bool get _isMarketSystem {
+    // إذا كان النوع ليس مطعماً، فهو نظام سوق (خضروات، ماركت، لحوم)
+    return widget.restaurant.storeType != 'restaurant';
+  }
 
   @override
   void initState() {
@@ -8532,7 +8579,7 @@ class _MenuScreenState extends State<MenuScreen> {
         final renderBox = key.currentContext!.findRenderObject() as RenderBox?;
         if (renderBox != null) {
           final position = renderBox.localToGlobal(Offset.zero).dy;
-          if (position > 0 && position <= 250) {
+          if (position > 0 && position <= 300) {
             newActiveId = cat['id'];
             break;
           } else if (position <= 0) {
@@ -8553,35 +8600,26 @@ class _MenuScreenState extends State<MenuScreen> {
     }
   }
 
-  // 🔥 دالة القفز عند الضغط على قسم
-// 🔥 دالة القفز عند الضغط على قسم
   void _scrollToCategory(int id) async {
     setState(() {
       _selectedCategoryId = id;
-      _isAutoScrolling = true; // إيقاف التتبع التلقائي أثناء النزول
+      _isAutoScrolling = true;
     });
 
     _scrollCategoryBarToActive(id);
 
     final key = _categoryKeys[id];
     if (key != null && key.currentContext != null) {
-
-      // 1. الحصول على موقع القسم في الشاشة حالياً
       final RenderBox renderBox = key.currentContext!.findRenderObject() as RenderBox;
       final double yPosition = renderBox.localToGlobal(Offset.zero).dy;
 
-      // 2. حساب مسافة السكرول المطلوبة بدقة:
-      // (موقع السكرول الحالي + موقع القسم في الشاشة - ارتفاع الهيدر الثابت)
-      // وضعنا 150.0 كقيمة لخصم ارتفاع الـ AppBar وشريط الأقسام معاً
-      double targetOffset = _scrollController.offset + yPosition - 150.0;
+      double targetOffset = _scrollController.offset + yPosition - 180.0;
 
-      // 3. حماية السكرول من تجاوز الحدود (الأعلى والأسفل)
       if (targetOffset < 0) targetOffset = 0;
       if (_scrollController.hasClients && targetOffset > _scrollController.position.maxScrollExtent) {
         targetOffset = _scrollController.position.maxScrollExtent;
       }
 
-      // 4. تنفيذ النزول السلس
       _scrollController.animateTo(
         targetOffset,
         duration: const Duration(milliseconds: 500),
@@ -8589,10 +8627,10 @@ class _MenuScreenState extends State<MenuScreen> {
       );
     }
 
-    // الانتظار حتى يكتمل النزول قبل إعادة تفعيل التتبع التلقائي (ScrollSpy)
     await Future.delayed(const Duration(milliseconds: 600));
     _isAutoScrolling = false;
   }
+
   void _scrollCategoryBarToActive(int id) {
     if (!_categoryScrollController.hasClients) return;
 
@@ -8601,7 +8639,7 @@ class _MenuScreenState extends State<MenuScreen> {
       index = _subcategories.indexWhere((c) => c['id'] == id) + 1;
     }
 
-    double offset = index * 80.0;
+    double offset = index * 100.0;
     _categoryScrollController.animateTo(
       offset,
       duration: const Duration(milliseconds: 300),
@@ -8678,7 +8716,6 @@ class _MenuScreenState extends State<MenuScreen> {
         body: CustomScrollView(
           controller: _scrollController,
           slivers: [
-            // 1. الهيدر
             SliverAppBar(
               expandedHeight: 220.0,
               pinned: true,
@@ -8750,13 +8787,11 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
 
-            // 2. شريط الأقسام الأفقي Sticky
             SliverPersistentHeader(
               pinned: true,
               delegate: _StickyCategoryDelegate(
                 child: Container(
                   color: Colors.white,
-                  height: 60,
                   decoration: const BoxDecoration(
                       border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1))
                   ),
@@ -8765,12 +8800,13 @@ class _MenuScreenState extends State<MenuScreen> {
                       : ListView(
                     controller: _categoryScrollController,
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                     children: [
-                      _buildCategoryChip(0, "الكل"),
-                      ..._subcategories.map((cat) => _buildCategoryChip(
+                      _buildCategoryChipWithImage(0, "الكل", "🌐"),
+                      ..._subcategories.map((cat) => _buildCategoryChipWithImage(
                         cat['id'] as int,
                         cat['name'] as String,
+                        cat['icon'] as String? ?? "🍽️",
                       )),
                     ],
                   ),
@@ -8778,7 +8814,6 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
 
-            // 3. عرض المنيو بالكامل باستخدام SliverToBoxAdapter واحد لضمان عمل ScrollSpy بشكل صحيح
             Consumer<CustomerProvider>(
               builder: (context, provider, child) {
                 final menu = provider.menuItems[widget.restaurant.id] ?? [];
@@ -8806,23 +8841,21 @@ class _MenuScreenState extends State<MenuScreen> {
                   return const SliverFillRemaining(child: Center(child: Text("المطعم لا يحتوي على وجبات حالياً")));
                 }
 
-                // 🔥 وضع كل الأقسام في Column واحد ليتم بناء كل العناصر وتجنب مشكلة السكرول
                 List<Widget> columnChildren = [];
 
                 if (_subcategories.isEmpty) {
                   columnChildren.add(Container(key: _categoryKeys[0]));
                   for (var item in menu) {
-                    columnChildren.add(FoodCard(food: item));
+                    // 🔥 تم تمرير _isMarketSystem هنا
+                    columnChildren.add(_buildThemedFoodCard(item));
                   }
                 } else {
-                  // عرض قسم "الكل"
                   columnChildren.add(Container(key: _categoryKeys[0]));
 
                   for (var cat in _subcategories) {
                     final catItems = menu.where((item) => item.allCategoryIds.contains(cat['id'])).toList();
                     if (catItems.isEmpty) continue;
 
-                    // عنوان القسم
                     columnChildren.add(
                       Container(
                         key: _categoryKeys[cat['id']],
@@ -8833,13 +8866,12 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     );
 
-                    // وجبات القسم
                     for (var item in catItems) {
-                      columnChildren.add(FoodCard(food: item));
+                      // 🔥 تم تمرير _isMarketSystem هنا
+                      columnChildren.add(_buildThemedFoodCard(item));
                     }
                   }
 
-                  // الوجبات غير المصنفة
                   final subcatIds = _subcategories.map((c) => c['id']).toList();
                   final uncategorized = menu.where((item) => !item.allCategoryIds.any((id) => subcatIds.contains(id))).toList();
                   if (uncategorized.isNotEmpty) {
@@ -8852,12 +8884,13 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     );
                     for (var item in uncategorized) {
-                      columnChildren.add(FoodCard(food: item));
+                      // 🔥 تم تمرير _isMarketSystem هنا
+                      columnChildren.add(_buildThemedFoodCard(item));
                     }
                   }
                 }
 
-                columnChildren.add(const SizedBox(height: 90)); // مساحة السلة
+                columnChildren.add(const SizedBox(height: 90));
 
                 return SliverToBoxAdapter(
                   child: Column(
@@ -8870,7 +8903,6 @@ class _MenuScreenState extends State<MenuScreen> {
           ],
         ),
 
-        // زر السلة العائم
         floatingActionButton: Consumer<CartProvider>(
           builder: (context, cart, child) {
             if (cart.cartCount == 0) return const SizedBox.shrink();
@@ -8901,31 +8933,73 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
-  Widget _buildCategoryChip(int id, String name) {
+  // 🔥 دالة مساعدة لبناء الـ FoodCard مع تمرير نوع النظام (سوق أم مطعم)
+  Widget _buildThemedFoodCard(FoodItem item) {
+    // نقوم بتغليف استدعاء الـ BottomSheet لضمان تمرير isMarket الصحيح
+    return GestureDetector(
+      onTap: () {
+        if (item.isDeliverable) {
+          showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (context) => FoodItemBottomSheet(
+              foodItem: item,
+              isMarket: _isMarketSystem, // 👈 التعديل هنا: يمرر true إذا لم يكن مطعماً
+            ),
+          );
+        } else {
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailScreen(foodItem: item)));
+        }
+      },
+      child: FoodCard(food: item),
+    );
+  }
+
+  Widget _buildCategoryChipWithImage(int id, String name, String emojiIcon) {
     final isSelected = _selectedCategoryId == id;
+
     return GestureDetector(
       onTap: () => _scrollToCategory(id),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        margin: const EdgeInsets.symmetric(horizontal: 10),
+        margin: const EdgeInsets.symmetric(horizontal: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.transparent,
-          border: Border(
-            bottom: BorderSide(
-              color: isSelected ? Theme.of(context).primaryColor : Colors.transparent,
-              width: 3,
-            ),
-          ),
+          color: isSelected ? Colors.cyan.shade50 : Colors.transparent,
+          borderRadius: BorderRadius.circular(15),
+          border: isSelected ? Border.all(color: const Color(0xFF00BCD4), width: 2) : Border.all(color: Colors.transparent, width: 2),
         ),
-        child: Center(
-          child: Text(
-            name,
-            style: TextStyle(
-                color: isSelected ? Theme.of(context).primaryColor : Colors.grey.shade600,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                fontSize: 15
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.white : Colors.grey.shade100,
+                shape: BoxShape.circle,
+                boxShadow: isSelected ? [const BoxShadow(color: Colors.black12, blurRadius: 4)] : null,
+              ),
+              child: Center(
+                child: Text(
+                  emojiIcon,
+                  style: const TextStyle(fontSize: 24),
+                ),
+              ),
             ),
-          ),
+            const SizedBox(height: 6),
+            Text(
+              name,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isSelected ? Colors.black87 : Colors.grey.shade600,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -8938,12 +9012,15 @@ class _StickyCategoryDelegate extends SliverPersistentHeaderDelegate {
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) => child;
   @override
-  double get maxExtent => 60.0;
+  double get maxExtent => 105.0;
   @override
-  double get minExtent => 60.0;
+  double get minExtent => 105.0;
   @override
   bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) => true;
 }
+
+// ⚠️ تم زيادة الارتفاع (maxExtent و minExtent) ليتسع للصور والنصوص معاً
+
 
 
 
@@ -9353,6 +9430,7 @@ class _CartScreenState extends State<CartScreen> {
                       couponCode: cart.appliedCoupon, position: _capturedPosition,
                       deliveryFee: _deliveryFee, zoneId: currentZoneId,
                       restaurantId: firstRestaurantId, regionId: currentZoneId,
+                      platformMarkupTotal: cart.totalPlatformMarkup, // 👈 1. تم إضافة إجمالي أرباح المنصة هنا
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -9600,6 +9678,7 @@ class _CartScreenState extends State<CartScreen> {
         ]));
   }
 }
+
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
 
