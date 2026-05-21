@@ -105,8 +105,6 @@ dependencies:
   flutter_chat_ui: ^1.6.8
   flutter_chat_types: ^3.6.0
   cupertino_icons: ^1.0.8
-
-  font_awesome_flutter: any
   page_transition: any
   agora_rtc_engine: ^6.3.0       # للصوت
   flutter_callkit_incoming: ^2.0.2 # لشاشة الرنين والاهتزاز
@@ -220,6 +218,7 @@ dependency_overrides:
   web: ^0.5.0
   file_picker: any
   just_audio: any
+  font_awesome_flutter: ^11.0.0
   permission_handler_android: ^12.0.0
   platform: ^3.1.0
   xml: ^6.0.0
