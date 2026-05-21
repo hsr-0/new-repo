@@ -716,24 +716,22 @@ class CustomerProvider with ChangeNotifier {
   // ============================================================
   // 1. جلب بيانات الصفحة الرئيسية (المطاعم) - 🔥 النظام الهجين الذكي
   // ============================================================
+  // 1. جلب بيانات الصفحة الرئيسية (المطاعم) - 🔥 النظام الهجين الذكي
+  // ============================================================
   Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
     _lastLoadedAreaId = areaId;
     _hasError = false;
 
-    // 🔥 أ) محاولة العرض الفوري من الكاش (حتى لو كان قديماً)
+    // 🔥 أ) محاولة العرض الفوري من الكاش
     if (!isRefresh) {
-      bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 2);
-
+      bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 5);
       if (isCacheAvailable) {
         await _loadHomeFromCache(areaId);
-
         if (_allRestaurants.isNotEmpty) {
-          print("🚀 عرض فوري للبيانات من الكاش (مع فحص خلفي للحالة)");
           _isLoadingHome = false;
-          notifyListeners();
-
-          // 🔥 إطلاق الفحص الخلفي السريع (لتحديث حالة الفتح/الإغلاق)
-          _updateStatusesInBackground();
+          notifyListeners(); // عرض الكاش فوراً للسرعة
+          // 🔥 تحديث الحالة في الخلفية وتحديث الواجهة فوراً عند الانتهاء
+          _syncStatusesSilently(areaId);
           return;
         }
       }
@@ -745,6 +743,7 @@ class CustomerProvider with ChangeNotifier {
     }
 
     try {
+      // 🔥 جلب البيانات من الشبكة
       final results = await Future.wait([
         _apiService.getRawDeliverableIds(areaId),
         _apiService.getRawRestaurants(areaId),
@@ -752,10 +751,12 @@ class CustomerProvider with ChangeNotifier {
 
       final deliverableJson = results[0];
       final restaurantsJson = results[1];
-
       _processAndSetHomeData(deliverableJson, restaurantsJson);
-      await _saveHomeToCache(areaId, deliverableJson, restaurantsJson);
 
+      // 🔥 جلب الحالة الفعلية مباشرة ودمجها قبل العرض النهائي (يضمن دقة 100% من أول لحظة)
+      await _fetchAndApplyFreshStatuses();
+
+      await _saveHomeToCache(areaId, deliverableJson, restaurantsJson);
     } catch (e) {
       print("⚠️ فشل تحديث المطاعم من الشبكة: $e");
       if (_homeData.isEmpty) _hasError = true;
@@ -765,62 +766,67 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  // ============================================================
-  // 🔥🔥🔥 دالة الفحص الخلفي الذكية (تحديث الحالة دون إزعاج الزبون) 🔥🔥🔥
-  // ============================================================
-  Future<void> _updateStatusesInBackground() async {
+  // 🔥 دالة جديدة: جلب الحالة ودمجها فوراً مع القائمة
+  Future<void> _fetchAndApplyFreshStatuses() async {
     if (_allRestaurants.isEmpty) return;
-
     try {
-      print("🕵️ [Background Check] فحص حالة المطاعم في الخلفية...");
-
       List<int> ids = _allRestaurants.map((r) => r.id).toList();
       final statuses = await _apiService.checkRestaurantsStatusLight(ids);
-
-      bool somethingChanged = false;
 
       for (var status in statuses) {
         final int id = status['id'];
         final bool serverIsOpen = status['is_open'] == true;
         final String newAutoOpen = status['auto_open'] ?? '09:00';
         final String newAutoClose = status['auto_close'] ?? '22:00';
-
         final index = _allRestaurants.indexWhere((r) => r.id == id);
 
         if (index != -1) {
-          if (_allRestaurants[index].isOpen != serverIsOpen) {
-            print("🔄 تحديث حالة المطعم ${_allRestaurants[index].name}: من ${_allRestaurants[index].isOpen} إلى $serverIsOpen");
-
-            _allRestaurants[index] = Restaurant(
-              id: _allRestaurants[index].id,
-              name: _allRestaurants[index].name,
-              imageUrl: _allRestaurants[index].imageUrl,
-              isDeliverable: _allRestaurants[index].isDeliverable,
-              averageRating: _allRestaurants[index].averageRating,
-              ratingCount: _allRestaurants[index].ratingCount,
-              latitude: _allRestaurants[index].latitude,
-              longitude: _allRestaurants[index].longitude,
-              isOpen: serverIsOpen,
-              autoOpenTime: newAutoOpen,
-              autoCloseTime: newAutoClose,
-              storeType: _allRestaurants[index].storeType, // تمرير النوع
-            );
-
-            somethingChanged = true;
-          }
+          // استبدال الكائن بالكامل لضمان تفاعل Flutter مع التغيير
+          _allRestaurants[index] = Restaurant(
+            id: _allRestaurants[index].id,
+            name: _allRestaurants[index].name,
+            imageUrl: _allRestaurants[index].imageUrl,
+            isDeliverable: _allRestaurants[index].isDeliverable,
+            averageRating: _allRestaurants[index].averageRating,
+            ratingCount: _allRestaurants[index].ratingCount,
+            latitude: _allRestaurants[index].latitude,
+            longitude: _allRestaurants[index].longitude,
+            isOpen: serverIsOpen,
+            autoOpenTime: newAutoOpen,
+            autoCloseTime: newAutoClose,
+            storeType: _allRestaurants[index].storeType,
+          );
         }
       }
-
-      if (somethingChanged) {
-        _homeData['restaurants'] = _allRestaurants;
-        notifyListeners();
-      }
-
+      _homeData['restaurants'] = _allRestaurants;
     } catch (e) {
-      print("⚠️ فشل الفحص الخلفي (غير مؤثر على العرض): $e");
+      print("⚠️ فشل جلب الحالة المباشرة: $e");
     }
   }
 
+  // 🔥 دالة الخلفية المحسنة: تحديث صامت + تحديث الكاش + إجبار الواجهة على الرسم
+  Future<void> _syncStatusesSilently(int areaId) async {
+    await _fetchAndApplyFreshStatuses();
+
+    // 🔥 إجبار الواجهة على التحديث فوراً
+    notifyListeners();
+
+    // 🔥 تحديث الكاش بالحالة الجديدة لضمان ظهورها صحيحاً في المرات القادمة
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // نحفظ القائمة المحدثة كـ JSON بسيط للكاش
+      final updatedListJson = json.encode(_allRestaurants.map((r) => {
+        'id': r.id, 'name': r.name, 'imageUrl': r.imageUrl,
+        'isDeliverable': r.isDeliverable, 'isOpen': r.isOpen,
+        'autoOpenTime': r.autoOpenTime, 'autoCloseTime': r.autoCloseTime,
+        'storeType': r.storeType, 'latitude': r.latitude, 'longitude': r.longitude,
+        'averageRating': r.averageRating, 'ratingCount': r.ratingCount
+      }).toList());
+
+      await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_list', updatedListJson);
+      await prefs.setInt('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+  }
   // ============================================================
   // 🔥 [NEW] دالة تحديث حالة مطعم واحد (تستخدم للفحص الفوري)
   // ============================================================
@@ -1158,6 +1164,7 @@ class DashboardProvider with ChangeNotifier {
 
 
 
+
 class DeliveryConfigProvider with ChangeNotifier {
   Map<String, dynamic>? _cachedConfig;
   bool _isLoading = false;
@@ -1204,7 +1211,7 @@ class DeliveryConfigProvider with ChangeNotifier {
     }
   }
 
-  // 🔥 الدالة الجديدة: تحسب السعر وتطبع كيف تم الحساب في الكونسول
+  // 🔥 الدالة الأساسية: تحسب السعر محلياً وتطبع خطوات الحساب في الكونسول
   Map<String, dynamic> calculateFeeDetails({
     required double userLat,
     required double userLng,
@@ -1221,7 +1228,7 @@ class DeliveryConfigProvider with ChangeNotifier {
     // 1. تحديد المنطقة (الكوت 84 أو الصويرة 85)
     bool isKut = (areaId == 84);
     bool isSuwaira = (areaId == 85);
-    double fallbackFee = isSuwaira ? 1500.0 : (isKut ? 1500.0 : 1000.0);
+    double fallbackFee = isSuwaira ? 1000.0 : (isKut ? 1500.0 : 1000.0);
 
     print("📍 حالة المنطقة: هل هي الكوت؟ $isKut | هل هي الصويرة؟ $isSuwaira");
 
@@ -1320,17 +1327,24 @@ class DeliveryConfigProvider with ChangeNotifier {
         return {'fee': finalPrice, 'message': '📏 تسعيرة الكوت الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
 
       } else if (isSuwaira) {
-        print("🔢 [Calc Logic] تطبيق تسعيرة الصويرة...");
-        if (distanceKm <= 2.5) {
-          finalPrice = 1500.0;
-        } else if (distanceKm <= 5.0) {
-          finalPrice = 2000.0;
+        // ✨ تسعيرة الصويرة الجديدة (أول 2 كم بـ 1000، ثم 400 لكل كم إضافي)
+        print("🔢 [Calc Logic] تطبيق تسعيرة الصويرة الجديدة (أساس 2 كم)...");
+        if (distanceKm <= 2.0) {
+          finalPrice = 1000.0;
         } else {
-          finalPrice = 2500.0;
+          double extraDistance = distanceKm - 2.0;
+          double rawPrice = 900.0 + (extraDistance * 350.0);
+
+          // التقريب لأقرب 250 دينار (Round to Nearest) مطابق للسيرفر تماماً
+          finalPrice = (rawPrice / 250.0).round() * 250.0;
+
+          // ضمان الحدود الدنيا والعليا
+          if (finalPrice < 1000.0) finalPrice = 1000.0;
+          if (finalPrice > 7000.0) finalPrice = 7000.0;
         }
         print("✅ [Calc Success] السعر النهائي للصويرة: $finalPrice د.ع");
         print("==================================================");
-        return {'fee': finalPrice, 'message': '📏 تسعيرة الصويرة (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
+        return {'fee': finalPrice, 'message': '📏 تسعيرة الصويرة الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
 
       } else {
         print("🔢 [Calc Logic] تطبيق تسعيرة الطوارئ للمسافات (خارج المناطق المرسومة)...");
@@ -1380,7 +1394,6 @@ class DeliveryConfigProvider with ChangeNotifier {
 
   double _deg2rad(double deg) => deg * (3.141592653589793 / 180.0);
 }
-
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -1668,12 +1681,23 @@ class Restaurant {
       }
     }
 
+    // 🛡️🔥 استخراج الصورة بهيكل دفاعي يقبل جميع الصيغ (سيرفر، كاش، نصوص مباشرة)
+    // يمنع اختفاء الصورة بعد الخروج والدخول أو عند تحديث الكاش
+    String imageUrl = 'https://via.placeholder.com/300';
+    if (json['image'] != null) {
+      if (json['image'] is Map && json['image']['src'] != null) {
+        imageUrl = json['image']['src'].toString();
+      } else if (json['image'] is String && json['image'].toString().isNotEmpty) {
+        imageUrl = json['image'].toString();
+      }
+    } else if (json['imageUrl'] != null && json['imageUrl'].toString().isNotEmpty) {
+      imageUrl = json['imageUrl'].toString();
+    }
+
     return Restaurant(
       id: json['id'] ?? 0,
       name: json['name'] ?? 'اسم غير معروف',
-      imageUrl: json['image'] != null && json['image']['src'] != false
-          ? json['image']['src']
-          : 'https://via.placeholder.com/300',
+      imageUrl: imageUrl, // 👈 استخدام الرابط الموحد والآمن
       averageRating: avgRating,
       ratingCount: rCount,
       isOpen: finalIsOpenStatus,
@@ -1683,8 +1707,7 @@ class Restaurant {
       longitude: lng,
       storeType: sType, // تعيين النوع بنجاح
     );
-  }
-}
+  }}
 class FoodItem {
   final int id;
   final String name;
@@ -4549,7 +4572,9 @@ class NetworkErrorWidget extends StatelessWidget {
 
 class FoodCard extends StatelessWidget {
   final FoodItem food;
-  const FoodCard({super.key, required this.food});
+  final bool isMarket; // 🔥 إضافة المتغير لمعرفة نظام الأوزان
+
+  const FoodCard({super.key, required this.food, this.isMarket = false}); // تمريره في المُنشئ
 
   @override
   Widget build(BuildContext context) {
@@ -4562,7 +4587,10 @@ class FoodCard extends StatelessWidget {
             context: context,
             isScrollControlled: true,
             backgroundColor: Colors.transparent,
-            builder: (context) => FoodItemBottomSheet(foodItem: food),
+            builder: (context) => FoodItemBottomSheet(
+                foodItem: food,
+                isMarket: isMarket // 🔥 تمرير القيمة هنا عند النقر على البطاقة
+            ),
           );
         } else {
           Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailScreen(foodItem: food)));
@@ -4571,23 +4599,22 @@ class FoodCard extends StatelessWidget {
       child: Opacity(
         opacity: canOrder ? 1.0 : 0.5,
         child: Directionality(
-          textDirection: TextDirection.rtl, // 🔥 إجبار الواجهة على أن تكون عربية (يمين لليسار)
+          textDirection: TextDirection.rtl,
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 15),
             padding: const EdgeInsets.symmetric(vertical: 12),
             decoration: const BoxDecoration(
               color: Colors.white,
-              border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)), // خط سفلي فاصل
+              border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 1. قسم النصوص (على اليمين)
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.only(left: 10), // مسافة بين النص والصورة
+                    padding: const EdgeInsets.only(left: 10),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start, // محاذاة لليمين
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           food.name,
@@ -4614,12 +4641,11 @@ class FoodCard extends StatelessWidget {
                   ),
                 ),
 
-                // 2. قسم الصورة وزر الإضافة (على اليسار)
                 Stack(
-                  alignment: Alignment.bottomRight, // 🔥 زر الإضافة في الزاوية
+                  alignment: Alignment.bottomRight,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 10, right: 10), // مساحة لزر الزائد
+                      padding: const EdgeInsets.only(bottom: 10, right: 10),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(12),
                         child: CachedNetworkImage(
@@ -4649,7 +4675,15 @@ class FoodCard extends StatelessWidget {
                       left: 0,
                       child: InkWell(
                         onTap: canOrder
-                            ? () => showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.transparent, builder: (context) => FoodItemBottomSheet(foodItem: food))
+                            ? () => showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            builder: (context) => FoodItemBottomSheet(
+                                foodItem: food,
+                                isMarket: isMarket // 🔥 تمرير القيمة هنا عند النقر على زر (+)
+                            )
+                        )
                             : null,
                         child: Container(
                           decoration: BoxDecoration(
@@ -7806,6 +7840,10 @@ class ModernVerticalRestaurantCard extends StatelessWidget {
 // =======================================================================
 // --- شاشة الزبون الرئيسية (HomeScreen) المحدثة مع 6 أيقونات ---
 // =======================================================================
+
+// =======================================================================
+// - شاشة الزبون الرئيسية (HomeScreen) المحدثة مع Shimmer Loading -
+// =======================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -7911,9 +7949,9 @@ class HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
-                      child: _buildTopCategories(), // 👈 الدالة المعدلة
+                      child: _buildTopCategories(),
                     ),
-                    height: 95.0, // 🔥 تم تقليل الارتفاع ليتناسب مع الأيقونات الصغيرة
+                    height: 95.0,
                   ),
                 ),
 
@@ -7986,8 +8024,9 @@ class HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
 
+                        // 🔥 تم استبدال دائرة التحميل بـ Shimmer Skeleton عصري
                         if (provider.isLoadingHome && filteredStores.isEmpty)
-                          const Center(child: Padding(padding: EdgeInsets.all(30), child: CircularProgressIndicator()))
+                          _buildHomeShimmer()
                         else if (filteredStores.isEmpty)
                           const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد متاجر مطابقة في هذا القسم.")))
                         else
@@ -8017,6 +8056,32 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // 🔥 ودجت الهيكل العظمي (Shimmer) للصفحة الرئيسية
+  Widget _buildHomeShimmer() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: GridView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        physics: const NeverScrollableScrollPhysics(),
+        shrinkWrap: true,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          childAspectRatio: 0.75,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+        ),
+        itemCount: 6, // عدد بطاقات وهمية تحاكي الشبكة الحقيقية
+        itemBuilder: (_, __) => Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+          ),
+        ),
+      ),
+    );
+  }
+
   String _getCategoryTitle(String category) {
     switch (category) {
       case 'market': return "أسواق المسواك";
@@ -8034,11 +8099,17 @@ class HomeScreenState extends State<HomeScreen> {
       elevation: 0,
       leading: SecretAdminButton(
         icon: Icons.admin_panel_settings,
-        onUnlock: () {
+        onTap: () {
           final auth = Provider.of<AuthProvider>(context, listen: false);
-          if (!auth.isLoggedIn) {
+          if (auth.isLoggedIn && auth.userRole == 'leader') {
+            Navigator.of(context).push(MaterialPageRoute(builder: (_) => RegionDashboardScreen(token: auth.token!, areaId: 0, areaName: "منطقتك")));
+          }
+        },
+        onLongPress: () {
+          final auth = Provider.of<AuthProvider>(context, listen: false);
+          if (!auth.isLoggedIn || auth.userRole != 'leader') {
             Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamLeaderLoginScreen()));
-          } else if (auth.userRole == 'leader') {
+          } else {
             Navigator.of(context).push(MaterialPageRoute(builder: (_) => RegionDashboardScreen(token: auth.token!, areaId: 0, areaName: "منطقتك")));
           }
         },
@@ -8060,11 +8131,17 @@ class HomeScreenState extends State<HomeScreen> {
       actions: [
         SecretAdminButton(
           icon: Icons.store,
-          onUnlock: () {
+          onTap: () {
             final auth = Provider.of<AuthProvider>(context, listen: false);
-            if (!auth.isLoggedIn) {
+            if (auth.isLoggedIn && auth.userRole == 'owner') {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantDashboardScreen()));
+            }
+          },
+          onLongPress: () {
+            final auth = Provider.of<AuthProvider>(context, listen: false);
+            if (!auth.isLoggedIn || auth.userRole != 'owner') {
               Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantLoginScreen()));
-            } else if (auth.userRole == 'owner') {
+            } else {
               Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RestaurantDashboardScreen()));
             }
           },
@@ -8095,12 +8172,11 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🔥 بناء الأقسام: تم تصغير الأيقونات وتوزيعها بمسافات متساوية لظهور 6 أيقونات معاً
   Widget _buildTopCategories() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 5.0),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween, // 👈 يوزع الـ 6 أيقونات بمسافات متساوية
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
@@ -8120,8 +8196,6 @@ class HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-
-
           Expanded(
             child: _buildCategoryImage(
               title: "عروض",
@@ -8130,12 +8204,35 @@ class HomeScreenState extends State<HomeScreen> {
               onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
             ),
           ),
+
+          Expanded(
+            child: _buildCategoryImage(
+              title: "مرطبات وحلويات ",
+              imagePath: 'assets/icon/grocery_icon.png',
+              isSelected: _activeMainCategory == 'grocery',
+              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'grocery' ? 'all' : 'grocery'),
+            ),
+          ),
+          Expanded(
+            child: _buildCategoryImage(
+              title: "دجاج ولحوم ",
+              imagePath: 'assets/icon/meat_icon.png',
+              isSelected: _activeMainCategory == 'meat',
+              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'meat' ? 'all' : 'meat'),
+            ),
+          ),
+          Expanded(
+            child: _buildCategoryImage(
+              title: "خبز وافران ",
+              imagePath: 'assets/icon/pastry_icon.png',
+              isSelected: _activeMainCategory == 'pastry',
+              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'pastry' ? 'all' : 'pastry'),
+            ),
+          ),
         ],
       ),
     );
   }
-
-  // 🔥 دالة بناء الأيقونة تم تصغير الأبعاد فيها
   Widget _buildCategoryImage({required String title, required String imagePath, required bool isSelected, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
@@ -8143,8 +8240,8 @@ class HomeScreenState extends State<HomeScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 52, // 👈 تم التصغير من 75 إلى 52 ليتسع لـ 6 أيقونات
-            height: 52, // 👈 تم التصغير من 75 إلى 52
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
               color: isSelected ? Colors.cyan.shade50 : Colors.transparent,
               borderRadius: BorderRadius.circular(14),
@@ -8163,10 +8260,10 @@ class HomeScreenState extends State<HomeScreen> {
           Text(
             title,
             textAlign: TextAlign.center,
-            maxLines: 1, // سطر واحد فقط
+            maxLines: 1,
             overflow: TextOverflow.visible,
             style: TextStyle(
-                fontSize: 10, // 👈 تم التصغير ليتناسب مع الحجم الجديد
+                fontSize: 10,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
                 color: Colors.black87
             ),
@@ -8176,7 +8273,6 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 }
-
 // =======================================================================
 // --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
 // =======================================================================
@@ -8522,9 +8618,8 @@ class _MenuScreenState extends State<MenuScreen> {
   final Map<int, GlobalKey> _categoryKeys = {};
   bool _isAutoScrolling = false;
 
-  // 🔥 دالة ذكية لتحديد ما إذا كان المتجر يدعم نظام الأوزان (سوق، خضروات، قصابة)
+  // 🔥 دالة ذكية لتحديد ما إذا كان المتجر يدعم نظام الأوزان
   bool get _isMarketSystem {
-    // إذا كان النوع ليس مطعماً، فهو نظام سوق (خضروات، ماركت، لحوم)
     return widget.restaurant.storeType != 'restaurant';
   }
 
@@ -8547,24 +8642,42 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _initData() async {
     final provider = Provider.of<CustomerProvider>(context, listen: false);
+
+    // المنيو يتم كيشته تلقائياً داخل الـ Provider
     await provider.fetchMenuForRestaurant(widget.restaurant.id);
     _checkRestaurantStatusNow();
 
+    // 🔥 نظام التخزين المؤقت (الكاش) الخاص بالأقسام لعرضها فوراً
+    final prefs = await SharedPreferences.getInstance();
+    final cacheKey = 'cats_${widget.restaurant.id}';
+    final cachedCats = prefs.getString(cacheKey);
+
+    if (cachedCats != null) {
+      if (mounted) {
+        setState(() {
+          _subcategories = json.decode(cachedCats);
+          _isLoadingCats = false; // نوقف التحميل إذا وجدنا كاش
+          _categoryKeys[0] = GlobalKey();
+          for (var cat in _subcategories) _categoryKeys[cat['id']] = GlobalKey();
+        });
+      }
+    }
+
+    // جلب التحديثات الجديدة من السيرفر بالخلفية
     try {
       final cats = await ApiService().getSubcategories(widget.restaurant.id);
+      prefs.setString(cacheKey, json.encode(cats)); // تحديث الكاش
       if (mounted) {
         setState(() {
           _subcategories = cats;
           _isLoadingCats = false;
+          _categoryKeys.clear();
+          _categoryKeys[0] = GlobalKey();
+          for (var cat in _subcategories) _categoryKeys[cat['id']] = GlobalKey();
         });
-
-        _categoryKeys[0] = GlobalKey();
-        for (var cat in _subcategories) {
-          _categoryKeys[cat['id']] = GlobalKey();
-        }
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoadingCats = false);
+      if (mounted && cachedCats == null) setState(() => _isLoadingCats = false);
     }
   }
 
@@ -8613,7 +8726,8 @@ class _MenuScreenState extends State<MenuScreen> {
       final RenderBox renderBox = key.currentContext!.findRenderObject() as RenderBox;
       final double yPosition = renderBox.localToGlobal(Offset.zero).dy;
 
-      double targetOffset = _scrollController.offset + yPosition - 180.0;
+      // خصم مساحة الهيدر + شريط الأقسام
+      double targetOffset = _scrollController.offset + yPosition - 140.0;
 
       if (targetOffset < 0) targetOffset = 0;
       if (_scrollController.hasClients && targetOffset > _scrollController.position.maxScrollExtent) {
@@ -8633,13 +8747,8 @@ class _MenuScreenState extends State<MenuScreen> {
 
   void _scrollCategoryBarToActive(int id) {
     if (!_categoryScrollController.hasClients) return;
-
-    int index = 0;
-    if (id != 0) {
-      index = _subcategories.indexWhere((c) => c['id'] == id) + 1;
-    }
-
-    double offset = index * 100.0;
+    int index = id != 0 ? _subcategories.indexWhere((c) => c['id'] == id) + 1 : 0;
+    double offset = index * 80.0;
     _categoryScrollController.animateTo(
       offset,
       duration: const Duration(milliseconds: 300),
@@ -8673,7 +8782,6 @@ class _MenuScreenState extends State<MenuScreen> {
           ],
         ),
       );
-
       if (exit == true) {
         cart.clearCart();
         return true;
@@ -8707,6 +8815,35 @@ class _MenuScreenState extends State<MenuScreen> {
     } catch (e) {}
   }
 
+  // 🔥 ودجت تأثير الهيكل (Shimmer) للمنيو بدلاً من الدوار
+  Widget _buildMenuShimmer() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(height: 20, width: double.infinity, color: Colors.white),
+                  const SizedBox(height: 6),
+                  Container(height: 12, width: 100, color: Colors.white),
+                  const SizedBox(height: 12),
+                  Container(height: 20, width: 60, color: Colors.white),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(width: 110, height: 110, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12))),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -8716,6 +8853,7 @@ class _MenuScreenState extends State<MenuScreen> {
         body: CustomScrollView(
           controller: _scrollController,
           slivers: [
+            // 1. الهيدر (صورة المطعم العلوية)
             SliverAppBar(
               expandedHeight: 220.0,
               pinned: true,
@@ -8787,6 +8925,7 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
 
+            // 2. شريط الأقسام الأفقي (نصي فقط بدون صور)
             SliverPersistentHeader(
               pinned: true,
               delegate: _StickyCategoryDelegate(
@@ -8795,31 +8934,45 @@ class _MenuScreenState extends State<MenuScreen> {
                   decoration: const BoxDecoration(
                       border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1))
                   ),
-                  child: _isLoadingCats
-                      ? const Center(child: CircularProgressIndicator())
+                  child: _isLoadingCats && _subcategories.isEmpty
+                  // 🔥 هيكل التحميل للأقسام بدلاً من الدوار
+                      ? ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: 5,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    itemBuilder: (ctx, i) => Shimmer.fromColors(
+                      baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!,
+                      child: Container(
+                        width: 80, margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                      ),
+                    ),
+                  )
                       : ListView(
                     controller: _categoryScrollController,
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                     children: [
-                      _buildCategoryChipWithImage(0, "الكل", "🌐"),
-                      ..._subcategories.map((cat) => _buildCategoryChipWithImage(
-                        cat['id'] as int,
-                        cat['name'] as String,
-                        cat['icon'] as String? ?? "🍽️",
-                      )),
+                      _buildCategoryChip(0, "الكل"),
+                      ..._subcategories.map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String)),
                     ],
                   ),
                 ),
               ),
             ),
 
+            // 3. عرض المنيو بالكامل
             Consumer<CustomerProvider>(
               builder: (context, provider, child) {
                 final menu = provider.menuItems[widget.restaurant.id] ?? [];
 
+                // 🔥 هيكل التحميل للوجبات بدلاً من الدوار
                 if (provider.isLoadingMenu && menu.isEmpty) {
-                  return const SliverFillRemaining(child: Center(child: CircularProgressIndicator()));
+                  return SliverToBoxAdapter(
+                    child: Column(
+                      children: List.generate(5, (index) => _buildMenuShimmer()),
+                    ),
+                  );
                 }
 
                 if (menu.isEmpty) {
@@ -8846,8 +8999,8 @@ class _MenuScreenState extends State<MenuScreen> {
                 if (_subcategories.isEmpty) {
                   columnChildren.add(Container(key: _categoryKeys[0]));
                   for (var item in menu) {
-                    // 🔥 تم تمرير _isMarketSystem هنا
-                    columnChildren.add(_buildThemedFoodCard(item));
+                    // 🔥 تمرير isMarket هنا
+                    columnChildren.add(FoodCard(food: item, isMarket: _isMarketSystem));
                   }
                 } else {
                   columnChildren.add(Container(key: _categoryKeys[0]));
@@ -8867,8 +9020,7 @@ class _MenuScreenState extends State<MenuScreen> {
                     );
 
                     for (var item in catItems) {
-                      // 🔥 تم تمرير _isMarketSystem هنا
-                      columnChildren.add(_buildThemedFoodCard(item));
+                      columnChildren.add(FoodCard(food: item, isMarket: _isMarketSystem));
                     }
                   }
 
@@ -8884,8 +9036,7 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     );
                     for (var item in uncategorized) {
-                      // 🔥 تم تمرير _isMarketSystem هنا
-                      columnChildren.add(_buildThemedFoodCard(item));
+                      columnChildren.add(FoodCard(food: item, isMarket: _isMarketSystem));
                     }
                   }
                 }
@@ -8933,88 +9084,45 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
-  // 🔥 دالة مساعدة لبناء الـ FoodCard مع تمرير نوع النظام (سوق أم مطعم)
-  Widget _buildThemedFoodCard(FoodItem item) {
-    // نقوم بتغليف استدعاء الـ BottomSheet لضمان تمرير isMarket الصحيح
-    return GestureDetector(
-      onTap: () {
-        if (item.isDeliverable) {
-          showModalBottomSheet(
-            context: context,
-            isScrollControlled: true,
-            backgroundColor: Colors.transparent,
-            builder: (context) => FoodItemBottomSheet(
-              foodItem: item,
-              isMarket: _isMarketSystem, // 👈 التعديل هنا: يمرر true إذا لم يكن مطعماً
-            ),
-          );
-        } else {
-          Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailScreen(foodItem: item)));
-        }
-      },
-      child: FoodCard(food: item),
-    );
-  }
-
-  Widget _buildCategoryChipWithImage(int id, String name, String emojiIcon) {
+  // 🔥 شريط الأقسام الجديد (نصوص فقط ومظهر أنيق)
+  Widget _buildCategoryChip(int id, String name) {
     final isSelected = _selectedCategoryId == id;
 
     return GestureDetector(
       onTap: () => _scrollToCategory(id),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        margin: const EdgeInsets.symmetric(horizontal: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? Colors.cyan.shade50 : Colors.transparent,
-          borderRadius: BorderRadius.circular(15),
-          border: isSelected ? Border.all(color: const Color(0xFF00BCD4), width: 2) : Border.all(color: Colors.transparent, width: 2),
+          color: isSelected ? Theme.of(context).primaryColor : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: isSelected ? Theme.of(context).primaryColor : Colors.transparent),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.white : Colors.grey.shade100,
-                shape: BoxShape.circle,
-                boxShadow: isSelected ? [const BoxShadow(color: Colors.black12, blurRadius: 4)] : null,
-              ),
-              child: Center(
-                child: Text(
-                  emojiIcon,
-                  style: const TextStyle(fontSize: 24),
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              name,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: isSelected ? Colors.black87 : Colors.grey.shade600,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                fontSize: 12,
-              ),
-            ),
-          ],
+        child: Text(
+          name,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.black87,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+            fontSize: 14,
+          ),
         ),
       ),
     );
   }
 }
 
+// 🔥 تم تقليل الارتفاع لأننا أزلنا الصور وأبقينا النصوص فقط
 class _StickyCategoryDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
   _StickyCategoryDelegate({required this.child});
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) => child;
   @override
-  double get maxExtent => 105.0;
+  double get maxExtent => 55.0; // ارتفاع مناسب للنصوص
   @override
-  double get minExtent => 105.0;
+  double get minExtent => 55.0; // ارتفاع مناسب للنصوص
   @override
   bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) => true;
 }
@@ -9430,7 +9538,7 @@ class _CartScreenState extends State<CartScreen> {
                       couponCode: cart.appliedCoupon, position: _capturedPosition,
                       deliveryFee: _deliveryFee, zoneId: currentZoneId,
                       restaurantId: firstRestaurantId, regionId: currentZoneId,
-                      platformMarkupTotal: cart.totalPlatformMarkup, // 👈 1. تم إضافة إجمالي أرباح المنصة هنا
+                      platformMarkupTotal: cart.totalPlatformMarkup,
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -9442,23 +9550,21 @@ class _CartScreenState extends State<CartScreen> {
 
                     Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
 
+                    // 🔥 الانتقال المباشر والفوري لشاشة التتبع 🔥
                     if (cartScreenContext.mounted) {
-                      showDialog(
-                          context: cartScreenContext,
-                          barrierDismissible: false,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text("تم بنجاح! 🎉"),
-                            content: const Text("تم استلام طلبك. يمكنك متابعة حالته الآن في صفحة طلباتي."),
-                            actions: [
-                              ElevatedButton(
-                                onPressed: () {
-                                  Navigator.pop(ctx);
-                                  Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
-                                },
-                                child: const Text("متابعة الطلب"),
-                              )
-                            ],
-                          ));
+                      // إشعار صغير يختفي تلقائياً
+                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(
+                          const SnackBar(content: Text("تم استلام طلبك بنجاح! 🎉"), backgroundColor: Colors.green)
+                      );
+
+                      // تغيير التبويب في الخلفية إلى "طلباتي"
+                      Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
+
+                      // فتح شاشة التتبع مباشرة
+                      Navigator.push(
+                          cartScreenContext,
+                          MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder))
+                      );
                     }
                   } catch (e) {
                     if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
@@ -12564,13 +12670,19 @@ class _RatingsDashboardScreenState extends State<RatingsDashboardScreen> {
 
 
 // =======================================================================
-// --- الزر السري لدخول الإدارة (شبه شفاف + ضغط 3 ثواني) ---
+// --- الزر السري لدخول الإدارة (النسخة الذكية المطورة) ---
 // =======================================================================
 class SecretAdminButton extends StatefulWidget {
   final IconData icon;
-  final VoidCallback onUnlock;
+  final VoidCallback onLongPress; // للضغط المطول (3 ثواني) لتسجيل الدخول
+  final VoidCallback onTap;       // للنقرة العادية (للدخول المباشر إذا كان مسجلاً)
 
-  const SecretAdminButton({super.key, required this.icon, required this.onUnlock});
+  const SecretAdminButton({
+    super.key,
+    required this.icon,
+    required this.onLongPress,
+    required this.onTap
+  });
 
   @override
   State<SecretAdminButton> createState() => _SecretAdminButtonState();
@@ -12582,9 +12694,8 @@ class _SecretAdminButtonState extends State<SecretAdminButton> {
   void _startTimer() {
     // تفعيل المؤقت لمدة 3 ثواني
     _timer = Timer(const Duration(seconds: 3), () {
-      // بعد 3 ثواني، اهتزاز خفيف للموبايل وتنفيذ الدخول
       HapticFeedback.heavyImpact();
-      widget.onUnlock();
+      widget.onLongPress();
     });
   }
 
@@ -12595,11 +12706,15 @@ class _SecretAdminButtonState extends State<SecretAdminButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      onTap: () {
+        _cancelTimer();
+        widget.onTap(); // تنفيذ النقرة العادية فوراً
+      },
       onTapDown: (_) => _startTimer(),
       onTapUp: (_) => _cancelTimer(),
       onTapCancel: () => _cancelTimer(),
       child: Opacity(
-        opacity: 0.2, // شبه شفاف (مخفي تقريباً)
+        opacity: 0.3, // شبه شفاف
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Icon(widget.icon, color: Colors.black, size: 24),
