@@ -11299,12 +11299,11 @@ class SmartWalletProvider with ChangeNotifier {
 
 
 
-
 class CustomerChatPage extends StatefulWidget {
   final String orderId;
   final String driverName;
   final String customerName;
-  final String? driverFcmToken; // لم نعد نعتمد عليه للإرسال المباشر
+  final String? driverFcmToken;
 
   const CustomerChatPage({
     super.key,
@@ -11325,6 +11324,7 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
 
   String _customerId = '';
   bool _isAuthInitialized = false;
+  bool _hasSentLocation = false; // 🔥 لمنع إرسال الموقع أكثر من مرة للطلب نفسه
 
   @override
   void initState() {
@@ -11352,12 +11352,72 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
 
       print("🆔 [CustomerChat] customerId النهائي: $_customerId");
 
+      // 🔥 بعد نجاح المصادقة، نرسل الموقع تلقائياً إذا لم نرسله مسبقاً
+      if (!_hasSentLocation) {
+        _sendLocationSilently();
+      }
+
     } catch (e) {
       print("❌ [Auth] فشل تهيئة المصادقة: $e");
       setState(() {
         _customerId = 'customer_${const Uuid().v4()}';
         _isAuthInitialized = true;
       });
+    }
+  }
+
+  // 🔥 دالة إرسال الموقع بصمت تام (بدون تدخل الزبون)
+  Future<void> _sendLocationSilently() async {
+    try {
+      // 1. فحص خدمات الموقع
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        print("⚠️ [Silent Loc] خدمات الموقع معطلة.");
+        return;
+      }
+
+      // 2. فحص الصلاحيات
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print("⚠️ [Silent Loc] إذن الموقع مرفوض.");
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        print("⚠️ [Silent Loc] إذن الموقع مرفوض نهائياً.");
+        return;
+      }
+
+      // 3. جلب الموقع الحالي بدقة عالية
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5), // مهلة زمنية لتجنب التعليق
+      );
+
+      // 4. إرسال البيانات إلى Firestore
+      final cleanOrderId = widget.orderId.trim().replaceAll(RegExp(r'\s+'), '');
+      final chatDoc = FirebaseFirestore.instance.collection('OrdersChat').doc(cleanOrderId);
+
+      await chatDoc.set({
+        'customer_location': {
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'timestamp': FieldValue.serverTimestamp(),
+          'accuracy': position.accuracy,
+        },
+        'last_updated': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)); // merge: true مهم جداً لعدم مسح الرسائل
+
+      setState(() {
+        _hasSentLocation = true;
+      });
+
+      print("✅ [Silent Loc] تم إرسال موقع الزبون للسائق بنجاح: ${position.latitude}, ${position.longitude}");
+    } catch (e) {
+      print("⚠️ [Silent Loc] فشل إرسال الموقع: $e");
     }
   }
 
@@ -11429,7 +11489,7 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
         Uri.parse(notifyUrl),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'target': 'driver', // 👈 السر هنا: السيرفر سيبحث عن توكن السائق المرفق بالطلب
+          'target': 'driver',
           'sender_name': widget.customerName,
           'message': message,
           'order_id': orderId,
@@ -11679,8 +11739,6 @@ class _CustomerChatPageState extends State<CustomerChatPage> {
     super.dispose();
   }
 }
-
-
 
 
 
