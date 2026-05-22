@@ -2820,8 +2820,10 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
   int quantity = 1;
   double _currentWeight = 1.0;
   final TextEditingController _noteController = TextEditingController();
-
   final List<double> _quickWeights = [1.5, 1.0, 0.5, 0.25];
+
+  // 🔥 1. إضافة متغير الحماية من النقر المزدوج
+  bool _isAdding = false;
 
   @override
   void dispose() {
@@ -2897,7 +2899,7 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
             ),
             const SizedBox(height: 20),
 
-            // 🔥 أزرار اختيار الوزن (للمسواك فقط) 🔥
+            // 🔥 أزرار اختيار الوزن (للمسواك فقط)
             if (widget.isMarket) ...[
               const Text("اختر الوزن:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               const SizedBox(height: 10),
@@ -2918,7 +2920,7 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
               ),
               const SizedBox(height: 10),
               GestureDetector(
-                onTap: _showCustomWeightDialog,
+                onTap: _isAdding ? null : _showCustomWeightDialog, // تعطيل النقر أثناء الإضافة
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   decoration: BoxDecoration(
@@ -2942,6 +2944,7 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
             // 📝 حقل الملاحظات (للجميع)
             TextField(
               controller: _noteController,
+              enabled: !_isAdding, // تعطيل الكتابة أثناء الإضافة
               decoration: InputDecoration(
                 hintText: widget.isMarket ? 'ملاحظات (مثال: طماطة قوية، موز أصفر...)' : 'ملاحظات إضافية (بدون بصل، صوص إضافي...)',
                 prefixIcon: const Icon(Icons.edit_note, color: Colors.grey),
@@ -2955,26 +2958,46 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                IconButton(onPressed: quantity > 1 ? () => setState(() => quantity--) : null, icon: const Icon(Icons.remove_circle_outline, size: 35), color: quantity > 1 ? Theme.of(context).primaryColor : Colors.grey),
+                IconButton(
+                    onPressed: (_isAdding || quantity <= 1) ? null : () => setState(() => quantity--),
+                    icon: const Icon(Icons.remove_circle_outline, size: 35),
+                    color: (_isAdding || quantity <= 1) ? Colors.grey : Theme.of(context).primaryColor
+                ),
                 const SizedBox(width: 20),
                 Text('$quantity', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(width: 20),
-                IconButton(onPressed: () => setState(() => quantity++), icon: const Icon(Icons.add_circle_outline, size: 35), color: Theme.of(context).primaryColor),
+                IconButton(
+                    onPressed: _isAdding ? null : () => setState(() => quantity++),
+                    icon: const Icon(Icons.add_circle_outline, size: 35),
+                    color: _isAdding ? Colors.grey : Theme.of(context).primaryColor
+                ),
               ],
             ),
             const SizedBox(height: 20),
 
-            // زر الإضافة
+            // 🔥 2. زر الإضافة المحمي من النقر المزدوج
             ElevatedButton(
-              onPressed: () {
+              onPressed: _isAdding
+                  ? null // تعطيل الزر تماماً إذا كانت الإضافة جارية
+                  : () {
+                // ✅ قفل الزر فوراً لمنع أي نقرات لاحقة
+                setState(() => _isAdding = true);
+
                 FoodItem cartItem = widget.foodItem.copyWith(
                   selectedWeight: widget.isMarket ? _currentWeight : 1.0,
                   customNote: _noteController.text.trim(),
                 );
+
                 Provider.of<CartProvider>(context, listen: false).addToCart(cartItem, context, quantity: quantity);
+
+                // إغلاق النافذة (الزر معطل الآن ولن يستجيب لأي ضغطات متكررة)
                 Navigator.pop(context);
               },
-              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), backgroundColor: Theme.of(context).primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+              style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 15),
+                  backgroundColor: Theme.of(context).primaryColor,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -2992,7 +3015,7 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
   Widget _buildWeightChip(String label, double weight) {
     bool isSelected = _weightsAreEqual(_currentWeight, weight);
     return GestureDetector(
-      onTap: () { setState(() => _currentWeight = weight); HapticFeedback.lightImpact(); },
+      onTap: _isAdding ? null : () { setState(() => _currentWeight = weight); HapticFeedback.lightImpact(); }, // تعطيل تغيير الوزن أثناء الإضافة
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
@@ -3626,6 +3649,8 @@ class ApiService {
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
       _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
 
+  // في ملف ApiService.dart
+
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -3638,24 +3663,24 @@ class ApiService {
     int? restaurantId,
     int? regionId,
     bool useSmartWallet = false,
-    double? platformMarkupTotal, // 👈 1. إضافة المتغير هنا
+    double? platformMarkupTotal,
+    required String checkoutSessionId, // 🔥 مفتاح فريد لمنع التكرار من السيرفر
   }) async {
+    // تجهيز البيانات
     List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
-
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
 
     final prefs = await SharedPreferences.getInstance();
-
     await prefs.reload();
 
+    // تجهيز المعرفات والتوكنات
     String? deviceId = prefs.getString('unique_device_id');
     if (deviceId == null) {
       deviceId = const Uuid().v4();
       await prefs.setString('unique_device_id', deviceId);
     }
-
     String? fcmToken = prefs.getString('fcm_token');
     String? voipToken = prefs.getString('voip_token');
 
@@ -3663,7 +3688,6 @@ class ApiService {
       fcmToken = await FirebaseMessaging.instance.getToken();
       if (fcmToken != null) await prefs.setString('fcm_token', fcmToken);
     }
-
     if (Platform.isIOS && (voipToken == null || voipToken.isEmpty)) {
       try {
         voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
@@ -3704,18 +3728,11 @@ class ApiService {
         {"key": "_customer_fcm_token", "value": fcmToken ?? ''},
         {"key": "fcm_token", "value": fcmToken ?? ''},
         {"key": "_device_id", "value": deviceId},
-
+        {"key": "_checkout_session_id", "value": checkoutSessionId}, // 🔥 المفتاح السحري لمنع التكرار
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
-
-        if (voipToken != null && voipToken.isNotEmpty)
-          {"key": "voip_token", "value": voipToken},
-
+        if (voipToken != null && voipToken.isNotEmpty) {"key": "voip_token", "value": voipToken},
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
-
-        // 👈 2. إرسال قيمة أرباح المنصة الكلية للسيرفر
-        if (platformMarkupTotal != null && platformMarkupTotal > 0)
-          {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
-
+        if (platformMarkupTotal != null && platformMarkupTotal > 0) {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
@@ -3725,21 +3742,29 @@ class ApiService {
 
     final body = json.encode(bodyPayload);
 
-    final response = await _executeWithRetry(() => http.post(
+    // ✅ الحل الجذري: إرسال مباشر بدون إعادة محاولة، مع مهلة طويلة
+    try {
+      final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
         headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
-        body: body
-    ));
+        body: body,
+      ).timeout(const Duration(seconds: 60)); // ⏳ مهلة 60 ثانية كافية لووكومرس
 
-    if (response.statusCode == 201) {
-      final createdOrder = Order.fromJson(json.decode(response.body));
-      await OrderHistoryService().saveOrder(createdOrder);
-      return createdOrder;
-    } else {
-      throw Exception('Failed to submit order: ${response.body}');
+      if (response.statusCode == 201) {
+        final createdOrder = Order.fromJson(json.decode(response.body));
+        await OrderHistoryService().saveOrder(createdOrder);
+        return createdOrder;
+      } else if (response.statusCode == 409) {
+        // 🔥 السيرفر يرد بـ 409 إذا كان الـ checkout_session_id مكرراً
+        throw Exception('هذا الطلب تم استلامه مسبقاً. سيتم الاتصال بك لتأكيد الطلب.');
+      } else {
+        throw Exception('فشل إنشاء الطلب: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      // ❌ لا نقوم بأي إعادة محاولة هنا أبداً
+      throw Exception('تأخر السيرفر أو انقطع الاتصال. يرجى التحقق من سجل الطلبات قبل إعادة المحاولة.');
     }
   }
-
   Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
     return _executeWithRetry(() async {
       final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
@@ -9424,6 +9449,9 @@ class _CartScreenState extends State<CartScreen> {
   void _showCheckoutDialog(BuildContext context, CartProvider cart) {
     final BuildContext cartScreenContext = context;
 
+    // 🔥 1. توليد مفتاح فريد لهذه الجلسة (لن يتغير عند الضغط المتكرر)
+    final String checkoutSessionId = const Uuid().v4();
+
     _nameController.clear();
     _phoneController.clear();
     _addressController.clear();
@@ -9432,7 +9460,6 @@ class _CartScreenState extends State<CartScreen> {
     bool isSubmitting = false;
     geolocator.Position? _capturedPosition;
 
-    // قيم افتراضية ريثما يتم الحساب
     double _deliveryFee = 1000.0;
     String _locationMessage = "جاري الحساب...";
     bool _isCalcFinished = false;
@@ -9443,8 +9470,6 @@ class _CartScreenState extends State<CartScreen> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
-
-          // 🔥 الحساب الفوري السريع بدون نوافذ GPS مزعجة
           if (!_hasStartedCalculation) {
             _hasStartedCalculation = true;
             _calculateDeliveryFeeFast(
@@ -9472,39 +9497,21 @@ class _CartScreenState extends State<CartScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    TextFormField(
-                        controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'),
-                        validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
                     const SizedBox(height: 10),
-                    TextFormField(
-                        controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'),
-                        keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
                     const SizedBox(height: 10),
-                    TextFormField(
-                        controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان (أقرب نقطة دالة)'),
-                        validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
+                    TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان (أقرب نقطة دالة)'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
                     const SizedBox(height: 20),
-
-                    // صندوق السعر ورسالة التوضيح
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
                       child: Column(
                         children: [
-                          Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
-                                _isCalcFinished
-                                    ? Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 16))
-                                    : const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                              ]),
-                          const SizedBox(height: 5),
-                          Row(children: [
-                            const Icon(Icons.info_outline, color: Colors.blue, size: 14),
-                            const SizedBox(width: 5),
-                            Expanded(child: Text(_locationMessage, style: TextStyle(fontSize: 12, color: Colors.blue.shade800, fontWeight: FontWeight.bold))),
-                          ])
+                          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                            const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
+                            _isCalcFinished ? Text("${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 16)) : const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          ]),
                         ],
                       ),
                     ),
@@ -9520,18 +9527,17 @@ class _CartScreenState extends State<CartScreen> {
               TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                onPressed: (isSubmitting || !_isCalcFinished)
-                    ? null
-                    : () async {
+                onPressed: (isSubmitting || !_isCalcFinished) ? null : () async {
                   if (!_formKey.currentState!.validate()) return;
                   setDialogState(() => isSubmitting = true);
                   try {
                     final prefs = await SharedPreferences.getInstance();
                     final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
-                    if (currentZoneId == 0) throw Exception("يرجى تحديد المنطقة من الصفحة الرئيسية.");
+                    if (currentZoneId == 0) throw Exception("يرجى تحديد المنطقة.");
 
                     final int? firstRestaurantId = cart.items.isNotEmpty ? cart.items.first.categoryId : null;
 
+                    // 🔥 2. تمرير كود الجلسة إلى دالة submitOrder
                     final createdOrder = await _apiService.submitOrder(
                       name: _nameController.text, phone: _phoneController.text,
                       address: _addressController.text, cartItems: cart.items,
@@ -9539,6 +9545,7 @@ class _CartScreenState extends State<CartScreen> {
                       deliveryFee: _deliveryFee, zoneId: currentZoneId,
                       restaurantId: firstRestaurantId, regionId: currentZoneId,
                       platformMarkupTotal: cart.totalPlatformMarkup,
+                      checkoutSessionId: checkoutSessionId, // 👈 التعديل
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -9547,24 +9554,11 @@ class _CartScreenState extends State<CartScreen> {
                     await cart._recordSuccessfulOrder();
                     Navigator.of(dialogContext).pop();
                     cart.clearCart();
-
                     Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
 
-                    // 🔥 الانتقال المباشر والفوري لشاشة التتبع 🔥
                     if (cartScreenContext.mounted) {
-                      // إشعار صغير يختفي تلقائياً
-                      ScaffoldMessenger.of(cartScreenContext).showSnackBar(
-                          const SnackBar(content: Text("تم استلام طلبك بنجاح! 🎉"), backgroundColor: Colors.green)
-                      );
-
-                      // تغيير التبويب في الخلفية إلى "طلباتي"
                       Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
-
-                      // فتح شاشة التتبع مباشرة
-                      Navigator.push(
-                          cartScreenContext,
-                          MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder))
-                      );
+                      Navigator.push(cartScreenContext, MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder)));
                     }
                   } catch (e) {
                     if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
@@ -9572,9 +9566,7 @@ class _CartScreenState extends State<CartScreen> {
                     if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
                   }
                 },
-                child: isSubmitting
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Text('تأكيد الطلب'),
+                child: isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('تأكيد الطلب'),
               )
             ],
           );
@@ -9582,7 +9574,6 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
   }
-
   // 🔥 دالة الحساب السريعة (بدون إجبار الزبون)
   Future<void> _calculateDeliveryFeeFast({
     required CartProvider cart,
