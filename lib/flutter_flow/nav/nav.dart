@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:cosmetic_store/flutter_flow/nav/page_transition.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:page_transition/page_transition.dart';
 import 'package:provider/provider.dart';
 import '../../beytei_ms/ms.dart';
 import '../../beytei_re/re.dart'as re;
