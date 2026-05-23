@@ -2,10 +2,18 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:io';
+import 'dart:ui';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
+
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
+import 'package:geolocator/geolocator.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 
 
 import 'dart:math'; // 👈 تأكد من وجود هذا السطر ضروري جداً
@@ -50,7 +58,149 @@ const String TAXI_URL = 'https://banner.beytei.com'; // 🚕 تكسي )
 const int AD_PRODUCT_ID = 9999; // ⚠️ استبدل هذا الرقم بـ ID منتج "خدمة إعلان" من ووكومرس
 const double AD_COST = 3000.0; // تكلفة الإعلان
 
+// =======================================================================
+// 📍 خدمة إدارة الموقع المحفوظ (متاحة لجميع الشاشات)
+// =======================================================================
 
+// =======================================================================
+// 📍 خدمة إدارة الموقع المحفوظ (متاحة لجميع الشاشات)
+// =======================================================================
+// =======================================================================
+// 📍 خدمة إدارة الموقع المحفوظ (موحدة - متاحة لجميع الشاشات)
+// =======================================================================
+class LocationService {
+  // ✅ مفاتيح موحدة للمشاركة بين التطبيقات
+  static const String LAT_KEY = 'shared_user_latitude';
+  static const String LNG_KEY = 'shared_user_longitude';
+  static const String LOCATION_SOURCE_KEY = 'shared_location_source';
+  static const String LOCATION_TIMESTAMP_KEY = 'shared_location_timestamp';
+  static const String AREA_ID_KEY = 'shared_area_id';
+  static const String AREA_NAME_KEY = 'shared_area_name';
+  static const int LOCATION_MAX_AGE_HOURS = 24;
+
+  /// حفظ الموقع مع مصدره ووقت الحفظ
+  static Future<bool> saveLocation(double lat, double lng, {
+    String source = 'auto',
+    int? areaId,
+    String? areaName,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(LAT_KEY, lat);
+      await prefs.setDouble(LNG_KEY, lng);
+      await prefs.setString(LOCATION_SOURCE_KEY, source);
+      await prefs.setInt(LOCATION_TIMESTAMP_KEY, DateTime.now().millisecondsSinceEpoch);
+      if (areaId != null) await prefs.setInt(AREA_ID_KEY, areaId);
+      if (areaName != null) await prefs.setString(AREA_NAME_KEY, areaName);
+      return true;
+    } catch (e) {
+      print('❌ Error saving location: $e');
+      return false;
+    }
+  }
+
+  /// جلب الموقع المحفوظ مع التحقق من صلاحيته
+  static Future<({double lat, double lng, String source, bool isExpired})?> getSavedLocation() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble(LAT_KEY);
+      final lng = prefs.getDouble(LNG_KEY);
+      final source = prefs.getString(LOCATION_SOURCE_KEY) ?? 'unknown';
+      final timestamp = prefs.getInt(LOCATION_TIMESTAMP_KEY);
+
+      if (lat != null && lng != null) {
+        bool isExpired = false;
+        if (timestamp != null) {
+          final age = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(timestamp));
+          isExpired = age.inHours > LOCATION_MAX_AGE_HOURS;
+        }
+        return (lat: lat, lng: lng, source: source, isExpired: isExpired);
+      }
+      return null;
+    } catch (e) {
+      print('❌ Error getting location: $e');
+      return null;
+    }
+  }
+
+  /// دالة مبسطة: ترجع الإحداثيات فقط
+  static Future<({double lat, double lng})?> getSavedLocationSimple() async {
+    final saved = await getSavedLocation();
+    if (saved != null) return (lat: saved.lat, lng: saved.lng);
+    return null;
+  }
+
+  /// التحقق من وجود موقع محفوظ
+  static Future<bool> hasSavedLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.containsKey(LAT_KEY) && prefs.containsKey(LNG_KEY);
+  }
+
+  /// حذف الموقع المحفوظ
+  static Future<void> clearSavedLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(LAT_KEY);
+    await prefs.remove(LNG_KEY);
+    await prefs.remove(LOCATION_SOURCE_KEY);
+    await prefs.remove(LOCATION_TIMESTAMP_KEY);
+    await prefs.remove(AREA_ID_KEY);
+    await prefs.remove(AREA_NAME_KEY);
+  }
+
+  /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
+  static Future<geolocator.Position?> tryAutoDetectSilent({Duration timeout = const Duration(seconds: 40)}) async {
+    try {
+      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+
+      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        return null; // لا نطلب إذن هنا، نعود null بصمت
+      }
+      if (permission == geolocator.LocationPermission.deniedForever) return null;
+
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
+        desiredAccuracy: geolocator.LocationAccuracy.medium,
+        timeLimit: timeout,
+      );
+      return position;
+    } catch (e) {
+      print('❌ Silent auto-detect location failed: $e');
+      return null;
+    }
+  }
+
+  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
+  static Future<geolocator.Position?> tryAutoDetectWithPermission({Duration timeout = const Duration(seconds: 10)}) async {
+    try {
+      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+
+      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        permission = await geolocator.Geolocator.requestPermission();
+        if (permission != geolocator.LocationPermission.whileInUse && permission != geolocator.LocationPermission.always) {
+          return null;
+        }
+      }
+      if (permission == geolocator.LocationPermission.deniedForever) return null;
+
+      geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
+        desiredAccuracy: geolocator.LocationAccuracy.medium,
+        timeLimit: timeout,
+      );
+      return position;
+    } catch (e) {
+      print('❌ Auto-detect with permission failed: $e');
+      return null;
+    }
+  }
+
+  /// حساب المسافة بين نقطتين
+  static double calculateDistance(double lat1, double lng1, double lat2, double lng2) {
+    return geolocator.Geolocator.distanceBetween(lat1, lng1, lat2, lng2);
+  }
+}
 class AppConstants {
 
   // مفاتيح الكاش (للزبون فقط)
@@ -3664,10 +3814,11 @@ class ApiService {
     int? regionId,
     bool useSmartWallet = false,
     double? platformMarkupTotal,
-    required String checkoutSessionId, // 🔥 مفتاح فريد لمنع التكرار من السيرفر
+    required String checkoutSessionId,
   }) async {
     // تجهيز البيانات
-    List<Map<String, dynamic>> couponLines = couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
+    List<Map<String, dynamic>> couponLines =
+    couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
         ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
         : [];
@@ -3699,6 +3850,33 @@ class ApiService {
       }
     }
 
+    // 📍 ============================================
+    // 🔥 التعديل الجديد: استخدام الموقع المحفوظ كخطة طوارئ
+    // ============================================
+    if (position == null) {
+      try {
+        final savedLocation = await LocationService.getSavedLocationSimple();
+        if (savedLocation != null) {
+          position = geolocator.Position(
+            latitude: savedLocation.lat,
+            longitude: savedLocation.lng,
+            timestamp: DateTime.now(),
+            accuracy: 10,
+            altitude: 0,
+            altitudeAccuracy: 0,
+            heading: 0,
+            headingAccuracy: 0,
+            speed: 0,
+            speedAccuracy: 0,
+          );
+          print('✅ [SubmitOrder] Using saved location as fallback: ${savedLocation.lat}, ${savedLocation.lng}');
+        }
+      } catch (e) {
+        print('⚠️ [SubmitOrder] Failed to get saved location: $e');
+      }
+    }
+    // 📍 ============================================
+
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
       "payment_method_title": "الدفع عند الاستلام",
@@ -3728,11 +3906,12 @@ class ApiService {
         {"key": "_customer_fcm_token", "value": fcmToken ?? ''},
         {"key": "fcm_token", "value": fcmToken ?? ''},
         {"key": "_device_id", "value": deviceId},
-        {"key": "_checkout_session_id", "value": checkoutSessionId}, // 🔥 المفتاح السحري لمنع التكرار
+        {"key": "_checkout_session_id", "value": checkoutSessionId},
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
         if (voipToken != null && voipToken.isNotEmpty) {"key": "voip_token", "value": voipToken},
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
         if (platformMarkupTotal != null && platformMarkupTotal > 0) {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
+        // 📍 إرسال الإحداثيات (سواء كانت جديدة أو محفوظة)
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
@@ -3742,26 +3921,24 @@ class ApiService {
 
     final body = json.encode(bodyPayload);
 
-    // ✅ الحل الجذري: إرسال مباشر بدون إعادة محاولة، مع مهلة طويلة
+    // ✅ إرسال الطلب بدون إعادة محاولة، مع مهلة طويلة
     try {
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
         headers: {'Authorization': _authString, 'Content-Type': 'application/json'},
         body: body,
-      ).timeout(const Duration(seconds: 60)); // ⏳ مهلة 60 ثانية كافية لووكومرس
+      ).timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 201) {
         final createdOrder = Order.fromJson(json.decode(response.body));
         await OrderHistoryService().saveOrder(createdOrder);
         return createdOrder;
       } else if (response.statusCode == 409) {
-        // 🔥 السيرفر يرد بـ 409 إذا كان الـ checkout_session_id مكرراً
         throw Exception('هذا الطلب تم استلامه مسبقاً. سيتم الاتصال بك لتأكيد الطلب.');
       } else {
         throw Exception('فشل إنشاء الطلب: ${response.statusCode} - ${response.body}');
       }
     } catch (e) {
-      // ❌ لا نقوم بأي إعادة محاولة هنا أبداً
       throw Exception('تأخر السيرفر أو انقطع الاتصال. يرجى التحقق من سجل الطلبات قبل إعادة المحاولة.');
     }
   }
@@ -6422,11 +6599,426 @@ class _RestaurantModuleState extends State<RestaurantModule> {
 
 
 
+class MapLocationPicker extends StatefulWidget {
+  final double? initialLat;
+  final double? initialLng;
+  final String mapStyleUrl; // رابط ستايل الخريطة
+
+  const MapLocationPicker({
+    super.key,
+    this.initialLat,
+    this.initialLng,
+    this.mapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty',
+  });
+
+  @override
+  State<MapLocationPicker> createState() => _MapLocationPickerState();
+}
 
 
+class _MapLocationPickerState extends State<MapLocationPicker>
+    with SingleTickerProviderStateMixin {
+  ml.MapLibreMapController? _mapController;
+  ml.LatLng _selectedPoint = ml.LatLng(32.5000, 45.8000); // افتراضي (الكوت)
+  bool _isMapReady = false;
+  bool _isLocating = false;
+  bool _autoLocated = false;     // هل تم التحديد تلقائياً؟
+  bool _manualMode = false;      // هل المستخدم في الوضع اليدوي؟
+  AnimationController? _pulseController;
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialLat != null && widget.initialLng != null) {
+      _selectedPoint = ml.LatLng(widget.initialLat!, widget.initialLng!);
+    }
+    _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 2))
+      ..repeat();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _tryAutoDetectLocation();
+    });
+  }
 
+  @override
+  void dispose() {
+    _pulseController?.dispose();
+    _mapController?.dispose();
+    super.dispose();
+  }
 
+  // ====================== التحديد التلقائي ======================
+  Future<void> _tryAutoDetectLocation() async {
+    if (_isLocating) return;
+    setState(() {
+      _isLocating = true;
+      _manualMode = false;
+    });
+
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        _handleGpsDisabled();
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
+          _handlePermissionDenied();
+          return;
+        }
+      }
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 8),
+      );
+
+      if (mounted) {
+        setState(() {
+          _selectedPoint = ml.LatLng(position.latitude, position.longitude);
+          _autoLocated = true;
+          _manualMode = false;
+          _isLocating = false;
+        });
+        if (_isMapReady && _mapController != null) {
+          _mapController!.animateCamera(
+            ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0),
+          );
+        }
+        HapticFeedback.mediumImpact();
+        _showSuccessAndClose(position);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLocating = false);
+        _showModernToast('⚠️ تعذر تحديد الموقع تلقائياً. استخدم التحديد اليدوي.', isError: true);
+        setState(() => _manualMode = true);
+      }
+    }
+  }
+
+  void _handleGpsDisabled() {
+    setState(() => _isLocating = false);
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(children: [
+          Icon(Icons.location_off, color: Colors.orange),
+          SizedBox(width: 10),
+          Text('خدمة الموقع معطلة')
+        ]),
+        content: const Text('يرجى تفعيل GPS أو استخدام التحديد اليدوي.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(_);
+              setState(() => _manualMode = true);
+            },
+            child: const Text('تحديد يدوي'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              Navigator.pop(_);
+              await Geolocator.openLocationSettings();
+              await Future.delayed(const Duration(seconds: 1));
+              if (mounted) _tryAutoDetectLocation();
+            },
+            icon: const Icon(Icons.settings),
+            label: const Text('تفعيل الإعدادات'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handlePermissionDenied() {
+    setState(() => _isLocating = false);
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(children: [
+          Icon(Icons.lock, color: Colors.red),
+          SizedBox(width: 10),
+          Text('الصلاحية مرفوضة')
+        ]),
+        content: const Text('لم تمنح صلاحية الموقع. يرجى منحها من الإعدادات أو استخدام التحديد اليدوي.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(_);
+              setState(() => _manualMode = true);
+            },
+            child: const Text('تحديد يدوي'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(_);
+              await Geolocator.openAppSettings();
+            },
+            child: const Text('فتح الإعدادات'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSuccessAndClose(Position position) {
+    Fluttertoast.showToast(
+      msg: "✅ تم تحديد موقعك بنجاح",
+      toastLength: Toast.LENGTH_SHORT,
+      gravity: ToastGravity.CENTER,
+      backgroundColor: Colors.green.shade600,
+      textColor: Colors.white,
+    );
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) {
+        Navigator.pop(context, {
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'source': 'auto_gps',
+        });
+      }
+    });
+  }
+
+  void _showModernToast(String msg, {bool isError = false}) {
+    Fluttertoast.showToast(
+      msg: msg,
+      toastLength: Toast.LENGTH_LONG,
+      gravity: ToastGravity.BOTTOM,
+      backgroundColor: isError ? Colors.red.shade600 : Colors.black87,
+      textColor: Colors.white,
+    );
+  }
+
+  // ====================== الوضع اليدوي ======================
+  void _onCameraIdle() {
+    if (_mapController != null && !_isLocating) {
+      // الوصول إلى موضع الكاميرا عبر الخاصية مباشرةً
+      final ml.CameraPosition? currentPosition = _mapController!.cameraPosition;
+
+      if (currentPosition != null && mounted) {
+        setState(() {
+          // استخدام الـ target من الـ CameraPosition
+          _selectedPoint = currentPosition.target;
+          _autoLocated = false;
+          _manualMode = true;
+        });
+      } else {
+        print("تعذر الحصول على موضع الكاميرا، تأكد من تفعيل trackCameraPosition.");
+      }
+    }
+  }
+  // ====================== بناء الواجهة ======================
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          ml.MapLibreMap(
+            styleString: widget.mapStyleUrl,
+            initialCameraPosition: ml.CameraPosition(target: _selectedPoint, zoom: 16.0),
+            onMapCreated: (controller) {
+              _mapController = controller;
+              setState(() => _isMapReady = true);
+              if (_autoLocated) {
+                controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0));
+              }
+            },
+            onCameraIdle: _onCameraIdle,
+            myLocationEnabled: true,
+            myLocationTrackingMode: ml.MyLocationTrackingMode.none,
+            compassEnabled: false,
+            logoViewMargins: const Point(-100, -100),
+            attributionButtonMargins: const Point(-100, -100),
+          ),
+
+          // دبوس النبض
+          Center(
+            child: IgnorePointer(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  FadeTransition(
+                    opacity: _pulseController!.drive(CurveTween(curve: Curves.easeOut)),
+                    child: ScaleTransition(
+                      scale: _pulseController!.drive(Tween<double>(begin: 0.8, end: 1.8)),
+                      child: Container(
+                        width: 60, height: 60,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _autoLocated ? Colors.green.withOpacity(0.3) : Colors.red.withOpacity(0.3),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, offset: const Offset(0, 4))],
+                    ),
+                    child: Icon(
+                      _autoLocated ? Icons.my_location : Icons.location_on,
+                      color: _autoLocated ? Colors.green : Colors.red,
+                      size: 32,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // زر العودة
+          Positioned(
+            top: 40, left: 20,
+            child: SafeArea(
+              child: Material(
+                color: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 4,
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back_ios, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ),
+          ),
+
+          // زر إعادة المحاولة (يظهر فقط إذا لم يتم التحديد)
+          if (!_isLocating && !_autoLocated)
+            Positioned(
+              top: 40, right: 20,
+              child: SafeArea(
+                child: Material(
+                  color: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 4,
+                  child: IconButton(
+                    icon: const Icon(Icons.my_location, color: Colors.blue),
+                    onPressed: _tryAutoDetectLocation,
+                  ),
+                ),
+              ),
+            ),
+
+          // البطاقة السفلية
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 20, offset: const Offset(0, -10))],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40, height: 5,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10)),
+                  ),
+                  if (_isLocating) ...[
+                    const SizedBox(height: 30, width: 30, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.blue)),
+                    const SizedBox(height: 12),
+                    const Text('جاري تحديد موقعك تلقائياً...', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  ] else ...[
+                    Row(
+                      children: [
+                        Icon(
+                          _autoLocated ? Icons.verified : (_manualMode ? Icons.edit_location_alt : Icons.gps_fixed),
+                          color: _autoLocated ? Colors.green : (_manualMode ? Colors.blue : Colors.orange),
+                          size: 24,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            _autoLocated
+                                ? '✅ تم تحديد موقعك تلقائياً بدقة'
+                                : (_manualMode
+                                ? '📍 تم تحديد الموقع يدوياً (اسحب الخريطة)'
+                                : '🔄 جاري انتظار تحديد الموقع...'),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: _autoLocated ? Colors.green.shade700 : (_manualMode ? Colors.blue.shade700 : Colors.orange.shade700),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        Navigator.pop(context, {
+                          'lat': _selectedPoint.latitude,
+                          'lng': _selectedPoint.longitude,
+                          'source': _autoLocated ? 'auto_gps' : 'manual_map',
+                        });
+                      },
+                      icon: const Icon(Icons.check_circle_outline, size: 22),
+                      label: const Text('تأكيد هذا الموقع', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        backgroundColor: _autoLocated ? Colors.green.shade600 : Colors.blue.shade600,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        minimumSize: const Size.fromHeight(55),
+                      ),
+                    ),
+                    if (!_autoLocated && !_manualMode)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12.0),
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setState(() => _manualMode = true);
+                            _showModernToast('اسحب الخريطة وضع الدبوس على موقعك');
+                          },
+                          icon: const Icon(Icons.edit_location_alt, color: Colors.blue),
+                          label: const Text('تحديد يدوي', style: TextStyle(fontSize: 14)),
+                          style: TextButton.styleFrom(foregroundColor: Colors.blue),
+                        ),
+                      ),
+                    if (_manualMode && !_autoLocated)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          '💡 يمكنك سحب الخريطة وتحريك الدبوس إلى موقعك الدقيق',
+                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+
+          if (_isLocating)
+            Positioned.fill(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+                child: Container(color: Colors.black.withOpacity(0.05)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 
 
@@ -8317,43 +8909,34 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
   Future<void> _saveSelection(int areaId, String areaName) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. ✅ خطوة هامة: جلب المنطقة القديمة *قبل* حفظ المنطقة الجديدة
-    // لكي نتمكن من إلغاء الاشتراك منها
+    // 1. إلغاء الاشتراك من القناة القديمة
     int? oldAreaId = prefs.getInt('selectedAreaId');
-
-    // 2. إلغاء الاشتراك من القناة القديمة (لتجنب استلام تحديثات منطقة لم تعد فيها)
     if (oldAreaId != null && oldAreaId != areaId) {
       await FirebaseMessaging.instance.unsubscribeFromTopic('area_$oldAreaId');
-      print("🔕 تم إلغاء الاشتراك من area_$oldAreaId");
     }
 
-    // 3. الاشتراك في القناة الجديدة (لاستلام تحديثات فتح/غلق المطاعم)
+    // 2. الاشتراك في القناة الجديدة
     await FirebaseMessaging.instance.subscribeToTopic('area_$areaId');
-    print("🔔 تم الاشتراك في area_$areaId");
 
-    // 4. حفظ البيانات الجديدة محلياً
+    // 3. حفظ البيانات الجديدة
     await prefs.setInt('selectedAreaId', areaId);
     await prefs.setString('selectedAreaName', areaName);
 
-    // 5. تسجيل التوكن في الباك إند (Fire and Forget - لا ننتظره)
-    AuthService().registerDeviceToken(areaId: areaId).then((_) {
-      print("✅ تم تحديث المنطقة في السيرفر");
-    }).catchError((e) {
-      print("⚠️ تنبيه: فشل تحديث المنطقة في السيرفر (غير مؤثر): $e");
-    });
+    // 4. تسجيل التوكن في الباك إند
+    AuthService().registerDeviceToken(areaId: areaId);
 
-    // 6. الانتقال للصفحة التالية فوراً
+    // 5. الانتقال للصفحة التالية
     if (mounted) {
       if (widget.isCancellable) {
         Navigator.of(context).pop(true);
       } else {
         Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const LocationCheckWrapper()),
-                (route) => false);
+          MaterialPageRoute(builder: (_) => const LocationCheckWrapper()),
+              (route) => false,
+        );
       }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     // تجميع المحافظات (الأب = 0)
@@ -8531,6 +9114,11 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _isLoadingCats = true;
   bool _shouldClearCart = true;
 
+  // 📍 متغيرات سعر التوصيل
+  double _deliveryFee = 1000.0;
+  bool _isLoadingDeliveryFee = true;
+  String _deliveryMessage = 'جاري الحساب...';
+
   final ScrollController _scrollController = ScrollController();
   final ScrollController _categoryScrollController = ScrollController();
   final Map<int, GlobalKey> _categoryKeys = {};
@@ -8547,6 +9135,7 @@ class _MenuScreenState extends State<MenuScreen> {
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initData();
+      _loadDeliveryFee(); // 🔥 تحميل سعر التوصيل فوراً
     });
   }
 
@@ -8556,6 +9145,95 @@ class _MenuScreenState extends State<MenuScreen> {
     _scrollController.dispose();
     _categoryScrollController.dispose();
     super.dispose();
+  }
+
+  // 📍 دالة حساب سعر التوصيل باستخدام الموقع المحفوظ
+  Future<void> _loadDeliveryFee() async {
+    if (!mounted) return;
+
+    try {
+      // 1. جلب الموقع المحفوظ (بدون انتظار تحديث)
+      final savedLocation = await LocationService.getSavedLocationSimple();
+
+      if (savedLocation == null) {
+        // لا يوجد موقع محفوظ → نستخدم السعر الافتراضي
+        setState(() {
+          _isLoadingDeliveryFee = false;
+          _deliveryFee = 1000.0;
+          _deliveryMessage = 'يرجى تحديد موقعك';
+        });
+        return;
+      }
+
+      // 2. تهيئة مزود التسعير وجلب الكاش
+      final configProvider = Provider.of<DeliveryConfigProvider>(context, listen: false);
+      if (configProvider.cachedConfig == null) {
+        await configProvider.fetchAndCacheConfig();
+      }
+
+      // 3. جلب بيانات المنطقة من الذاكرة (باستخدام المفاتيح الموحدة)
+      final prefs = await SharedPreferences.getInstance();
+      final areaId = prefs.getInt('shared_area_id') ?? prefs.getInt('selectedAreaId') ?? 0;
+      final areaName = prefs.getString('shared_area_name') ?? prefs.getString('selectedAreaName') ?? 'المنطقة';
+
+      // 4. حساب السعر محلياً (بدون انتظار السيرفر)
+      final result = configProvider.calculateFeeDetails(
+        userLat: savedLocation.lat,
+        userLng: savedLocation.lng,
+        restaurantId: widget.restaurant.id,
+        areaId: areaId,
+        areaName: areaName,
+      );
+
+      // 5. تحديث الواجهة
+      if (mounted) {
+        setState(() {
+          _deliveryFee = result['fee'] as double;
+          _deliveryMessage = result['message'] as String;
+          _isLoadingDeliveryFee = false;
+        });
+      }
+
+      // 6. 🔄 تحديث الموقع في الخلفية (اختياري - بدون إزعاج المستخدم)
+      _tryUpdateLocationInBackground();
+
+    } catch (e) {
+      print('❌ Error calculating delivery fee: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingDeliveryFee = false;
+          _deliveryFee = 1000.0;
+          _deliveryMessage = 'تم تطبيق السعر الافتراضي';
+        });
+      }
+    }
+  }
+
+  // 🔄 محاولة تحديث الموقع في الخلفية (صامت)
+  Future<void> _tryUpdateLocationInBackground() async {
+    try {
+      final newPosition = await LocationService.tryAutoDetectSilent();
+      if (newPosition != null && mounted) {
+        // جلب بيانات المنطقة الحالية لتحديثها مع الموقع
+        final prefs = await SharedPreferences.getInstance();
+        final areaId = prefs.getInt('shared_area_id') ?? prefs.getInt('selectedAreaId');
+        final areaName = prefs.getString('shared_area_name') ?? prefs.getString('selectedAreaName');
+
+        await LocationService.saveLocation(
+          newPosition.latitude,
+          newPosition.longitude,
+          source: 'background_auto',
+          areaId: areaId,
+          areaName: areaName,
+        );
+        // نعيد حساب السعر إذا تغير الموقع بشكل ملحوظ
+        _loadDeliveryFee();
+        print('✅ Location updated in background');
+      }
+    } catch (e) {
+      // فشل التحديث الصامت → نحتفظ بالموقع القديم (لا نفعل شيئاً)
+      print('ℹ️ Background location update skipped: $e');
+    }
   }
 
   Future<void> _initData() async {
@@ -8762,6 +9440,36 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
+  // 📍 ودجت عرض سعر التوصيل (بدلاً من "توصيل بيتي")
+  Widget _buildDeliveryFeeWidget() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: _deliveryFee == 0 ? Colors.green.withOpacity(0.8) : Colors.white24,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _isLoadingDeliveryFee ? Icons.hourglass_empty : (_deliveryFee == 0 ? Icons.check_circle : Icons.delivery_dining),
+            color: Colors.white,
+            size: 16,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _isLoadingDeliveryFee
+                ? 'جاري الحساب...'
+                : _deliveryFee == 0
+                ? 'توصيل مجاني'
+                : '${NumberFormat('#,###', 'ar_IQ').format(_deliveryFee)} د.ع',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -8822,17 +9530,8 @@ class _MenuScreenState extends State<MenuScreen> {
                                 ),
                               ),
                               const SizedBox(width: 10),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(8)),
-                                child: const Row(
-                                  children: [
-                                    Icon(Icons.delivery_dining, color: Colors.white, size: 16),
-                                    SizedBox(width: 4),
-                                    Text("توصيل بيتي", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                                  ],
-                                ),
-                              ),
+                              // ✅ استبدال "توصيل بيتي" بسعر التوصيل المحسوب
+                              _buildDeliveryFeeWidget(),
                             ],
                           )
                         ],
@@ -9030,7 +9729,6 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 }
-
 // 🔥 تم تقليل الارتفاع لأننا أزلنا الصور وأبقينا النصوص فقط
 class _StickyCategoryDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
@@ -9292,6 +9990,42 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
+  // 📍 دالة مساعدة: جلب الموقع المحفوظ أولاً، ثم محاولة الـ GPS كخطة بديلة
+  Future<({double lat, double lng})?> _getSavedLocation() async {
+    try {
+      // 1. ✅ أولاً: جلب الموقع المحفوظ (فوري - بدون انتظار)
+      final location = await LocationService.getSavedLocationSimple();
+      if (location != null) {
+        print('✅ [Cart] Using saved location: ${location.lat}, ${location.lng}');
+        return location;
+      }
+
+      // 2. 🔄 ثانياً: محاولة جلب موقع جديد من الـ GPS (كخطة بديلة)
+      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+
+      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        permission = await geolocator.Geolocator.requestPermission();
+        if (permission != geolocator.LocationPermission.whileInUse &&
+            permission != geolocator.LocationPermission.always) {
+          return null;
+        }
+      }
+      if (permission == geolocator.LocationPermission.deniedForever) return null;
+
+      Position pos = await geolocator.Geolocator.getCurrentPosition(
+        desiredAccuracy: geolocator.LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 3), // مهلة قصيرة لعدم إزعاج المستخدم
+      );
+      print('✅ [Cart] Using fresh GPS location: ${pos.latitude}, ${pos.longitude}');
+      return (lat: pos.latitude, lng: pos.longitude);
+    } catch (e) {
+      print('⚠️ [Cart] Failed to get location: $e');
+      return null; // فشل آمن → نستخدم السعر الافتراضي
+    }
+  }
+
   Future<void> _checkActiveOrderAndCheckout(BuildContext context, CartProvider cart) async {
     try {
       final localOrders = await OrderHistoryService().getOrders();
@@ -9430,15 +10164,42 @@ class _CartScreenState extends State<CartScreen> {
 
                     final int? firstRestaurantId = cart.items.isNotEmpty ? cart.items.first.categoryId : null;
 
-                    // 🔥 2. تمرير كود الجلسة إلى دالة submitOrder
+                    // 📍 3. التأكد من وجود إحداثيات صالحة قبل الإرسال
+                    geolocator.Position? finalPosition = _capturedPosition;
+                    if (finalPosition == null) {
+                      // محاولة أخيرة: استخدام الموقع المحفوظ كخطة طوارئ
+                      final savedLoc = await LocationService.getSavedLocationSimple();
+                      if (savedLoc != null) {
+                        finalPosition = geolocator.Position(
+                          latitude: savedLoc.lat,
+                          longitude: savedLoc.lng,
+                          timestamp: DateTime.now(),
+                          accuracy: 0,
+                          altitude: 0,
+                          heading: 0,
+                          speed: 0,
+                          speedAccuracy: 0,
+                          altitudeAccuracy: 0,
+                          headingAccuracy: 0,
+                        );
+                        print('✅ [Cart] Using saved location as fallback for order submission');
+                      }
+                    }
+
+                    // 🔥 4. تمرير كود الجلسة + الموقع النهائي إلى دالة submitOrder
                     final createdOrder = await _apiService.submitOrder(
-                      name: _nameController.text, phone: _phoneController.text,
-                      address: _addressController.text, cartItems: cart.items,
-                      couponCode: cart.appliedCoupon, position: _capturedPosition,
-                      deliveryFee: _deliveryFee, zoneId: currentZoneId,
-                      restaurantId: firstRestaurantId, regionId: currentZoneId,
+                      name: _nameController.text,
+                      phone: _phoneController.text,
+                      address: _addressController.text,
+                      cartItems: cart.items,
+                      couponCode: cart.appliedCoupon,
+                      position: finalPosition, // ✅ نرسل الموقع النهائي (سواء كان جديد أو محفوظ)
+                      deliveryFee: _deliveryFee,
+                      zoneId: currentZoneId,
+                      restaurantId: firstRestaurantId,
+                      regionId: currentZoneId,
                       platformMarkupTotal: cart.totalPlatformMarkup,
-                      checkoutSessionId: checkoutSessionId, // 👈 التعديل
+                      checkoutSessionId: checkoutSessionId,
                     );
 
                     if (!cartScreenContext.mounted) return;
@@ -9467,7 +10228,8 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
   }
-  // 🔥 دالة الحساب السريعة (بدون إجبار الزبون)
+
+  // 🔥 دالة الحساب السريعة: تستخدم الموقع المحفوظ أولاً (بدون انتظار)
   Future<void> _calculateDeliveryFeeFast({
     required CartProvider cart,
     required BuildContext cartScreenContext,
@@ -9487,34 +10249,27 @@ class _CartScreenState extends State<CartScreen> {
       double uLat = 0.0, uLng = 0.0;
       geolocator.Position? capturedPos;
 
-      // 1. جلب الموقع بدقة عالية وحل مشكلة الـ Null
-      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-      if (serviceEnabled) {
-        geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-        if (permission == geolocator.LocationPermission.denied) {
-          permission = await geolocator.Geolocator.requestPermission();
-        }
-
-        if (permission == geolocator.LocationPermission.whileInUse || permission == geolocator.LocationPermission.always) {
-          try {
-            // نطلب الموقع المباشر الآن مع مهلة 5 ثواني
-            capturedPos = await geolocator.Geolocator.getCurrentPosition(
-              desiredAccuracy: geolocator.LocationAccuracy.bestForNavigation,
-              timeLimit: const Duration(seconds: 5),
-            );
-          } catch (e) {
-            // إذا فشل (بسبب التواجد داخل مبنى)، نأخذ آخر موقع كخطة طوارئ
-            capturedPos = await geolocator.Geolocator.getLastKnownPosition();
-          }
-
-          if (capturedPos != null) {
-            uLat = capturedPos.latitude;
-            uLng = capturedPos.longitude;
-          }
-        }
+      // 🎯 1. ✅ أولاً: استخدام الموقع المحفوظ فوراً (بدون انتظار الـ GPS)
+      final savedLocation = await LocationService.getSavedLocationSimple();
+      if (savedLocation != null) {
+        uLat = savedLocation.lat;
+        uLng = savedLocation.lng;
+        print('✅ [FastCalc] Using saved location: $uLat, $uLng');
       }
 
-      // 2. الحساب السريع المباشر (Client-Side) 100% بدون السيرفر
+      // 🔄 2. محاولة جلب موقع جديد في الخلفية (بدون منع الحساب)
+      // نبدأ هذه العملية بشكل غير متزامن (لا ننتظرها)
+      _tryUpdateLocationInBackground().then((newPosition) {
+        if (newPosition != null) {
+          // إذا نجح التحديث، نحتفظ بالموقع الجديد لاستخدامه عند الإرسال
+          capturedPos = newPosition;
+          print('✅ [Background] Location updated: ${newPosition.latitude}, ${newPosition.longitude}');
+        }
+      }).catchError((e) {
+        print('⚠️ [Background] Location update failed: $e');
+      });
+
+      // 3. الحساب الفوري باستخدام الموقع المتاح (المحفوظ أو الافتراضي)
       final configProvider = Provider.of<DeliveryConfigProvider>(cartScreenContext, listen: false);
       if (configProvider.cachedConfig == null) await configProvider.fetchAndCacheConfig();
 
@@ -9526,10 +10281,47 @@ class _CartScreenState extends State<CartScreen> {
           areaName: areaName
       );
 
+      // نرسل النتيجة فوراً + الموقع الجديد إذا توفر (للاستخدام لاحقاً عند الإرسال)
       onResult(result['fee'], result['message'], capturedPos);
 
     } catch (e) {
+      print('❌ [FastCalc] Error: $e');
       onResult(1000.0, "تم تطبيق السعر الافتراضي بسبب خطأ داخلي.", null);
+    }
+  }
+
+  // 🔄 دالة تحديث الموقع في الخلفية (صامتة - لا تنتظر)
+  Future<geolocator.Position?> _tryUpdateLocationInBackground() async {
+    try {
+      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+
+      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        permission = await geolocator.Geolocator.requestPermission();
+        if (permission != geolocator.LocationPermission.whileInUse &&
+            permission != geolocator.LocationPermission.always) {
+          return null;
+        }
+      }
+      if (permission == geolocator.LocationPermission.deniedForever) return null;
+
+      Position newPosition = await geolocator.Geolocator.getCurrentPosition(
+        desiredAccuracy: geolocator.LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 4),
+      );
+
+      // إذا نجح، نحفظ الموقع الجديد للاستخدام المستقبلي
+      await LocationService.saveLocation(
+        newPosition.latitude,
+        newPosition.longitude,
+        source: 'cart_background',
+      );
+
+      return newPosition;
+    } catch (e) {
+      print('⚠️ [BackgroundUpdate] Failed: $e');
+      return null; // فشل آمن → نحتفظ بالموقع القديم
     }
   }
 
@@ -9668,7 +10460,6 @@ class _CartScreenState extends State<CartScreen> {
         ]));
   }
 }
-
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
 
