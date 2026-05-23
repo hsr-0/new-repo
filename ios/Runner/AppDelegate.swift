@@ -28,10 +28,10 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
+        let controller: FlutterViewController = window?.rootViewController as! FlutterViewController
         let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
 
-        debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+        debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
             if call.method == "getLogs" {
                 let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
                 let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
@@ -59,38 +59,55 @@ extension AppDelegate: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
 
-        writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
+        writeLog("⚠️ تم استلام إشعار عبر PushKit")
 
-        if let dict = payload.dictionaryPayload as? [String: Any] {
+        guard let dict = payload.dictionaryPayload as? [String: Any] else {
+            writeLog("❌ payload غير صالح")
+            completion()
+            return
+        }
 
-            let callerName = dict["driver_name"] as? String ?? "الكابتن"
-            let orderId = dict["order_id"] as? String ?? ""
+        // 🔑 التحقق من أن هذا إشعار مكالمة فعلية، وليس تحديث صامت
+        guard let notificationType = dict["type"] as? String,
+              notificationType == "voip_call" else {
+            writeLog("ℹ️ إشعار غير متعلق بالمكالمات (مثلاً تحديث أسعار). يتم تجاهله بأمان.")
+            completion()
+            return
+        }
 
-            // 🔥 الحل الجذري هنا: يجب توليد UUID حقيقي ترضى عنه آبل
-            let validCallKitId = UUID().uuidString
+        let callerName = dict["driver_name"] as? String ?? "الكابتن"
+        let orderId = dict["order_id"] as? String ?? ""
+        let validCallKitId = UUID().uuidString
 
-            let callkitData: [String: Any] = [
-                "id": validCallKitId, // 👈 كود آبل الرسمي (يمنع الكراش)
-                "nameCaller": callerName,
-                "appName": "مطاعم بيتي",
-                "handle": "طلب رقم \(orderId)",
-                "type": 0,
-                "duration": 30000,
-                "extra": dict // 👈 بياناتك (channel_name وغيرها) محفوظة هنا بأمان وتصل لـ Flutter
+        let callkitData: [String: Any] = [
+            "id": validCallKitId,
+            "nameCaller": callerName,
+            "appName": "مطاعم بيتي",
+            "handle": "طلب رقم \(orderId)",
+            "type": 0,
+            "duration": 30000,
+            "extra": [
+                "channel_name": dict["channel_name"] as? String ?? "",
+                "agora_app_id": dict["agora_app_id"] as? String ?? "",
+                "order_id": orderId,
+                "driver_phone": dict["driver_phone"] as? String ?? ""
+                // يمكنك إضافة حقول أخرى هنا إذا لزم الأمر
             ]
+        ]
 
-            let data = flutter_callkit_incoming.Data(args: callkitData)
+        let data = flutter_callkit_incoming.Data(args: callkitData)
 
-            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح.")
-            } else {
-                writeLog("❌ المكتبة غير جاهزة.")
-            }
+        if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+            plugin.showCallkitIncoming(data, fromPushKit: true)
+            writeLog("✅ تم عرض شاشة المكالمة بنجاح.")
+        } else {
+            writeLog("❌ مكتبة CallKit غير جاهزة.")
         }
 
         completion()
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        // اختياري: يمكنك مسح التوكن من UserDefaults هنا إذا أردت
+    }
 }
