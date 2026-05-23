@@ -236,114 +236,165 @@ Future<void> _saveAndRegisterToken(String token) async {
 // =======================================================================
 // 🔥 4. الدالة الرئيسية (MAIN)
 // =======================================================================
+// =======================================================================
+// 🔥 الدالة الرئيسية المحسنة (Non-Blocking Main)
+// =======================================================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   GoRouter.optionURLReflectsImperativeAPIs = true;
   usePathUrlStrategy();
 
+  // 1. تهيئة فايربيس فقط (سريعة وضرورية للخلفية)
   await initFirebase();
 
-  try {
-    if (FirebaseAuth.instance.currentUser == null) {
-      await FirebaseAuth.instance.signInAnonymously();
-      print("✅ تم تسجيل دخول الزبون مجهول الهوية في فايربيس بنجاح (مطلوب للدردشة)");
-    }
-  } catch (e) {
-    print("⚠️ خطأ في مصادقة فايربيس للزبون: $e");
-  }
-
-  try {
-    String? initialToken = await FirebaseMessaging.instance.getToken();
-    if (initialToken != null) {
-      await _saveAndRegisterToken(initialToken);
-    }
-  } catch (e) {
-    print("⚠️ Error fetching initial FCM token: $e");
-  }
-
-  _handleTokenRefresh();
-
+  // 2. تسجيل مستمع الخلفية (يجب أن يكون قبل runApp حسب وثائق Firebase)
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
-  const InitializationSettings initializationSettings = InitializationSettings(
-    android: initializationSettingsAndroid,
-    iOS: initializationSettingsIOS,
-  );
-
-  await flutterLocalNotificationsPlugin.initialize(
-    initializationSettings,
-    onDidReceiveNotificationResponse: (NotificationResponse response) {
-      if (response.payload != null) {
-        try {
-          handleNotificationClick(jsonDecode(response.payload!));
-        } catch (e) {
-          print("Error parsing local notification payload: $e");
-        }
-      }
-    },
-  );
-
-  const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'high_importance_channel',
-    'High Importance Notifications',
-    description: 'This channel is used for important notifications.',
-    importance: Importance.high,
-    playSound: true,
-  );
-
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
-
-  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-    alert: true,
-    badge: true,
-    sound: true,
-  );
-
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    print("🔔 [FCM] Received message in foreground");
-
-    if (message.data['type'] == 'cancel_call') {
-      await FlutterCallkitIncoming.endAllCalls();
-      return;
-    }
-
-    if (message.data['type'] == 'voip_call') {
-      showIncomingCall(message.data);
-    } else {
-      _showLocalNotification(message);
-    }
-  });
-
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    handleNotificationClick(message.data);
-  });
-
-  final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
-  if (initialMessage != null) {
-    print("🚀 تم فتح التطبيق من إشعار وهو مغلق تماماً!");
-    handleNotificationClick(initialMessage.data);
-  }
-
-  await actions.connected();
-  await actions.notificationPermission();
-  await actions.notificationInit();
-  await actions.lockOrientation();
-
-  await FFLocalizations.initialize();
-
-  final appState = FFAppState();
-  await appState.initializePersistedState();
-
-  runApp(ChangeNotifierProvider(
-    create: (context) => appState,
-    child: MyApp(),
-  ));
+  // 3. تشغيل التطبيق فوراً مع شاشة تحميل احترافية
+  runApp(const AppInitializer());
 }
 
+// =======================================================================
+// 🚀 غلاف التهيئة الذكي (يظهر فوراً ويهيئ كل شيء في الخلفية)
+// =======================================================================
+class AppInitializer extends StatefulWidget {
+  const AppInitializer({super.key});
+  @override
+  State<AppInitializer> createState() => _AppInitializerState();
+}
+
+class _AppInitializerState extends State<AppInitializer> {
+  bool _isReady = false;
+  FFAppState? _appState;
+
+  @override
+  void initState() {
+    super.initState();
+    _runHeavyInitialization();
+  }
+
+  Future<void> _runHeavyInitialization() async {
+    try {
+      // 🔥 تشغيل المهام الثقيلة بالتوازي لتسريع الإقلاع
+      await Future.wait([
+        _setupAuthAndFCM(),
+        _setupLocalNotifications(),
+        _setupFlutterFlowAndState(),
+      ]);
+
+      // إعدادات المستمعين الأماميين (سريعة ولا تحتاج await)
+      _setupForegroundListeners();
+    } catch (e) {
+      print("⚠️ [Init] خطأ أثناء التهيئة الخلفية: $e");
+    } finally {
+      if (mounted) setState(() => _isReady = true);
+    }
+  }
+
+  Future<void> _setupAuthAndFCM() async {
+    try {
+      if (FirebaseAuth.instance.currentUser == null) {
+        await FirebaseAuth.instance.signInAnonymously();
+      }
+      String? initialToken = await FirebaseMessaging.instance.getToken();
+      if (initialToken != null) await _saveAndRegisterToken(initialToken);
+      _handleTokenRefresh();
+    } catch (e) {
+      print("⚠️ [Init] خطأ في إعدادات FCM/Auth: $e");
+    }
+  }
+
+  Future<void> _setupLocalNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        if (response.payload != null) {
+          try { handleNotificationClick(jsonDecode(response.payload!)); } catch (_) {}
+        }
+      },
+    );
+
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'high_importance_channel', 'High Importance Notifications',
+      description: 'This channel is used for important notifications.',
+      importance: Importance.high, playSound: true,
+    );
+
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(channel);
+
+    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
+  }
+
+  Future<void> _setupFlutterFlowAndState() async {
+    await actions.connected();
+    await actions.notificationPermission();
+    await actions.notificationInit();
+    await actions.lockOrientation();
+    await FFLocalizations.initialize();
+    _appState = FFAppState();
+    await _appState!.initializePersistedState();
+  }
+
+  void _setupForegroundListeners() {
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      if (message.data['type'] == 'cancel_call') {
+        await FlutterCallkitIncoming.endAllCalls();
+        return;
+      }
+      if (message.data['type'] == 'voip_call') {
+        showIncomingCall(message.data);
+      } else {
+        _showLocalNotification(message);
+      }
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      handleNotificationClick(message.data);
+    });
+
+    FirebaseMessaging.instance.getInitialMessage().then((message) {
+      if (message != null) handleNotificationClick(message.data);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 🔥 شاشة التحميل الفورية (تظهر في أقل من 0.1 ثانية)
+    if (!_isReady || _appState == null) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(color: Color(0xFF0579ED)),
+                const SizedBox(height: 20),
+                const Text("منصة بيتي ترحب بكم عالم نحو التطور ...", style: TextStyle(color: Colors.grey, fontSize: 16, fontWeight: FontWeight.w500)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // ✅ الانتقال السلس للتطبيق الرئيسي بعد اكتمال التهيئة
+    return ChangeNotifierProvider.value(
+      value: _appState!,
+      child: MyApp(),
+    );
+  }
+}
 // =======================================================================
 // 🔥 5. التطبيق الرئيسي (MyApp)
 // =======================================================================
