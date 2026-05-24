@@ -984,7 +984,7 @@ class _SelectLocationScreenState extends State<SelectLocationScreen> {
       appBar: AppBar(title: const Text('اختر المنطقة'), automaticallyImplyLeading: widget.isCancellable),
       body: FutureBuilder<List<Area>>(future: _areas, builder: (_, snap) {
         if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-        if (!snap.hasData) return const Center(child: NetworkErrorWidget(message: 'لا يمكن جلب المناطق', onRetry:  null));
+        if (!snap.hasData) return const Center(child: NetworkErrorWidget(message: 'سيتم تفعيل الصيدليات قريبا ', onRetry:  null));
 
         final gov = snap.data!.where((a) => a.parentId == 0).toList();
         final cities = _selGov == null ? <Area>[] : snap.data!.where((a) => a.parentId == _selGov).toList();
