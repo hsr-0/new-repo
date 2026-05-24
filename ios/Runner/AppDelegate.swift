@@ -11,6 +11,7 @@ import CoreLocation
     var voipRegistry: PKPushRegistry?
     let locationManager = CLLocationManager()
 
+    // دالة مساعدة لتسجيل السجلات
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -57,6 +58,14 @@ import CoreLocation
         voipRegistry?.desiredPushTypes = [.voIP]
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    // منع الاستجابة للدالة المهملة التي تسبب الانهيار
+    override func responds(to aSelector: Selector!) -> Bool {
+        if aSelector == Selector(("pushRegistry:didReceiveRemoteNotificationPayload:withCompletionHandler:")) {
+            return false
+        }
+        return super.responds(to: aSelector)
     }
 }
 
@@ -105,11 +114,11 @@ extension AppDelegate: PKPushRegistryDelegate {
         completion()
     }
 
-    // ⚡️ الطريقة القديمة التي تمنع الكراش بدون completion (متوافقة مع كل إصدارات iOS)
+    // هذه الدالة للإصدارات القديمة (حتى iOS 13) ولن تُستدعى في iOS 14+، ونبقيها احترازياً
     func pushRegistry(_ registry: PKPushRegistry,
                       didReceiveRemoteNotificationPayload payload: PKPushPayload,
                       for type: PKPushType) {
-        // لا تفعل شيئاً، فقط امنع التوجيه إلى FlutterAppDelegate
+        // لا تفعل شيئاً، فقط تمنع التوجيه إلى Flutter
     }
 
     func pushRegistry(_ registry: PKPushRegistry,
