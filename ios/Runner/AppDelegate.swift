@@ -11,7 +11,6 @@ import CoreLocation
     var voipRegistry: PKPushRegistry?
     let locationManager = CLLocationManager()
 
-    // دالة مساعدة لكتابة سجلات داخلية للتتبع (اختيارية)
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -28,16 +27,10 @@ import CoreLocation
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
 
-        // 1. تهيئة Firebase للإشعارات العادية FCM
         FirebaseApp.configure()
-
-        // 2. طلب إذن الموقع مبدئياً لتهيئة خدمات الخرائط وتجنب الكراش
         locationManager.requestWhenInUseAuthorization()
-
-        // 3. تسجيل كل إضافات Flutter
         GeneratedPluginRegistrant.register(with: self)
 
-        // 4. قناة ديباج لقراءة السجلات والتوكن من Flutter (اختياري)
         if let controller = window?.rootViewController as? FlutterViewController {
             let debugChannel = FlutterMethodChannel(
                 name: "beytei_deep_debugger",
@@ -54,13 +47,11 @@ import CoreLocation
             }
         }
 
-        // 5. تسجيل الإشعارات العادية عبر مركز الإشعارات
         if #available(iOS 10.0, *) {
             UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
         }
         application.registerForRemoteNotifications()
 
-        // 6. إعداد PushKit لاستقبال المكالمات VoIP
         voipRegistry = PKPushRegistry(queue: .main)
         voipRegistry?.delegate = self
         voipRegistry?.desiredPushTypes = [.voIP]
@@ -69,7 +60,7 @@ import CoreLocation
     }
 }
 
-// MARK: - PKPushRegistryDelegate (المكالمات VoIP)
+// MARK: - PKPushRegistryDelegate
 extension AppDelegate: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry,
@@ -114,16 +105,13 @@ extension AppDelegate: PKPushRegistryDelegate {
         completion()
     }
 
-    // ⚡️ الإصلاح الحاسم: منع الكراش عند وصول إشعار عادي عبر الواجهة المهملة
+    // ⚡️ الطريقة القديمة التي تمنع الكراش بدون completion (متوافقة مع كل إصدارات iOS)
     func pushRegistry(_ registry: PKPushRegistry,
                       didReceiveRemoteNotificationPayload payload: PKPushPayload,
-                      withCompletionHandler completion: @escaping (PKPushNotificationProcessingResult) -> Void) {
-        // تجاهل الإشعار العادي بأمان، وعدم تمريره إلى FlutterAppDelegate
-        completion(.noData)
+                      for type: PKPushType) {
+        // لا تفعل شيئاً، فقط امنع التوجيه إلى FlutterAppDelegate
     }
 
     func pushRegistry(_ registry: PKPushRegistry,
-                      didInvalidatePushTokenFor type: PKPushType) {
-        // لا حاجة لفعل شيء هنا
-    }
+                      didInvalidatePushTokenFor type: PKPushType) {}
 }
