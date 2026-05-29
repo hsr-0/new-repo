@@ -9,7 +9,7 @@ class MainSplashPageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Future.delayed(const Duration(seconds: 4), () {
+    Future.delayed(const Duration(seconds: 2), () {
       context.go('/sections');
     });
 

@@ -188,14 +188,6 @@ name: HomeMainPageWidget.routeName,
 path: HomeMainPageWidget.routePath,
 builder: (context, params) => HomeMainPageWidget(),
 ),
-    FFRoute(
-      name: 'MiswakStorePage',
-      path: '/miswak-store',
-      // ✅ التعديل هنا: نستدعي نقطة الدخول الجديدة (MiswakAppEntryPoint)
-      // بدلاً من (LocationCheckWrapper) مباشرة
-      builder: (context, params) => const MiswakModule(),
-    ),
-
 
 
 

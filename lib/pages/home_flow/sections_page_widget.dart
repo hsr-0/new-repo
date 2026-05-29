@@ -129,29 +129,29 @@ class LocationService {
   }
 
   /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
-  static Future<geolocator.Position?> tryAutoDetectSilent({Duration timeout = const Duration(seconds: 20)}) async {
+  /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
+  /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
+  static Future<geolocator.Position?> tryAutoDetectSilent({Duration timeout = const Duration(seconds: 5)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return null;
 
       geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-      if (permission == geolocator.LocationPermission.denied) {
-        return null; // لا نطلب إذن هنا، نعود null بصمت
+      if (permission == geolocator.LocationPermission.denied || permission == geolocator.LocationPermission.deniedForever) {
+        return null;
       }
-      if (permission == geolocator.LocationPermission.deniedForever) return null;
 
+      // 🔥 التعديل الجذري: استخدام دقة منخفضة + إجبار الدالة على التوقف بعد 5 ثواني
       geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
-        desiredAccuracy: geolocator.LocationAccuracy.medium,
-        timeLimit: timeout,
-      );
+        desiredAccuracy: geolocator.LocationAccuracy.low,
+      ).timeout(timeout);
+
       return position;
     } catch (e) {
       print('❌ Silent auto-detect location failed: $e');
       return null;
     }
-  }
-
-  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
+  }  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
   static Future<geolocator.Position?> tryAutoDetectWithPermission({Duration timeout = const Duration(seconds: 10)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -247,53 +247,128 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     _startBackgroundTasks();
     _startSilentBackgroundLocationUpdates();
   }
+  /// 🛡️ التأكد من صلاحية الموقع (تُرجع true إذا كانت الصلاحية متاحة)
+  Future<bool> _ensureLocationPermission() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      // يمكن هنا تنبيه المستخدم لتشغيل الـ GPS إذا رغبت
+      print('ℹ️ خدمات الموقع (GPS) مغلقة');
+    }
 
+    LocationPermission permission = await Geolocator.checkPermission();
+
+    // إذا لم يتم طلب الصلاحية من قبل، نطلبها الآن
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    // إذا رفض المستخدم الصلاحية نهائياً (Denied Forever)
+    if (permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        _showSettingsDialog();
+      }
+      return false;
+    }
+
+    return permission == LocationPermission.whileInUse || permission == LocationPermission.always;
+  }
+
+  /// ⚙️ عرض رسالة إجبارية تطلب من المستخدم فتح الإعدادات لمنح الصلاحية
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false, // لا يمكن تخطيها
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: const Row(
+            children: [
+              Icon(Icons.location_disabled_rounded, color: Colors.red),
+              SizedBox(width: 10),
+              Text('صلاحية الموقع مطلوبة', style: TextStyle(fontSize: 18)),
+            ],
+          ),
+          content: const Text(
+            'التطبيق يعتمد بشكل كامل على موقعك لتقديم خدمات التوصيل وحساب المسافات بدقة. يرجى تفعيل الصلاحية من إعدادات الجهاز للمتابعة.',
+            style: TextStyle(height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                // يمكن السماح له بالاستمرار للتحديد اليدوي كخيار أخير
+              },
+              child: const Text('المتابعة بدون موقع', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await Geolocator.openAppSettings(); // يفتح إعدادات التطبيق مباشرة
+              },
+              child: const Text('فتح الإعدادات لتفعيل اذن الموقع', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
   /// 📍 المنطق الرئيسي للتحقق من الموقع
+  /// 📍 المنطق الرئيسي للتحقق من الموقع والصلاحيات عند الدخول
+  /// 📍 المنطق الرئيسي للتحقق من الموقع والصلاحيات عند الدخول
   Future<void> _checkAndHandleLocation() async {
     if (!mounted) return;
     setState(() => _isCheckingLocation = true);
 
-    // 1. محاولة جلب الموقع المحفوظ
-    _savedLocation = await LocationService.getSavedLocation();
+    try {
+      // 1. التحقق من الصلاحية أولاً
+      bool hasPermission = await _ensureLocationPermission();
 
-    // 2. إذا كان الموقع موجوداً (حتى لو منتهي الصلاحية) → نستخدمه
-    if (_savedLocation != null) {
-      setState(() => _isCheckingLocation = false);
+      if (hasPermission) {
+        // 🔥 الخدعة الذكية: محاولة جلب آخر موقع معروف (فوري ولا يسبب تعليق)
+        final lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null && mounted) {
+          await LocationService.saveLocation(lastKnown.latitude, lastKnown.longitude, source: 'auto_fast');
+          setState(() {
+            _savedLocation = (lat: lastKnown.latitude, lng: lastKnown.longitude, source: 'auto_fast', isExpired: false);
+          });
+          return; // الخروج فوراً للواجهة الرئيسية
+        }
 
-      // نحاول التحديث في الخلفية لكن نحتفظ بالقديم
-      _tryUpdateLocationInBackground();
-      return;
+        // إذا لم يكن هناك موقع معروف، نجرب التحديد الحي ولكن بمهلة قصيرة جداً (5 ثواني بدل 40)
+        final position = await LocationService.tryAutoDetectSilent(timeout: const Duration(seconds: 5));
+        if (position != null && mounted) {
+          await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto');
+          setState(() {
+            _savedLocation = (lat: position.latitude, lng: position.longitude, source: 'auto', isExpired: false);
+          });
+          return;
+        }
+      }
+
+      // 2. الخطة البديلة: جلب الموقع المحفوظ
+      _savedLocation = await LocationService.getSavedLocation();
+      if (_savedLocation != null) {
+        return;
+      }
+
+      // 3. لا يوجد أي موقع -> نجهز نافذة الاختيار اليدوي
+      if (mounted && !_locationDialogShown) {
+        _locationDialogShown = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showLocationPickerDialog();
+        });
+      }
+    } catch (e) {
+      print('❌ Error in Location Check: $e');
+    } finally {
+      // 🔥🔥🔥 الحماية القصوى: هذا الكود سيعمل دائماً مهما حدث من أخطاء، وسيزيل شاشة التحميل
+      if (mounted) {
+        setState(() => _isCheckingLocation = false);
+        _startSilentBackgroundLocationUpdates();
+      }
     }
-
-    // 3. لا يوجد موقع محفوظ → نحاول التحديد التلقائي مع طلب الإذن
-    final autoPosition = await LocationService.tryAutoDetectWithPermission();
-    if (autoPosition != null && mounted) {
-      await LocationService.saveLocation(
-        autoPosition.latitude,
-        autoPosition.longitude,
-        source: 'auto',
-      );
-      setState(() {
-        _isCheckingLocation = false;
-        _savedLocation = (
-        lat: autoPosition.latitude,
-        lng: autoPosition.longitude,
-        source: 'auto',
-        isExpired: false,
-        );
-      });
-      return;
-    }
-
-    // 4. إذا فشل كل شيء → نعرض حوار التحديد اليدوي
-    setState(() => _isCheckingLocation = false);
-    if (mounted && !_locationDialogShown) {
-      _locationDialogShown = true;
-      _showLocationPickerDialog();
-    }
-  }
-
-  /// 🔄 محاولة تحديث الموقع في الخلفية (بدون إزعاج المستخدم)
+  }  /// 🔄 محاولة تحديث الموقع في الخلفية (بدون إزعاج المستخدم)
   Future<void> _tryUpdateLocationInBackground() async {
     if (_savedLocation == null) return;
 
@@ -337,6 +412,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   /// 🗺️ حوار تحديد الموقع الحديث
+  /// 🗺️ حوار تحديد الموقع الحديث
   void _showLocationPickerDialog() {
     showDialog(
       context: context,
@@ -372,12 +448,12 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                       topRight: Radius.circular(23),
                     ),
                   ),
-                  child: Row(
+                  child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(Icons.location_on_rounded, color: Colors.white, size: 28),
-                      const SizedBox(width: 10),
-                      const Text(
+                      SizedBox(width: 10),
+                      Text(
                         'تحديد موقع التوصيل',
                         style: TextStyle(
                           color: Colors.white,
@@ -427,30 +503,67 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                           Expanded(
                             child: ElevatedButton.icon(
                               onPressed: () async {
-                                Navigator.pop(ctx);
+                                Navigator.pop(ctx); // إغلاق النافذة الحالية
                                 setState(() => _isCheckingLocation = true);
-                                final position = await LocationService.tryAutoDetectWithPermission();
-                                setState(() => _isCheckingLocation = false);
 
-                                if (position != null && mounted) {
-                                  await LocationService.saveLocation(
-                                    position.latitude,
-                                    position.longitude,
-                                    source: 'auto',
-                                  );
-                                  setState(() {
-                                    _savedLocation = (
-                                    lat: position.latitude,
-                                    lng: position.longitude,
-                                    source: 'auto',
-                                    isExpired: false,
-                                    );
-                                  });
-                                } else if (mounted) {
-                                  // إعادة العرض إذا فشل
-                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                try {
+                                  // 🔥 1. فحص خدمة الـ GPS
+                                  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+                                  if (!serviceEnabled) {
+                                    setState(() => _isCheckingLocation = false);
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text('يرجى تشغيل خدمة الـ GPS أولاً.'), backgroundColor: Colors.red)
+                                      );
+                                      _showLocationPickerDialog(); // إعادة عرض النافذة
+                                    }
+                                    return;
+                                  }
+
+                                  // 🔥 2. فحص الصلاحيات (ستظهر نافذة "الصلاحية مرفوضة" إذا كانت ممنوعة)
+                                  bool hasPermission = await _ensureLocationPermission();
+                                  if (!hasPermission) {
+                                    setState(() => _isCheckingLocation = false);
+                                    // إذا رفض الصلاحية، نكتفي بالتوقف لأن دالة _ensureLocationPermission ستعرض نافذة الإعدادات
                                     if (mounted) _showLocationPickerDialog();
-                                  });
+                                    return;
+                                  }
+
+                                  // 🔥 3. محاولة التقاط الموقع الفعلي
+                                  final position = await Geolocator.getCurrentPosition(
+                                    desiredAccuracy: LocationAccuracy.medium,
+                                    timeLimit: const Duration(seconds: 10),
+                                  );
+
+                                  if (mounted) {
+                                    await LocationService.saveLocation(
+                                      position.latitude,
+                                      position.longitude,
+                                      source: 'auto',
+                                    );
+                                    setState(() {
+                                      _savedLocation = (
+                                      lat: position.latitude,
+                                      lng: position.longitude,
+                                      source: 'auto',
+                                      isExpired: false,
+                                      );
+                                      _isCheckingLocation = false;
+                                    });
+                                    _startSilentBackgroundLocationUpdates();
+                                  }
+
+                                } catch (e) {
+                                  // 🔥 4. في حال فشل الالتقاط (ضعف الإشارة)
+                                  setState(() => _isCheckingLocation = false);
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('فشل في التقاط الموقع. حاول مرة أخرى أو استخدم التحديد اليدوي.'), backgroundColor: Colors.orange)
+                                    );
+                                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                                      if (mounted) _showLocationPickerDialog();
+                                    });
+                                  }
                                 }
                               },
                               icon: const Icon(Icons.my_location),
@@ -486,7 +599,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       ),
     );
   }
-
   /// 🗺️ فتح شاشة اختيار الموقع يدوياً
   Future<bool> _handleManualLocationPick() async {
     try {

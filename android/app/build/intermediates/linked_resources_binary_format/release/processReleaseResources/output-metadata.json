@@ -11,8 +11,8 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 73,
-      "versionName": "1.7.3",
+      "versionCode": 75,
+      "versionName": "1.7.5",
       "outputFile": "linked-resources-binary-format-release.ap_"
     }
   ],
