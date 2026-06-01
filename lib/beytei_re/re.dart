@@ -10,14 +10,9 @@ import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:geolocator/geolocator.dart';
 import 'package:fluttertoast/fluttertoast.dart';
-
-
-import 'dart:math'; // 👈 تأكد من وجود هذا السطر ضروري جداً
 import 'package:flutter_map/flutter_map.dart';
-import 'package:flutter/services.dart'; // مطلوب للاهتزاز
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -57,12 +52,8 @@ const double AD_COST = 3000.0; // تكلفة الإعلان
 // =======================================================================
 // 📍 خدمة إدارة الموقع المحفوظ (متاحة لجميع الشاشات)
 // =======================================================================
-
 // =======================================================================
-// 📍 خدمة إدارة الموقع المحفوظ (متاحة لجميع الشاشات)
-// =======================================================================
-// =======================================================================
-// 📍 خدمة إدارة الموقع المحفوظ (موحدة - متاحة لجميع الشاشات)
+// 🔄 خدمة التحديث الصامت للموقع عند الدخول/العودة
 // =======================================================================
 class LocationService {
   // ✅ مفاتيح موحدة للمشاركة بين التطبيقات
@@ -86,8 +77,16 @@ class LocationService {
       await prefs.setDouble(LNG_KEY, lng);
       await prefs.setString(LOCATION_SOURCE_KEY, source);
       await prefs.setInt(LOCATION_TIMESTAMP_KEY, DateTime.now().millisecondsSinceEpoch);
-      if (areaId != null) await prefs.setInt(AREA_ID_KEY, areaId);
-      if (areaName != null) await prefs.setString(AREA_NAME_KEY, areaName);
+
+      // ✅ حفظ المنطقة مع الموقع
+      if (areaId != null) {
+        await prefs.setInt(AREA_ID_KEY, areaId);
+        print("💾 تم حفظ المنطقة مع الموقع: $areaId");
+      }
+      if (areaName != null) {
+        await prefs.setString(AREA_NAME_KEY, areaName);
+      }
+
       return true;
     } catch (e) {
       print('❌ Error saving location: $e');
@@ -1310,7 +1309,6 @@ class DashboardProvider with ChangeNotifier {
 
 
 
-
 class DeliveryConfigProvider with ChangeNotifier {
   Map<String, dynamic>? _cachedConfig;
   bool _isLoading = false;
@@ -1331,7 +1329,7 @@ class DeliveryConfigProvider with ChangeNotifier {
       print("🚀 [Config] جاري جلب ملف التسعير من السيرفر...");
       final response = await http.get(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/delivery-config-geo'),
-      ).timeout(const Duration(seconds: 8));
+      ).timeout(const Duration(seconds: 19));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -1357,7 +1355,7 @@ class DeliveryConfigProvider with ChangeNotifier {
     }
   }
 
-  // 🔥 الدالة الأساسية: تحسب السعر محلياً وتطبع خطوات الحساب في الكونسول
+  // 🔥 الدالة الأساسية: تحسب السعر محلياً وتُرجع رسوم الخدمة والكاش باك
   Map<String, dynamic> calculateFeeDetails({
     required double userLat,
     required double userLng,
@@ -1378,16 +1376,38 @@ class DeliveryConfigProvider with ChangeNotifier {
 
     print("📍 حالة المنطقة: هل هي الكوت؟ $isKut | هل هي الصويرة؟ $isSuwaira");
 
+    // 🔥 تهيئة رسوم الخدمة والكاش باك (مؤقتاً يتم تحديدها هنا لحين برمجتها في السيرفر)
+    double serviceFee = 0.0;
+    double cashbackAmount = 0.0;
+
+    // يمكنك لاحقاً قراءة هذه القيم من _cachedConfig بناءً على المنطقة
+    // مثال: قراءة القيم المخصصة للكوت من ملف التسعير
+    if (isKut) {
+      // هذه القيم ستفعل الأنيميشن في شاشة إتمام الدفع وتضيف رسوم الخدمة
+      serviceFee = 250.0; // مثال لرسوم الخدمة
+      cashbackAmount = 1000.0; // قيمة الكاش باك الهدية للمحفظة
+    }
+
     // حماية: التأكد من وجود ملف التسعير
     if (_cachedConfig == null) {
       print("⚠️ [Calc Error] ملف التسعير غير موجود! سيتم تطبيق السعر الافتراضي: $fallbackFee");
-      return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة (أوفلاين)'};
+      return {
+        'fee': fallbackFee,
+        'message': '📌 تسعيرة ($areaName) الموحدة (أوفلاين)',
+        'service_fee': serviceFee,
+        'cashback_amount': cashbackAmount
+      };
     }
 
     // حماية: إذا كان الـ GPS مغلق أو لم يتم جلبه
     if (userLat == 0.0 || userLng == 0.0) {
       print("⚠️ [Calc Error] إحداثيات الزبون صفرية! سيتم تطبيق السعر الافتراضي: $fallbackFee");
-      return {'fee': fallbackFee, 'message': '📌 تم تطبيق تسعيرة ($areaName) الموحدة'};
+      return {
+        'fee': fallbackFee,
+        'message': '📌 تم تطبيق تسعيرة ($areaName) الموحدة',
+        'service_fee': serviceFee,
+        'cashback_amount': cashbackAmount
+      };
     }
 
     try {
@@ -1421,7 +1441,17 @@ class DeliveryConfigProvider with ChangeNotifier {
             double zonePrice = double.tryParse(zone['price'].toString()) ?? fallbackFee;
             if (zonePrice < 1000.0) zonePrice = 1000.0;
             print("✅ [Calc Success] الزبون داخل منطقة مرسومة: ${zone['name']} | السعر: $zonePrice");
-            return {'fee': zonePrice, 'message': '🎯 داخل المنطقة المرسومة: ${zone['name']}'};
+
+            // قراءة قيم الكاش باك والخدمة المخصصة للمنطقة المرسومة إذا أرسلها السيرفر
+            double zoneServiceFee = double.tryParse(zone['service_fee']?.toString() ?? '0.0') ?? serviceFee;
+            double zoneCashback = double.tryParse(zone['cashback_amount']?.toString() ?? '0.0') ?? cashbackAmount;
+
+            return {
+              'fee': zonePrice,
+              'message': '🎯 داخل المنطقة المرسومة: ${zone['name']}',
+              'service_fee': zoneServiceFee,
+              'cashback_amount': zoneCashback
+            };
           }
         }
         print("ℹ️ [Calc Info] الزبون خارج جميع المناطق المرسومة، سيتم حساب المسافة...");
@@ -1433,7 +1463,12 @@ class DeliveryConfigProvider with ChangeNotifier {
       final restLoc = locations.firstWhere((l) => l['id'] == restaurantId, orElse: () => {});
       if (restLoc.isEmpty) {
         print("⚠️ [Calc Error] لم يتم العثور على إحداثيات للمطعم! سيتم تطبيق السعر الافتراضي: $fallbackFee");
-        return {'fee': fallbackFee, 'message': '📌 تسعيرة ($areaName) الموحدة'};
+        return {
+          'fee': fallbackFee,
+          'message': '📌 تسعيرة ($areaName) الموحدة',
+          'service_fee': serviceFee,
+          'cashback_amount': cashbackAmount
+        };
       }
 
       double restLat = double.tryParse(restLoc['lat'].toString()) ?? 0.0;
@@ -1470,7 +1505,12 @@ class DeliveryConfigProvider with ChangeNotifier {
         }
         print("✅ [Calc Success] السعر النهائي للكوت: $finalPrice د.ع");
         print("==================================================");
-        return {'fee': finalPrice, 'message': '📏 تسعيرة الكوت الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
+        return {
+          'fee': finalPrice,
+          'message': '📏 تسعيرة الكوت الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)',
+          'service_fee': serviceFee,
+          'cashback_amount': cashbackAmount
+        };
 
       } else if (isSuwaira) {
         // ✨ تسعيرة الصويرة المحدثة (أول 1.60 كم بـ 1000، ثم 400 لكل كم إضافي)
@@ -1492,7 +1532,12 @@ class DeliveryConfigProvider with ChangeNotifier {
         }
         print("✅ [Calc Success] السعر النهائي للصويرة: $finalPrice د.ع");
         print("==================================================");
-        return {'fee': finalPrice, 'message': '📏 تسعيرة الصويرة الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)'};
+        return {
+          'fee': finalPrice,
+          'message': '📏 تسعيرة الصويرة الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)',
+          'service_fee': serviceFee,
+          'cashback_amount': cashbackAmount
+        };
 
       } else {
         print("🔢 [Calc Logic] تطبيق تسعيرة الطوارئ للمسافات (خارج المناطق المرسومة)...");
@@ -1506,13 +1551,23 @@ class DeliveryConfigProvider with ChangeNotifier {
 
         print("✅ [Calc Success] السعر النهائي للطوارئ: $finalPrice د.ع");
         print("==================================================");
-        return {'fee': finalPrice < 1000 ? 1000.0 : finalPrice, 'message': '📏 تسعيرة المسافة الاحتياطية (${distanceKm.toStringAsFixed(2)} كم)'};
+        return {
+          'fee': finalPrice < 1000 ? 1000.0 : finalPrice,
+          'message': '📏 تسعيرة المسافة الاحتياطية (${distanceKm.toStringAsFixed(2)} كم)',
+          'service_fee': serviceFee,
+          'cashback_amount': cashbackAmount
+        };
       }
 
     } catch (e) {
       print("❌ [Calc Fatal Error] حدث خطأ أثناء الحساب: $e");
       print("==================================================");
-      return {'fee': fallbackFee, 'message': '⚠️ تم تطبيق السعر الافتراضي لـ ($areaName)'};
+      return {
+        'fee': fallbackFee,
+        'message': '⚠️ تم تطبيق السعر الافتراضي لـ ($areaName)',
+        'service_fee': serviceFee,
+        'cashback_amount': cashbackAmount
+      };
     }
   }
 
@@ -1542,7 +1597,6 @@ class DeliveryConfigProvider with ChangeNotifier {
 
   double _deg2rad(double deg) => deg * (3.141592653589793 / 180.0);
 }
-
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -6435,21 +6489,113 @@ void main() async {
   runApp(const RestaurantModule());
 }
 
+// =======================================================================
+// 🔄 خدمة التحديث الصامت للموقع عند الدخول/العودة (ضعها قبل الكلاس)
+// =======================================================================
+class BackgroundLocationRefresher {
+  static bool _isUpdating = false;
+
+  /// تحديث الموقع في الخلفية عند فتح التطبيق أو استئنافه
+  static Future<void> silentRefresh() async {
+    if (_isUpdating) return;
+    _isUpdating = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // التأكد من وجود موقع محفوظ مسبقاً
+      final savedLat = prefs.getDouble(LocationService.LAT_KEY);
+      final savedLng = prefs.getDouble(LocationService.LNG_KEY);
+
+      if (savedLat == null || savedLng == null) {
+        _isUpdating = false;
+        return; // لا يوجد موقع سابق، ننتظر التحديد اليدوي
+      }
+
+      // فحص صامت لحالة الـ GPS والصلاحيات
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _isUpdating = false;
+        return;
+      }
+
+      final perm = await Geolocator.checkPermission();
+      if (perm != LocationPermission.whileInUse && perm != LocationPermission.always) {
+        _isUpdating = false;
+        return;
+      }
+
+      // جلب الموقع الحالي بسرعة (بدون تعطيل الواجهة)
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.low,
+        timeLimit: const Duration(seconds: 15), // مهلة قصيرة جداً
+      );
+
+      // حساب المسافة لتجنب التحديثات غير الضرورية
+      final distance = Geolocator.distanceBetween(
+          savedLat, savedLng, pos.latitude, pos.longitude);
+
+      // تحديث فقط إذا تحرك المستخدم أكثر من 50 متر
+      if (distance > 50.0) {
+        await LocationService.saveLocation(
+          pos.latitude,
+          pos.longitude,
+          source: 'auto_resume_refresh',
+        );
+        print("📍 [AutoUpdate] تم تحديث الموقع في الخلفية (تحرك ${distance.toStringAsFixed(0)}م)");
+
+        // إشعار التطبيق بإعادة حساب التسعيرة إذا لزم الأمر
+        _triggerAppRefresh();
+      }
+    } catch (e) {
+      print("⚠️ [AutoUpdate] فشل التحديث الصامت: $e");
+    } finally {
+      _isUpdating = false;
+    }
+  }
+
+  static void _triggerAppRefresh() {
+    // بما أن شاشات المنيو والسلة تقرأ من SharedPreferences عند الفتح،
+    // فإن تحديث الموقع هنا يكفي لضمان دقة السعر عند الدخول التالي لأي شاشة.
+    // يمكن إضافة: Provider.of<DeliveryConfigProvider>(...).notifyListeners(); إذا أردت تحديث فوري
+  }
+}
+
+// =======================================================================
+// --- MAIN APP ENTRY POINT & WRAPPERS ---
+// =======================================================================
+
 class RestaurantModule extends StatefulWidget {
   const RestaurantModule({super.key});
+
   @override
   State<RestaurantModule> createState() => _RestaurantModuleState();
 }
 
-class _RestaurantModuleState extends State<RestaurantModule> {
+class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBindingObserver {
+
   @override
   void initState() {
     super.initState();
+    // ✅ إضافة المراقب لدورة حياة التطبيق
+    WidgetsBinding.instance.addObserver(this);
     _initializeServices();
-
-    // 🔥 1. تشغيل مستمع المكالمات (للرد الفوري عبر CallKit)
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // ✅ عند فتح التطبيق أو العودة إليه من الخلفية
+    if (state == AppLifecycleState.resumed) {
+      BackgroundLocationRefresher.silentRefresh();
+    }
+  }
+
+  @override
+  void dispose() {
+    // ✅ تنظيف المراقب عند إغلاق التطبيق
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   Future<void> _initializeServices() async {
     // تهيئة خدمة الإشعارات المحلية الموجودة مسبقاً
@@ -6458,21 +6604,13 @@ class _RestaurantModuleState extends State<RestaurantModule> {
     // طلب صلاحيات الإشعارات
     await FirebaseMessaging.instance.requestPermission();
 
-
-    // 🔥 4. الاستماع للإشعارات عند النقر عليها لفتح التطبيق (Background to Foreground)
+    // 🔥 الاستماع للإشعارات عند النقر عليها لفتح التطبيق (Background to Foreground)
     FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessage);
 
     print("✅ Notification & Call Services Initialized");
   }
 
   // ==========================================================
-  // دالة معالجة الإشعارات أثناء عمل التطبيق (Foreground)
-  // ==========================================================
-
-  // ==========================================================
-  // دالة معالجة الإشعارات عند فتح التطبيق من الخلفية (Background)
-  // ==========================================================
-// ==========================================================
   // دالة معالجة الإشعارات عند فتح التطبيق من الخلفية (Background)
   // ==========================================================
   Future<void> _handleBackgroundMessage(RemoteMessage message) async {
@@ -6487,21 +6625,16 @@ class _RestaurantModuleState extends State<RestaurantModule> {
       await prefs.setString('pending_call_driver', driverName);
       await prefs.setBool('has_pending_call', true);
 
-      // ملاحظة: يمكنك إضافة منطق في شاشتك الرئيسية (MainScreen) لفحص 'has_pending_call'
-      // وفتح صفحة المكالمة تلقائياً عند الدخول.
-
       // محاولة التوجيه المباشر إذا كان التطبيق قد بنى الواجهة
       if (navigatorKey.currentState != null) {
         navigatorKey.currentState?.push(
           MaterialPageRoute(
-            // الكود بعد التعديل
             builder: (context) => ActiveVoiceCallScreen(
               channelName: channelName,
               remoteName: driverName,
-              // 👇 هذا هو السطر الذي سيحل المشكلة
               onCallEnded: () {
                 if (Navigator.canPop(context)) {
-                  Navigator.pop(context); // إغلاق الشاشة عند انتهاء المكالمة
+                  Navigator.pop(context);
                 }
               },
             ),
@@ -6509,12 +6642,12 @@ class _RestaurantModuleState extends State<RestaurantModule> {
         );
       }
     }
-    // 2️⃣ 🔥 التعديل الجديد: معالجة إشعارات الدردشة
+    // 2️⃣ معالجة إشعارات الدردشة
     else if (message.data['type'] == 'chat_message') {
       final orderId = message.data['order_id'];
       final driverName = message.data['sender_name'] ?? 'المندوب';
 
-      // الانتظار قليلاً لضمان بناء الواجهة الأساسية (مهم جداً لتجنب الشاشة السوداء)
+      // الانتظار قليلاً لضمان بناء الواجهة الأساسية
       await Future.delayed(const Duration(milliseconds: 500));
 
       if (navigatorKey.currentState != null && orderId != null) {
@@ -6523,13 +6656,14 @@ class _RestaurantModuleState extends State<RestaurantModule> {
             builder: (context) => CustomerChatPage(
               orderId: orderId.toString(),
               driverName: driverName,
-              customerName: 'الزبون', // يمكن تبديلها باسم الزبون الحقيقي من الـ SharedPreferences لاحقاً إذا أردت
+              customerName: 'الزبون',
             ),
           ),
         );
       }
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
@@ -6543,6 +6677,7 @@ class _RestaurantModuleState extends State<RestaurantModule> {
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
         ChangeNotifierProvider(create: (_) => DeliveryConfigProvider()),
         ChangeNotifierProvider(create: (_) => SmartWalletProvider()),
+
         ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
           create: (_) => DashboardProvider(),
           update: (_, auth, dashboard) {
@@ -6603,15 +6738,10 @@ class _RestaurantModuleState extends State<RestaurantModule> {
   }
 }
 
-
-
-
-
-
 class MapLocationPicker extends StatefulWidget {
   final double? initialLat;
   final double? initialLng;
-  final String mapStyleUrl; // رابط ستايل الخريطة
+  final String mapStyleUrl;
 
   const MapLocationPicker({
     super.key,
@@ -6625,81 +6755,161 @@ class MapLocationPicker extends StatefulWidget {
 }
 
 class _MapLocationPickerState extends State<MapLocationPicker>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   ml.MapLibreMapController? _mapController;
-  ml.LatLng _selectedPoint = ml.LatLng(32.5000, 45.8000); // افتراضي (الكوت)
+
+  // النقطة الابتدائية العشوائية (ستتغير فوراً بعد أجزاء من الثانية)
+  ml.LatLng _selectedPoint = ml.LatLng(32.5000, 45.8000);
+
   bool _isMapReady = false;
   bool _isLocating = false;
-  bool _autoLocated = false;     // هل تم التحديد تلقائياً؟
-  bool _manualMode = false;      // هل المستخدم في الوضع اليدوي؟
+  bool _autoLocated = false;
+  bool _manualMode = false;
+  bool _userChoseManual = false;
+
+  double _currentZoom = 14.0;
+  final double _minAllowedZoom = 14.0;
+
   AnimationController? _pulseController;
 
   @override
   void initState() {
     super.initState();
-    if (widget.initialLat != null && widget.initialLng != null) {
+    WidgetsBinding.instance.addObserver(this);
+
+    // فحص ما إذا كان هناك موقع ممرر من الشاشة السابقة
+    if (widget.initialLat != null && widget.initialLng != null && widget.initialLat != 0.0) {
       _selectedPoint = ml.LatLng(widget.initialLat!, widget.initialLng!);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _tryAutoDetectLocation(isUserInitiated: false);
+      });
     } else {
-      // 🔥 الخدعة الذكية: إذا لم يكن هناك موقع سابق، اجلب مركز المدينة المختارة
-      _setCityCenterFallback();
+      // إذا لم يكن هناك موقع سابق، افحص المدينة ووجه الكاميرا إليها
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _checkAreaAndSetFallback();
+      });
     }
 
-    _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 2))
-      ..repeat();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _tryAutoDetectLocation();
-    });
-  }
-
-  // ====================== دالة توجيه الخريطة لمركز المدينة ======================
-  Future<void> _setCityCenterFallback() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      // قراءة رقم المنطقة التي اختارها الزبون في البداية
-      int? areaId = prefs.getInt('selectedAreaId') ?? prefs.getInt('shared_area_id');
-
-      ml.LatLng? cityPoint;
-
-      // 📍 تحديد الإحداثيات بناءً على المنطقة (يمكنك تعديل الأرقام لزيادة الدقة)
-      if (areaId == 84) {
-        // الكوت
-        cityPoint = ml.LatLng(32.5055, 45.8247);
-      } else if (areaId == 85) {
-        // الصويرة
-        cityPoint = ml.LatLng(32.9288, 44.7766);
-      } else if (areaId == 42) {
-        // النعمانية (استخدمت 42 بناءً على الأكواد السابقة، عدله إذا كان مختلفاً)
-        cityPoint = ml.LatLng(32.5385, 45.4190);
-      } else {
-        // العزيزية أو مناطق أخرى (ضع الـ ID الخاص بها هنا)
-        // cityPoint = ml.LatLng(32.9066, 45.0644); // إحداثيات تقريبية للعزيزية
-      }
-
-      if (cityPoint != null && mounted) {
-        setState(() {
-          _selectedPoint = cityPoint!;
-        });
-
-        // إذا اكتمل تحميل الخريطة قبل هذه الدالة، حرك الكاميرا فوراً للمدينة
-        if (_isMapReady && _mapController != null && !_autoLocated) {
-          _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(cityPoint, 14.0));
-        }
-      }
-    } catch (e) {
-      print("Error setting city fallback: $e");
-    }
+    _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulseController?.dispose();
     _mapController?.dispose();
     super.dispose();
   }
 
-  // ====================== التحديد التلقائي ======================
-  Future<void> _tryAutoDetectLocation() async {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      if (!_isLocating && !_autoLocated && !_userChoseManual) {
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) _tryAutoDetectLocation(isUserInitiated: false);
+        });
+      }
+    }
+  }
+
+  Future<void> _checkAreaAndSetFallback() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      int? areaId = prefs.getInt('selectedAreaId');
+
+      if (areaId != null && [84, 85, 42].contains(areaId)) {
+        _moveToCity(areaId);
+        _tryAutoDetectLocation(isUserInitiated: false);
+      } else {
+        _showCitySelectionDialog();
+      }
+    } catch (e) {
+      print("Error checking area: $e");
+    }
+  }
+
+  void _moveToCity(int areaId) {
+    ml.LatLng cityPoint;
+    switch (areaId) {
+      case 84: cityPoint = ml.LatLng(32.5055, 45.8247); break; // الكوت
+      case 85: cityPoint = ml.LatLng(32.9288, 44.7766); break; // الصويرة
+      case 42: cityPoint = ml.LatLng(32.5385, 45.4190); break; // النعمانية
+      default: cityPoint = ml.LatLng(32.5000, 45.8000);
+    }
+
+    if (mounted) {
+      setState(() => _selectedPoint = cityPoint);
+
+      // إذا كانت الخريطة جاهزة فعلاً، حرك الكاميرا
+      if (_isMapReady && _mapController != null) {
+        _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(cityPoint, 14.0));
+      }
+    }
+  }
+
+  void _showCitySelectionDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.location_city, color: Colors.blue),
+              SizedBox(width: 10),
+              Text('أين تتواجد حالياً؟', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: const Text('يرجى تحديد مدينتك لنوجه الخريطة بدقة إلى منطقتك.', style: TextStyle(color: Colors.grey)),
+          actionsPadding: const EdgeInsets.all(10),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15),
+          actions: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ElevatedButton(
+                  onPressed: () => _saveAndMove(ctx, 84, "الكوت"),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade800, elevation: 0),
+                  child: const Text("محافظة واسط - الكوت", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  onPressed: () => _saveAndMove(ctx, 85, "الصويرة"),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade800, elevation: 0),
+                  child: const Text("قضاء الصويرة", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  onPressed: () => _saveAndMove(ctx, 42, "النعمانية"),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade800, elevation: 0),
+                  child: const Text("قضاء النعمانية", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveAndMove(BuildContext ctx, int areaId, String areaName) async {
+    Navigator.pop(ctx);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('selectedAreaId', areaId);
+    await prefs.setString('selectedAreaName', areaName);
+
+    _moveToCity(areaId);
+
+    await Future.delayed(const Duration(milliseconds: 500));
+    _tryAutoDetectLocation(isUserInitiated: false);
+  }
+
+  Future<void> _tryAutoDetectLocation({bool isUserInitiated = false}) async {
+    if (!isUserInitiated && _userChoseManual) return;
+
     if (_isLocating) return;
     setState(() {
       _isLocating = true;
@@ -6716,16 +6926,16 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied ||
-            permission == LocationPermission.deniedForever) {
-          _handlePermissionDenied();
-          return;
-        }
+      }
+
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        _handlePermissionDenied();
+        return;
       }
 
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 8),
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 20),
       );
 
       if (mounted) {
@@ -6734,11 +6944,11 @@ class _MapLocationPickerState extends State<MapLocationPicker>
           _autoLocated = true;
           _manualMode = false;
           _isLocating = false;
+          _userChoseManual = false;
+          _currentZoom = 17.0;
         });
         if (_isMapReady && _mapController != null) {
-          _mapController!.animateCamera(
-            ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0),
-          );
+          _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0));
         }
         HapticFeedback.mediumImpact();
         _showSuccessAndClose(position);
@@ -6746,8 +6956,16 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     } catch (e) {
       if (mounted) {
         setState(() => _isLocating = false);
-        _showModernToast('⚠️ تعذر تحديد الموقع تلقائياً. استخدم التحديد اليدوي.', isError: true);
-        setState(() => _manualMode = true);
+
+        if (e is TimeoutException) {
+          _showModernToast('⌛ انتهى وقت البحث. يرجى التأكد من وقوفك في مكان مكشوف أو التحديد يدوياً.', isError: true);
+        } else {
+          _showModernToast('⚠️ تعذر التقاط إحداثيات الـ GPS بدقة، يرجى التحديد يدوياً.', isError: true);
+        }
+        setState(() {
+          _manualMode = true;
+          _userChoseManual = true;
+        });
       }
     }
   }
@@ -6760,30 +6978,25 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [
-          Icon(Icons.location_off, color: Colors.orange),
-          SizedBox(width: 10),
-          Text('خدمة الموقع معطلة')
-        ]),
-        content: const Text('يرجى تفعيل GPS أو استخدام التحديد اليدوي.'),
+        title: const Row(children: [Icon(Icons.location_off, color: Colors.orange), SizedBox(width: 10), Text('خدمة الموقع معطلة')]),
+        content: const Text('يرجى تفعيل GPS لكي نتمكن من تحديد موقعك بدقة.'),
         actions: [
           TextButton(
-            onPressed: () {
-              Navigator.pop(_);
-              setState(() => _manualMode = true);
-            },
-            child: const Text('تحديد يدوي'),
+              onPressed: () {
+                Navigator.pop(_);
+                setState(() {
+                  _manualMode = true;
+                  _userChoseManual = true;
+                });
+              },
+              child: const Text('تحديد يدوي')
           ),
           ElevatedButton.icon(
             onPressed: () async {
               Navigator.pop(_);
               await Geolocator.openLocationSettings();
-              await Future.delayed(const Duration(seconds: 1));
-              if (mounted) _tryAutoDetectLocation();
             },
-            icon: const Icon(Icons.settings),
-            label: const Text('تفعيل الإعدادات'),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            icon: const Icon(Icons.settings), label: const Text('تفعيل الإعدادات'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           ),
         ],
       ),
@@ -6798,78 +7011,62 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [
-          Icon(Icons.lock, color: Colors.red),
-          SizedBox(width: 10),
-          Text('الصلاحية مرفوضة')
-        ]),
-        content: const Text('لم تمنح صلاحية الموقع. يرجى منحها من الإعدادات أو استخدام التحديد اليدوي.'),
+        title: const Row(children: [Icon(Icons.lock, color: Colors.red), SizedBox(width: 10), Text('الصلاحية مرفوضة')]),
+        content: const Text('لم تمنح صلاحية الموقع للتطبيق. يرجى فتح الإعدادات ومنح الصلاحية.'),
         actions: [
           TextButton(
-            onPressed: () {
-              Navigator.pop(_);
-              setState(() => _manualMode = true);
-            },
-            child: const Text('تحديد يدوي'),
+              onPressed: () {
+                Navigator.pop(_);
+                setState(() {
+                  _manualMode = true;
+                  _userChoseManual = true;
+                });
+              },
+              child: const Text('تحديد يدوي')
           ),
           ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(_);
-              await Geolocator.openAppSettings();
-            },
-            child: const Text('فتح الإعدادات'),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () async {
+                Navigator.pop(_);
+                await Geolocator.openAppSettings();
+              },
+              child: const Text('فتح الإعدادات'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red)
           ),
         ],
       ),
     );
   }
 
-  void _showSuccessAndClose(Position position) {
-    Fluttertoast.showToast(
-      msg: "✅ تم تحديد موقعك بنجاح",
-      toastLength: Toast.LENGTH_SHORT,
-      gravity: ToastGravity.CENTER,
-      backgroundColor: Colors.green.shade600,
-      textColor: Colors.white,
-    );
+  void _showSuccessAndClose(Position position) async {
+    Fluttertoast.showToast(msg: "✅ تم تحديد موقعك بنجاح بدقة عالية", toastLength: Toast.LENGTH_SHORT, gravity: ToastGravity.CENTER, backgroundColor: Colors.green.shade600, textColor: Colors.white);
+
+    final prefs = await SharedPreferences.getInstance();
+    int areaId = prefs.getInt('selectedAreaId') ?? 0;
+    await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto_gps', areaId: areaId);
+
     Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) {
-        Navigator.pop(context, {
-          'lat': position.latitude,
-          'lng': position.longitude,
-          'source': 'auto_gps',
-        });
-      }
+      if (mounted) Navigator.pop(context, {'lat': position.latitude, 'lng': position.longitude, 'source': 'auto_gps'});
     });
   }
 
   void _showModernToast(String msg, {bool isError = false}) {
-    Fluttertoast.showToast(
-      msg: msg,
-      toastLength: Toast.LENGTH_LONG,
-      gravity: ToastGravity.BOTTOM,
-      backgroundColor: isError ? Colors.red.shade600 : Colors.black87,
-      textColor: Colors.white,
-    );
+    Fluttertoast.showToast(msg: msg, toastLength: Toast.LENGTH_LONG, gravity: ToastGravity.BOTTOM, backgroundColor: isError ? Colors.red.shade600 : Colors.black87, textColor: Colors.white);
   }
 
-  // ====================== الوضع اليدوي ======================
-  void _onCameraIdle() {
-    if (_mapController != null && !_isLocating) {
-      final ml.CameraPosition? currentPosition = _mapController!.cameraPosition;
+  void _onCameraMove(ml.CameraPosition position) {
+    _currentZoom = position.zoom;
+    _selectedPoint = position.target;
+  }
 
-      if (currentPosition != null && mounted) {
-        setState(() {
-          _selectedPoint = currentPosition.target;
-          _autoLocated = false;
-          _manualMode = true;
-        });
-      }
+  void _onCameraIdle() {
+    if (!_isLocating && mounted) {
+      setState(() {
+        _autoLocated = false;
+        _manualMode = true;
+      });
     }
   }
 
-  // ====================== بناء الواجهة ======================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -6877,18 +7074,18 @@ class _MapLocationPickerState extends State<MapLocationPicker>
         children: [
           ml.MapLibreMap(
             styleString: widget.mapStyleUrl,
-            initialCameraPosition: ml.CameraPosition(target: _selectedPoint, zoom: 14.0), // 🔥 قللنا الزوم قليلاً ليناسب عرض المدينة
+            initialCameraPosition: ml.CameraPosition(target: _selectedPoint, zoom: 14.0),
             onMapCreated: (controller) {
               _mapController = controller;
               setState(() => _isMapReady = true);
 
-              // تحريك الكاميرا إذا تم التحديد التلقائي، أو إذا جلبنا مركز المدينة
-              if (_autoLocated) {
-                controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0));
-              } else {
-                controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 14.0));
-              }
+              // 🔥 الحل الجذري للمشكلة:
+              // بمجرد أن تجهز الخريطة، اجبرها على الذهاب لـ _selectedPoint
+              // سواء كانت مركز مدينة الصويرة أو الـ GPS
+              double initialZoom = _autoLocated ? 17.0 : 14.0;
+              controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, initialZoom));
             },
+            onCameraMove: _onCameraMove,
             onCameraIdle: _onCameraIdle,
             myLocationEnabled: true,
             myLocationTrackingMode: ml.MyLocationTrackingMode.none,
@@ -6897,36 +7094,28 @@ class _MapLocationPickerState extends State<MapLocationPicker>
             attributionButtonMargins: const Point(-100, -100),
           ),
 
-          // دبوس النبض
+          // تصميم المؤشر الدقيق
           Center(
             child: IgnorePointer(
               child: Stack(
                 alignment: Alignment.center,
+                clipBehavior: Clip.none,
                 children: [
-                  FadeTransition(
-                    opacity: _pulseController!.drive(CurveTween(curve: Curves.easeOut)),
-                    child: ScaleTransition(
-                      scale: _pulseController!.drive(Tween<double>(begin: 0.8, end: 1.8)),
-                      child: Container(
-                        width: 60, height: 60,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _autoLocated ? Colors.green.withOpacity(0.3) : Colors.red.withOpacity(0.3),
-                        ),
-                      ),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _autoLocated ? Colors.green.shade700 : Colors.black87,
+                      shape: BoxShape.circle,
+                      boxShadow: const [BoxShadow(color: Colors.white, spreadRadius: 2)],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4))],
-                    ),
+                  Positioned(
+                    bottom: 4,
                     child: Icon(
-                      _autoLocated ? Icons.my_location : Icons.location_on,
+                      Icons.location_pin,
                       color: _autoLocated ? Colors.green : Colors.red,
-                      size: 32,
+                      size: 48,
                     ),
                   ),
                 ],
@@ -6934,7 +7123,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
             ),
           ),
 
-          // زر العودة
           Positioned(
             top: 40, left: 20,
             child: SafeArea(
@@ -6942,15 +7130,11 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                 color: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 elevation: 4,
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back_ios, size: 20),
-                  onPressed: () => Navigator.pop(context),
-                ),
+                child: IconButton(icon: const Icon(Icons.arrow_back_ios, size: 20), onPressed: () => Navigator.pop(context)),
               ),
             ),
           ),
 
-          // زر إعادة المحاولة (يظهر فقط إذا لم يتم التحديد)
           if (!_isLocating && !_autoLocated)
             Positioned(
               top: 40, right: 20,
@@ -6961,13 +7145,12 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                   elevation: 4,
                   child: IconButton(
                     icon: const Icon(Icons.my_location, color: Colors.blue),
-                    onPressed: _tryAutoDetectLocation,
+                    onPressed: () => _tryAutoDetectLocation(isUserInitiated: true),
                   ),
                 ),
               ),
             ),
 
-          // البطاقة السفلية
           Positioned(
             bottom: 0, left: 0, right: 0,
             child: Container(
@@ -6980,15 +7163,12 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 40, height: 5,
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10)),
-                  ),
+                  Container(width: 40, height: 5, margin: const EdgeInsets.only(bottom: 16), decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10))),
+
                   if (_isLocating) ...[
                     const SizedBox(height: 30, width: 30, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.blue)),
                     const SizedBox(height: 12),
-                    const Text('جاري تحديد موقعك تلقائياً...', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    const Text('جاري معالجة وتأكيد موقعك...', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                   ] else ...[
                     Row(
                       children: [
@@ -7014,52 +7194,85 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                         ),
                       ],
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 10),
+
+                    if (_manualMode && _currentZoom < _minAllowedZoom)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.red.shade200)
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.zoom_in, color: Colors.red.shade700, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'يرجى تقريب الخريطة أكثر لتحديد الموقع بدقة!',
+                                style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
                     ElevatedButton.icon(
-                      onPressed: () {
+                      onPressed: () async {
                         HapticFeedback.lightImpact();
-                        Navigator.pop(context, {
-                          'lat': _selectedPoint.latitude,
-                          'lng': _selectedPoint.longitude,
-                          'source': _autoLocated ? 'auto_gps' : 'manual_map',
-                        });
+
+                        if (_manualMode && _currentZoom < _minAllowedZoom) {
+                          _showModernToast('عذراً، أنت بعيد جداً! يرجى تقريب الخريطة (Zoom in) لاختيار منزلك بدقة.', isError: true);
+                          return;
+                        }
+
+                        setState(() => _isLocating = true);
+
+                        ml.LatLng finalPoint = _selectedPoint;
+                        bool isValid = (finalPoint.latitude != 0.0 && finalPoint.longitude != 0.0);
+
+                        setState(() => _isLocating = false);
+
+                        if (isValid) {
+                          final prefs = await SharedPreferences.getInstance();
+                          int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+                          await LocationService.saveLocation(
+                              finalPoint.latitude,
+                              finalPoint.longitude,
+                              source: _autoLocated ? 'auto_gps' : 'manual_map',
+                              areaId: areaId
+                          );
+
+                          if (mounted) {
+                            Navigator.pop(context, {
+                              'lat': finalPoint.latitude,
+                              'lng': finalPoint.longitude,
+                              'source': _autoLocated ? 'auto_gps' : 'manual_map',
+                            });
+                          }
+                        } else {
+                          _showModernToast('تعذر التقاط الإحداثيات. يرجى تحريك الخريطة قليلاً ثم الضغط على تأكيد مرة أخرى.', isError: true);
+                        }
                       },
                       icon: const Icon(Icons.check_circle_outline, size: 22),
                       label: const Text('تأكيد هذا الموقع', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        backgroundColor: _autoLocated ? Colors.green.shade600 : Colors.blue.shade600,
+                        backgroundColor: (_manualMode && _currentZoom < _minAllowedZoom)
+                            ? Colors.grey.shade400
+                            : (_autoLocated ? Colors.green.shade600 : Colors.blue.shade600),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                         minimumSize: const Size.fromHeight(55),
                       ),
                     ),
-                    if (!_autoLocated && !_manualMode)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12.0),
-                        child: TextButton.icon(
-                          onPressed: () {
-                            setState(() => _manualMode = true);
-                            _showModernToast('اسحب الخريطة وضع الدبوس على موقعك');
-                          },
-                          icon: const Icon(Icons.edit_location_alt, color: Colors.blue),
-                          label: const Text('تحديد يدوي', style: TextStyle(fontSize: 14)),
-                          style: TextButton.styleFrom(foregroundColor: Colors.blue),
-                        ),
-                      ),
-                    if (_manualMode && !_autoLocated)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Text(
-                          '💡 يمكنك سحب الخريطة وتحريك الدبوس إلى موقعك الدقيق',
-                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                        ),
-                      ),
                   ],
                 ],
               ),
             ),
           ),
-
           if (_isLocating)
             Positioned.fill(
               child: BackdropFilter(
@@ -9214,76 +9427,26 @@ class _MenuScreenState extends State<MenuScreen> {
     });
 
     try {
-      // 1️⃣ أولاً: فحص هل يوجد موقع محفوظ (سواء من الشاشة الرئيسية أو من تحديثات الخلفية)
+      // 1️⃣ فحص الموقع المحفوظ
       final savedLocation = await LocationService.getSavedLocationSimple();
+
       if (savedLocation != null && savedLocation.lat != 0.0) {
+        // ✅ موقع موجود - احسب السعر فوراً
         await _calculateDeliveryFee();
-        return; // تم الحساب بنجاح، لا حاجة لإكمال الفحص
-      }
-
-      // 2️⃣ إذا لم يوجد موقع، ننتقل لفحص صلاحيات الجهاز والـ GPS
-      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (mounted) {
-          setState(() {
-            _isLoadingDeliveryFee = false;
-            _deliveryFee = -1.0;
-            _deliveryMessage = 'الـ GPS معطل';
-          });
-          _showLocationRequiredDialog();
-        }
         return;
       }
 
-      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-
-      // إذا كانت الصلاحية مرفوضة، نطلبها مرة واحدة
-      if (permission == geolocator.LocationPermission.denied) {
-        permission = await geolocator.Geolocator.requestPermission();
-      }
-
-      // التحقق النهائي من الصلاحية
-      if (permission != geolocator.LocationPermission.whileInUse &&
-          permission != geolocator.LocationPermission.always) {
-        if (mounted) {
-          setState(() {
-            _isLoadingDeliveryFee = false;
-            _deliveryFee = -1.0;
-            _deliveryMessage = 'يرجى منح إذن الموقع';
-          });
-          _showLocationRequiredDialog();
-        }
-        return;
-      }
-
-      // 3️⃣ محاولة التقاط الموقع الحالي (سريعاً)
-      final position = await LocationService.tryAutoDetectSilent(timeout: const Duration(seconds: 5));
-
-      if (position != null && mounted) {
-        await LocationService.saveLocation(position.latitude, position.longitude, source: 'menu_entry');
-        await _calculateDeliveryFee();
-      } else {
-        // 4️⃣ إذا فشلنا في كل ما سبق، نظهر نافذة التحديد اليدوي/التلقائي
-        if (mounted) {
-          setState(() {
-            _isLoadingDeliveryFee = false;
-            _deliveryFee = -1.0;
-            _deliveryMessage = 'تعذر الوصول للموقع';
-          });
-          _showLocationRequiredDialog();
-        }
-      }
-
-    } catch (e) {
-      print('⚠️ فشل الفحص في المنيو: $e');
+      // 2️⃣ إذا لم يوجد موقع، اطلب من المستخدم تحديده
       if (mounted) {
         setState(() {
           _isLoadingDeliveryFee = false;
           _deliveryFee = -1.0;
-          _deliveryMessage = 'خطأ في النظام';
+          _deliveryMessage = 'يرجى تحديد موقعك';
         });
         _showLocationRequiredDialog();
       }
+    } catch (e) {
+      print('⚠️ فشل الفحص: $e');
     }
   }
   // 📍 دالة حساب السعر النهائية (مطابقة للسلة 100%)
@@ -9467,7 +9630,9 @@ class _MenuScreenState extends State<MenuScreen> {
   /// 🗺️ فتح شاشة الخريطة اليدوية (من داخل المنيو)
   Future<bool> _handleManualLocationPickInMenu() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
       final savedLoc = await LocationService.getSavedLocationSimple();
+      final areaId = prefs.getInt('selectedAreaId'); // ✅ قراءة المنطقة
 
       final result = await Navigator.push(
         context,
@@ -9483,25 +9648,26 @@ class _MenuScreenState extends State<MenuScreen> {
       if (result != null && result is Map) {
         double? lat = double.tryParse(result['lat'].toString());
         double? lng = double.tryParse(result['lng'].toString());
-        String source = result['source']?.toString() ?? 'manual_map';
 
         if (lat != null && lng != null) {
-          // حفظ الموقع في الذاكرة المحلية
-          await LocationService.saveLocation(lat, lng, source: source);
+          // ✅ حفظ الموقع مع المنطقة
+          await LocationService.saveLocation(
+            lat,
+            lng,
+            source: result['source'] ?? 'manual_map',
+            areaId: areaId, // تمرير المنطقة
+          );
 
-          // حساب السعر فوراً بعد التحديد
           await _calculateDeliveryFee();
-
-          return true; // نجاح العملية
+          return true;
         }
       }
-      return false; // تراجع الزبون بدون تحديد
+      return false;
     } catch (e) {
-      print('❌ Manual location pick error in menu: $e');
+      print('❌ Error: $e');
       return false;
     }
-  }
-  // 🔄 دالة إعادة المحاولة (عند الضغط على الشريط)
+  }  // 🔄 دالة إعادة المحاولة (عند الضغط على الشريط)
   void _retryCalculation() {
     _performFullLocationAndFeeCheck();
   }
@@ -10101,28 +10267,31 @@ class CartScreen extends StatefulWidget {
   State<CartScreen> createState() => _CartScreenState();
 }
 
+class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _flashController;
+  late Animation<Color?> _colorAnimation;
 
-class _CartScreenState extends State<CartScreen> {
-  final _apiService = ApiService();
-  final _nameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _addressController = TextEditingController();
-  final _couponController = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
+  @override
+  void initState() {
+    super.initState();
+    // 🔥 إعداد الوميض الأصفر لمدة ثانية ونصف
+    _flashController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+    _colorAnimation = ColorTween(
+        begin: Colors.yellow.shade200,
+        end: Colors.transparent
+    ).animate(CurvedAnimation(parent: _flashController, curve: Curves.easeOut));
+
+    _flashController.forward();
+  }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _addressController.dispose();
-    _couponController.dispose();
+    _flashController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final mainContext = context;
-
     return Scaffold(
       appBar: AppBar(title: const Text('سلتي')),
       body: Consumer<CartProvider>(
@@ -10130,406 +10299,30 @@ class _CartScreenState extends State<CartScreen> {
           if (cart.items.isEmpty) {
             return const Center(child: Text('سلّتك فارغة!', style: TextStyle(fontSize: 18, color: Colors.grey)));
           }
-          return Column(
-            children: [
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(15),
-                  itemCount: cart.items.length,
-                  itemBuilder: (ctx, index) => _buildCartItemCard(mainContext, cart, cart.items[index]),
+          return AnimatedBuilder(
+            animation: _colorAnimation,
+            builder: (context, child) {
+              return Container(
+                color: _colorAnimation.value, // تطبيق الوميض على الخلفية
+                child: child,
+              );
+            },
+            child: Column(
+              children: [
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(15),
+                    itemCount: cart.items.length,
+                    itemBuilder: (ctx, index) => _buildCartItemCard(context, cart, cart.items[index]),
+                  ),
                 ),
-              ),
-              _buildCheckoutSection(mainContext, cart)
-            ],
+                _buildCartSummary(context, cart)
+              ],
+            ),
           );
         },
       ),
     );
-  }
-
-  // 🔥 دالة الفحص الإجباري للموقع والصلاحيات (جدار الحماية الأخير)
-  Future<bool> _ensureLocationBeforeCheckout(BuildContext context) async {
-    // 1. هل يوجد موقع محفوظ مسبقاً وصالح؟
-    final savedLoc = await LocationService.getSavedLocationSimple();
-    if (savedLoc != null && savedLoc.lat != 0.0 && savedLoc.lng != 0.0) {
-      return true; // لدينا موقع، اسمح له بإكمال الطلب
-    }
-
-    // 2. إذا لم يكن هناك موقع، نفحص هل الـ GPS يعمل في الهاتف؟
-    bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      if (context.mounted) {
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            title: const Row(children: [
-              Icon(Icons.location_off, color: Colors.red),
-              SizedBox(width: 10),
-              Text("تفعيل الـ GPS مطلوب", style: TextStyle(fontWeight: FontWeight.bold))
-            ]),
-            content: const Text("خدمة الموقع (GPS) معطلة في جهازك. يجب تفعيلها لحساب سعر التوصيل بدقة لمنطقتك."),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                onPressed: () async {
-                  Navigator.pop(ctx);
-                  await geolocator.Geolocator.openLocationSettings(); // يحوله فوراً لإعدادات الهاتف
-                },
-                child: const Text("فتح الإعدادات لتفعيل GPS"),
-              ),
-            ],
-          ),
-        );
-      }
-      return false; // نوقف عملية الدفع
-    }
-
-    // 3. فحص صلاحيات التطبيق (هل المستخدم وافق على تتبع الموقع؟)
-    geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-    if (permission == geolocator.LocationPermission.denied) {
-      permission = await geolocator.Geolocator.requestPermission(); // نطلب الصلاحية منه الآن
-      if (permission == geolocator.LocationPermission.denied) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('يجب منح صلاحية الوصول للموقع لإتمام الطلب.'), backgroundColor: Colors.orange));
-        }
-        return false; // رفض الصلاحية، نوقف الدفع
-      }
-    }
-
-    if (permission == geolocator.LocationPermission.deniedForever) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الصلاحية مرفوضة نهائياً. سيتم فتح إعدادات التطبيق.'), backgroundColor: Colors.red));
-        await geolocator.Geolocator.openAppSettings();
-      }
-      return false;
-    }
-
-    // 4. الـ GPS يعمل والصلاحية ممنوحة -> نقوم بالتقاط الموقع فوراً وبدقة
-    if (context.mounted) {
-      showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
-    }
-
-    try {
-      geolocator.Position pos = await geolocator.Geolocator.getCurrentPosition(
-        desiredAccuracy: geolocator.LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10), // ننتظر 10 ثواني كحد أقصى
-      );
-
-      // نحفظ الموقع الجديد لكي تستخدمه نافذة الدفع
-      await LocationService.saveLocation(pos.latitude, pos.longitude, source: 'forced_cart_checkout');
-
-      if (context.mounted) Navigator.pop(context); // إغلاق دائرة التحميل
-      return true; // نجحنا، اسمح له بالدفع
-    } catch (e) {
-      if (context.mounted) {
-        Navigator.pop(context); // إغلاق دائرة التحميل
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فشل تحديد الموقع. تأكد من أن الـ GPS يعمل وحاول مجدداً.'), backgroundColor: Colors.red));
-      }
-      return false;
-    }
-  }
-
-  Future<void> _checkActiveOrderAndCheckout(BuildContext context, CartProvider cart) async {
-    // 🔥 1. الفحص الإجباري الصارم للموقع قبل أي شيء
-    bool hasValidLocation = await _ensureLocationBeforeCheckout(context);
-    if (!hasValidLocation) {
-      return; // 🛑 إيقاف التنفيذ كلياً إذا لم يعطنا الموقع (لن تفتح نافذة الدفع)
-    }
-
-    try {
-      final localOrders = await OrderHistoryService().getOrders();
-      final activeStatuses = ['pending', 'processing', 'on-hold', 'driver-assigned', 'out-for-delivery', 'accepted', 'at_store', 'picked_up'];
-
-      final activeOrders = localOrders.where((o) {
-        bool isStatusActive = activeStatuses.contains(o.status.toLowerCase());
-        int hoursPassed = DateTime.now().difference(o.dateCreated).inHours;
-        return isStatusActive && hoursPassed < 4;
-      }).toList();
-
-      if (activeOrders.isNotEmpty) {
-        if (context.mounted) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: const Row(children: [Icon(Icons.info_outline, color: Colors.blue), SizedBox(width: 10), Text("تنبيه", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))]),
-              content: const Text("يبدو أن لديك طلباً قيد التنفيذ حالياً.\nيمكنك متابعة طلبك الحالي أو المتابعة لإنشاء طلب جديد إضافي.", style: TextStyle(height: 1.5, fontSize: 16)),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: activeOrders.first)));
-                  },
-                  child: const Text("تتبع طلبي الحالي", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _showCheckoutDialog(context, cart);
-                  },
-                  child: const Text("طلب جديد", style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          );
-        }
-      } else {
-        _showCheckoutDialog(context, cart);
-      }
-    } catch (e) {
-      _showCheckoutDialog(context, cart);
-    }
-  }
-
-  void _showCheckoutDialog(BuildContext context, CartProvider cart) {
-    final BuildContext cartScreenContext = context;
-    final String checkoutSessionId = const Uuid().v4();
-
-    _nameController.clear();
-    _phoneController.clear();
-    _addressController.clear();
-    _couponController.text = cart.appliedCoupon ?? '';
-
-    bool isSubmitting = false;
-    geolocator.Position? _capturedPosition;
-
-    // 🔥 القيمة الابتدائية أصبحت -1.0 بدلاً من 1000 لمنع الدفع بسعر وهمي
-    double _deliveryFee = -1.0;
-    String _locationMessage = "جاري الحساب...";
-    bool _isCalcFinished = false;
-    bool _hasStartedCalculation = false;
-
-    showDialog(
-      context: cartScreenContext,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return StatefulBuilder(builder: (context, setDialogState) {
-          if (!_hasStartedCalculation) {
-            _hasStartedCalculation = true;
-            _calculateDeliveryFeeFast(
-                cart: cart,
-                cartScreenContext: cartScreenContext,
-                onResult: (fee, message, position) {
-                  if (dialogContext.mounted) {
-                    setDialogState(() {
-                      _deliveryFee = fee;
-                      _locationMessage = message;
-                      _capturedPosition = position;
-                      _isCalcFinished = true;
-                    });
-                  }
-                }
-            );
-          }
-
-          return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            title: const Text('إتمام الطلب'),
-            content: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 10),
-                    TextFormField(controller: _phoneController, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone, validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 10),
-                    TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'العنوان (أقرب نقطة دالة)'), validator: (v) => v!.isEmpty ? 'مطلوب' : null, enabled: !isSubmitting),
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.shade200)),
-                      child: Column(
-                        children: [
-                          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                            const Text("تكلفة التوصيل:", style: TextStyle(fontWeight: FontWeight.bold)),
-                            _isCalcFinished
-                                ? Text(_deliveryFee == -1.0 ? "موقع غير محدد" : "${NumberFormat('#,###').format(_deliveryFee)} د.ع", style: TextStyle(fontWeight: FontWeight.bold, color: _deliveryFee == -1.0 ? Colors.red : Colors.blue, fontSize: 16))
-                                : const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                          ]),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    TextFormField(controller: _couponController, decoration: const InputDecoration(labelText: 'كود الخصم (اختياري)')),
-                    const Divider(height: 30),
-                    _buildPriceSummary(cart, _deliveryFee, !_isCalcFinished, ""),
-                  ],
-                ),
-              ),
-            ),
-            actions: <Widget>[
-              TextButton(onPressed: isSubmitting ? null : () => Navigator.of(dialogContext).pop(), child: const Text('إلغاء')),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                // 🔥 تعطيل الزر إذا كان السعر -1.0
-                onPressed: (isSubmitting || !_isCalcFinished || _deliveryFee == -1.0) ? null : () async {
-                  if (!_formKey.currentState!.validate()) return;
-                  setDialogState(() => isSubmitting = true);
-                  try {
-                    final prefs = await SharedPreferences.getInstance();
-                    final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
-                    if (currentZoneId == 0) throw Exception("يرجى تحديد المنطقة.");
-
-                    final int? firstRestaurantId = cart.items.isNotEmpty ? cart.items.first.categoryId : null;
-
-                    // 📍 3. التأكد من وجود إحداثيات صالحة قبل الإرسال
-                    geolocator.Position? finalPosition = _capturedPosition;
-                    if (finalPosition == null) {
-                      final savedLoc = await LocationService.getSavedLocationSimple();
-                      if (savedLoc != null) {
-                        finalPosition = geolocator.Position(
-                          latitude: savedLoc.lat,
-                          longitude: savedLoc.lng,
-                          timestamp: DateTime.now(),
-                          accuracy: 0,
-                          altitude: 0,
-                          heading: 0,
-                          speed: 0,
-                          speedAccuracy: 0,
-                          altitudeAccuracy: 0,
-                          headingAccuracy: 0,
-                        );
-                      }
-                    }
-
-                    // 🔥 4. تمرير كود الجلسة + الموقع النهائي
-                    final createdOrder = await _apiService.submitOrder(
-                      name: _nameController.text,
-                      phone: _phoneController.text,
-                      address: _addressController.text,
-                      cartItems: cart.items,
-                      couponCode: cart.appliedCoupon,
-                      position: finalPosition,
-                      deliveryFee: _deliveryFee,
-                      zoneId: currentZoneId,
-                      restaurantId: firstRestaurantId,
-                      regionId: currentZoneId,
-                      platformMarkupTotal: cart.totalPlatformMarkup,
-                      checkoutSessionId: checkoutSessionId,
-                    );
-
-                    if (!cartScreenContext.mounted) return;
-                    if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
-
-                    await cart._recordSuccessfulOrder();
-                    Navigator.of(dialogContext).pop();
-                    cart.clearCart();
-                    Provider.of<NotificationProvider>(cartScreenContext, listen: false).triggerRefresh();
-
-                    if (cartScreenContext.mounted) {
-                      Provider.of<NavigationProvider>(cartScreenContext, listen: false).changeTab(2);
-                      Navigator.push(cartScreenContext, MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder)));
-                    }
-                  } catch (e) {
-                    if (cartScreenContext.mounted) ScaffoldMessenger.of(cartScreenContext).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
-                  } finally {
-                    if (dialogContext.mounted) setDialogState(() => isSubmitting = false);
-                  }
-                },
-                child: isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('تأكيد الطلب'),
-              )
-            ],
-          );
-        });
-      },
-    );
-  }
-
-  Future<void> _calculateDeliveryFeeFast({
-    required CartProvider cart,
-    required BuildContext cartScreenContext,
-    required Function(double fee, String message, geolocator.Position? pos) onResult
-  }) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
-      String areaName = prefs.getString('selectedAreaName') ?? "المنطقة المحددة";
-
-      if (cart.items.isEmpty) {
-        onResult(-1.0, "السلة فارغة", null);
-        return;
-      }
-
-      int restaurantId = cart.items.first.categoryId;
-      double uLat = 0.0, uLng = 0.0;
-      geolocator.Position? capturedPos;
-
-      // استخدام الموقع المحفوظ فوراً (بدون انتظار الـ GPS)
-      final savedLocation = await LocationService.getSavedLocationSimple();
-      if (savedLocation != null) {
-        uLat = savedLocation.lat;
-        uLng = savedLocation.lng;
-      }
-
-      // حماية: إذا لم يكن هناك موقع صالح، نعيد خطأ
-      if (uLat == 0.0 || uLng == 0.0) {
-        onResult(-1.0, "⚠️ يرجى تفعيل الـ GPS لتحديد موقعك", null);
-        return;
-      }
-
-      // محاولة جلب موقع جديد في الخلفية
-      _tryUpdateLocationInBackground().then((newPosition) {
-        if (newPosition != null) {
-          capturedPos = newPosition;
-        }
-      }).catchError((e) {
-        print('⚠️ [Background] Location update failed: $e');
-      });
-
-      final configProvider = Provider.of<DeliveryConfigProvider>(cartScreenContext, listen: false);
-      if (configProvider.cachedConfig == null) await configProvider.fetchAndCacheConfig();
-
-      Map<String, dynamic> result = configProvider.calculateFeeDetails(
-          userLat: uLat,
-          userLng: uLng,
-          restaurantId: restaurantId,
-          areaId: currentZoneId,
-          areaName: areaName
-      );
-
-      onResult(result['fee'], result['message'], capturedPos);
-
-    } catch (e) {
-      print('❌ [FastCalc] Error: $e');
-      onResult(-1.0, "خطأ في حساب الموقع", null);
-    }
-  }
-
-  Future<geolocator.Position?> _tryUpdateLocationInBackground() async {
-    try {
-      bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return null;
-
-      geolocator.LocationPermission permission = await geolocator.Geolocator.checkPermission();
-      if (permission == geolocator.LocationPermission.denied) {
-        permission = await geolocator.Geolocator.requestPermission();
-        if (permission != geolocator.LocationPermission.whileInUse &&
-            permission != geolocator.LocationPermission.always) {
-          return null;
-        }
-      }
-      if (permission == geolocator.LocationPermission.deniedForever) return null;
-
-      Position newPosition = await geolocator.Geolocator.getCurrentPosition(
-        desiredAccuracy: geolocator.LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 4),
-      );
-
-      await LocationService.saveLocation(
-        newPosition.latitude,
-        newPosition.longitude,
-        source: 'cart_background',
-      );
-
-      return newPosition;
-    } catch (e) {
-      return null;
-    }
   }
 
   Widget _buildCartItemCard(BuildContext context, CartProvider cart, FoodItem item) {
@@ -10539,136 +10332,416 @@ class _CartScreenState extends State<CartScreen> {
         child: Padding(
             padding: const EdgeInsets.all(10.0),
             child: Row(children: [
-              ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: CachedNetworkImage(imageUrl: item.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
+              ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: item.imageUrl, width: 80, height: 80, fit: BoxFit.cover)),
               const SizedBox(width: 15),
-              Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 5),
-                    Text(item.formattedPrice, style: TextStyle(fontSize: 16, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold))
-                  ])),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)), const SizedBox(height: 5), Text(item.formattedPrice, style: TextStyle(fontSize: 16, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold))])),
               Row(children: [
                 IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => cart.decrementQuantity(item)),
                 Text(item.quantity.toString(), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => cart.incrementQuantity(item))
               ])
-            ])));
+            ])
+        )
+    );
   }
 
-  Widget _buildCheckoutSection(BuildContext context, CartProvider cart) {
+  Widget _buildCartSummary(BuildContext context, CartProvider cart) {
     final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.totalPrice);
-    final discountedTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(cart.discountedTotal);
-
     return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)),
-            boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), blurRadius: 10, spreadRadius: 5)]),
-        child: Column(children: [
-
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('المجموع', style: TextStyle(fontSize: 18, color: Colors.grey)),
-            Text('$totalFormatted د.ع',
-                style: TextStyle(
-                    fontSize: 18,
-                    color: Colors.grey,
-                    decoration: (cart.appliedCoupon != null) ? TextDecoration.lineThrough : TextDecoration.none))
-          ]),
-
-          if (cart.appliedCoupon != null)
-            Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text('الإجمالي بعد الخصم', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
-                  Text('$discountedTotalFormatted د.ع', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor))
-                ])),
-
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.2), blurRadius: 10, spreadRadius: 5)],
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('إجمالي المنتجات', style: TextStyle(fontSize: 18, color: Colors.grey)),
+              Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
           const SizedBox(height: 20),
           SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                  onPressed: () => _checkActiveOrderAndCheckout(context, cart),
-                  style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                      backgroundColor: Theme.of(context).primaryColor,
-                      foregroundColor: Colors.white),
-                  child: const Text('إتمام الطلب', style: TextStyle(fontSize: 18))))
-        ]));
-  }
-
-  Widget _buildPriceSummary(CartProvider cart, double? deliveryFee, bool isCalculatingFee, String feeMessage) {
-    final double foodTotal = cart.totalPrice;
-
-    double discountAmount = 0.0;
-    if (cart.appliedCoupon != null) {
-      discountAmount = cart.totalDiscountAmount;
-    }
-
-    final double finalFoodTotal = (foodTotal - discountAmount).clamp(0.0, double.infinity);
-    // فقط نجمع التوصيل إذا كان رقماً صالحاً
-    final double finalTotal = finalFoodTotal + (deliveryFee != null && deliveryFee != -1.0 ? deliveryFee : 0);
-
-    final totalFormatted = NumberFormat('#,###', 'ar_IQ').format(foodTotal);
-    final discountFormatted = NumberFormat('#,###', 'ar_IQ').format(discountAmount);
-    final finalTotalFormatted = NumberFormat('#,###', 'ar_IQ').format(finalTotal);
-
-    return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(10)),
-        child: Column(children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('سعر الطلبات', style: TextStyle(fontSize: 14)),
-            Text('$totalFormatted د.ع', style: const TextStyle(fontWeight: FontWeight.bold))
-          ]),
-
-          if (discountAmount > 0) ...[
-            const SizedBox(height: 8),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text('خصم الكوبون', style: TextStyle(fontSize: 14, color: Theme.of(context).primaryColor)),
-              Text('- $discountFormatted د.ع', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor))
-            ])
-          ],
-
-          const SizedBox(height: 8),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Row(children: [
-              Icon(Icons.delivery_dining_outlined, size: 20, color: Colors.blue.shade700),
-              const SizedBox(width: 5),
-              const Text('خدمة التوصيل', style: TextStyle(fontSize: 14))
-            ]),
-            AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: isCalculatingFee
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                    : Text(
-                    deliveryFee == -1.0 ? 'موقع غير محدد' : (deliveryFee != null ? '${NumberFormat('#,###', 'ar_IQ').format(deliveryFee)} د.ع' : '---'),
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: (deliveryFee == null || deliveryFee == -1.0) && !isCalculatingFee ? Colors.red : Colors.black)))
-          ]),
-          if (feeMessage.isNotEmpty)
-            Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Text(feeMessage.replaceAll("Exception: ", ""),
-                    textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.red.shade700))),
-          const Divider(height: 20),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('الإجمالي المطلوب دفعه', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                // إخفاء المجموع الكلي إذا كان التوصيل فيه مشكلة (-1.0) لمنع دفع مبلغ ناقص
-                child: isCalculatingFee || deliveryFee == null || deliveryFee == -1.0
-                    ? const SizedBox.shrink()
-                    : Text('$finalTotalFormatted د.ع', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)))
-          ])
-        ]));
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                // 🔥 الانتقال إلى شاشة الدفع الكاملة بدلاً من النافذة المنبثقة
+                Navigator.push(context, MaterialPageRoute(builder: (_) => CheckoutScreen(cart: cart)));
+              },
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                backgroundColor: Theme.of(context).primaryColor,
+              ),
+              child: const Text('متابعة لإتمام الدفع', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          )
+        ],
+      ),
+    );
   }
 }
+class CheckoutScreen extends StatefulWidget {
+  final CartProvider cart;
+  const CheckoutScreen({super.key, required this.cart});
+
+  @override
+  State<CheckoutScreen> createState() => _CheckoutScreenState();
+}
+
+class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProviderStateMixin {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _couponController = TextEditingController();
+
+  bool _isSubmitting = false;
+  double _deliveryFee = -1.0;
+  double _serviceFee = 0.0;
+  double _cashbackAmount = 0.0;
+  geolocator.Position? _capturedPosition;
+  String _locationMessage = "جاري حساب موقعك...";
+
+  // 🔥 الأنيميشن الخاص بـ "لأنك غالي"
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(reverse: true);
+    _couponController.text = widget.cart.appliedCoupon ?? '';
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _calculateInitialFees();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _nameController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    _couponController.dispose();
+    super.dispose();
+  }
+
+  // 🔥 الدالة المسؤولة عن حساب الأسعار بناءً على الموقع
+  Future<void> _calculateInitialFees() async {
+    final prefs = await SharedPreferences.getInstance();
+    int areaId = prefs.getInt('selectedAreaId') ?? 0;
+    String areaName = prefs.getString('selectedAreaName') ?? "";
+
+    // جلب الموقع المحفوظ
+    final savedLoc = await LocationService.getSavedLocationSimple();
+
+    if (savedLoc != null && savedLoc.lat != 0.0) {
+      final configProvider = Provider.of<DeliveryConfigProvider>(context, listen: false);
+      if (configProvider.cachedConfig == null) await configProvider.fetchAndCacheConfig();
+
+      // حساب التسعيرة من البروفايدر
+      final result = configProvider.calculateFeeDetails(
+        userLat: savedLoc.lat,
+        userLng: savedLoc.lng,
+        restaurantId: widget.cart.items.first.categoryId,
+        areaId: areaId,
+        areaName: areaName,
+      );
+
+      if (mounted) {
+        setState(() {
+          _deliveryFee = result['fee'] ?? -1.0;
+          _serviceFee = result['service_fee'] ?? 0.0;
+          _cashbackAmount = result['cashback_amount'] ?? 0.0;
+          _locationMessage = result['message'] ?? "تم تحديد الموقع بنجاح";
+
+          // تحديث الإحداثيات النهائية التي ستُرسل للسيرفر
+          _capturedPosition = geolocator.Position(
+            latitude: savedLoc.lat,
+            longitude: savedLoc.lng,
+            timestamp: DateTime.now(), accuracy: 0, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0, altitudeAccuracy: 0, headingAccuracy: 0,
+          );
+        });
+      }
+    } else {
+      if (mounted) setState(() => _locationMessage = "يرجى تحديد الموقع على الخريطة");
+    }
+  }
+
+  // 🔥 دالة فتح الخريطة (تم إصلاح مشكلة التحديث هنا جذرياً)
+  Future<void> _openMapPicker() async {
+    final savedLoc = await LocationService.getSavedLocationSimple();
+
+    final result = await Navigator.push(context, MaterialPageRoute(
+      builder: (_) => MapLocationPicker(initialLat: savedLoc?.lat, initialLng: savedLoc?.lng),
+    ));
+
+    // إذا عاد الزبون بنتيجة (إحداثيات جديدة)
+    if (result != null && result is Map) {
+
+      // 1. إظهار حالة التحميل للزبون فوراً ليعرف أن النظام يستجيب
+      setState(() {
+        _deliveryFee = -1.0;
+        _locationMessage = "جاري تحديث الموقع وحساب التسعيرة...";
+      });
+
+      // 2. الاستخراج الآمن للإحداثيات (Safe Parsing)
+      double newLat = double.tryParse(result['lat'].toString()) ?? 0.0;
+      double newLng = double.tryParse(result['lng'].toString()) ?? 0.0;
+
+      if (newLat != 0.0 && newLng != 0.0) {
+        final prefs = await SharedPreferences.getInstance();
+        int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+        // 3. الحفظ المباشر في الذاكرة
+        await LocationService.saveLocation(newLat, newLng, source: 'manual_checkout', areaId: areaId);
+
+        // 4. إعادة الحساب بناءً على الموقع الجديد
+        await _calculateInitialFees();
+      } else {
+        setState(() => _locationMessage = "حدث خطأ في قراءة الموقع، حاول مجدداً");
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    double total = widget.cart.totalPrice - widget.cart.totalDiscountAmount;
+    double grandTotal = total + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF9F9F9),
+      appBar: AppBar(
+        title: const Text('إتمام الدفع', style: TextStyle(fontWeight: FontWeight.bold)),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // 📍 1. قسم تحديد الموقع والخريطة (التفاعلي)
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: Colors.blue.shade50, shape: BoxShape.circle),
+                  child: const Icon(Icons.location_on, color: Colors.blue),
+                ),
+                title: const Text("موقع التوصيل", style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: _deliveryFee == -1.0
+                    ? const Row(
+                  children: [
+                    SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 8),
+                    Text("جاري الحساب...", style: TextStyle(color: Colors.blue, fontSize: 12)),
+                  ],
+                )
+                    : Text(_locationMessage, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                trailing: TextButton.icon(
+                  onPressed: _openMapPicker,
+                  icon: const Icon(Icons.map),
+                  label: const Text("تعديل"),
+                ),
+              ),
+            ),
+            const SizedBox(height: 15),
+
+            // 🎁 2. قسم "لأنك غالي" الأنيميشن الديناميكي
+            if (_cashbackAmount > 0 && _deliveryFee != -1.0)
+              ScaleTransition(
+                scale: Tween<double>(begin: 0.98, end: 1.02).animate(_pulseController),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 20),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [Colors.red.shade50, Colors.white]),
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: Colors.red.shade200, width: 1.5),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.favorite, color: Colors.red.shade600, size: 24),
+                          const SizedBox(width: 8),
+                          Text("ولأنك غالي وعزيز علينا ❤️", style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 18)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      const Text("منصة بيتي راح ترجعلك للمحفظة عند اكمال الطلب:", style: TextStyle(fontSize: 14, color: Colors.black87)),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        decoration: BoxDecoration(color: Colors.green.shade100, borderRadius: BorderRadius.circular(20)),
+                        child: Text("+ ${NumberFormat('#,###').format(_cashbackAmount)} د.ع", style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.bold, fontSize: 20)),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+
+            // ✍️ 3. بيانات المستلم
+            const Text("بيانات التوصيل", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 10),
+            TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person_outline), fillColor: Colors.white, filled: true), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 12),
+            TextFormField(controller: _phoneController, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone_outlined), fillColor: Colors.white, filled: true), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 12),
+            TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'أقرب نقطة دالة', border: OutlineInputBorder(), prefixIcon: Icon(Icons.home_outlined), fillColor: Colors.white, filled: true), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            const SizedBox(height: 20),
+
+            // 🎟️ 4. كود الخصم (Promo Code)
+            const Text("كود الخصم (Promo Code)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade300)),
+              child: Row(
+                children: [
+                  const SizedBox(width: 10),
+                  const Icon(Icons.local_offer_outlined, color: Colors.orange),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _couponController,
+                      decoration: const InputDecoration(hintText: 'ادخل كود الخصم هنا', border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 10)),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      if (_couponController.text.isEmpty) return;
+                      final res = await widget.cart.applyCoupon(_couponController.text);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['message']), backgroundColor: res['valid'] == true ? Colors.green : Colors.red));
+                      setState(() {});
+                    },
+                    child: const Text("تطبيق", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                  )
+                ],
+              ),
+            ),
+            const Divider(height: 40, thickness: 1),
+
+            // 🧾 5. تفاصيل الفاتورة
+            const Text("تفاصيل الفاتورة", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            const SizedBox(height: 15),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.grey.shade200)),
+              child: Column(
+                children: [
+                  _buildSummaryRow("سعر الطلبات:", widget.cart.totalPrice),
+                  if (widget.cart.totalDiscountAmount > 0)
+                    _buildSummaryRow("الخصم (البروموكود):", -widget.cart.totalDiscountAmount, isDiscount: true),
+
+                  _buildSummaryRow("رسوم التوصيل:", _deliveryFee == -1.0 ? 0 : _deliveryFee, isLoading: _deliveryFee == -1.0),
+
+                  if (_serviceFee > 0)
+                    _buildSummaryRow("رسوم الخدمة:", _serviceFee),
+
+                  const Divider(height: 20, thickness: 1),
+                  _buildSummaryRow("الإجمالي الكلي:", grandTotal, isTotal: true, isLoading: _deliveryFee == -1.0),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 30),
+
+            // 🔘 6. زر التأكيد
+            SizedBox(
+              height: 55,
+              child: ElevatedButton(
+                onPressed: (_isSubmitting || _deliveryFee == -1.0) ? null : () async {
+                  if (!_formKey.currentState!.validate()) return;
+                  setState(() => _isSubmitting = true);
+
+                  try {
+                    final prefs = await SharedPreferences.getInstance();
+                    final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
+                    final int? firstRestaurantId = widget.cart.items.isNotEmpty ? widget.cart.items.first.categoryId : null;
+
+                    // 🚀 إرسال الطلب النهائي للسيرفر باستخدام الموقع المحدث (_capturedPosition)
+                    final createdOrder = await ApiService().submitOrder(
+                      name: _nameController.text,
+                      phone: _phoneController.text,
+                      address: _addressController.text,
+                      cartItems: widget.cart.items,
+                      couponCode: widget.cart.appliedCoupon,
+                      position: _capturedPosition,
+                      deliveryFee: _deliveryFee,
+                      zoneId: currentZoneId,
+                      restaurantId: firstRestaurantId,
+                      regionId: currentZoneId,
+                      platformMarkupTotal: widget.cart.totalPlatformMarkup,
+                      checkoutSessionId: const Uuid().v4(),
+                    );
+
+                    if (!mounted) return;
+                    if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
+
+                    // تفريغ السلة والتوجه لشاشة التتبع
+                    widget.cart.clearCart();
+                    Provider.of<NotificationProvider>(context, listen: false).triggerRefresh();
+                    Provider.of<NavigationProvider>(context, listen: false).changeTab(2);
+
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder)),
+                          (route) => route.isFirst, // الرجوع للصفحة الرئيسية في الخلفية
+                    );
+
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red));
+                  } finally {
+                    if (mounted) setState(() => _isSubmitting = false);
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).primaryColor,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                ),
+                child: _isSubmitting
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text("تأكيد وإتمام الطلب", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryRow(String title, double amount, {bool isDiscount = false, bool isTotal = false, bool isLoading = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title, style: TextStyle(fontSize: isTotal ? 18 : 15, fontWeight: isTotal ? FontWeight.bold : FontWeight.w600)),
+          isLoading
+              ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+              : Text(
+              amount == 0 && !isTotal ? "مجاناً" : "${NumberFormat('#,###').format(amount)} د.ع",
+              style: TextStyle(
+                  fontSize: isTotal ? 20 : 15,
+                  fontWeight: FontWeight.bold,
+                  color: isDiscount ? Colors.red : (isTotal ? Theme.of(context).primaryColor : Colors.black87)
+              )
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
 
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});

@@ -152,7 +152,7 @@ class LocationService {
       return null;
     }
   }  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
-  static Future<geolocator.Position?> tryAutoDetectWithPermission({Duration timeout = const Duration(seconds: 10)}) async {
+  static Future<geolocator.Position?> tryAutoDetectWithPermission({Duration timeout = const Duration(seconds: 20)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return null;
