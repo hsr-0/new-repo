@@ -54,38 +54,51 @@ extension AppDelegate: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
-        writeLog("تم حفظ التوكن")
+        writeLog("تم حفظ توكن المكالمات (VoIP)")
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
 
-        writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
+        writeLog("⚠️ تم استلام إشعار عبر مسار (VoIP)!")
 
         if let dict = payload.dictionaryPayload as? [String: Any] {
 
-            let callerName = dict["driver_name"] as? String ?? "الكابتن"
-            let orderId = dict["order_id"] as? String ?? ""
+            // 💡 نظام الفلترة: التحقق مما إذا كان الإشعار يحتوي على بيانات مكالمة حقيقية
+            // يتم فحص وجود مفاتيح معينة لا يرسلها السيرفر إلا مع المكالمات (مثل channel_name أو توكن agora)
+            let isCall = dict["is_call"] as? String ?? "false"
+            let hasChannelName = dict["channel_name"] != nil
 
-            // 🔥 الحل الجذري هنا: يجب توليد UUID حقيقي ترضى عنه آبل
-            let validCallKitId = UUID().uuidString
+            // إذا كان الإشعار يحمل علامة المكالمة أو اسم قناة، قم بتشغيل شاشة الرنين
+            if isCall == "true" || hasChannelName {
+                writeLog("📞 هذا إشعار مكالمة حقيقي. جاري تشغيل شاشة الرنين...")
 
-            let callkitData: [String: Any] = [
-                "id": validCallKitId, // 👈 كود آبل الرسمي (يمنع الكراش)
-                "nameCaller": callerName,
-                "appName": "مطاعم بيتي",
-                "handle": "طلب رقم \(orderId)",
-                "type": 0,
-                "duration": 30000,
-                "extra": dict // 👈 بياناتك (channel_name وغيرها) محفوظة هنا بأمان وتصل لـ Flutter
-            ]
+                let callerName = dict["driver_name"] as? String ?? "الكابتن"
+                let orderId = dict["order_id"] as? String ?? ""
 
-            let data = flutter_callkit_incoming.Data(args: callkitData)
+                // توليد UUID فريد لتجنب كراش CallKit
+                let validCallKitId = UUID().uuidString
 
-            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح.")
+                let callkitData: [String: Any] = [
+                    "id": validCallKitId,
+                    "nameCaller": callerName,
+                    "appName": "منصة بيتي",
+                    "handle": "طلب رقم \(orderId)",
+                    "type": 0,
+                    "duration": 30000,
+                    "extra": dict // تمرير كامل البيانات ليتعامل معها Flutter بعد الرد
+                ]
+
+                let data = flutter_callkit_incoming.Data(args: callkitData)
+
+                if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                    plugin.showCallkitIncoming(data, fromPushKit: true)
+                    writeLog("✅ الشاشة رنت بنجاح.")
+                } else {
+                    writeLog("❌ المكتبة غير جاهزة.")
+                }
             } else {
-                writeLog("❌ المكتبة غير جاهزة.")
+                // 🚫 الإشعار عادي (وليس مكالمة)، نتجاهل تشغيل CallKit لمنع الرنين الخاطئ
+                writeLog("🚫 تم استلام إشعار عادي عبر مسار المكالمات. تم إيقاف شاشة الرنين لمنع الإزعاج.")
             }
         }
 
