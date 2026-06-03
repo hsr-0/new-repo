@@ -649,6 +649,7 @@ class AuthProvider with ChangeNotifier {
 
   // 🔥 دالة تسجيل الدخول الموحدة (المطورة)
 // 🔥 دالة تسجيل الدخول الموحدة (مطاعم + مسواك + سائقين Banner)
+// 🔥 دالة تسجيل الدخول الموحدة (مطاعم + مسواك + سائقين Banner)
   Future<bool> login(String username, String password, String role, {String? restaurantLat, String? restaurantLng}) async {
     final authService = AuthService();
     _token = await authService.loginToServer(BEYTEI_URL, username, password);
@@ -674,11 +675,15 @@ class AuthProvider with ChangeNotifier {
 
       await authService.registerDeviceTokenTriple(_token, _miswakToken, _taxiToken);
 
+      // 💡 التعديل هنا: تحديث الرتبة في الذاكرة الحية للمزود (Provider)
+      _userRole = role;
+
       notifyListeners();
       return true;
     }
     return false;
   }
+
   // تسجيل الخروج
   Future<void> logout(BuildContext context) async {
     final authService = AuthService();
@@ -7728,7 +7733,6 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
-        floatingActionButton: const TestNotificationFAB(),
       ),
     );
   }

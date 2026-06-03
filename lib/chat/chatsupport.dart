@@ -101,8 +101,16 @@ class _SupportUserChatScreenState extends State<SupportUserChatScreen> {
 
   Future<void> _silentLoginAndInitChat() async {
     try {
-      UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
-      String firebaseUid = userCredential.user!.uid;
+      // 💡 التعديل هنا: التحقق من وجود جلسة نشطة مسبقاً
+      User? currentUser = FirebaseAuth.instance.currentUser;
+
+      if (currentUser == null) {
+        // إنشاء حساب مجهول فقط إذا لم يكن مسجلاً مسبقاً
+        UserCredential userCredential = await FirebaseAuth.instance.signInAnonymously();
+        currentUser = userCredential.user;
+      }
+
+      String firebaseUid = currentUser!.uid;
 
       setState(() {
         _user = types.User(id: firebaseUid);
