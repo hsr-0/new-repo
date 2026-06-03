@@ -29,6 +29,7 @@ import 'package:shimmer/shimmer.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
+import '../cr.dart';
 import '../main.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7733,6 +7734,9 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
+
+        floatingActionButton: const IosCrashDebuggerFAB(),
+
       ),
     );
   }

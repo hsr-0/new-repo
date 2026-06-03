@@ -2,12 +2,14 @@ import UIKit
 import Flutter
 import Firebase
 import PushKit
+import CallKit // 🔥 مهم جداً لدرع الحماية
 import flutter_callkit_incoming
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CXProviderDelegate {
 
     var voipRegistry: PKPushRegistry?
+    var backupProvider: CXProvider? // 🛡️ درع الحماية للآيفون
 
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
@@ -28,16 +30,21 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
+        // 🛡️ تهيئة درع الحماية الأصلي (CXProvider) لمنع الكراش في حالة إغلاق التطبيق تماماً
+        let providerConfig = CXProviderConfiguration(localizedName: "مطاعم بيتي")
+        providerConfig.supportsVideo = false
+        providerConfig.maximumCallsPerCallGroup = 1
+        providerConfig.supportedHandleTypes = [.generic]
+        self.backupProvider = CXProvider(configuration: providerConfig)
+        self.backupProvider?.setDelegate(self, queue: nil)
+
         let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
         let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
-
-        debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+        debugChannel.setMethodCallHandler({ [weak self] (call, result) in
             if call.method == "getLogs" {
                 let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
                 let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
                 result(["logs": logs.joined(separator: "\n\n"), "token": token])
-            } else {
-                result(FlutterMethodNotImplemented)
             }
         })
 
@@ -48,36 +55,26 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // 🔥 هذا الدرع الواقي يمنع محرك Flutter من الفحص الخاطئ عند وصول إشعار عادي
-    override func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable : Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        completionHandler(.newData)
-    }
-}
-
-extension AppDelegate: PKPushRegistryDelegate {
-
+    // دوال PushKit الإلزامية
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
-        writeLog("تم حفظ التوكن")
+        writeLog("✅ تم حفظ توكن VoIP بنجاح")
     }
 
-    // 🔥 هنا تم تصحيح اسم الدالة لتطابق iOS 11+ وتمنع تسريب الإشعار لـ Flutter
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
-        writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
+        writeLog("⚠️ استلام إشعار مكالمة (VoIP)")
 
-        if let dict = payload.dictionaryPayload as? [String: Any] {
-            let callerName = dict["driver_name"] as? String ?? "الكابتن"
-            let orderId = dict["order_id"] as? String ?? ""
-            let validCallKitId = UUID().uuidString
+        let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
+        let callerName = dict["driver_name"] as? String ?? "الكابتن"
+        let orderId = dict["order_id"] as? String ?? "0"
+        let validCallKitId = UUID()
 
+        if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+            // إذا كان محرك Flutter مستيقظاً، نعطيه المهمة
             let callkitData: [String: Any] = [
-                "id": validCallKitId,
+                "id": validCallKitId.uuidString,
                 "nameCaller": callerName,
                 "appName": "مطاعم بيتي",
                 "handle": "طلب رقم \(orderId)",
@@ -85,22 +82,32 @@ extension AppDelegate: PKPushRegistryDelegate {
                 "duration": 30000,
                 "extra": dict
             ]
-
             let data = flutter_callkit_incoming.Data(args: callkitData)
+            plugin.showCallkitIncoming(data, fromPushKit: true)
+            writeLog("✅ الشاشة رنت عبر مكتبة فلاتر.")
+        } else {
+            // 🛡️ درع الحماية يتدخل فوراً: محرك Flutter لا يزال نائماً أو يحمل، نرن الشاشة نحن لمنع الكراش!
+            writeLog("🛡️ تدخل درع الحماية السريع لمنع الكراش!")
+            let update = CXCallUpdate()
+            update.remoteHandle = CXHandle(type: .generic, value: callerName)
+            update.hasVideo = false
+            update.localizedCallerName = callerName
 
-            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح.")
-            } else {
-                writeLog("❌ المكتبة غير جاهزة.")
+            self.backupProvider?.reportNewIncomingCall(with: validCallKitId, update: update) { error in
+                if let error = error {
+                    self.writeLog("❌ فشل درع الحماية: \(error.localizedDescription)")
+                } else {
+                    self.writeLog("✅ الشاشة رنت بنجاح عبر درع الحماية.")
+                }
             }
         }
 
-        // 🔥 تأخير الرد لآبل بجزء من الثانية لضمان تشغيل شاشة المكالمة بنجاح
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            completion()
-        }
+        // ⚠️ السر هنا: يجب استدعاء الدالة فوراً وبدون أي تأخير زمني (Delay) لإرضاء آبل!
+        completion()
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}
+
+    // دالة إلزامية لدرع الحماية (CXProviderDelegate)
+    func providerDidReset(_ provider: CXProvider) {}
 }
