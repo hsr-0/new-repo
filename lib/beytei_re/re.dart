@@ -7735,7 +7735,6 @@ class _MainScreenState extends State<MainScreen> {
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
 
-        floatingActionButton: const IosCrashDebuggerFAB(),
 
       ),
     );
