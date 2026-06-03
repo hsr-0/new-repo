@@ -11,12 +11,12 @@ import flutter_callkit_incoming
 
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
+        formatter.dateFormat = "HH:mm:ss.SSS" // أضفنا أجزاء الثانية لدقة التتبع
         let timeString = formatter.string(from: Date())
         let logMessage = "[\(timeString)] 🍏 \(message)"
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
-        if logs.count > 30 { logs.removeFirst() }
+        if logs.count > 50 { logs.removeFirst() } // رفعنا العدد لـ 50 سجل
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
     }
 
@@ -45,6 +45,7 @@ import flutter_callkit_incoming
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
 
+        writeLog("تم تشغيل التطبيق وتهيئة PushKit")
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 }
@@ -54,56 +55,52 @@ extension AppDelegate: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
-        writeLog("تم حفظ توكن المكالمات (VoIP)")
+        writeLog("تم حفظ توكن VoIP الجديد")
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
 
-        writeLog("⚠️ تم استلام إشعار عبر مسار (VoIP)!")
+        writeLog("⚠️ تم استلام إشعار VoIP!")
 
-        if let dict = payload.dictionaryPayload as? [String: Any] {
+        // 1. استخراج البيانات بأمان (حتى لو فشل، نضع بيانات افتراضية لمنع الكراش)
+        let dict = payload.dictionaryPayload as? [String: Any] ?? ["fallback": "true"]
+        writeLog("📦 محتوى الإشعار: \(dict)")
 
-            // 💡 نظام الفلترة: التحقق مما إذا كان الإشعار يحتوي على بيانات مكالمة حقيقية
-            // يتم فحص وجود مفاتيح معينة لا يرسلها السيرفر إلا مع المكالمات (مثل channel_name أو توكن agora)
-            let isCall = dict["is_call"] as? String ?? "false"
-            let hasChannelName = dict["channel_name"] != nil
+        let callerName = dict["driver_name"] as? String ?? "تنبيه النظام"
+        let orderId = dict["order_id"] as? String ?? "N/A"
 
-            // إذا كان الإشعار يحمل علامة المكالمة أو اسم قناة، قم بتشغيل شاشة الرنين
-            if isCall == "true" || hasChannelName {
-                writeLog("📞 هذا إشعار مكالمة حقيقي. جاري تشغيل شاشة الرنين...")
+        let validCallKitId = UUID().uuidString
 
-                let callerName = dict["driver_name"] as? String ?? "الكابتن"
-                let orderId = dict["order_id"] as? String ?? ""
+        let callkitData: [String: Any] = [
+            "id": validCallKitId,
+            "nameCaller": callerName,
+            "appName": "مطاعم بيتي",
+            "handle": "طلب رقم \(orderId)",
+            "type": 0,
+            "duration": 30000,
+            "extra": dict
+        ]
 
-                // توليد UUID فريد لتجنب كراش CallKit
-                let validCallKitId = UUID().uuidString
+        let data = flutter_callkit_incoming.Data(args: callkitData)
 
-                let callkitData: [String: Any] = [
-                    "id": validCallKitId,
-                    "nameCaller": callerName,
-                    "appName": "منصة بيتي",
-                    "handle": "طلب رقم \(orderId)",
-                    "type": 0,
-                    "duration": 30000,
-                    "extra": dict // تمرير كامل البيانات ليتعامل معها Flutter بعد الرد
-                ]
-
-                let data = flutter_callkit_incoming.Data(args: callkitData)
-
-                if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                    plugin.showCallkitIncoming(data, fromPushKit: true)
-                    writeLog("✅ الشاشة رنت بنجاح.")
-                } else {
-                    writeLog("❌ المكتبة غير جاهزة.")
-                }
-            } else {
-                // 🚫 الإشعار عادي (وليس مكالمة)، نتجاهل تشغيل CallKit لمنع الرنين الخاطئ
-                writeLog("🚫 تم استلام إشعار عادي عبر مسار المكالمات. تم إيقاف شاشة الرنين لمنع الإزعاج.")
-            }
+        if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+            writeLog("✅ جاري عرض شاشة CallKit...")
+            plugin.showCallkitIncoming(data, fromPushKit: true)
+        } else {
+            // إذا كانت المكتبة غير مهيأة، نسجل ذلك
+            writeLog("❌ خطأ: SwiftFlutterCallkitIncomingPlugin.sharedInstance غير متاح!")
         }
 
-        completion()
+        // 🔥 التعديل الأهم لمنع Crash نظام iOS:
+        // آبل تتطلب إرجاع completion بعد أن يتم إخبار النظام بالمكالمة.
+        // تأخيره قليلاً (ثانية واحدة) يضمن أن CallKit قد أخذ مجراه في النظام ولم يتم قتله.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            completion()
+            self.writeLog("🏁 تم إنهاء الـ completion بسلام لمنع الكراش.")
+        }
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        writeLog("⚠️ تم إبطال توكن VoIP من قبل آبل.")
+    }
 }

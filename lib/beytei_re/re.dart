@@ -29,6 +29,7 @@ import 'package:shimmer/shimmer.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
+import '../cr.dart';
 import '../main.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -1376,16 +1377,22 @@ class DeliveryConfigProvider with ChangeNotifier {
 
     print("📍 حالة المنطقة: هل هي الكوت؟ $isKut | هل هي الصويرة؟ $isSuwaira");
 
-    // 🔥 تهيئة رسوم الخدمة والكاش باك (مؤقتاً يتم تحديدها هنا لحين برمجتها في السيرفر)
+    // 🔥 1. قراءة رسوم الخدمة الحقيقية من السيرفر (التي أضفناها في PHP)
+    double realServiceFeeFromServer = 0.0;
+    if (_cachedConfig != null && _cachedConfig!['pricing'] != null) {
+      realServiceFeeFromServer = double.tryParse(_cachedConfig!['pricing']['service_fee']?.toString() ?? '0.0') ?? 0.0;
+    }
+
+    // 🔥 2. القاعدة الذهبية: رسوم الخدمة تُطبق فقط في منطقة الكوت (84)
     double serviceFee = 0.0;
     double cashbackAmount = 0.0;
 
-    // يمكنك لاحقاً قراءة هذه القيم من _cachedConfig بناءً على المنطقة
-    // مثال: قراءة القيم المخصصة للكوت من ملف التسعير
     if (isKut) {
-      // هذه القيم ستفعل الأنيميشن في شاشة إتمام الدفع وتضيف رسوم الخدمة
-      serviceFee = 250.0; // مثال لرسوم الخدمة
+      serviceFee = realServiceFeeFromServer; // يأخذ الـ 500 دينار من السيرفر تلقائياً
       cashbackAmount = 1000.0; // قيمة الكاش باك الهدية للمحفظة
+    } else {
+      serviceFee = 0.0; // الصويرة (85)، النعمانية، والمناطق الأخرى = 0
+      cashbackAmount = 0.0;
     }
 
     // حماية: التأكد من وجود ملف التسعير
@@ -1443,6 +1450,7 @@ class DeliveryConfigProvider with ChangeNotifier {
             print("✅ [Calc Success] الزبون داخل منطقة مرسومة: ${zone['name']} | السعر: $zonePrice");
 
             // قراءة قيم الكاش باك والخدمة المخصصة للمنطقة المرسومة إذا أرسلها السيرفر
+            // (بما أن القاعدة هي الكوت فقط، فالـ serviceFee هنا سيكون 0 ما لم يرسل السيرفر قيمة مخصصة للمنطقة)
             double zoneServiceFee = double.tryParse(zone['service_fee']?.toString() ?? '0.0') ?? serviceFee;
             double zoneCashback = double.tryParse(zone['cashback_amount']?.toString() ?? '0.0') ?? cashbackAmount;
 
@@ -1597,6 +1605,8 @@ class DeliveryConfigProvider with ChangeNotifier {
 
   double _deg2rad(double deg) => deg * (3.141592653589793 / 180.0);
 }
+
+
 class RestaurantSettingsProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -2922,8 +2932,15 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // 🔥🔥🔥 التعديل الجذري هنا: جلب المنطقة وتمريرها للسيرفر 🔥🔥🔥
   Future<Map<String, dynamic>> applyCoupon(String code) async {
-    final result = await ApiService().validateCoupon(code);
+    // 1. جلب منطقة الزبون الحالية من الذاكرة (التي اختارها عند فتح التطبيق)
+    final prefs = await SharedPreferences.getInstance();
+    int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+    // 2. تمرير المنطقة مع الكود إلى الـ API (الذي تم تعديله مسبقاً ليستقبل areaId)
+    final result = await ApiService().validateCoupon(code, areaId);
+
     if (result['is_promoter'] == true) {
       _promoterCode = code.toUpperCase();
       _usageCount = await _loadUsageCount(_promoterCode!);
@@ -3020,6 +3037,7 @@ class CartProvider with ChangeNotifier {
 
   void clearCart() { _items.clear(); removeCoupon(); notifyListeners(); }
 }
+
 class FoodItemBottomSheet extends StatefulWidget {
   final FoodItem foodItem;
   final bool isMarket;
@@ -4038,12 +4056,13 @@ class ApiService {
     return response.statusCode == 201;
   }
 
-  Future<Map<String, dynamic>> validateCoupon(String code) async {
+  Future<Map<String, dynamic>> validateCoupon(String code, int areaId) async {
     try {
       final response = await _executeWithRetry(() => http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/validate-coupon'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'code': code}),
+        // 🔥 إرسال المنطقة مع الكود ليتحقق السيرفر من الشروط (مثل منطقة 85 لكود العيد)
+        body: json.encode({'code': code, 'area_id': areaId}),
       ));
       if (response.statusCode == 200) return json.decode(response.body);
       return {'valid': false, 'message': 'كود غير صالح'};
@@ -6753,7 +6772,6 @@ class MapLocationPicker extends StatefulWidget {
   @override
   State<MapLocationPicker> createState() => _MapLocationPickerState();
 }
-
 class _MapLocationPickerState extends State<MapLocationPicker>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   ml.MapLibreMapController? _mapController;
@@ -6777,11 +6795,20 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // فحص ما إذا كان هناك موقع ممرر من الشاشة السابقة
+    // ✅ الإصلاح الجذري: إذا كان هناك موقع محفوظ وممرر، نستخدمه مباشرة
+    // ولا نحاول التحديد التلقائي (GPS) حتى لا يتم استبدال الموقع الذي اختاره المستخدم
     if (widget.initialLat != null && widget.initialLng != null && widget.initialLat != 0.0) {
       _selectedPoint = ml.LatLng(widget.initialLat!, widget.initialLng!);
+      _userChoseManual = true; // منع أي محاولة للتحديد التلقائي اللاحقة
+
+      // 🔥 طباعة الموقع الابتدائي في الكونسول
+      print("🗺️ [MapPicker] الموقع الابتدائي الممرر: Lat=${widget.initialLat}, Lng=${widget.initialLng}");
+
+      // تحريك الكاميرا للموقع المحفوظ فوراً بعد بناء الخريطة
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _tryAutoDetectLocation(isUserInitiated: false);
+        if (mounted && _isMapReady && _mapController != null) {
+          _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 16.0));
+        }
       });
     } else {
       // إذا لم يكن هناك موقع سابق، افحص المدينة ووجه الكاميرا إليها
@@ -6792,6 +6819,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
     _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
   }
+
 
   @override
   void dispose() {
@@ -6840,6 +6868,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
     if (mounted) {
       setState(() => _selectedPoint = cityPoint);
+
+      // 🔥 طباعة موقع المدينة في الكونسول
+      print("🏙️ [MapPicker] الانتقال إلى مدينة: AreaID=$areaId, Lat=${cityPoint.latitude}, Lng=${cityPoint.longitude}");
 
       // إذا كانت الخريطة جاهزة فعلاً، حرك الكاميرا
       if (_isMapReady && _mapController != null) {
@@ -6947,6 +6978,10 @@ class _MapLocationPickerState extends State<MapLocationPicker>
           _userChoseManual = false;
           _currentZoom = 17.0;
         });
+
+        // 🔥 طباعة موقع GPS التلقائي في الكونسول
+        print("📍 [MapPicker] موقع GPS التلقائي: Lat=${position.latitude}, Lng=${position.longitude}");
+
         if (_isMapReady && _mapController != null) {
           _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0));
         }
@@ -6978,8 +7013,8 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [Icon(Icons.location_off, color: Colors.orange), SizedBox(width: 10), Text('خدمة الموقع معطلة')]),
-        content: const Text('يرجى تفعيل GPS لكي نتمكن من تحديد موقعك بدقة.'),
+        title: const Row(children: [Icon(Icons.location_off, color: Colors.blueAccent), SizedBox(width: 10), Text('خدمة الموقع معطلة')]),
+        content: const Text('يرجى تفعيل   GPS ومنح الان الموقع  لكي نتمكن من تحديد موقعك بدقة.'),
         actions: [
           TextButton(
               onPressed: () {
@@ -7042,6 +7077,10 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
     final prefs = await SharedPreferences.getInstance();
     int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+    // 🔥 طباعة الموقع قبل الحفظ
+    print("💾 [MapPicker] جاري حفظ الموقع: Lat=${position.latitude}, Lng=${position.longitude}, AreaID=$areaId");
+
     await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto_gps', areaId: areaId);
 
     Future.delayed(const Duration(milliseconds: 600), () {
@@ -7064,6 +7103,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
         _autoLocated = false;
         _manualMode = true;
       });
+
+      // 🔥 طباعة الإحداثيات عندما تتوقف الخريطة عن الحركة
+      print("🎯 [MapPicker] الكاميرا توقفت عند: Lat=${_selectedPoint.latitude}, Lng=${_selectedPoint.longitude}, Zoom=$_currentZoom");
     }
   }
 
@@ -7084,6 +7126,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               // سواء كانت مركز مدينة الصويرة أو الـ GPS
               double initialZoom = _autoLocated ? 17.0 : 14.0;
               controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, initialZoom));
+
+              // 🔥 طباعة عند جاهزية الخريطة
+              print("🗺️ [MapPicker] الخريطة جاهزة الآن");
             },
             onCameraMove: _onCameraMove,
             onCameraIdle: _onCameraIdle,
@@ -7233,11 +7278,24 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                         ml.LatLng finalPoint = _selectedPoint;
                         bool isValid = (finalPoint.latitude != 0.0 && finalPoint.longitude != 0.0);
 
+                        // 🔥 طباعة الإحداثيات النهائية عند الضغط على زر التأكيد
+                        print("✅ [MapPicker] الضغط على زر التأكيد:");
+                        print("   📍 Lat: ${finalPoint.latitude}");
+                        print("   📍 Lng: ${finalPoint.longitude}");
+                        print("   ✅ Valid: $isValid");
+
                         setState(() => _isLocating = false);
 
                         if (isValid) {
                           final prefs = await SharedPreferences.getInstance();
                           int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+                          // 🔥 طباعة قبل الحفظ
+                          print("💾 [MapPicker] جاري حفظ الموقع النهائي:");
+                          print("   📍 Lat: ${finalPoint.latitude}");
+                          print("   📍 Lng: ${finalPoint.longitude}");
+                          print("   🏙️ AreaID: $areaId");
+                          print("   📝 Source: ${_autoLocated ? 'auto_gps' : 'manual_map'}");
 
                           await LocationService.saveLocation(
                               finalPoint.latitude,
@@ -7246,14 +7304,23 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                               areaId: areaId
                           );
 
+                          // 🔥 طباعة بعد الحفظ
+                          print("✅ [MapPicker] تم حفظ الموقع بنجاح في SharedPreferences");
+
                           if (mounted) {
+                            // 🔥 طباعة قبل الإغلاق
+                            print("🚪 [MapPicker] جاري إغلاق الشاشة وإرجاع البيانات...");
+
                             Navigator.pop(context, {
                               'lat': finalPoint.latitude,
                               'lng': finalPoint.longitude,
                               'source': _autoLocated ? 'auto_gps' : 'manual_map',
                             });
+
+                            print("✅ [MapPicker] تم إغلاق الشاشة بنجاح");
                           }
                         } else {
+                          print("❌ [MapPicker] الإحداثيات غير صالحة!");
                           _showModernToast('تعذر التقاط الإحداثيات. يرجى تحريك الخريطة قليلاً ثم الضغط على تأكيد مرة أخرى.', isError: true);
                         }
                       },
@@ -7285,6 +7352,18 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     );
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class RestaurantSettingsScreen extends StatefulWidget {
@@ -7650,7 +7729,7 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
-        // ✅ تمت إزالة زر الفحص العائم من هنا لتنظيف الواجهة
+        floatingActionButton: const IosCrashDebuggerFAB(),
       ),
     );
   }
@@ -9628,11 +9707,12 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
   /// 🗺️ فتح شاشة الخريطة اليدوية (من داخل المنيو)
+  /// 🗺️ فتح شاشة الخريطة اليدوية (من داخل المنيو)
   Future<bool> _handleManualLocationPickInMenu() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedLoc = await LocationService.getSavedLocationSimple();
-      final areaId = prefs.getInt('selectedAreaId'); // ✅ قراءة المنطقة
+      final areaId = prefs.getInt('selectedAreaId');
 
       final result = await Navigator.push(
         context,
@@ -9649,16 +9729,29 @@ class _MenuScreenState extends State<MenuScreen> {
         double? lat = double.tryParse(result['lat'].toString());
         double? lng = double.tryParse(result['lng'].toString());
 
-        if (lat != null && lng != null) {
+        if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
           // ✅ حفظ الموقع مع المنطقة
           await LocationService.saveLocation(
             lat,
             lng,
             source: result['source'] ?? 'manual_map',
-            areaId: areaId, // تمرير المنطقة
+            areaId: areaId,
           );
 
+          // 🔥 الحل: إعادة حساب السعر فوراً مع إظهار حالة التحميل
+          if (mounted) {
+            setState(() {
+              _isLoadingDeliveryFee = true;
+              _deliveryMessage = 'جاري تحديث الموقع وحساب التسعيرة...';
+            });
+          }
+
+          // انتظار لحظة لضمان حفظ البيانات
+          await Future.delayed(const Duration(milliseconds: 300));
+
+          // 🔥 إعادة حساب السعر
           await _calculateDeliveryFee();
+
           return true;
         }
       }
@@ -9667,7 +9760,9 @@ class _MenuScreenState extends State<MenuScreen> {
       print('❌ Error: $e');
       return false;
     }
-  }  // 🔄 دالة إعادة المحاولة (عند الضغط على الشريط)
+  }
+
+  // 🔄 دالة إعادة المحاولة (عند الضغط على الشريط)
   void _retryCalculation() {
     _performFullLocationAndFeeCheck();
   }
@@ -10472,24 +10567,31 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     }
   }
 
-  // 🔥 دالة فتح الخريطة (تم إصلاح مشكلة التحديث هنا جذرياً)
+// 🔥 دالة فتح الخريطة (تم إصلاح مشكلة التحديث هنا جذرياً)
   Future<void> _openMapPicker() async {
     final savedLoc = await LocationService.getSavedLocationSimple();
 
-    final result = await Navigator.push(context, MaterialPageRoute(
-      builder: (_) => MapLocationPicker(initialLat: savedLoc?.lat, initialLng: savedLoc?.lng),
-    ));
+    final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MapLocationPicker(
+              initialLat: savedLoc?.lat,
+              initialLng: savedLoc?.lng
+          ),
+        )
+    );
 
     // إذا عاد الزبون بنتيجة (إحداثيات جديدة)
     if (result != null && result is Map) {
-
-      // 1. إظهار حالة التحميل للزبون فوراً ليعرف أن النظام يستجيب
+      // 1. إظهار حالة التحميل للزبون فوراً
       setState(() {
         _deliveryFee = -1.0;
+        _serviceFee = 0.0;
+        _cashbackAmount = 0.0;
         _locationMessage = "جاري تحديث الموقع وحساب التسعيرة...";
       });
 
-      // 2. الاستخراج الآمن للإحداثيات (Safe Parsing)
+      // 2. الاستخراج الآمن للإحداثيات
       double newLat = double.tryParse(result['lat'].toString()) ?? 0.0;
       double newLng = double.tryParse(result['lng'].toString()) ?? 0.0;
 
@@ -10498,16 +10600,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         int areaId = prefs.getInt('selectedAreaId') ?? 0;
 
         // 3. الحفظ المباشر في الذاكرة
-        await LocationService.saveLocation(newLat, newLng, source: 'manual_checkout', areaId: areaId);
+        await LocationService.saveLocation(
+            newLat,
+            newLng,
+            source: 'manual_checkout',
+            areaId: areaId
+        );
+
+        // 🔥 الحل: انتظار لحظة لضمان حفظ البيانات
+        await Future.delayed(const Duration(milliseconds: 300));
 
         // 4. إعادة الحساب بناءً على الموقع الجديد
         await _calculateInitialFees();
+
+        // 🔥 إظهار رسالة نجاح
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("✅ تم تحديث الموقع وحساب التسعيرة بنجاح"),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
       } else {
         setState(() => _locationMessage = "حدث خطأ في قراءة الموقع، حاول مجدداً");
       }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     double total = widget.cart.totalPrice - widget.cart.totalDiscountAmount;
