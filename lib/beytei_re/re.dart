@@ -29,7 +29,6 @@ import 'package:shimmer/shimmer.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
-import '../cr.dart';
 import '../main.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7729,7 +7728,7 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         bottomNavigationBar: _buildCustomBottomNav(navProvider),
-        floatingActionButton: const IosCrashDebuggerFAB(),
+        floatingActionButton: const TestNotificationFAB(),
       ),
     );
   }
@@ -7773,6 +7772,83 @@ class _MainScreenState extends State<MainScreen> {
       ],
       currentIndex: navProvider.currentIndex,
       onTap: navProvider.changeTab,
+    );
+  }
+}
+class TestNotificationFAB extends StatelessWidget {
+  const TestNotificationFAB({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton(
+      heroTag: "test_notifications_btn",
+      backgroundColor: Colors.deepPurple,
+      onPressed: () async {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => const Center(child: CircularProgressIndicator()),
+        );
+
+        // جلب التوكنات
+        String? fcmToken = await FirebaseMessaging.instance.getToken();
+        String? voipToken = "";
+        try {
+          voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+        } catch (e) {
+          voipToken = "خطأ أو غير مدعوم";
+        }
+
+        if (context.mounted) {
+          Navigator.pop(context); // إغلاق التحميل
+          _showTokensDialog(context, fcmToken ?? "فارغ", voipToken ?? "فارغ");
+        }
+      },
+      child: const Icon(Icons.bug_report, color: Colors.white),
+    );
+  }
+
+  void _showTokensDialog(BuildContext context, String fcm, String voip) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("🔍 فحص الإشعارات والتوكنات", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("1️⃣ توكن الإشعارات العادية (FCM):", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+              SelectableText(fcm, style: const TextStyle(fontSize: 12)),
+              const Divider(height: 20),
+              const Text("2️⃣ توكن المكالمات (VoIP):", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+              SelectableText(voip, style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 15),
+              const Text("💡 أرسل التوكن الأخضر للسيرفر ليستخدمه في الإشعارات العادية.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+            ],
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            onPressed: () async {
+              // اختبار الإشعار العادي من داخل التطبيق
+              final plugin = FlutterLocalNotificationsPlugin();
+              const details = NotificationDetails(
+                iOS: DarwinNotificationDetails(presentAlert: true, presentSound: true),
+                android: AndroidNotificationDetails('test_channel', 'Test', importance: Importance.max),
+              );
+              await plugin.show(999, "✅ إشعار عادي", "هذا إشعار تجريبي يعمل بنجاح وبدون كراش!", details);
+              Navigator.pop(ctx);
+            },
+            child: const Text("اختبار إشعار عادي"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("إغلاق", style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
     );
   }
 }
