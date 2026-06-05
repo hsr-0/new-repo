@@ -2937,14 +2937,17 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // 🔥🔥🔥 التعديل الجذري هنا: جلب المنطقة وتمريرها للسيرفر 🔥🔥🔥
+  // 🔥🔥🔥 التعديل الجذري هنا: جلب المنطقة ومعرف الجهاز وتمريرهما للسيرفر 🔥🔥🔥
   Future<Map<String, dynamic>> applyCoupon(String code) async {
-    // 1. جلب منطقة الزبون الحالية من الذاكرة (التي اختارها عند فتح التطبيق)
+    // 1. جلب منطقة الزبون الحالية من الذاكرة
     final prefs = await SharedPreferences.getInstance();
     int areaId = prefs.getInt('selectedAreaId') ?? 0;
 
-    // 2. تمرير المنطقة مع الكود إلى الـ API (الذي تم تعديله مسبقاً ليستقبل areaId)
-    final result = await ApiService().validateCoupon(code, areaId);
+    // 2. 🔥 جلب معرف الجهاز (Device ID) لحماية الكوبونات الشخصية
+    String? deviceId = prefs.getString('unique_device_id');
+
+    // 3. تمرير المنطقة ومعرف الجهاز إلى الـ API
+    final result = await ApiService().validateCoupon(code, areaId, deviceId);
 
     if (result['is_promoter'] == true) {
       _promoterCode = code.toUpperCase();
@@ -3042,7 +3045,6 @@ class CartProvider with ChangeNotifier {
 
   void clearCart() { _items.clear(); removeCoupon(); notifyListeners(); }
 }
-
 class FoodItemBottomSheet extends StatefulWidget {
   final FoodItem foodItem;
   final bool isMarket;
@@ -4061,21 +4063,30 @@ class ApiService {
     return response.statusCode == 201;
   }
 
-  Future<Map<String, dynamic>> validateCoupon(String code, int areaId) async {
+  Future<Map<String, dynamic>> validateCoupon(String code, int areaId, [String? deviceId]) async {
     try {
+      // 🔥 تجهيز البيانات وإضافة device_id إذا كان موجوداً
+      final Map<String, dynamic> bodyData = {
+        'code': code,
+        'area_id': areaId,
+      };
+
+      if (deviceId != null && deviceId.isNotEmpty) {
+        bodyData['device_id'] = deviceId;
+      }
+
       final response = await _executeWithRetry(() => http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/validate-coupon'),
         headers: {'Content-Type': 'application/json'},
-        // 🔥 إرسال المنطقة مع الكود ليتحقق السيرفر من الشروط (مثل منطقة 85 لكود العيد)
-        body: json.encode({'code': code, 'area_id': areaId}),
+        body: json.encode(bodyData),
       ));
+
       if (response.statusCode == 200) return json.decode(response.body);
       return {'valid': false, 'message': 'كود غير صالح'};
     } catch (e) {
       return {'valid': false, 'message': 'خطأ في الاتصال بالخادم'};
     }
   }
-
   Future<RestaurantRatingsDashboard> getDashboardRatings(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
@@ -6781,7 +6792,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   ml.MapLibreMapController? _mapController;
 
-  // النقطة الابتدائية العشوائية (ستتغير فوراً بعد أجزاء من الثانية)
+  // النقطة الابتدائية العشوائية
   ml.LatLng _selectedPoint = ml.LatLng(32.5000, 45.8000);
 
   bool _isMapReady = false;
@@ -6800,23 +6811,16 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // ✅ الإصلاح الجذري: إذا كان هناك موقع محفوظ وممرر، نستخدمه مباشرة
-    // ولا نحاول التحديد التلقائي (GPS) حتى لا يتم استبدال الموقع الذي اختاره المستخدم
     if (widget.initialLat != null && widget.initialLng != null && widget.initialLat != 0.0) {
       _selectedPoint = ml.LatLng(widget.initialLat!, widget.initialLng!);
-      _userChoseManual = true; // منع أي محاولة للتحديد التلقائي اللاحقة
+      _userChoseManual = true;
 
-      // 🔥 طباعة الموقع الابتدائي في الكونسول
-      print("🗺️ [MapPicker] الموقع الابتدائي الممرر: Lat=${widget.initialLat}, Lng=${widget.initialLng}");
-
-      // تحريك الكاميرا للموقع المحفوظ فوراً بعد بناء الخريطة
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _isMapReady && _mapController != null) {
           _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 16.0));
         }
       });
     } else {
-      // إذا لم يكن هناك موقع سابق، افحص المدينة ووجه الكاميرا إليها
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _checkAreaAndSetFallback();
       });
@@ -6824,7 +6828,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
     _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
   }
-
 
   @override
   void dispose() {
@@ -6865,19 +6868,15 @@ class _MapLocationPickerState extends State<MapLocationPicker>
   void _moveToCity(int areaId) {
     ml.LatLng cityPoint;
     switch (areaId) {
-      case 84: cityPoint = ml.LatLng(32.5055, 45.8247); break; // الكوت
-      case 85: cityPoint = ml.LatLng(32.9288, 44.7766); break; // الصويرة
-      case 42: cityPoint = ml.LatLng(32.5385, 45.4190); break; // النعمانية
+      case 84: cityPoint = ml.LatLng(32.5055, 45.8247); break;
+      case 85: cityPoint = ml.LatLng(32.9288, 44.7766); break;
+      case 42: cityPoint = ml.LatLng(32.5385, 45.4190); break;
       default: cityPoint = ml.LatLng(32.5000, 45.8000);
     }
 
     if (mounted) {
       setState(() => _selectedPoint = cityPoint);
 
-      // 🔥 طباعة موقع المدينة في الكونسول
-      print("🏙️ [MapPicker] الانتقال إلى مدينة: AreaID=$areaId, Lat=${cityPoint.latitude}, Lng=${cityPoint.longitude}");
-
-      // إذا كانت الخريطة جاهزة فعلاً، حرك الكاميرا
       if (_isMapReady && _mapController != null) {
         _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(cityPoint, 14.0));
       }
@@ -6984,9 +6983,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
           _currentZoom = 17.0;
         });
 
-        // 🔥 طباعة موقع GPS التلقائي في الكونسول
-        print("📍 [MapPicker] موقع GPS التلقائي: Lat=${position.latitude}, Lng=${position.longitude}");
-
         if (_isMapReady && _mapController != null) {
           _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0));
         }
@@ -7019,7 +7015,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(children: [Icon(Icons.location_off, color: Colors.blueAccent), SizedBox(width: 10), Text('خدمة الموقع معطلة')]),
-        content: const Text('يرجى تفعيل   GPS ومنح الان الموقع  لكي نتمكن من تحديد موقعك بدقة.'),
+        content: const Text('يرجى تفعيل GPS ومنح الإذن لكي نتمكن من تحديد موقعك بدقة.'),
         actions: [
           TextButton(
               onPressed: () {
@@ -7083,9 +7079,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     final prefs = await SharedPreferences.getInstance();
     int areaId = prefs.getInt('selectedAreaId') ?? 0;
 
-    // 🔥 طباعة الموقع قبل الحفظ
-    print("💾 [MapPicker] جاري حفظ الموقع: Lat=${position.latitude}, Lng=${position.longitude}, AreaID=$areaId");
-
     await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto_gps', areaId: areaId);
 
     Future.delayed(const Duration(milliseconds: 600), () {
@@ -7102,15 +7095,17 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     _selectedPoint = position.target;
   }
 
+  // 🔥 التعديل الأول: سحب الموقع الفعلي من الكاميرا عند سكون الخريطة
   void _onCameraIdle() {
     if (!_isLocating && mounted) {
       setState(() {
+        if (_mapController != null && _mapController!.cameraPosition != null) {
+          _selectedPoint = _mapController!.cameraPosition!.target;
+          _currentZoom = _mapController!.cameraPosition!.zoom;
+        }
         _autoLocated = false;
         _manualMode = true;
       });
-
-      // 🔥 طباعة الإحداثيات عندما تتوقف الخريطة عن الحركة
-      print("🎯 [MapPicker] الكاميرا توقفت عند: Lat=${_selectedPoint.latitude}, Lng=${_selectedPoint.longitude}, Zoom=$_currentZoom");
     }
   }
 
@@ -7126,17 +7121,11 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               _mapController = controller;
               setState(() => _isMapReady = true);
 
-              // 🔥 الحل الجذري للمشكلة:
-              // بمجرد أن تجهز الخريطة، اجبرها على الذهاب لـ _selectedPoint
-              // سواء كانت مركز مدينة الصويرة أو الـ GPS
               double initialZoom = _autoLocated ? 17.0 : 14.0;
               controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, initialZoom));
-
-              // 🔥 طباعة عند جاهزية الخريطة
-              print("🗺️ [MapPicker] الخريطة جاهزة الآن");
             },
             onCameraMove: _onCameraMove,
-            onCameraIdle: _onCameraIdle,
+            onCameraIdle: _onCameraIdle, // 👈 استدعاء الدالة المحدثة هنا
             myLocationEnabled: true,
             myLocationTrackingMode: ml.MyLocationTrackingMode.none,
             compassEnabled: false,
@@ -7144,7 +7133,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
             attributionButtonMargins: const Point(-100, -100),
           ),
 
-          // تصميم المؤشر الدقيق
           Center(
             child: IgnorePointer(
               child: Stack(
@@ -7280,27 +7268,15 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
                         setState(() => _isLocating = true);
 
-                        ml.LatLng finalPoint = _selectedPoint;
+                        // 🔥 التعديل الثاني (الجوهري): إجبار التطبيق على أخذ الإحداثيات الفعلية لمركز الشاشة لحظة الضغط
+                        ml.LatLng finalPoint = _mapController?.cameraPosition?.target ?? _selectedPoint;
                         bool isValid = (finalPoint.latitude != 0.0 && finalPoint.longitude != 0.0);
-
-                        // 🔥 طباعة الإحداثيات النهائية عند الضغط على زر التأكيد
-                        print("✅ [MapPicker] الضغط على زر التأكيد:");
-                        print("   📍 Lat: ${finalPoint.latitude}");
-                        print("   📍 Lng: ${finalPoint.longitude}");
-                        print("   ✅ Valid: $isValid");
 
                         setState(() => _isLocating = false);
 
                         if (isValid) {
                           final prefs = await SharedPreferences.getInstance();
                           int areaId = prefs.getInt('selectedAreaId') ?? 0;
-
-                          // 🔥 طباعة قبل الحفظ
-                          print("💾 [MapPicker] جاري حفظ الموقع النهائي:");
-                          print("   📍 Lat: ${finalPoint.latitude}");
-                          print("   📍 Lng: ${finalPoint.longitude}");
-                          print("   🏙️ AreaID: $areaId");
-                          print("   📝 Source: ${_autoLocated ? 'auto_gps' : 'manual_map'}");
 
                           await LocationService.saveLocation(
                               finalPoint.latitude,
@@ -7309,23 +7285,14 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                               areaId: areaId
                           );
 
-                          // 🔥 طباعة بعد الحفظ
-                          print("✅ [MapPicker] تم حفظ الموقع بنجاح في SharedPreferences");
-
                           if (mounted) {
-                            // 🔥 طباعة قبل الإغلاق
-                            print("🚪 [MapPicker] جاري إغلاق الشاشة وإرجاع البيانات...");
-
                             Navigator.pop(context, {
                               'lat': finalPoint.latitude,
                               'lng': finalPoint.longitude,
                               'source': _autoLocated ? 'auto_gps' : 'manual_map',
                             });
-
-                            print("✅ [MapPicker] تم إغلاق الشاشة بنجاح");
                           }
                         } else {
-                          print("❌ [MapPicker] الإحداثيات غير صالحة!");
                           _showModernToast('تعذر التقاط الإحداثيات. يرجى تحريك الخريطة قليلاً ثم الضغط على تأكيد مرة أخرى.', isError: true);
                         }
                       },
@@ -7357,8 +7324,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     );
   }
 }
-
-
 
 
 
@@ -7860,7 +7825,6 @@ class TestNotificationFAB extends StatelessWidget {
   }
 }
 
-
 class CustomerWalletScreen extends StatefulWidget {
   const CustomerWalletScreen({super.key});
 
@@ -7868,13 +7832,18 @@ class CustomerWalletScreen extends StatefulWidget {
   State<CustomerWalletScreen> createState() => _CustomerWalletScreenState();
 }
 
-class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
+class _CustomerWalletScreenState extends State<CustomerWalletScreen> with TickerProviderStateMixin {
   int _areaId = 0;
   bool _isCheckingArea = true;
+
+  // لعجلة الحظ
+  late AnimationController _wheelController;
+  late Animation<double> _wheelAnimation;
 
   @override
   void initState() {
     super.initState();
+    _wheelController = AnimationController(vsync: this, duration: const Duration(seconds: 4));
     _checkAreaAndLoadData();
   }
 
@@ -7885,18 +7854,18 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
       _isCheckingArea = false;
     });
 
-    // إذا كانت المنطقة الكوت (84)، نقوم بجلب البيانات
-    if (_areaId == 84) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final auth = Provider.of<AuthProvider>(context, listen: false);
-        if (auth.isLoggedIn && auth.token != null) {
-          Provider.of<SmartWalletProvider>(context, listen: false).fetchWalletStatus(auth.token!);
-        }
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Provider.of<SmartWalletProvider>(context, listen: false).fetchWalletStatus(_areaId);
+    });
   }
 
-  void _showCouponDialog(String code, double amount) {
+  @override
+  void dispose() {
+    _wheelController.dispose();
+    super.dispose();
+  }
+
+  void _showGeneratedCoupon(String code, String message) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -7912,22 +7881,25 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text("لقد حصلت على خصم بقيمة ${NumberFormat('#,###').format(amount)} د.ع", textAlign: TextAlign.center),
+            Text(message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
                 color: Colors.grey.shade100,
-                border: Border.all(color: Theme.of(context).primaryColor, width: 2),                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Theme.of(context).primaryColor, width: 2),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: SelectableText(
                 code,
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor, letterSpacing: 2),
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor, letterSpacing: 2),
                 textAlign: TextAlign.center,
               ),
             ),
-            const SizedBox(height: 10),
-            const Text("انسخ الكود واستخدمه في سلة المشتريات للطلب القادم.", style: TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
+            const SizedBox(height: 15),
+            const Text("انسخ الكود واستخدمه في سلة المشتريات لطلبك القادم.", style: TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
+            const SizedBox(height: 5),
+            const Text("ملاحظة: عند استخدام الكود سيتم تصفير الرصيد لتبدأ رحلة تجميع جديدة!", style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
           ],
         ),
         actions: [
@@ -7954,81 +7926,12 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    // 🛑 حالة: الزبون في منطقة غير الكوت (84)
-    if (_areaId != 84) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        appBar: AppBar(title: const Text('كاش باك بيتي'), centerTitle: true, elevation: 0),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(30.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Image.network('https://cdn-icons-png.flaticon.com/512/7465/7465691.png', width: 150, color: Colors.grey.shade400),
-                const SizedBox(height: 20),
-                const Text("قريباً في منطقتك! 🚀", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                Text(
-                  "نظام الكاش باك الذكي متاح حالياً حصرياً في محافظة واسط (الكوت) فقط. نعمل على توسيع الخدمة لتشمل منطقتك قريباً.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, color: Colors.grey.shade600, height: 1.5),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    // --- إذا كانت المنطقة 84 (الكوت) ---
-    final auth = Provider.of<AuthProvider>(context);
     final wallet = Provider.of<SmartWalletProvider>(context);
 
-    // 🛑 حالة: الزبون غير مسجل دخول
-    if (!auth.isLoggedIn) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        appBar: AppBar(title: const Text('كاش باك بيتي'), centerTitle: true, elevation: 0),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(30.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.wallet_giftcard_rounded, size: 100, color: Colors.amber),
-                const SizedBox(height: 20),
-                const Text("سجل دخولك لتبدأ التجميع! 💰", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                Text(
-                  "اطلب 4 مرات من مطاعم بيتي في الكوت، واحصل على 10% كاش باك كود خصم لطلبك الخامس!",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, color: Colors.grey.shade600, height: 1.5),
-                ),
-                const SizedBox(height: 40),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).primaryColor,
-                      minimumSize: const Size(double.infinity, 55),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
-                  ),
-                  onPressed: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerLoginScreen()));
-                  },
-                  child: const Text("تسجيل الدخول / إنشاء حساب", style: TextStyle(fontSize: 18, color: Colors.white)),
-                )
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    // 🟢 حالة: الزبون مسجل دخول وفي الكوت
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FD),
       appBar: AppBar(
-        title: const Text('كاش باك بيتي 🎁', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
+        title: const Text('المحفظة والمكافآت 🎁', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -8036,147 +7939,277 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> {
       body: wallet.isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
-        onRefresh: () => wallet.fetchWalletStatus(auth.token!),
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            // --- 1. بطاقة الرصيد المتراكم العصرية ---
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(25),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(25),
-                boxShadow: [BoxShadow(color: const Color(0xFF2575FC).withOpacity(0.4), blurRadius: 15, offset: const Offset(0, 8))],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.savings_outlined, color: Colors.white70, size: 24),
-                      SizedBox(width: 8),
-                      Text("رصيد الكاش باك المتراكم", style: TextStyle(color: Colors.white70, fontSize: 16)),
-                    ],
-                  ),
-                  const SizedBox(height: 15),
-                  Text(
-                    "${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
-                    style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 5),
-                  const Text("يتم احتساب 10% من قيمة الوجبات لطلباتك المنجزة.", style: TextStyle(color: Colors.white60, fontSize: 12)),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            // --- 2. شريط التقدم العصري ---
-            Container(
-              padding: const EdgeInsets.all(25),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(25),
-                boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.08), blurRadius: 15, offset: const Offset(0, 5))],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text("تقدمك الحالي", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(20)),
-                        child: Text("${wallet.currentOrders} / ${wallet.targetOrders} طلبات", style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold)),
-                      )
-                    ],
-                  ),
-                  const SizedBox(height: 25),
-
-                  // تصميم دوائر التقدم
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: List.generate(wallet.targetOrders, (index) {
-                      bool isCompleted = index < wallet.currentOrders;
-                      return Expanded(
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: isCompleted ? Colors.green : Colors.grey.shade200,
-                                shape: BoxShape.circle,
-                                boxShadow: isCompleted ? [BoxShadow(color: Colors.green.withOpacity(0.4), blurRadius: 8)] : [],
-                              ),
-                              child: Center(
-                                child: isCompleted
-                                    ? const Icon(Icons.check, color: Colors.white, size: 20)
-                                    : Text("${index + 1}", style: TextStyle(color: Colors.grey.shade500, fontWeight: FontWeight.bold, fontSize: 16)),
-                              ),
-                            ),
-                            if (index < wallet.targetOrders - 1)
-                              Expanded(
-                                child: Container(
-                                  height: 4,
-                                  color: isCompleted ? Colors.green : Colors.grey.shade200,
-                                ),
-                              )
-                          ],
-                        ),
-                      );
-                    }),
-                  ),
-
-                  const SizedBox(height: 30),
-
-                  // رسالة التحفيز
-                  Center(
-                    child: Text(
-                      wallet.message,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: wallet.canClaim ? Colors.green.shade700 : Colors.grey.shade600, fontWeight: FontWeight.bold, fontSize: 14),
-                    ),
-                  ),
-
-                  const SizedBox(height: 25),
-
-                  // --- 3. زر المطالبة بالكوبون ---
-                  SizedBox(
-                    width: double.infinity,
-                    height: 55,
-                    child: ElevatedButton(
-                      onPressed: (!wallet.canClaim || wallet.isClaiming) ? null : () async {
-                        bool success = await wallet.claimDiscount(auth.token!, context);
-                        if (success && wallet.lastCouponCode != null) {
-                          _showCouponDialog(wallet.lastCouponCode!, wallet.accumulatedDiscount);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.amber.shade600,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: Colors.grey.shade300,
-                        elevation: wallet.canClaim ? 5 : 0,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                      ),
-                      child: wallet.isClaiming
-                          ? const CircularProgressIndicator(color: Colors.white)
-                          : const Text("استخراج كود الخصم 🎁", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        onRefresh: () => wallet.fetchWalletStatus(_areaId),
+        child: _areaId == 36 ? _buildKutCashbackSystem(wallet) : _buildWheelOfFortuneSystem(wallet),
       ),
     );
   }
-}
 
+  // =========================================================
+  // 🔥 نظام الكوت: الكاش باك التراكمي والمستويات (Area 84)
+  // =========================================================
+  // =========================================================
+  // 🔥 نظام الكوت: الكاش باك التراكمي الواضح (Area 84)
+  // =========================================================
+  Widget _buildKutCashbackSystem(SmartWalletProvider wallet) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        // 1. بطاقة الرصيد المغرية والواضحة
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(25),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+                colors: [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight
+            ),
+            borderRadius: BorderRadius.circular(25),
+            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 15, offset: const Offset(0, 8))],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Text("رصيد الكاش باك المتاح", style: TextStyle(color: Colors.white70, fontSize: 16)),
+              const SizedBox(height: 10),
+              Text(
+                "${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
+                style: const TextStyle(color: Colors.amber, fontSize: 45, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20)
+                ),
+                child: const Text(
+                    "نرجعلك 10% من قيمة كل طلب تكملّه!",
+                    style: TextStyle(color: Colors.white, fontSize: 12)
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 30),
+
+        // 2. رسالة توضيحية بدلاً من مستويات وهمية
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: Colors.teal.shade50,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.teal.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.teal.shade700, size: 28),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  "كل ما تجمع رصيد كافي، اضغط على الزر بالأسفل لتحويله إلى كود خصم فوري تستخدمه في سلة المشتريات!",
+                  style: TextStyle(fontSize: 13, color: Colors.teal, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 40),
+
+        // 3. زر الحصول على الخصم (تحويل الرصيد لكوبون)
+        SizedBox(
+          width: double.infinity,
+          height: 55,
+          child: ElevatedButton(
+            onPressed: (wallet.accumulatedDiscount <= 0 || wallet.isClaiming)
+                ? null
+                : () async {
+              bool success = await wallet.claimCashback();
+              if (success && wallet.lastCouponCode != null) {
+                _showGeneratedCoupon(
+                    wallet.lastCouponCode!,
+                    "تم تحويل رصيدك إلى كود خصم بقيمة ${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع"
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("حدث خطأ في توليد الكود"), backgroundColor: Colors.red)
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+              elevation: wallet.accumulatedDiscount > 0 ? 5 : 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            ),
+            child: wallet.isClaiming
+                ? const CircularProgressIndicator(color: Colors.white)
+                : Text(
+                wallet.accumulatedDiscount > 0 ? "استخراج كود الخصم الآن 🎁" : "لا يوجد رصيد كافي",
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+            ),
+          ),
+        ),
+
+        // 4. عرض الكود إذا تم استخراجه ولم يستخدم بعد
+        if (wallet.lastCouponCode != null) ...[
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber.shade200)
+            ),
+            child: Column(
+              children: [
+                const Text("لديك كود خصم لم تستخدمه بعد:", style: TextStyle(color: Colors.brown, fontSize: 12)),
+                SelectableText(
+                    wallet.lastCouponCode!,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 2)
+                ),
+              ],
+            ),
+          )
+        ]
+      ],
+    );
+  }
+  Widget _buildMilestoneLevel({required int level, required int target, required int current, required String title, required IconData icon, required Color color}) {
+    bool isReached = current >= target;
+    double progress = (current / target).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: isReached ? color.withOpacity(0.1) : Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: isReached ? color : Colors.grey.shade200, width: isReached ? 2 : 1),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: isReached ? color : Colors.grey.shade100, shape: BoxShape.circle),
+            child: Icon(icon, color: isReached ? Colors.white : Colors.grey, size: 24),
+          ),
+          const SizedBox(width: 15),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isReached ? color : Colors.black87)),
+                const SizedBox(height: 5),
+                Text(isReached ? "تم الوصول! 🎉" : "باقي ${target - current} طلبات", style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // =========================================================
+  // 🔥 نظام المناطق الأخرى: عجلة الحظ
+  // =========================================================
+  Widget _buildWheelOfFortuneSystem(SmartWalletProvider wallet) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Text("عجلة حظ بيتي 🎡", textAlign: TextAlign.center, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        const Text("اربح معنا مع كل طلب! محاولة واحدة لكل طلب يوصلك.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+        const SizedBox(height: 40),
+
+        // تصميم عجلة الحظ (Implicit Animation)
+        Center(
+          child: AnimatedBuilder(
+            animation: _wheelController,
+            builder: (context, child) {
+              return Transform.rotate(
+                angle: _wheelController.value * 2 * pi,
+                child: Container(
+                  width: 280,
+                  height: 280,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.amber, width: 8),
+                    boxShadow: [BoxShadow(color: Colors.amber.withOpacity(0.4), blurRadius: 20)],
+                    // صورة عجلة حظ (يمكن استبدالها بأصل من داخل التطبيق assets/wheel.png)
+                    image: const DecorationImage(
+                      image: NetworkImage('https://cdn-icons-png.flaticon.com/512/3231/3231314.png'),
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+
+        const SizedBox(height: 50),
+
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(20)),
+          child: Text("المحاولات المتبقية: ${wallet.spinAttempts}", textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue.shade800)),
+        ),
+
+        const SizedBox(height: 30),
+
+        SizedBox(
+          width: double.infinity,
+          height: 55,
+          child: ElevatedButton(
+            onPressed: (wallet.spinAttempts <= 0 || wallet.isSpinning) ? null : () async {
+              // 1. بدء الدوران الوهمي في الواجهة
+              _wheelController.repeat();
+
+              // 2. طلب النتيجة من السيرفر
+              bool success = await wallet.spinWheel();
+
+              // 3. إيقاف الدوران وعرض النتيجة
+              _wheelController.stop();
+
+              if (success && wallet.wonPrize != null) {
+                _showGeneratedCoupon(wallet.wonCouponCode ?? '', "لقد فزت بـ: ${wallet.wonPrize}!");
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("حظ أوفر في المرة القادمة!"), backgroundColor: Colors.orange));
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade600,
+              foregroundColor: Colors.black,
+              elevation: wallet.spinAttempts > 0 ? 5 : 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            ),
+            child: wallet.isSpinning
+                ? const CircularProgressIndicator(color: Colors.black)
+                : const Text("افتر العجلة وجرب حظك!", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ),
+        ),
+
+        if (wallet.wonCouponCode != null) ...[
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(15),
+            decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.green.shade200)),
+            child: Column(
+              children: [
+                const Text("آخر جائزة فزت بها:", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 5),
+                Text(wallet.wonPrize ?? '', style: const TextStyle(fontSize: 16)),
+                const SizedBox(height: 5),
+                SelectableText(wallet.wonCouponCode!, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 2)),
+              ],
+            ),
+          )
+        ]
+      ],
+    );
+  }
+}
 
 
 
@@ -12396,72 +12429,140 @@ class _EditProductScreenState extends State<EditProductScreen> {
 
 
 
-
-
 class SmartWalletProvider with ChangeNotifier {
+  // --- بيانات منطقة الكوت (84) ---
   int _currentOrders = 0;
-  int _targetOrders = 4;
   double _accumulatedDiscount = 0.0;
-  bool _canClaim = false;
-  String _message = '';
-  bool _isLoading = false;
-  bool _isClaiming = false;
   String? _lastCouponCode;
 
+  // --- بيانات المناطق الأخرى (عجلة الحظ) ---
+  int _spinAttempts = 0;
+  String? _wonPrize;
+  String? _wonCouponCode;
+
+  bool _isLoading = false;
+  bool _isClaiming = false;
+  bool _isSpinning = false;
+
+  // Getters
   int get currentOrders => _currentOrders;
-  int get targetOrders => _targetOrders;
   double get accumulatedDiscount => _accumulatedDiscount;
-  bool get canClaim => _canClaim;
-  String get message => _message;
+  String? get lastCouponCode => _lastCouponCode;
+  int get spinAttempts => _spinAttempts;
+  String? get wonPrize => _wonPrize;
+  String? get wonCouponCode => _wonCouponCode;
   bool get isLoading => _isLoading;
   bool get isClaiming => _isClaiming;
-  String? get lastCouponCode => _lastCouponCode;
+  bool get isSpinning => _isSpinning;
 
-  final ApiService _apiService = ApiService();
+  final String baseUrl = 'https://re.beytei.com/wp-json/restaurant-app/v1';
 
-  Future<void> fetchWalletStatus(String token) async {
+  Future<void> fetchWalletStatus(int areaId) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      final data = await _apiService.getCashbackStatus(token);
-      _currentOrders = data['current_orders'] ?? 0;
-      _targetOrders = data['target_orders'] ?? 4;
-      _accumulatedDiscount = double.tryParse(data['accumulated_discount'].toString()) ?? 0.0;
-      _canClaim = data['can_claim'] ?? false;
-      _message = data['message'] ?? '';
+      final prefs = await SharedPreferences.getInstance();
+      String? deviceId = prefs.getString('unique_device_id');
+
+      // 🔥 الحل الجذري: توليد ID للجهاز فوراً إذا لم يكن موجوداً
+      if (deviceId == null || deviceId.isEmpty) {
+        deviceId = const Uuid().v4();
+        await prefs.setString('unique_device_id', deviceId);
+        print("🆕 تم توليد Device ID جديد: $deviceId");
+      }
+
+      print("📡 جاري الاتصال بـ API المحفظة...");
+      final response = await http.get(
+        Uri.parse('$baseUrl/smart-wallet-guest?device_id=$deviceId&area_id=$areaId'),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        print("✅ بيانات المحفظة وصلت: $data");
+
+        if (areaId == 84) {
+          _currentOrders = data['current_orders'] ?? 0;
+          _accumulatedDiscount = double.tryParse(data['accumulated_discount'].toString()) ?? 0.0;
+          _lastCouponCode = data['active_coupon'];
+        } else {
+          _spinAttempts = data['spin_attempts'] ?? 0;
+          _wonPrize = data['last_won_prize'];
+          _wonCouponCode = data['last_won_coupon'];
+        }
+      } else {
+        print("❌ خطأ من السيرفر: ${response.statusCode} - ${response.body}");
+      }
     } catch (e) {
-      print("⚠️ خطأ في جلب بيانات الكاش باك: $e");
+      print("⚠️ خطأ في جلب بيانات المحفظة: $e");
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  Future<bool> claimDiscount(String token, BuildContext context) async {
+  // 🎁 دالة توليد كود الخصم (للكوت) وتصفير العداد
+  Future<bool> claimCashback() async {
     _isClaiming = true;
     notifyListeners();
 
     try {
-      final data = await _apiService.claimDiscountCoupon(token);
-      _lastCouponCode = data['coupon_code'];
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = prefs.getString('unique_device_id') ?? '';
 
-      // تحديث الحالة فوراً بعد النجاح (تصفير العداد)
-      await fetchWalletStatus(token);
-      return true;
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceAll("Exception: ", "")), backgroundColor: Colors.red),
+      final response = await http.post(
+        Uri.parse('$baseUrl/claim-cashback-guest'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'device_id': deviceId}),
       );
+
+      final data = json.decode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        _lastCouponCode = data['coupon_code'];
+        _currentOrders = 0;
+        _accumulatedDiscount = 0.0;
+        return true;
+      }
+      return false;
+    } catch (e) {
       return false;
     } finally {
       _isClaiming = false;
       notifyListeners();
     }
   }
+
+  // 🎡 دالة لف عجلة الحظ (للمناطق الأخرى)
+  Future<bool> spinWheel() async {
+    _isSpinning = true;
+    notifyListeners();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = prefs.getString('unique_device_id') ?? '';
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/spin-wheel-guest'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'device_id': deviceId}),
+      );
+
+      final data = json.decode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        _spinAttempts = data['remaining_attempts'] ?? 0;
+        _wonPrize = data['prize_name'];
+        _wonCouponCode = data['coupon_code'];
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    } finally {
+      _isSpinning = false;
+      notifyListeners();
+    }
+  }
 }
-
-
 
 
 class CustomerChatPage extends StatefulWidget {
