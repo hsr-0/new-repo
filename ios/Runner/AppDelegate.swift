@@ -16,7 +16,7 @@ import flutter_callkit_incoming
         let logMessage = "[\(timeString)] 🍏 \(message)"
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
-        if logs.count > 30 { logs.removeFirst() }
+        if logs.count > 50 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
     }
 
@@ -47,6 +47,15 @@ import flutter_callkit_incoming
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
+
+    // 🔥 هذا الدرع الواقي يمنع محرك Flutter من الفحص الخاطئ عند وصول إشعار عادي
+    override func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable : Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        completionHandler(.newData)
+    }
 }
 
 extension AppDelegate: PKPushRegistryDelegate {
@@ -57,17 +66,14 @@ extension AppDelegate: PKPushRegistryDelegate {
         writeLog("تم حفظ التوكن")
     }
 
-    // 🔥 التعديل الوحيد هنا: إضافة withCompletionHandler ليتوافق مع iOS 11 فما فوق ولتجنب أي Crash
+    // 🔥 هنا تم تصحيح اسم الدالة لتطابق iOS 11+ وتمنع تسريب الإشعار لـ Flutter
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
         writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
 
         if let dict = payload.dictionaryPayload as? [String: Any] {
-
             let callerName = dict["driver_name"] as? String ?? "الكابتن"
             let orderId = dict["order_id"] as? String ?? ""
-
-            // توليد كود حقيقي للمكالمة
             let validCallKitId = UUID().uuidString
 
             let callkitData: [String: Any] = [
@@ -90,7 +96,10 @@ extension AppDelegate: PKPushRegistryDelegate {
             }
         }
 
-        completion()
+        // 🔥 تأخير الرد لآبل بجزء من الثانية لضمان تشغيل شاشة المكالمة بنجاح
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            completion()
+        }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}

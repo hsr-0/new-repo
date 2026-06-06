@@ -3903,6 +3903,8 @@ class ApiService {
     bool useSmartWallet = false,
     double? platformMarkupTotal,
     required String checkoutSessionId,
+    double? discountAmount, // 👈 1. إضافة حقل الخصم
+    double? finalTotal,     // 👈 2. إضافة حقل الإجمالي النهائي
   }) async {
     // تجهيز البيانات
     List<Map<String, dynamic>> couponLines =
@@ -3999,6 +4001,12 @@ class ApiService {
         if (voipToken != null && voipToken.isNotEmpty) {"key": "voip_token", "value": voipToken},
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
         if (platformMarkupTotal != null && platformMarkupTotal > 0) {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
+
+        // 👇👇👇 إرسال الحقول الجديدة للسيرفر هنا 👇👇👇
+        if (discountAmount != null && discountAmount > 0) {"key": "calculated_discount_amount", "value": discountAmount.toString()},
+        if (finalTotal != null) {"key": "calculated_final_total", "value": finalTotal.toString()},
+        // 👆👆👆 نهاية الإضافة 👆👆👆
+
         // 📍 إرسال الإحداثيات (سواء كانت جديدة أو محفوظة)
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
@@ -6592,6 +6600,68 @@ class BackgroundLocationRefresher {
     // فإن تحديث الموقع هنا يكفي لضمان دقة السعر عند الدخول التالي لأي شاشة.
     // يمكن إضافة: Provider.of<DeliveryConfigProvider>(...).notifyListeners(); إذا أردت تحديث فوري
   }
+}
+// =========================================================
+// 🎡 كلاس رسم عجلة الحظ برمجياً (Native CustomPaint)
+// =========================================================
+class FortuneWheelPainter extends CustomPainter {
+  final List<String> items;
+  FortuneWheelPainter({required this.items});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = size.width / 2;
+    final Offset center = Offset(radius, radius);
+    final double sweepAngle = (2 * pi) / items.length;
+
+    for (int i = 0; i < items.length; i++) {
+      // 1. رسم الشريحة (قطعة البيتزا)
+      final paint = Paint()
+        ..color = i.isEven ? const Color(0xFFFBC02D) : const Color(0xFF512DA8) // ألوان بيتي (أصفر وأرجواني)
+        ..style = PaintingStyle.fill;
+
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        i * sweepAngle,
+        sweepAngle,
+        true,
+        paint,
+      );
+
+      // 2. رسم حدود بين الشرائح
+      final borderPaint = Paint()
+        ..color = Colors.white
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+      canvas.drawArc(Rect.fromCircle(center: center, radius: radius), i * sweepAngle, sweepAngle, true, borderPaint);
+
+      // 3. رسم النصوص داخل كل شريحة
+      canvas.save();
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(i * sweepAngle + (sweepAngle / 2));
+
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: items[i],
+          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'Tajawal'),
+        ),
+        textDirection: TextDirection.rtl,
+      );
+      textPainter.layout();
+
+      // إزاحة النص ليكون في طرف العجلة
+      canvas.translate(radius * 0.6, -textPainter.height / 2);
+      textPainter.paint(canvas, Offset.zero);
+      canvas.restore();
+    }
+
+    // 4. رسم دائرة صغيرة في المركز
+    final centerCirclePaint = Paint()..color = Colors.white;
+    canvas.drawCircle(center, 15, centerCirclePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // =======================================================================
@@ -10917,6 +10987,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       regionId: currentZoneId,
                       platformMarkupTotal: widget.cart.totalPlatformMarkup,
                       checkoutSessionId: const Uuid().v4(),
+                      // 👇👇 تمرير القيم التي حسبها التطبيق بدقة 👇👇
+                      discountAmount: widget.cart.totalDiscountAmount,
+                      finalTotal: grandTotal,
                     );
 
                     if (!mounted) return;
@@ -12460,36 +12533,34 @@ class SmartWalletProvider with ChangeNotifier {
   Future<void> fetchWalletStatus(int areaId) async {
     _isLoading = true;
     notifyListeners();
-
     try {
       final prefs = await SharedPreferences.getInstance();
       String? deviceId = prefs.getString('unique_device_id');
-
-      // 🔥 الحل الجذري: توليد ID للجهاز فوراً إذا لم يكن موجوداً
       if (deviceId == null || deviceId.isEmpty) {
         deviceId = const Uuid().v4();
         await prefs.setString('unique_device_id', deviceId);
         print("🆕 تم توليد Device ID جديد: $deviceId");
       }
 
-      print("📡 جاري الاتصال بـ API المحفظة...");
+      print("📡 جاري الاتصال بـ API المحفظة... device_id=$deviceId | areaId=$areaId");
+
       final response = await http.get(
         Uri.parse('$baseUrl/smart-wallet-guest?device_id=$deviceId&area_id=$areaId'),
-      ).timeout(const Duration(seconds: 15));
+      ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         print("✅ بيانات المحفظة وصلت: $data");
 
-        if (areaId == 84) {
-          _currentOrders = data['current_orders'] ?? 0;
-          _accumulatedDiscount = double.tryParse(data['accumulated_discount'].toString()) ?? 0.0;
-          _lastCouponCode = data['active_coupon'];
-        } else {
-          _spinAttempts = data['spin_attempts'] ?? 0;
-          _wonPrize = data['last_won_prize'];
-          _wonCouponCode = data['last_won_coupon'];
-        }
+        // ✅ الحل الجذري: قراءة جميع البيانات دائماً بغض النظر عن المنطقة
+        _currentOrders = data['current_orders'] ?? 0;
+        _accumulatedDiscount = double.tryParse(data['accumulated_discount'].toString()) ?? 0.0;
+        _lastCouponCode = data['active_coupon'];
+        _spinAttempts = data['spin_attempts'] ?? 0;
+        _wonPrize = data['last_won_prize'];
+        _wonCouponCode = data['last_won_coupon'];
+
+        print("✅ تم التحديث: orders=$_currentOrders | cashback=$_accumulatedDiscount | spins=$_spinAttempts");
       } else {
         print("❌ خطأ من السيرفر: ${response.statusCode} - ${response.body}");
       }
@@ -12500,38 +12571,37 @@ class SmartWalletProvider with ChangeNotifier {
       notifyListeners();
     }
   }
-
-  // 🎁 دالة توليد كود الخصم (للكوت) وتصفير العداد
   Future<bool> claimCashback() async {
     _isClaiming = true;
     notifyListeners();
-
     try {
       final prefs = await SharedPreferences.getInstance();
       final deviceId = prefs.getString('unique_device_id') ?? '';
-
       final response = await http.post(
         Uri.parse('$baseUrl/claim-cashback-guest'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'device_id': deviceId}),
       );
 
-      final data = json.decode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        _lastCouponCode = data['coupon_code'];
-        _currentOrders = 0;
-        _accumulatedDiscount = 0.0;
-        return true;
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _lastCouponCode = data['coupon_code'];
+          _currentOrders = 0;
+          _accumulatedDiscount = 0.0;
+          notifyListeners();
+          return true;
+        }
       }
       return false;
     } catch (e) {
+      print("❌ خطأ في claimCashback: $e");
       return false;
     } finally {
       _isClaiming = false;
       notifyListeners();
     }
   }
-
   // 🎡 دالة لف عجلة الحظ (للمناطق الأخرى)
   Future<bool> spinWheel() async {
     _isSpinning = true;
