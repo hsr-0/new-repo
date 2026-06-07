@@ -8010,7 +8010,7 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> with Ticker
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
         onRefresh: () => wallet.fetchWalletStatus(_areaId),
-        child: _areaId == 36 ? _buildKutCashbackSystem(wallet) : _buildWheelOfFortuneSystem(wallet),
+        child: _areaId == 84 ? _buildKutCashbackSystem(wallet) : _buildWheelOfFortuneSystem(wallet),
       ),
     );
   }
