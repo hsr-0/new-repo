@@ -2946,8 +2946,9 @@ class CartProvider with ChangeNotifier {
     // 2. 🔥 جلب معرف الجهاز (Device ID) لحماية الكوبونات الشخصية
     String? deviceId = prefs.getString('unique_device_id');
 
-    // 3. تمرير المنطقة ومعرف الجهاز إلى الـ API
-    final result = await ApiService().validateCoupon(code, areaId, deviceId);
+    // 3. تمرير الكود، المنطقة، إجمالي السلة، ومعرف الجهاز إلى الـ API
+    // 👈 التعديل هنا: تمرير totalPrice
+    final result = await ApiService().validateCoupon(code, areaId, totalPrice, deviceId);
 
     if (result['is_promoter'] == true) {
       _promoterCode = code.toUpperCase();
@@ -2955,12 +2956,12 @@ class CartProvider with ChangeNotifier {
       if (_usageCount == 3) {
         _loyaltyDiscountPercentage = 50.0;
         _discountType = 'loyalty_discount';
-        result['message'] = '🎉 تهانينا! خصم ٥٠٪ على هذا الطلب مفعل.';
+        result['message'] = '🎉 تهانينا! خصم ٪ على هذا الطلب مفعل.';
       } else {
         _loyaltyDiscountPercentage = 0.0;
         _discountType = '';
         final remaining = 3 - _usageCount;
-        result['message'] = "تم تفعيل رمز المروج. تبقى $remaining طلب للحصول على خصم ٥٠٪!";
+        result['message'] = "تم تفعيل رمز المروج. تبقى $remaining طلب للحصول على خصم ٪!";
       }
       _appliedCoupon = null;
       _discountAmount = 0.0;
@@ -2979,7 +2980,6 @@ class CartProvider with ChangeNotifier {
     }
     return result;
   }
-
   // --- إدارة السلة ---
   void addToCart(FoodItem foodItem, BuildContext context, {int quantity = 1}) {
     if (!foodItem.isDeliverable) return;
@@ -4071,12 +4071,13 @@ class ApiService {
     return response.statusCode == 201;
   }
 
-  Future<Map<String, dynamic>> validateCoupon(String code, int areaId, [String? deviceId]) async {
+  Future<Map<String, dynamic>> validateCoupon(String code, int areaId, double cartTotal, [String? deviceId]) async {
     try {
-      // 🔥 تجهيز البيانات وإضافة device_id إذا كان موجوداً
+      // 🔥 تجهيز البيانات وإضافة cart_total و device_id
       final Map<String, dynamic> bodyData = {
         'code': code,
         'area_id': areaId,
+        'cart_total': cartTotal, // 👈 التعديل هنا: إرسال إجمالي السلة
       };
 
       if (deviceId != null && deviceId.isNotEmpty) {
@@ -4095,6 +4096,7 @@ class ApiService {
       return {'valid': false, 'message': 'خطأ في الاتصال بالخادم'};
     }
   }
+
   Future<RestaurantRatingsDashboard> getDashboardRatings(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
@@ -6858,6 +6860,7 @@ class MapLocationPicker extends StatefulWidget {
   @override
   State<MapLocationPicker> createState() => _MapLocationPickerState();
 }
+
 class _MapLocationPickerState extends State<MapLocationPicker>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   ml.MapLibreMapController? _mapController;
@@ -7165,14 +7168,10 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     _selectedPoint = position.target;
   }
 
-  // 🔥 التعديل الأول: سحب الموقع الفعلي من الكاميرا عند سكون الخريطة
+  // 🔥 الحل الجذري الأول: منع دالة OnCameraIdle من إعادة تعيين الموقع وقراءته من الكنترولر البطيء
   void _onCameraIdle() {
     if (!_isLocating && mounted) {
       setState(() {
-        if (_mapController != null && _mapController!.cameraPosition != null) {
-          _selectedPoint = _mapController!.cameraPosition!.target;
-          _currentZoom = _mapController!.cameraPosition!.zoom;
-        }
         _autoLocated = false;
         _manualMode = true;
       });
@@ -7195,7 +7194,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, initialZoom));
             },
             onCameraMove: _onCameraMove,
-            onCameraIdle: _onCameraIdle, // 👈 استدعاء الدالة المحدثة هنا
+            onCameraIdle: _onCameraIdle,
             myLocationEnabled: true,
             myLocationTrackingMode: ml.MyLocationTrackingMode.none,
             compassEnabled: false,
@@ -7338,8 +7337,8 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
                         setState(() => _isLocating = true);
 
-                        // 🔥 التعديل الثاني (الجوهري): إجبار التطبيق على أخذ الإحداثيات الفعلية لمركز الشاشة لحظة الضغط
-                        ml.LatLng finalPoint = _mapController?.cameraPosition?.target ?? _selectedPoint;
+                        // 🔥 الحل الجذري الثاني: الاعتماد الكلي على النقطة الحية التي توقف عندها المستخدم بيده
+                        ml.LatLng finalPoint = _selectedPoint;
                         bool isValid = (finalPoint.latitude != 0.0 && finalPoint.longitude != 0.0);
 
                         setState(() => _isLocating = false);
@@ -7394,6 +7393,8 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     );
   }
 }
+
+
 
 
 
