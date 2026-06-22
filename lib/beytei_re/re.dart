@@ -2145,7 +2145,203 @@ class Order {
     }
   }
 }
+class PremiumCampaignProvider with ChangeNotifier {
+  final ApiService _apiService = ApiService();
 
+  Map<String, dynamic>? _config;
+  Map<String, dynamic>? _cartValidationResult;
+  bool _isLoading = false;
+  bool _hasShownPopup = false; // لمنع إزعاج الزبون بظهور النافذة كل ثانية
+
+  Map<String, dynamic>? get config => _config;
+  Map<String, dynamic>? get cartValidationResult => _cartValidationResult;
+  bool get isLoading => _isLoading;
+
+  // 1. جلب إعدادات الحملة (يتم استدعاؤها في الصفحة الرئيسية)
+  Future<void> fetchCampaignConfig(int currentAreaId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/premium-campaign-config'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        // التحقق الجغرافي: هل الحملة نشطة؟ وهل منطقة الزبون مشمولة؟
+        bool isActive = data['show_campaign'] ?? false;
+        List<dynamic> targetAreas = data['target_areas'] ?? [];
+
+        if (isActive && (targetAreas.isEmpty || targetAreas.contains(currentAreaId))) {
+          _config = data;
+        } else {
+          _config = null; // إخفاء الحملة إذا كان خارج المنطقة
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      print("⚠️ فشل جلب إعدادات الحملة: $e");
+    }
+  }
+
+  // 2. التحقق من السلة (Upsell Logic)
+  Future<void> validateCart(double cartTotal, int restaurantId, int areaId) async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/validate-premium-cart'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'cart_total': cartTotal,
+          'restaurant_id': restaurantId,
+          'area_id': areaId
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        _cartValidationResult = json.decode(response.body);
+      }
+    } catch (e) {
+      _cartValidationResult = null;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // دالة لتسجيل أن النافذة ظهرت لكي لا تظهر مرة أخرى في نفس الجلسة
+  void markPopupAsShown() {
+    _hasShownPopup = true;
+  }
+  bool get shouldShowPopup => _config != null && !_hasShownPopup;
+}
+class PremiumPromoDialog extends StatelessWidget {
+  final Map<String, dynamic> config;
+
+  const PremiumPromoDialog({super.key, required this.config});
+
+  @override
+  Widget build(BuildContext context) {
+    final popup = config['popup'] ?? {};
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 20)],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // صورة العرض
+            if (popup['image'] != null && popup['image'].toString().isNotEmpty)
+              ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+                child: CachedNetworkImage(
+                  imageUrl: popup['image'],
+                  width: double.infinity,
+                  height: 180,
+                  fit: BoxFit.cover,
+                  placeholder: (c, u) => Container(height: 180, color: Colors.grey.shade200),
+                ),
+              ),
+
+            Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                children: [
+                  Text(
+                    popup['title'] ?? 'عرض خاص!',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.red),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    popup['desc'] ?? 'استمتع بأقوى العروض الآن.',
+                    style: TextStyle(fontSize: 15, color: Colors.grey.shade700, height: 1.5),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 25),
+
+                  // الأزرار
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context); // إغلاق النافذة
+                        // الانتقال لصفحة المطاعم المشمولة
+                        Navigator.push(context, MaterialPageRoute(
+                            builder: (_) => PremiumRestaurantsScreen(
+                              restaurantIds: List<int>.from(config['included_restaurants'] ?? []),
+                            )
+                        ));
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade600,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                      ),
+                      child: const Text("اطلب الآن 🔥", style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("تخطي العرض", style: TextStyle(color: Colors.grey)),
+                  )
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+class PremiumRestaurantsScreen extends StatelessWidget {
+  final List<int> restaurantIds;
+
+  const PremiumRestaurantsScreen({super.key, required this.restaurantIds});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("🔥 المطاعم المشمولة بالعرض"),
+        backgroundColor: Colors.red.shade600,
+        foregroundColor: Colors.white,
+      ),
+      body: Consumer<CustomerProvider>(
+        builder: (context, customerProvider, child) {
+          // فلترة المطاعم المشمولة فقط
+          final filteredRestaurants = customerProvider.allRestaurants.where((r) {
+            return restaurantIds.isEmpty || restaurantIds.contains(r.id);
+          }).toList();
+
+          if (filteredRestaurants.isEmpty) {
+            return const Center(child: Text("عذراً، لا توجد مطاعم متاحة حالياً."));
+          }
+
+          return GridView.builder(
+            padding: const EdgeInsets.all(16),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.75,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: filteredRestaurants.length,
+            itemBuilder: (ctx, i) => RestaurantCard(restaurant: filteredRestaurants[i]),
+          );
+        },
+      ),
+    );
+  }
+}
 class LineItem {
   final String name;
   final int quantity;
@@ -3277,7 +3473,6 @@ class ApiService {
     required String? imageUrl,
   }) async {
     return _executeWithRetry(() async {
-      // 1. تجهيز بيانات الإعلان كـ Meta Data
       List<Map<String, dynamic>> metaData = [
         {"key": "_is_ad_request", "value": "true"},
         {"key": "ad_title", "value": title},
@@ -3286,7 +3481,6 @@ class ApiService {
           {"key": "ad_image", "value": imageUrl},
       ];
 
-      // 2. إرسال الطلب إلى ووكومرس
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-ad-order'),
         headers: {
@@ -3294,9 +3488,9 @@ class ApiService {
           'Content-Type': 'application/json',
         },
         body: json.encode({
-          'product_id': 9999, // تأكد من استبدال هذا الرقم بـ ID منتج الإعلان في ووكومرس
+          'product_id': AD_PRODUCT_ID,
           'quantity': 1,
-          'total_cost': 3000.0, // المبلغ المراد خصمه
+          'total_cost': AD_COST,
           'meta_data': metaData,
         }),
       );
@@ -3310,7 +3504,6 @@ class ApiService {
     });
   }
 
-  // 🔥 دوال نظام الكاش باك الذكي V2 (الجديد)
   Future<Map<String, dynamic>> getCashbackStatus(String token) async {
     return _executeWithRetry(() async {
       final response = await http.get(
@@ -3603,9 +3796,8 @@ class ApiService {
     });
   }
 
-  // 🔥 1. التعديل الجذري هنا لإضافة beytei_store_type
   Future<String> getRawRestaurants(int areaId) async {
-    const fields = 'id,name,image,count,meta_data,beytei_store_type'; // 👈 التعديل هنا
+    const fields = 'id,name,image,count,meta_data,beytei_store_type';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&_fields=$fields&area_id=$areaId';
 
     return _executeWithRetry(() async {
@@ -3683,8 +3875,6 @@ class ApiService {
 
   Future<List<UnifiedDeliveryOrder>> getOrdersByRegion(int areaId, String token) async {
     final url = '$BEYTEI_URL/wp-json/restaurant-app/v1/region-orders?area_id=$areaId';
-    print("🚀 [Team Leader] Fetching: $url");
-
     return _executeWithRetry(() async {
       final response = await http.get(
         Uri.parse(url),
@@ -3734,9 +3924,8 @@ class ApiService {
     });
   }
 
-  // 🔥 2. التعديل الجذري هنا لإضافة beytei_store_type
   Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
-    const fields = 'id,name,image,count,meta_data,beytei_store_type'; // 👈 التعديل هنا
+    const fields = 'id,name,image,count,meta_data,beytei_store_type';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&page=1&_fields=$fields&area_id=$areaId';
     final cacheKey = 'restaurants_area_${areaId}_page_1_limit_100';
 
@@ -3751,9 +3940,8 @@ class ApiService {
     });
   }
 
-  // 🔥 3. التعديل الجذري هنا لإضافة beytei_store_type
   Future<Restaurant> getRestaurantById(int restaurantId) async {
-    const fields = 'id,name,image,count,meta_data,beytei_store_type'; // 👈 التعديل هنا
+    const fields = 'id,name,image,count,meta_data,beytei_store_type';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories/$restaurantId?_fields=$fields';
 
     return _executeWithRetry(() async {
@@ -3887,8 +4075,7 @@ class ApiService {
   Future<List<FoodItem>> getMenuForRestaurant(int categoryId) =>
       _getProducts('category=$categoryId&per_page=100&page=1', 'menu_${categoryId}_page_1_limit_100');
 
-  // في ملف ApiService.dart
-
+  // 🔥 تم إزالة التكرار في هذه الدالة وحل المشكلة
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -3903,10 +4090,10 @@ class ApiService {
     bool useSmartWallet = false,
     double? platformMarkupTotal,
     required String checkoutSessionId,
-    double? discountAmount, // 👈 1. إضافة حقل الخصم
-    double? finalTotal,     // 👈 2. إضافة حقل الإجمالي النهائي
+    double? discountAmount,
+    double? finalTotal,
+    bool usedPremiumCampaign = false,
   }) async {
-    // تجهيز البيانات
     List<Map<String, dynamic>> couponLines =
     couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
     List<Map<String, dynamic>> shippingLines = deliveryFee != null
@@ -3916,7 +4103,6 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
 
-    // تجهيز المعرفات والتوكنات
     String? deviceId = prefs.getString('unique_device_id');
     if (deviceId == null) {
       deviceId = const Uuid().v4();
@@ -3940,9 +4126,6 @@ class ApiService {
       }
     }
 
-    // 📍 ============================================
-    // 🔥 التعديل الجديد: استخدام الموقع المحفوظ كخطة طوارئ
-    // ============================================
     if (position == null) {
       try {
         final savedLocation = await LocationService.getSavedLocationSimple();
@@ -3958,14 +4141,13 @@ class ApiService {
             headingAccuracy: 0,
             speed: 0,
             speedAccuracy: 0,
+            // ❌ تم إزالة السطر المكرر الذي كان يسبب المشكلة
           );
-          print('✅ [SubmitOrder] Using saved location as fallback: ${savedLocation.lat}, ${savedLocation.lng}');
         }
       } catch (e) {
         print('⚠️ [SubmitOrder] Failed to get saved location: $e');
       }
     }
-    // 📍 ============================================
 
     Map<String, dynamic> bodyPayload = {
       "payment_method": "cod",
@@ -4001,13 +4183,9 @@ class ApiService {
         if (voipToken != null && voipToken.isNotEmpty) {"key": "voip_token", "value": voipToken},
         if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
         if (platformMarkupTotal != null && platformMarkupTotal > 0) {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
-
-        // 👇👇👇 إرسال الحقول الجديدة للسيرفر هنا 👇👇👇
         if (discountAmount != null && discountAmount > 0) {"key": "calculated_discount_amount", "value": discountAmount.toString()},
         if (finalTotal != null) {"key": "calculated_final_total", "value": finalTotal.toString()},
-        // 👆👆👆 نهاية الإضافة 👆👆👆
-
-        // 📍 إرسال الإحداثيات (سواء كانت جديدة أو محفوظة)
+        if (usedPremiumCampaign) {"key": "_used_premium_campaign", "value": "yes"},
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
@@ -4017,7 +4195,6 @@ class ApiService {
 
     final body = json.encode(bodyPayload);
 
-    // ✅ إرسال الطلب بدون إعادة محاولة، مع مهلة طويلة
     try {
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
@@ -4038,6 +4215,7 @@ class ApiService {
       throw Exception('تأخر السيرفر أو انقطع الاتصال. يرجى التحقق من سجل الطلبات قبل إعادة المحاولة.');
     }
   }
+
   Future<List<Order>> getRestaurantOrders({required String status, required String token}) async {
     return _executeWithRetry(() async {
       final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/get-orders?status=$status');
@@ -4073,11 +4251,10 @@ class ApiService {
 
   Future<Map<String, dynamic>> validateCoupon(String code, int areaId, double cartTotal, [String? deviceId]) async {
     try {
-      // 🔥 تجهيز البيانات وإضافة cart_total و device_id
       final Map<String, dynamic> bodyData = {
         'code': code,
         'area_id': areaId,
-        'cart_total': cartTotal, // 👈 التعديل هنا: إرسال إجمالي السلة
+        'cart_total': cartTotal,
       };
 
       if (deviceId != null && deviceId.isNotEmpty) {
@@ -4213,6 +4390,7 @@ class ApiService {
     }
   }
 }
+
 class AuthService {
   // 1. تسجيل الدخول للسيرفرات القياسية (مطاعم + مسواك)
   // يعتمد على إضافة JWT Auth القياسية
@@ -6547,6 +6725,16 @@ class BackgroundLocationRefresher {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+
+      // 🔥 التعديل الجذري الأهم: حماية الموقع اليدوي من المسح!
+      // إذا كان المستخدم قد حدد موقعه بيده من الخريطة، نمنع الـ GPS من التدخل
+      final source = prefs.getString(LocationService.LOCATION_SOURCE_KEY);
+      if (source != null && source.contains('manual')) {
+        print("📍 [AutoUpdate] تم إيقاف التحديث التلقائي لأن الموقع محدد يدوياً من قبل المستخدم.");
+        _isUpdating = false;
+        return;
+      }
+
       // التأكد من وجود موقع محفوظ مسبقاً
       final savedLat = prefs.getDouble(LocationService.LAT_KEY);
       final savedLng = prefs.getDouble(LocationService.LNG_KEY);
@@ -6580,12 +6768,16 @@ class BackgroundLocationRefresher {
 
       // تحديث فقط إذا تحرك المستخدم أكثر من 50 متر
       if (distance > 50.0) {
+        // جلب رقم المنطقة لكي لا يتم مسحه عند التحديث
+        final areaId = prefs.getInt(LocationService.AREA_ID_KEY) ?? prefs.getInt('selectedAreaId');
+
         await LocationService.saveLocation(
           pos.latitude,
           pos.longitude,
           source: 'auto_resume_refresh',
+          areaId: areaId,
         );
-        print("📍 [AutoUpdate] تم تحديث الموقع في الخلفية (تحرك ${distance.toStringAsFixed(0)}م)");
+        print("📍 [AutoUpdate] تم تحديث الموقع في الخلفية بالـ GPS (تحرك ${distance.toStringAsFixed(0)}م)");
 
         // إشعار التطبيق بإعادة حساب التسعيرة إذا لزم الأمر
         _triggerAppRefresh();
@@ -6682,7 +6874,6 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
   @override
   void initState() {
     super.initState();
-    // ✅ إضافة المراقب لدورة حياة التطبيق
     WidgetsBinding.instance.addObserver(this);
     _initializeServices();
   }
@@ -6690,8 +6881,6 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-
-    // ✅ عند فتح التطبيق أو العودة إليه من الخلفية
     if (state == AppLifecycleState.resumed) {
       BackgroundLocationRefresher.silentRefresh();
     }
@@ -6699,40 +6888,27 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
 
   @override
   void dispose() {
-    // ✅ تنظيف المراقب عند إغلاق التطبيق
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   Future<void> _initializeServices() async {
-    // تهيئة خدمة الإشعارات المحلية الموجودة مسبقاً
     await NotificationService.initialize();
-
-    // طلب صلاحيات الإشعارات
     await FirebaseMessaging.instance.requestPermission();
-
-    // 🔥 الاستماع للإشعارات عند النقر عليها لفتح التطبيق (Background to Foreground)
     FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessage);
-
     print("✅ Notification & Call Services Initialized");
   }
 
-  // ==========================================================
-  // دالة معالجة الإشعارات عند فتح التطبيق من الخلفية (Background)
-  // ==========================================================
   Future<void> _handleBackgroundMessage(RemoteMessage message) async {
-    // 1️⃣ معالجة مكالمات الصوت (VoIP)
     if (message.data['type'] == 'voip_call') {
       final channelName = message.data['channelName'] ?? message.data['channel_name'];
       final driverName = message.data['driverName'] ?? message.data['driver_name'] ?? 'الكابتن';
 
-      // حفظ البيانات للتعامل معها بعد انتهاء رسم الواجهة الأساسية
       SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString('pending_call_channel', channelName ?? '');
       await prefs.setString('pending_call_driver', driverName);
       await prefs.setBool('has_pending_call', true);
 
-      // محاولة التوجيه المباشر إذا كان التطبيق قد بنى الواجهة
       if (navigatorKey.currentState != null) {
         navigatorKey.currentState?.push(
           MaterialPageRoute(
@@ -6749,12 +6925,10 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
         );
       }
     }
-    // 2️⃣ معالجة إشعارات الدردشة
     else if (message.data['type'] == 'chat_message') {
       final orderId = message.data['order_id'];
       final driverName = message.data['sender_name'] ?? 'المندوب';
 
-      // الانتظار قليلاً لضمان بناء الواجهة الأساسية
       await Future.delayed(const Duration(milliseconds: 500));
 
       if (navigatorKey.currentState != null && orderId != null) {
@@ -6784,6 +6958,9 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
         ChangeNotifierProvider(create: (_) => DeliveryConfigProvider()),
         ChangeNotifierProvider(create: (_) => SmartWalletProvider()),
+
+        // 🔥🔥🔥 الإضافة التي تحل مشكلة الشاشة الحمراء 🔥🔥🔥
+        ChangeNotifierProvider(create: (_) => PremiumCampaignProvider()),
 
         ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
           create: (_) => DashboardProvider(),
@@ -6820,7 +6997,7 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
         ),
       ],
       child: MaterialApp(
-        navigatorKey: navigatorKey, // 🔥 مهم جداً للتوجيه الفوري
+        navigatorKey: navigatorKey,
         title: 'Beytei Restaurants',
         theme: ThemeData(
             primarySwatch: Colors.teal,
@@ -6844,6 +7021,7 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
     );
   }
 }
+
 
 class MapLocationPicker extends StatefulWidget {
   final double? initialLat;
@@ -6870,6 +7048,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
   bool _isMapReady = false;
   bool _isLocating = false;
+  bool _isSaving = false; // 🔥 حالة الانتظار عند الحفظ
   bool _autoLocated = false;
   bool _manualMode = false;
   bool _userChoseManual = false;
@@ -6884,13 +7063,20 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    if (widget.initialLat != null && widget.initialLng != null && widget.initialLat != 0.0) {
+    // 🔥 إذا كان هناك موقع ابتدائي (محفوظ مسبقاً)، استخدمه
+    if (widget.initialLat != null &&
+        widget.initialLng != null &&
+        widget.initialLat != 0.0 &&
+        widget.initialLng != 0.0) {
       _selectedPoint = ml.LatLng(widget.initialLat!, widget.initialLng!);
       _userChoseManual = true;
+      _manualMode = true;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _isMapReady && _mapController != null) {
-          _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 16.0));
+          _mapController!.animateCamera(
+              ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0)
+          );
         }
       });
     } else {
@@ -6899,7 +7085,10 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       });
     }
 
-    _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    _pulseController = AnimationController(
+        vsync: this,
+        duration: const Duration(seconds: 2)
+    )..repeat();
   }
 
   @override
@@ -6951,7 +7140,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       setState(() => _selectedPoint = cityPoint);
 
       if (_isMapReady && _mapController != null) {
-        _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(cityPoint, 14.0));
+        _mapController!.animateCamera(
+            ml.CameraUpdate.newLatLngZoom(cityPoint, 14.0)
+        );
       }
     }
   }
@@ -6968,32 +7159,54 @@ class _MapLocationPickerState extends State<MapLocationPicker>
             children: [
               Icon(Icons.location_city, color: Colors.blue),
               SizedBox(width: 10),
-              Text('أين تتواجد حالياً؟', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              Text('أين تتواجد حالياً؟',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             ],
           ),
-          content: const Text('يرجى تحديد مدينتك لنوجه الخريطة بدقة إلى منطقتك.', style: TextStyle(color: Colors.grey)),
+          content: const Text(
+              'يرجى تحديد مدينتك لنوجه الخريطة بدقة إلى منطقتك.',
+              style: TextStyle(color: Colors.grey)
+          ),
           actionsPadding: const EdgeInsets.all(10),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15),
+          contentPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 15
+          ),
           actions: [
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 ElevatedButton(
                   onPressed: () => _saveAndMove(ctx, 84, "الكوت"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade800, elevation: 0),
-                  child: const Text("محافظة واسط - الكوت", style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade50,
+                      foregroundColor: Colors.blue.shade800,
+                      elevation: 0
+                  ),
+                  child: const Text("محافظة واسط - الكوت",
+                      style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: () => _saveAndMove(ctx, 85, "الصويرة"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade800, elevation: 0),
-                  child: const Text("قضاء الصويرة", style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade50,
+                      foregroundColor: Colors.blue.shade800,
+                      elevation: 0
+                  ),
+                  child: const Text("قضاء الصويرة",
+                      style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: () => _saveAndMove(ctx, 42, "النعمانية"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade50, foregroundColor: Colors.blue.shade800, elevation: 0),
-                  child: const Text("قضاء النعمانية", style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade50,
+                      foregroundColor: Colors.blue.shade800,
+                      elevation: 0
+                  ),
+                  child: const Text("قضاء النعمانية",
+                      style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
             )
@@ -7036,7 +7249,8 @@ class _MapLocationPickerState extends State<MapLocationPicker>
         permission = await Geolocator.requestPermission();
       }
 
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         _handlePermissionDenied();
         return;
       }
@@ -7057,7 +7271,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
         });
 
         if (_isMapReady && _mapController != null) {
-          _mapController!.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0));
+          _mapController!.animateCamera(
+              ml.CameraUpdate.newLatLngZoom(_selectedPoint, 17.0)
+          );
         }
         HapticFeedback.mediumImpact();
         _showSuccessAndClose(position);
@@ -7067,9 +7283,15 @@ class _MapLocationPickerState extends State<MapLocationPicker>
         setState(() => _isLocating = false);
 
         if (e is TimeoutException) {
-          _showModernToast('⌛ انتهى وقت البحث. يرجى التأكد من وقوفك في مكان مكشوف أو التحديد يدوياً.', isError: true);
+          _showModernToast(
+              '⌛ انتهى وقت البحث. يرجى التأكد من وقوفك في مكان مكشوف أو التحديد يدوياً.',
+              isError: true
+          );
         } else {
-          _showModernToast('⚠️ تعذر التقاط إحداثيات الـ GPS بدقة، يرجى التحديد يدوياً.', isError: true);
+          _showModernToast(
+              '⚠️ تعذر التقاط إحداثيات الـ GPS بدقة، يرجى التحديد يدوياً.',
+              isError: true
+          );
         }
         setState(() {
           _manualMode = true;
@@ -7087,8 +7309,16 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [Icon(Icons.location_off, color: Colors.blueAccent), SizedBox(width: 10), Text('خدمة الموقع معطلة')]),
-        content: const Text('يرجى تفعيل GPS ومنح الإذن لكي نتمكن من تحديد موقعك بدقة.'),
+        title: const Row(
+          children: [
+            Icon(Icons.location_off, color: Colors.blueAccent),
+            SizedBox(width: 10),
+            Text('خدمة الموقع معطلة')
+          ],
+        ),
+        content: const Text(
+            'يرجى تفعيل GPS ومنح الإذن لكي نتمكن من تحديد موقعك بدقة.'
+        ),
         actions: [
           TextButton(
               onPressed: () {
@@ -7105,7 +7335,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               Navigator.pop(_);
               await Geolocator.openLocationSettings();
             },
-            icon: const Icon(Icons.settings), label: const Text('تفعيل الإعدادات'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            icon: const Icon(Icons.settings),
+            label: const Text('تفعيل الإعدادات'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           ),
         ],
       ),
@@ -7120,8 +7352,16 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [Icon(Icons.lock, color: Colors.red), SizedBox(width: 10), Text('الصلاحية مرفوضة')]),
-        content: const Text('لم تمنح صلاحية الموقع للتطبيق. يرجى فتح الإعدادات ومنح الصلاحية.'),
+        title: const Row(
+          children: [
+            Icon(Icons.lock, color: Colors.red),
+            SizedBox(width: 10),
+            Text('الصلاحية مرفوضة')
+          ],
+        ),
+        content: const Text(
+            'لم تمنح صلاحية الموقع للتطبيق. يرجى فتح الإعدادات ومنح الصلاحية.'
+        ),
         actions: [
           TextButton(
               onPressed: () {
@@ -7147,20 +7387,43 @@ class _MapLocationPickerState extends State<MapLocationPicker>
   }
 
   void _showSuccessAndClose(Position position) async {
-    Fluttertoast.showToast(msg: "✅ تم تحديد موقعك بنجاح بدقة عالية", toastLength: Toast.LENGTH_SHORT, gravity: ToastGravity.CENTER, backgroundColor: Colors.green.shade600, textColor: Colors.white);
+    Fluttertoast.showToast(
+        msg: "✅ تم تحديد موقعك بنجاح بدقة عالية",
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.CENTER,
+        backgroundColor: Colors.green.shade600,
+        textColor: Colors.white
+    );
 
     final prefs = await SharedPreferences.getInstance();
     int areaId = prefs.getInt('selectedAreaId') ?? 0;
 
-    await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto_gps', areaId: areaId);
+    await LocationService.saveLocation(
+        position.latitude,
+        position.longitude,
+        source: 'auto_gps',
+        areaId: areaId
+    );
 
     Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) Navigator.pop(context, {'lat': position.latitude, 'lng': position.longitude, 'source': 'auto_gps'});
+      if (mounted) {
+        Navigator.pop(context, {
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'source': 'auto_gps'
+        });
+      }
     });
   }
 
   void _showModernToast(String msg, {bool isError = false}) {
-    Fluttertoast.showToast(msg: msg, toastLength: Toast.LENGTH_LONG, gravity: ToastGravity.BOTTOM, backgroundColor: isError ? Colors.red.shade600 : Colors.black87, textColor: Colors.white);
+    Fluttertoast.showToast(
+        msg: msg,
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: isError ? Colors.red.shade600 : Colors.black87,
+        textColor: Colors.white
+    );
   }
 
   void _onCameraMove(ml.CameraPosition position) {
@@ -7168,13 +7431,79 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     _selectedPoint = position.target;
   }
 
-  // 🔥 الحل الجذري الأول: منع دالة OnCameraIdle من إعادة تعيين الموقع وقراءته من الكنترولر البطيء
   void _onCameraIdle() {
     if (!_isLocating && mounted) {
       setState(() {
         _autoLocated = false;
         _manualMode = true;
       });
+    }
+  }
+
+  // 🔥 دالة الحفظ مع الانتظار
+  Future<void> _confirmAndSaveLocation() async {
+    if (_manualMode && _currentZoom < _minAllowedZoom) {
+      _showModernToast(
+          'عذراً، أنت بعيد جداً! يرجى تقريب الخريطة (Zoom in) لاختيار منزلك بدقة.',
+          isError: true
+      );
+      return;
+    }
+
+    // 🔥 إظهار حالة الانتظار
+    setState(() => _isSaving = true);
+
+    try {
+      ml.LatLng finalPoint = _selectedPoint;
+
+      // 🔥 استخدام queryCameraPosition() للحصول على الموقع الدقيق
+      if (_mapController != null) {
+        final cameraPosition = await _mapController!.queryCameraPosition();
+        if (cameraPosition != null) {
+          finalPoint = cameraPosition.target;
+          // تحديث النقطة المحدثة
+          setState(() => _selectedPoint = finalPoint);
+        }
+      }
+
+      bool isValid = (finalPoint.latitude != 0.0 && finalPoint.longitude != 0.0);
+
+      if (isValid) {
+        final prefs = await SharedPreferences.getInstance();
+        int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+        // 🔥 حفظ الموقع مع الانتظار
+        await LocationService.saveLocation(
+          finalPoint.latitude,
+          finalPoint.longitude,
+          source: _autoLocated ? 'auto_gps' : 'manual_map',
+          areaId: areaId,
+        );
+
+        // انتظار قصير للتأكد من الحفظ
+        await Future.delayed(const Duration(milliseconds: 300));
+
+        if (mounted) {
+          setState(() => _isSaving = false);
+          Navigator.pop(context, {
+            'lat': finalPoint.latitude,
+            'lng': finalPoint.longitude,
+            'source': _autoLocated ? 'auto_gps' : 'manual_map',
+          });
+        }
+      } else {
+        setState(() => _isSaving = false);
+        _showModernToast(
+            'تعذر التقاط الإحداثيات. يرجى تحريك الخريطة قليلاً ثم الضغط على تأكيد مرة أخرى.',
+            isError: true
+        );
+      }
+    } catch (e) {
+      print('❌ Error saving location: $e');
+      if (mounted) {
+        setState(() => _isSaving = false);
+        _showModernToast('حدث خطأ أثناء الحفظ. حاول مجدداً.', isError: true);
+      }
     }
   }
 
@@ -7185,13 +7514,19 @@ class _MapLocationPickerState extends State<MapLocationPicker>
         children: [
           ml.MapLibreMap(
             styleString: widget.mapStyleUrl,
-            initialCameraPosition: ml.CameraPosition(target: _selectedPoint, zoom: 14.0),
+            initialCameraPosition: ml.CameraPosition(
+                target: _selectedPoint,
+                zoom: 14.0
+            ),
             onMapCreated: (controller) {
               _mapController = controller;
               setState(() => _isMapReady = true);
 
-              double initialZoom = _autoLocated ? 17.0 : 14.0;
-              controller.animateCamera(ml.CameraUpdate.newLatLngZoom(_selectedPoint, initialZoom));
+              // 🔥 التقريب لدرجة 17 إذا كان الموقع محفوظاً مسبقاً
+              double initialZoom = (_autoLocated || _userChoseManual) ? 17.0 : 14.0;
+              controller.animateCamera(
+                  ml.CameraUpdate.newLatLngZoom(_selectedPoint, initialZoom)
+              );
             },
             onCameraMove: _onCameraMove,
             onCameraIdle: _onCameraIdle,
@@ -7202,6 +7537,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
             attributionButtonMargins: const Point(-100, -100),
           ),
 
+          // 🔥 الدبوس في المنتصف
           Center(
             child: IgnorePointer(
               child: Stack(
@@ -7214,7 +7550,9 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                     decoration: BoxDecoration(
                       color: _autoLocated ? Colors.green.shade700 : Colors.black87,
                       shape: BoxShape.circle,
-                      boxShadow: const [BoxShadow(color: Colors.white, spreadRadius: 2)],
+                      boxShadow: const [
+                        BoxShadow(color: Colors.white, spreadRadius: 2)
+                      ],
                     ),
                   ),
                   Positioned(
@@ -7230,25 +7568,36 @@ class _MapLocationPickerState extends State<MapLocationPicker>
             ),
           ),
 
+          // زر الرجوع
           Positioned(
-            top: 40, left: 20,
+            top: 40,
+            left: 20,
             child: SafeArea(
               child: Material(
                 color: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)
+                ),
                 elevation: 4,
-                child: IconButton(icon: const Icon(Icons.arrow_back_ios, size: 20), onPressed: () => Navigator.pop(context)),
+                child: IconButton(
+                    icon: const Icon(Icons.arrow_back_ios, size: 20),
+                    onPressed: () => Navigator.pop(context)
+                ),
               ),
             ),
           ),
 
+          // زر GPS
           if (!_isLocating && !_autoLocated)
             Positioned(
-              top: 40, right: 20,
+              top: 40,
+              right: 20,
               child: SafeArea(
                 child: Material(
                   color: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)
+                  ),
                   elevation: 4,
                   child: IconButton(
                     icon: const Icon(Icons.my_location, color: Colors.blue),
@@ -7258,30 +7607,61 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               ),
             ),
 
+          // panel السفلي
           Positioned(
-            bottom: 0, left: 0, right: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
             child: Container(
               padding: const EdgeInsets.all(24),
               decoration: const BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 20, offset: Offset(0, -10))],
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black12,
+                      blurRadius: 20,
+                      offset: Offset(0, -10)
+                  )
+                ],
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(width: 40, height: 5, margin: const EdgeInsets.only(bottom: 16), decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10))),
+                  Container(
+                      width: 40,
+                      height: 5,
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                          color: Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(10)
+                      )
+                  ),
 
                   if (_isLocating) ...[
-                    const SizedBox(height: 30, width: 30, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.blue)),
+                    const SizedBox(
+                        height: 30,
+                        width: 30,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.blue
+                        )
+                    ),
                     const SizedBox(height: 12),
-                    const Text('جاري معالجة وتأكيد موقعك...', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    const Text(
+                        'جاري معالجة وتأكيد موقعك...',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)
+                    ),
                   ] else ...[
                     Row(
                       children: [
                         Icon(
-                          _autoLocated ? Icons.verified : (_manualMode ? Icons.edit_location_alt : Icons.gps_fixed),
-                          color: _autoLocated ? Colors.green : (_manualMode ? Colors.blue : Colors.orange),
+                          _autoLocated
+                              ? Icons.verified
+                              : (_manualMode ? Icons.edit_location_alt : Icons.gps_fixed),
+                          color: _autoLocated
+                              ? Colors.green
+                              : (_manualMode ? Colors.blue : Colors.orange),
                           size: 24,
                         ),
                         const SizedBox(width: 12),
@@ -7295,7 +7675,11 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: _autoLocated ? Colors.green.shade700 : (_manualMode ? Colors.blue.shade700 : Colors.orange.shade700),
+                              color: _autoLocated
+                                  ? Colors.green.shade700
+                                  : (_manualMode
+                                  ? Colors.blue.shade700
+                                  : Colors.orange.shade700),
                             ),
                           ),
                         ),
@@ -7305,7 +7689,10 @@ class _MapLocationPickerState extends State<MapLocationPicker>
 
                     if (_manualMode && _currentZoom < _minAllowedZoom)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8
+                        ),
                         margin: const EdgeInsets.only(bottom: 12),
                         decoration: BoxDecoration(
                             color: Colors.red.shade50,
@@ -7314,66 +7701,61 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.zoom_in, color: Colors.red.shade700, size: 20),
+                            Icon(
+                                Icons.zoom_in,
+                                color: Colors.red.shade700,
+                                size: 20
+                            ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 'يرجى تقريب الخريطة أكثر لتحديد الموقع بدقة!',
-                                style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 13),
+                                style: TextStyle(
+                                    color: Colors.red.shade700,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13
+                                ),
                               ),
                             ),
                           ],
                         ),
                       ),
 
-                    ElevatedButton.icon(
-                      onPressed: () async {
-                        HapticFeedback.lightImpact();
-
-                        if (_manualMode && _currentZoom < _minAllowedZoom) {
-                          _showModernToast('عذراً، أنت بعيد جداً! يرجى تقريب الخريطة (Zoom in) لاختيار منزلك بدقة.', isError: true);
-                          return;
-                        }
-
-                        setState(() => _isLocating = true);
-
-                        // 🔥 الحل الجذري الثاني: الاعتماد الكلي على النقطة الحية التي توقف عندها المستخدم بيده
-                        ml.LatLng finalPoint = _selectedPoint;
-                        bool isValid = (finalPoint.latitude != 0.0 && finalPoint.longitude != 0.0);
-
-                        setState(() => _isLocating = false);
-
-                        if (isValid) {
-                          final prefs = await SharedPreferences.getInstance();
-                          int areaId = prefs.getInt('selectedAreaId') ?? 0;
-
-                          await LocationService.saveLocation(
-                              finalPoint.latitude,
-                              finalPoint.longitude,
-                              source: _autoLocated ? 'auto_gps' : 'manual_map',
-                              areaId: areaId
-                          );
-
-                          if (mounted) {
-                            Navigator.pop(context, {
-                              'lat': finalPoint.latitude,
-                              'lng': finalPoint.longitude,
-                              'source': _autoLocated ? 'auto_gps' : 'manual_map',
-                            });
-                          }
-                        } else {
-                          _showModernToast('تعذر التقاط الإحداثيات. يرجى تحريك الخريطة قليلاً ثم الضغط على تأكيد مرة أخرى.', isError: true);
-                        }
-                      },
-                      icon: const Icon(Icons.check_circle_outline, size: 22),
-                      label: const Text('تأكيد هذا الموقع', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        backgroundColor: (_manualMode && _currentZoom < _minAllowedZoom)
-                            ? Colors.grey.shade400
-                            : (_autoLocated ? Colors.green.shade600 : Colors.blue.shade600),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        minimumSize: const Size.fromHeight(55),
+                    // 🔥 زر التأكيد مع حالة الانتظار
+                    SizedBox(
+                      width: double.infinity,
+                      height: 55,
+                      child: ElevatedButton.icon(
+                        onPressed: _isSaving ? null : _confirmAndSaveLocation,
+                        icon: _isSaving
+                            ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                            : const Icon(Icons.check_circle_outline, size: 22),
+                        label: Text(
+                          _isSaving
+                              ? 'جاري الحفظ...'
+                              : 'تأكيد هذا الموقع',
+                          style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: (_manualMode && _currentZoom < _minAllowedZoom)
+                              ? Colors.grey.shade400
+                              : (_autoLocated
+                              ? Colors.green.shade600
+                              : Colors.blue.shade600),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -7381,11 +7763,32 @@ class _MapLocationPickerState extends State<MapLocationPicker>
               ),
             ),
           ),
-          if (_isLocating)
+
+          // Overlay أثناء الحفظ
+          if (_isSaving)
             Positioned.fill(
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
-                child: Container(color: Colors.black.withOpacity(0.05)),
+                child: Container(
+                  color: Colors.black.withOpacity(0.3),
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(color: Colors.white),
+                        SizedBox(height: 16),
+                        Text(
+                          'جاري حفظ الموقع...',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
         ],
@@ -7393,9 +7796,6 @@ class _MapLocationPickerState extends State<MapLocationPicker>
     );
   }
 }
-
-
-
 
 
 
@@ -7895,7 +8295,6 @@ class TestNotificationFAB extends StatelessWidget {
     );
   }
 }
-
 class CustomerWalletScreen extends StatefulWidget {
   const CustomerWalletScreen({super.key});
 
@@ -7903,18 +8302,28 @@ class CustomerWalletScreen extends StatefulWidget {
   State<CustomerWalletScreen> createState() => _CustomerWalletScreenState();
 }
 
-class _CustomerWalletScreenState extends State<CustomerWalletScreen> with TickerProviderStateMixin {
+class _CustomerWalletScreenState extends State<CustomerWalletScreen>
+    with TickerProviderStateMixin {
   int _areaId = 0;
   bool _isCheckingArea = true;
 
-  // لعجلة الحظ
+  //  متغيرات العجلة الديناميكية
+  List<Map<String, dynamic>> _wheelPrizes = [];
+  bool _isLoadingPrizes = true;
+  int _totalSlices = 0;
+  double _currentRotation = 0.0;
+  bool _isSpinning = false;
+
   late AnimationController _wheelController;
-  late Animation<double> _wheelAnimation;
+  late Animation<double> _spinAnimation;
 
   @override
   void initState() {
     super.initState();
-    _wheelController = AnimationController(vsync: this, duration: const Duration(seconds: 4));
+    _wheelController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 5),
+    );
     _checkAreaAndLoadData();
   }
 
@@ -7925,15 +8334,464 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> with Ticker
       _isCheckingArea = false;
     });
 
+    // 🔥 جلب جوائز العجلة من السيرفر
+    await _fetchWheelPrizes();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<SmartWalletProvider>(context, listen: false).fetchWalletStatus(_areaId);
+      Provider.of<SmartWalletProvider>(context, listen: false)
+          .fetchWalletStatus(_areaId);
     });
+  }
+
+  // 🔥 جلب الجوائز من السيرفر
+  Future<void> _fetchWheelPrizes() async {
+    setState(() => _isLoadingPrizes = true);
+    try {
+      final response = await http.get(
+        Uri.parse(
+            'https://re.beytei.com/wp-json/restaurant-app/v1/get-wheel-config'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['prizes'] != null) {
+          setState(() {
+            _wheelPrizes = List<Map<String, dynamic>>.from(data['prizes']);
+            _totalSlices = _wheelPrizes.length;
+            _isLoadingPrizes = false;
+          });
+          print("✅ تم جلب ${_wheelPrizes.length} جائزة للعجلة");
+        }
+      }
+    } catch (e) {
+      print("⚠️ فشل جلب جوائز العجلة: $e");
+      setState(() => _isLoadingPrizes = false);
+    }
   }
 
   @override
   void dispose() {
     _wheelController.dispose();
     super.dispose();
+  }
+
+  // 🔥 دالة تدوير العجلة
+  Future<void> _spinWheel() async {
+    if (_isSpinning || _wheelPrizes.isEmpty) return;
+
+    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
+    if (wallet.spinAttempts <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text("لا توجد محاولات متبقية!"),
+            backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    setState(() => _isSpinning = true);
+
+    try {
+      // 1️⃣ طلب النتيجة من السيرفر
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = prefs.getString('unique_device_id') ?? '';
+
+      final response = await http.post(
+        Uri.parse(
+            'https://re.beytei.com/wp-json/restaurant-app/v1/spin-wheel-guest'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'device_id': deviceId,
+          'area_id': _areaId,
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      final data = json.decode(response.body);
+
+      if (response.statusCode == 200 && data['success'] == true) {
+        // 2️⃣ الحصول على زاوية التوقف من السيرفر
+        final stopAngle = data['stop_angle']?.toDouble() ?? 0.0;
+        final totalSlices = data['total_slices'] ?? _totalSlices;
+        final isConsolation = data['is_consolation'] ?? false;
+
+        // 3️⃣ تحديث عدد المحاولات
+        await wallet.fetchWalletStatus(_areaId);
+
+        // 4️ تدوير العجلة للزاوية الصحيحة
+        await _animateToStopAngle(stopAngle);
+
+        // 5️⃣ انتظار انتهاء الأنيميشن ثم عرض النتيجة
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        if (mounted) {
+          if (isConsolation) {
+            _showConsolationDialog();
+          } else {
+            _showWinDialog(
+              prizeName: data['prize_name'] ?? 'جائزة',
+              prizeType: data['prize_type'] ?? '',
+              prizeValue: data['prize_value'] ?? 0,
+              couponCode: data['coupon_code'],
+            );
+          }
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text(data['message'] ?? 'حدث خطأ'),
+                backgroundColor: Colors.red),
+          );
+        }
+      }
+    } catch (e) {
+      print("❌ خطأ في تدوير العجلة: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text("فشل الاتصال بالسيرفر"),
+              backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSpinning = false);
+    }
+  }
+
+  // 🔥 أنيميشن التوقف الدقيق
+  Future<void> _animateToStopAngle(double stopAngle) async {
+    // إضافة دورات كاملة (5 دورات) + الزاوية المطلوبة
+    final fullRotations = 5 * 360.0;
+    final targetRotation = _currentRotation + fullRotations + stopAngle;
+
+    await _wheelController.animateTo(
+      1.0,
+      duration: const Duration(seconds: 5),
+      curve: Curves.easeOutQuart,
+    );
+
+    setState(() {
+      _currentRotation = targetRotation % 360.0;
+    });
+
+    _wheelController.reset();
+  }
+
+  // 🔥 نافذة الفوز
+  void _showWinDialog({
+    required String prizeName,
+    required String prizeType,
+    required double prizeValue,
+    String? couponCode,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Column(
+          children: [
+            const Icon(Icons.celebration, color: Colors.amber, size: 60),
+            const SizedBox(height: 10),
+            const Text("مبروك! 🎉",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "لقد فزت بـ: $prizeName",
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16),
+            ),
+            if (prizeType == 'coupon_percent')
+              Text(
+                "خصم ${prizeValue.toInt()}%",
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green),
+              ),
+            if (prizeType == 'coupon_fixed')
+              Text(
+                "${NumberFormat('#,###').format(prizeValue)} د.ع",
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green),
+              ),
+            if (prizeType == 'extra_spin')
+              const Text(
+                "محاولة إضافية!",
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue),
+              ),
+            if (couponCode != null) ...[
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  border: Border.all(color: Theme.of(context).primaryColor, width: 2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  children: [
+                    const Text("كود الخصم الخاص بك:",
+                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const SizedBox(height: 5),
+                    SelectableText(
+                      couponCode,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).primaryColor,
+                        letterSpacing: 2,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "سيتم تطبيقه تلقائياً في سلة المشتريات",
+                style: TextStyle(fontSize: 11, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).primaryColor,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                if (couponCode != null) {
+                  Clipboard.setData(ClipboardData(text: couponCode));
+                }
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text("تم نسخ الكود بنجاح! "),
+                      backgroundColor: Colors.green),
+                );
+              },
+              child: const Text("نسخ الكود وإغلاق",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  // 🔥 نافذة الحظ الأوفر
+  void _showConsolationDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Column(
+          children: [
+            Icon(Icons.sentiment_satisfied, color: Colors.orange, size: 60),
+            SizedBox(height: 10),
+            Text("حظ أوفر! 🍀",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          "لا توجد جوائز متاحة حالياً. حاول مرة أخرى في المرة القادمة!",
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 16),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("حسناً"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isCheckingArea) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final wallet = Provider.of<SmartWalletProvider>(context);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FD),
+      appBar: AppBar(
+        title: const Text('آلة بيتي زون اليومي 🎡',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: wallet.isLoading || _isLoadingPrizes
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+        onRefresh: () async {
+          await _fetchWheelPrizes();
+          await wallet.fetchWalletStatus(_areaId);
+        },
+        child: _areaId == 84
+            ? _buildKutCashbackSystem(wallet)
+            : _buildWheelOfFortuneSystem(wallet),
+      ),
+    );
+  }
+
+  // =========================================================
+  // 🔥 نظام الكوت: الكاش باك التراكمي (Area 84)
+  // =========================================================
+  Widget _buildKutCashbackSystem(SmartWalletProvider wallet) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        // بطاقة الرصيد
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(25),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(25),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black26, blurRadius: 15, offset: const Offset(0, 8))
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Text("رصيد الكاش باك المتاح",
+                  style: TextStyle(color: Colors.white70, fontSize: 16)),
+              const SizedBox(height: 10),
+              Text(
+                "${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
+                style: const TextStyle(
+                    color: Colors.amber, fontSize: 45, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text("نرجعلك 10% من قيمة كل طلب تكملّه!",
+                    style: TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 30),
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: Colors.teal.shade50,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.teal.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.teal.shade700, size: 28),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  "كل ما تجمع رصيد كافي، اضغط على الزر بالأسفل لتحويله إلى كود خصم فوري تستخدمه في سلة المشتريات!",
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.teal,
+                      fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 40),
+        SizedBox(
+          width: double.infinity,
+          height: 55,
+          child: ElevatedButton(
+            onPressed: (wallet.accumulatedDiscount <= 0 || wallet.isClaiming)
+                ? null
+                : () async {
+              bool success = await wallet.claimCashback();
+              if (success && wallet.lastCouponCode != null) {
+                _showGeneratedCoupon(
+                  wallet.lastCouponCode!,
+                  "تم تحويل رصيدك إلى كود خصم بقيمة ${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text("حدث خطأ في توليد الكود"),
+                      backgroundColor: Colors.red),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+              elevation: wallet.accumulatedDiscount > 0 ? 5 : 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15)),
+            ),
+            child: wallet.isClaiming
+                ? const CircularProgressIndicator(color: Colors.white)
+                : Text(
+              wallet.accumulatedDiscount > 0
+                  ? "استخراج كود الخصم الآن 🎁"
+                  : "لا يوجد رصيد كافي",
+              style: const TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+        if (wallet.lastCouponCode != null) ...[
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber.shade200),
+            ),
+            child: Column(
+              children: [
+                const Text("لديك كود خصم لم تستخدمه بعد:",
+                    style: TextStyle(color: Colors.brown, fontSize: 12)),
+                SelectableText(
+                  wallet.lastCouponCode!,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                      letterSpacing: 2),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   void _showGeneratedCoupon(String code, String message) {
@@ -7952,7 +8810,8 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> with Ticker
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+            Text(message,
+                textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.all(15),
@@ -7963,301 +8822,171 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> with Ticker
               ),
               child: SelectableText(
                 code,
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor, letterSpacing: 2),
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).primaryColor,
+                  letterSpacing: 2,
+                ),
                 textAlign: TextAlign.center,
               ),
             ),
             const SizedBox(height: 15),
-            const Text("انسخ الكود واستخدمه في سلة المشتريات لطلبك القادم.", style: TextStyle(fontSize: 12, color: Colors.grey), textAlign: TextAlign.center),
-            const SizedBox(height: 5),
-            const Text("ملاحظة: عند استخدام الكود سيتم تصفير الرصيد لتبدأ رحلة تجميع جديدة!", style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+            const Text(
+              "انسخ الكود واستخدمه في سلة المشتريات لطلبك القادم.",
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
         actions: [
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).primaryColor,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: code));
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تم نسخ الكود بنجاح! 📋"), backgroundColor: Colors.green));
-              },
-              child: const Text("نسخ الكود وإغلاق", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isCheckingArea) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    final wallet = Provider.of<SmartWalletProvider>(context);
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FD),
-      appBar: AppBar(
-        title: const Text('المحفظة والمكافآت 🎁', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
-        centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-      ),
-      body: wallet.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-        onRefresh: () => wallet.fetchWalletStatus(_areaId),
-        child: _areaId == 84 ? _buildKutCashbackSystem(wallet) : _buildWheelOfFortuneSystem(wallet),
-      ),
-    );
-  }
-
-  // =========================================================
-  // 🔥 نظام الكوت: الكاش باك التراكمي والمستويات (Area 84)
-  // =========================================================
-  // =========================================================
-  // 🔥 نظام الكوت: الكاش باك التراكمي الواضح (Area 84)
-  // =========================================================
-  Widget _buildKutCashbackSystem(SmartWalletProvider wallet) {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        // 1. بطاقة الرصيد المغرية والواضحة
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(25),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight
-            ),
-            borderRadius: BorderRadius.circular(25),
-            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 15, offset: const Offset(0, 8))],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Text("رصيد الكاش باك المتاح", style: TextStyle(color: Colors.white70, fontSize: 16)),
-              const SizedBox(height: 10),
-              Text(
-                "${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
-                style: const TextStyle(color: Colors.amber, fontSize: 45, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20)
-                ),
-                child: const Text(
-                    "نرجعلك 10% من قيمة كل طلب تكملّه!",
-                    style: TextStyle(color: Colors.white, fontSize: 12)
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 30),
-
-        // 2. رسالة توضيحية بدلاً من مستويات وهمية
-        Container(
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            color: Colors.teal.shade50,
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(color: Colors.teal.shade200),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.info_outline, color: Colors.teal.shade700, size: 28),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  "كل ما تجمع رصيد كافي، اضغط على الزر بالأسفل لتحويله إلى كود خصم فوري تستخدمه في سلة المشتريات!",
-                  style: TextStyle(fontSize: 13, color: Colors.teal, fontWeight: FontWeight.w500),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 40),
-
-        // 3. زر الحصول على الخصم (تحويل الرصيد لكوبون)
-        SizedBox(
-          width: double.infinity,
-          height: 55,
-          child: ElevatedButton(
-            onPressed: (wallet.accumulatedDiscount <= 0 || wallet.isClaiming)
-                ? null
-                : () async {
-              bool success = await wallet.claimCashback();
-              if (success && wallet.lastCouponCode != null) {
-                _showGeneratedCoupon(
-                    wallet.lastCouponCode!,
-                    "تم تحويل رصيدك إلى كود خصم بقيمة ${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع"
-                );
-              } else {
                 ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("حدث خطأ في توليد الكود"), backgroundColor: Colors.red)
+                  const SnackBar(
+                      content: Text("تم نسخ الكود بنجاح! 📋"),
+                      backgroundColor: Colors.green),
                 );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).primaryColor,
-              foregroundColor: Colors.white,
-              elevation: wallet.accumulatedDiscount > 0 ? 5 : 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            ),
-            child: wallet.isClaiming
-                ? const CircularProgressIndicator(color: Colors.white)
-                : Text(
-                wallet.accumulatedDiscount > 0 ? "استخراج كود الخصم الآن 🎁" : "لا يوجد رصيد كافي",
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
-            ),
-          ),
-        ),
-
-        // 4. عرض الكود إذا تم استخراجه ولم يستخدم بعد
-        if (wallet.lastCouponCode != null) ...[
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-                color: Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.amber.shade200)
-            ),
-            child: Column(
-              children: [
-                const Text("لديك كود خصم لم تستخدمه بعد:", style: TextStyle(color: Colors.brown, fontSize: 12)),
-                SelectableText(
-                    wallet.lastCouponCode!,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 2)
-                ),
-              ],
+              },
+              child: const Text("نسخ الكود وإغلاق",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           )
-        ]
-      ],
-    );
-  }
-  Widget _buildMilestoneLevel({required int level, required int target, required int current, required String title, required IconData icon, required Color color}) {
-    bool isReached = current >= target;
-    double progress = (current / target).clamp(0.0, 1.0);
-
-    return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: isReached ? color.withOpacity(0.1) : Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: isReached ? color : Colors.grey.shade200, width: isReached ? 2 : 1),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: isReached ? color : Colors.grey.shade100, shape: BoxShape.circle),
-            child: Icon(icon, color: isReached ? Colors.white : Colors.grey, size: 24),
-          ),
-          const SizedBox(width: 15),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isReached ? color : Colors.black87)),
-                const SizedBox(height: 5),
-                Text(isReached ? "تم الوصول! 🎉" : "باقي ${target - current} طلبات", style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
 
   // =========================================================
-  // 🔥 نظام المناطق الأخرى: عجلة الحظ
+  // 🔥 نظام المناطق الأخرى: عجلة الحظ الديناميكية
   // =========================================================
   Widget _buildWheelOfFortuneSystem(SmartWalletProvider wallet) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        const Text("عجلة حظ بيتي 🎡", textAlign: TextAlign.center, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const Text("آلة بيتي زون اليومي ",
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
-        const Text("اربح معنا مع كل طلب! محاولة واحدة لكل طلب يوصلك.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+        const Text("اربح معنا مع كل طلب! محاولة واحدة لكل طلب يوصلك.",
+            textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
         const SizedBox(height: 40),
 
-        // تصميم عجلة الحظ (Implicit Animation)
+        // 🔥 العجلة الديناميكية المرسومة برمجياً
         Center(
-          child: AnimatedBuilder(
-            animation: _wheelController,
-            builder: (context, child) {
-              return Transform.rotate(
-                angle: _wheelController.value * 2 * pi,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // مؤشر السهم في الأعلى
+              Positioned(
+                top: -10,
                 child: Container(
-                  width: 280,
-                  height: 280,
+                  width: 0,
+                  height: 0,
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.amber, width: 8),
-                    boxShadow: [BoxShadow(color: Colors.amber.withOpacity(0.4), blurRadius: 20)],
-                    // صورة عجلة حظ (يمكن استبدالها بأصل من داخل التطبيق assets/wheel.png)
-                    image: const DecorationImage(
-                      image: NetworkImage('https://cdn-icons-png.flaticon.com/512/3231/3231314.png'),
-                      fit: BoxFit.contain,
+                    border: Border(
+                      left: BorderSide(
+                          width: 15, color: Colors.transparent),
+                      right: BorderSide(
+                          width: 15, color: Colors.transparent),
+                      top: BorderSide(width: 25, color: Colors.red.shade700),
                     ),
                   ),
                 ),
-              );
-            },
+              ),
+
+              // العجلة المرسومة
+              AnimatedBuilder(
+                animation: _wheelController,
+                builder: (context, child) {
+                  return Transform.rotate(
+                    angle: _wheelController.value * 2 * pi,
+                    child: CustomPaint(
+                      size: const Size(280, 280),
+                      painter: WheelPainter(prizes: _wheelPrizes),
+                    ),
+                  );
+                },
+              ),
+
+              // دائرة المركز
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black26, blurRadius: 8, offset: const Offset(0, 4))
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    "Beytei",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).primaryColor,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
 
         const SizedBox(height: 50),
 
+        // عداد المحاولات
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(20)),
-          child: Text("المحاولات المتبقية: ${wallet.spinAttempts}", textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue.shade800)),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            "المحاولات المتبقية: ${wallet.spinAttempts}",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue.shade800),
+          ),
         ),
 
         const SizedBox(height: 30),
 
+        // زر التدوير
         SizedBox(
           width: double.infinity,
           height: 55,
           child: ElevatedButton(
-            onPressed: (wallet.spinAttempts <= 0 || wallet.isSpinning) ? null : () async {
-              // 1. بدء الدوران الوهمي في الواجهة
-              _wheelController.repeat();
-
-              // 2. طلب النتيجة من السيرفر
-              bool success = await wallet.spinWheel();
-
-              // 3. إيقاف الدوران وعرض النتيجة
-              _wheelController.stop();
-
-              if (success && wallet.wonPrize != null) {
-                _showGeneratedCoupon(wallet.wonCouponCode ?? '', "لقد فزت بـ: ${wallet.wonPrize}!");
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("حظ أوفر في المرة القادمة!"), backgroundColor: Colors.orange));
-              }
-            },
+            onPressed: (wallet.spinAttempts <= 0 || _isSpinning || _wheelPrizes.isEmpty)
+                ? null
+                : _spinWheel,
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.amber.shade600,
               foregroundColor: Colors.black,
               elevation: wallet.spinAttempts > 0 ? 5 : 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15)),
             ),
-            child: wallet.isSpinning
+            child: _isSpinning
                 ? const CircularProgressIndicator(color: Colors.black)
-                : const Text("افتر العجلة وجرب حظك!", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                : const Text("افتر العجلة وجرب حظك!",
+                style: TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.bold)),
           ),
         ),
 
@@ -8265,26 +8994,146 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen> with Ticker
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(15),
-            decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.green.shade200)),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(color: Colors.green.shade200),
+            ),
             child: Column(
               children: [
-                const Text("آخر جائزة فزت بها:", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                const Text("آخر جائزة فزت بها:",
+                    style: TextStyle(
+                        color: Colors.green, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 5),
-                Text(wallet.wonPrize ?? '', style: const TextStyle(fontSize: 16)),
+                Text(wallet.wonPrize ?? '',
+                    style: const TextStyle(fontSize: 16)),
                 const SizedBox(height: 5),
-                SelectableText(wallet.wonCouponCode!, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 2)),
+                SelectableText(
+                  wallet.wonCouponCode!,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                      letterSpacing: 2),
+                ),
               ],
             ),
-          )
-        ]
+          ),
+        ],
       ],
     );
   }
 }
 
+// =======================================================================
+// 🎡 رسام العجلة الديناميكي (يرسم الجوائز من السيرفر)
+// =======================================================================
+class WheelPainter extends CustomPainter {
+  final List<Map<String, dynamic>> prizes;
 
+  WheelPainter({required this.prizes});
 
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (prizes.isEmpty) return;
 
+    final double radius = size.width / 2;
+    final Offset center = Offset(radius, radius);
+    final double sweepAngle = (2 * pi) / prizes.length;
+
+    for (int i = 0; i < prizes.length; i++) {
+      final prize = prizes[i];
+
+      // 1️⃣ رسم الشريحة باللون القادم من السيرفر
+      final colorHex = prize['color'] ?? '#FF5722';
+      final color = _hexToColor(colorHex);
+
+      final paint = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill;
+
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        i * sweepAngle,
+        sweepAngle,
+        true,
+        paint,
+      );
+
+      // 2️⃣ رسم حدود بيضاء بين الشرائح
+      final borderPaint = Paint()
+        ..color = Colors.white
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        i * sweepAngle,
+        sweepAngle,
+        true,
+        borderPaint,
+      );
+
+      // 3️⃣ رسم الأيقونة والنص داخل كل شريحة
+      canvas.save();
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(i * sweepAngle + (sweepAngle / 2));
+
+      // رسم الأيقونة (Emoji)
+      final icon = prize['icon'] ?? '🎁';
+      final iconPainter = TextPainter(
+        text: TextSpan(
+          text: icon,
+          style: const TextStyle(fontSize: 24),
+        ),
+        textDirection: TextDirection.rtl,
+      );
+      iconPainter.layout();
+      canvas.translate(radius * 0.5, -iconPainter.height / 2);
+      iconPainter.paint(canvas, Offset.zero);
+
+      // رسم اسم الجائزة
+      final title = prize['title'] ?? 'جائزة';
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: title,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'Tajawal',
+          ),
+        ),
+        textDirection: TextDirection.rtl,
+        maxLines: 2,
+      );
+      textPainter.layout(maxWidth: radius * 0.6);
+      canvas.translate(0, iconPainter.height + 5);
+      textPainter.paint(canvas, Offset.zero);
+
+      canvas.restore();
+    }
+
+    // 4️⃣ رسم دائرة خارجية
+    final outerCirclePaint = Paint()
+      ..color = Colors.amber
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawCircle(center, radius - 2, outerCirclePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+
+  // 🔥 دالة مساعدة لتحويل اللون من Hex
+  Color _hexToColor(String hex) {
+    hex = hex.replaceAll('#', '');
+    if (hex.length == 6) {
+      hex = 'FF$hex';
+    }
+    return Color(int.parse(hex, radix: 16));
+  }
+}
 
 
 
@@ -8882,8 +9731,6 @@ class ModernVerticalRestaurantCard extends StatelessWidget {
 // =======================================================================
 
 // =======================================================================
-// - شاشة الزبون الرئيسية (HomeScreen) المحدثة مع Shimmer Loading -
-// =======================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -8898,7 +9745,7 @@ class HomeScreenState extends State<HomeScreen> {
   String? _selectedAreaName;
 
   // فلاتر الواجهة
-  String _activeMainCategory = 'all'; // all, restaurant, market, pastry, grocery, meat, offers
+  String _activeMainCategory = 'all'; // all, restaurant, market, pastry, grocery, meat, offers, premium
 
   @override
   void initState() {
@@ -8919,6 +9766,19 @@ class HomeScreenState extends State<HomeScreen> {
       final provider = Provider.of<CustomerProvider>(context, listen: false);
       provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
       provider.fetchOffers(_selectedAreaId!);
+
+      // 🔥 1. استدعاء بيانات الحملة المميزة للتحقق من المنطقة (Geo-Fencing)
+      final premiumProvider = Provider.of<PremiumCampaignProvider>(context, listen: false);
+      await premiumProvider.fetchCampaignConfig(_selectedAreaId!);
+
+      // 🔥 2. عرض النافذة المنبثقة إذا كانت مستوفية الشروط الجغرافية ولم تظهر مسبقاً
+      if (premiumProvider.shouldShowPopup && mounted) {
+        premiumProvider.markPopupAsShown(); // لمنع الإزعاج وتكرار الظهور
+        showDialog(
+          context: context,
+          builder: (_) => PremiumPromoDialog(config: premiumProvider.config!),
+        );
+      }
     }
     setState(() {});
   }
@@ -8935,8 +9795,8 @@ class HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
       appBar: _buildProMaxAppBar(),
-      body: Consumer<CustomerProvider>(
-        builder: (context, provider, child) {
+      body: Consumer2<CustomerProvider, PremiumCampaignProvider>(
+        builder: (context, provider, premiumProvider, child) {
           if (_selectedAreaId == null) {
             return const Center(child: Text("يرجى تحديد منطقة لعرض المتاجر"));
           }
@@ -8953,6 +9813,13 @@ class HomeScreenState extends State<HomeScreen> {
           List<Restaurant> filteredStores = allStores.where((store) {
             if (_activeMainCategory == 'all') return true;
             if (_activeMainCategory == 'offers') return false;
+
+            // 🔥 فلترة قسم المطاعم المميزة بناءً على الـ API
+            if (_activeMainCategory == 'premium') {
+              final includedIds = List<int>.from(premiumProvider.config?['included_restaurants'] ?? []);
+              return includedIds.isEmpty ? true : includedIds.contains(store.id);
+            }
+
             return store.storeType == _activeMainCategory;
           }).toList();
 
@@ -8960,6 +9827,7 @@ class HomeScreenState extends State<HomeScreen> {
             onRefresh: () async {
               provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
               provider.fetchOffers(_selectedAreaId!);
+              await premiumProvider.fetchCampaignConfig(_selectedAreaId!);
             },
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -8972,13 +9840,12 @@ class HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
 
-                // 2. الأيقونات الرئيسية الستة (Sticky Header)
+                // 2. الأيقونات الرئيسية (Sticky Header)
                 SliverPersistentHeader(
                   pinned: true,
                   floating: false,
                   delegate: _StickyTopCategoriesDelegate(
                     child: Container(
-                      color: const Color(0xFFF9F9F9),
                       padding: const EdgeInsets.only(bottom: 5, top: 5),
                       decoration: const BoxDecoration(
                         color: Color(0xFFF9F9F9),
@@ -8989,7 +9856,7 @@ class HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
-                      child: _buildTopCategories(),
+                      child: _buildTopCategories(premiumProvider.config != null), // نمرر حالة العرض
                     ),
                     height: 95.0,
                   ),
@@ -9064,7 +9931,7 @@ class HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
 
-                        // 🔥 تم استبدال دائرة التحميل بـ Shimmer Skeleton عصري
+                        // Shimmer Skeleton عصري
                         if (provider.isLoadingHome && filteredStores.isEmpty)
                           _buildHomeShimmer()
                         else if (filteredStores.isEmpty)
@@ -9096,7 +9963,6 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🔥 ودجت الهيكل العظمي (Shimmer) للصفحة الرئيسية
   Widget _buildHomeShimmer() {
     return Shimmer.fromColors(
       baseColor: Colors.grey[300]!,
@@ -9111,7 +9977,7 @@ class HomeScreenState extends State<HomeScreen> {
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
         ),
-        itemCount: 6, // عدد بطاقات وهمية تحاكي الشبكة الحقيقية
+        itemCount: 6,
         itemBuilder: (_, __) => Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -9129,6 +9995,7 @@ class HomeScreenState extends State<HomeScreen> {
       case 'grocery': return "الماركت والبقالة";
       case 'meat': return "القصابة واللحوم";
       case 'restaurant': return "المطاعم المتاحة";
+      case 'premium': return "المطاعم المميزة 🌟"; // 🔥 إضافة عنوان القسم الجديد
       default: return "أفضل المتاجر";
     }
   }
@@ -9212,67 +10079,88 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildTopCategories() {
+  // 🔥 استقبال حالة العرض الديناميكية (hasPremiumCampaign)
+  Widget _buildTopCategories(bool hasPremiumCampaign) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 5.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: _buildCategoryImage(
-              title: "المطاعم",
-              imagePath: 'assets/icon/restaurant_icon.png',
-              isSelected: _activeMainCategory == 'restaurant',
-              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'restaurant' ? 'all' : 'restaurant'),
-            ),
-          ),
-          Expanded(
-            child: _buildCategoryImage(
-              title: "مسواك",
-              imagePath: 'assets/icon/market_icon.png',
-              isSelected: _activeMainCategory == 'market',
-              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'market' ? 'all' : 'market'),
-            ),
-          ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal, // لجعل الأيقونات قابلة للتمرير في الشاشات الصغيرة
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 🔥 إضافة أيقونة المطاعم المميزة ديناميكياً فقط إذا كان العرض مفعل
+            if (hasPremiumCampaign)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                child: _buildCategoryImage(
+                  title: "مميزة 🌟",
+                  imagePath: 'assets/icon/premium_icon.png', // يمكنك إضافة صورة مخصصة في الـ assets
+                  isSelected: _activeMainCategory == 'premium',
+                  onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'premium' ? 'all' : 'premium'),
+                ),
+              ),
 
-          Expanded(
-            child: _buildCategoryImage(
-              title: "عروض",
-              imagePath: 'assets/icon/offer_icon.png',
-              isSelected: _activeMainCategory == 'offers',
-              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: _buildCategoryImage(
+                title: "المطاعم",
+                imagePath: 'assets/icon/restaurant_icon.png',
+                isSelected: _activeMainCategory == 'restaurant',
+                onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'restaurant' ? 'all' : 'restaurant'),
+              ),
             ),
-          ),
-
-          Expanded(
-            child: _buildCategoryImage(
-              title: "مرطبات وحلويات ",
-              imagePath: 'assets/icon/grocery_icon.png',
-              isSelected: _activeMainCategory == 'grocery',
-              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'grocery' ? 'all' : 'grocery'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: _buildCategoryImage(
+                title: "مسواك",
+                imagePath: 'assets/icon/market_icon.png',
+                isSelected: _activeMainCategory == 'market',
+                onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'market' ? 'all' : 'market'),
+              ),
             ),
-          ),
-          Expanded(
-            child: _buildCategoryImage(
-              title: "دجاج ولحوم ",
-              imagePath: 'assets/icon/meat_icon.png',
-              isSelected: _activeMainCategory == 'meat',
-              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'meat' ? 'all' : 'meat'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: _buildCategoryImage(
+                title: "عروض",
+                imagePath: 'assets/icon/offer_icon.png',
+                isSelected: _activeMainCategory == 'offers',
+                onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
+              ),
             ),
-          ),
-          Expanded(
-            child: _buildCategoryImage(
-              title: "خبز وافران ",
-              imagePath: 'assets/icon/pastry_icon.png',
-              isSelected: _activeMainCategory == 'pastry',
-              onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'pastry' ? 'all' : 'pastry'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: _buildCategoryImage(
+                title: "مرطبات وحلويات",
+                imagePath: 'assets/icon/grocery_icon.png',
+                isSelected: _activeMainCategory == 'grocery',
+                onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'grocery' ? 'all' : 'grocery'),
+              ),
             ),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: _buildCategoryImage(
+                title: "دجاج ولحوم",
+                imagePath: 'assets/icon/meat_icon.png',
+                isSelected: _activeMainCategory == 'meat',
+                onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'meat' ? 'all' : 'meat'),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: _buildCategoryImage(
+                title: "خبز وافران",
+                imagePath: 'assets/icon/pastry_icon.png',
+                isSelected: _activeMainCategory == 'pastry',
+                onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'pastry' ? 'all' : 'pastry'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+
   Widget _buildCategoryImage({required String title, required String imagePath, required bool isSelected, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
@@ -9297,15 +10185,18 @@ class HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.visible,
-            style: TextStyle(
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                color: Colors.black87
+          SizedBox(
+            width: 60, // تثبيت العرض لضمان ترتيب النصوص
+            child: Text(
+              title,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.visible,
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                  color: Colors.black87
+              ),
             ),
           ),
         ],
@@ -9313,6 +10204,8 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+
 // =======================================================================
 // --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
 // =======================================================================
@@ -10224,13 +11117,17 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
             // 2. شريط الأقسام
+            // 2. شريط الأقسام
             SliverPersistentHeader(
               pinned: true,
               delegate: _StickyCategoryDelegate(
                 child: Container(
-                  color: Colors.white,
-                  decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1))),
+                  decoration: const BoxDecoration(
+                      color: Colors.white, // ✅ اللون أصبح هنا بالداخل بشكل صحيح
+                      border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1))
+                  ),
                   child: _isLoadingCats && _subcategories.isEmpty
+
                       ? ListView.builder(
                     scrollDirection: Axis.horizontal,
                     itemCount: 5,
@@ -10564,6 +11461,26 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
     ).animate(CurvedAnimation(parent: _flashController, curve: Curves.easeOut));
 
     _flashController.forward();
+
+    // 🔥 التحقق من العروض الذكية عند فتح السلة
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkCampaign();
+    });
+  }
+
+  // 🔥 دالة التحقق من الحملة التسويقية (تتصل بالبروفايدر)
+  Future<void> _checkCampaign() async {
+    final cart = Provider.of<CartProvider>(context, listen: false);
+    if (cart.items.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final areaId = prefs.getInt('selectedAreaId') ?? 0;
+    final restaurantId = cart.items.first.categoryId; // نأخذ آيدي المطعم من أول منتج
+
+    if (mounted) {
+      Provider.of<PremiumCampaignProvider>(context, listen: false)
+          .validateCart(cart.totalPrice, restaurantId, areaId);
+    }
   }
 
   @override
@@ -10591,6 +11508,51 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
             },
             child: Column(
               children: [
+                // 🔥 إضافة شريط السلة الذكي (Smart Upsell Banner)
+                Consumer<PremiumCampaignProvider>(
+                  builder: (context, premium, child) {
+                    if (premium.isLoading) {
+                      return const LinearProgressIndicator(minHeight: 2, color: Colors.redAccent);
+                    }
+
+                    final result = premium.cartValidationResult;
+                    if (result == null) return const SizedBox.shrink(); // لا يوجد عرض
+
+                    String hexColor = result['color'] ?? '#d63638';
+                    Color bannerColor = Color(int.parse(hexColor.replaceAll('#', '0xff')));
+                    String message = result['upsell_message'] ?? result['success_message'] ?? '';
+
+                    if (message.isEmpty) return const SizedBox.shrink();
+
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                      margin: const EdgeInsets.only(top: 15, left: 15, right: 15),
+                      decoration: BoxDecoration(
+                        color: bannerColor.withOpacity(0.1),
+                        border: Border.all(color: bannerColor, width: 1.5),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            result['is_valid'] == true ? Icons.celebration : Icons.info_outline,
+                            color: bannerColor,
+                            size: 28,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              message,
+                              style: TextStyle(color: bannerColor, fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+
                 Expanded(
                   child: ListView.builder(
                     padding: const EdgeInsets.all(15),
@@ -10618,9 +11580,21 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
               const SizedBox(width: 15),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)), const SizedBox(height: 5), Text(item.formattedPrice, style: TextStyle(fontSize: 16, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold))])),
               Row(children: [
-                IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => cart.decrementQuantity(item)),
+                IconButton(
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: () async {
+                      cart.decrementQuantity(item);
+                      await _checkCampaign(); // 🔥 إعادة الحساب عند تقليل الكمية
+                    }
+                ),
                 Text(item.quantity.toString(), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => cart.incrementQuantity(item))
+                IconButton(
+                    icon: const Icon(Icons.add_circle_outline),
+                    onPressed: () async {
+                      cart.incrementQuantity(item);
+                      await _checkCampaign(); // 🔥 إعادة الحساب عند زيادة الكمية
+                    }
+                )
               ])
             ])
         )
@@ -10650,7 +11624,6 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
-                // 🔥 الانتقال إلى شاشة الدفع الكاملة بدلاً من النافذة المنبثقة
                 Navigator.push(context, MaterialPageRoute(builder: (_) => CheckoutScreen(cart: cart)));
               },
               style: ElevatedButton.styleFrom(
@@ -10712,20 +11685,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     super.dispose();
   }
 
-  // 🔥 الدالة المسؤولة عن حساب الأسعار بناءً على الموقع
   Future<void> _calculateInitialFees() async {
     final prefs = await SharedPreferences.getInstance();
     int areaId = prefs.getInt('selectedAreaId') ?? 0;
     String areaName = prefs.getString('selectedAreaName') ?? "";
 
-    // جلب الموقع المحفوظ
     final savedLoc = await LocationService.getSavedLocationSimple();
 
     if (savedLoc != null && savedLoc.lat != 0.0) {
       final configProvider = Provider.of<DeliveryConfigProvider>(context, listen: false);
       if (configProvider.cachedConfig == null) await configProvider.fetchAndCacheConfig();
 
-      // حساب التسعيرة من البروفايدر
       final result = configProvider.calculateFeeDetails(
         userLat: savedLoc.lat,
         userLng: savedLoc.lng,
@@ -10741,7 +11711,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
           _cashbackAmount = result['cashback_amount'] ?? 0.0;
           _locationMessage = result['message'] ?? "تم تحديد الموقع بنجاح";
 
-          // تحديث الإحداثيات النهائية التي ستُرسل للسيرفر
           _capturedPosition = geolocator.Position(
             latitude: savedLoc.lat,
             longitude: savedLoc.lng,
@@ -10754,7 +11723,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     }
   }
 
-// 🔥 دالة فتح الخريطة (تم إصلاح مشكلة التحديث هنا جذرياً)
   Future<void> _openMapPicker() async {
     final savedLoc = await LocationService.getSavedLocationSimple();
 
@@ -10768,9 +11736,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         )
     );
 
-    // إذا عاد الزبون بنتيجة (إحداثيات جديدة)
     if (result != null && result is Map) {
-      // 1. إظهار حالة التحميل للزبون فوراً
       setState(() {
         _deliveryFee = -1.0;
         _serviceFee = 0.0;
@@ -10778,7 +11744,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         _locationMessage = "جاري تحديث الموقع وحساب التسعيرة...";
       });
 
-      // 2. الاستخراج الآمن للإحداثيات
       double newLat = double.tryParse(result['lat'].toString()) ?? 0.0;
       double newLng = double.tryParse(result['lng'].toString()) ?? 0.0;
 
@@ -10786,28 +11751,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         final prefs = await SharedPreferences.getInstance();
         int areaId = prefs.getInt('selectedAreaId') ?? 0;
 
-        // 3. الحفظ المباشر في الذاكرة
-        await LocationService.saveLocation(
-            newLat,
-            newLng,
-            source: 'manual_checkout',
-            areaId: areaId
-        );
-
-        // 🔥 الحل: انتظار لحظة لضمان حفظ البيانات
+        await LocationService.saveLocation(newLat, newLng, source: 'manual_checkout', areaId: areaId);
         await Future.delayed(const Duration(milliseconds: 300));
-
-        // 4. إعادة الحساب بناءً على الموقع الجديد
         await _calculateInitialFees();
 
-        // 🔥 إظهار رسالة نجاح
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("✅ تم تحديث الموقع وحساب التسعيرة بنجاح"),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
+            const SnackBar(content: Text("✅ تم تحديث الموقع وحساب التسعيرة بنجاح"), backgroundColor: Colors.green, duration: Duration(seconds: 2)),
           );
         }
       } else {
@@ -10815,10 +11765,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
       }
     }
   }
+
   @override
   Widget build(BuildContext context) {
+    // 🌟 جلب بيانات العرض المميز لحساب الخصم الفعلي
+    final premium = Provider.of<PremiumCampaignProvider>(context);
+    double premiumDiscount = 0.0;
+    bool usedPremium = false;
+    bool hasFreeItem = false;
+
+    if (premium.cartValidationResult != null && premium.cartValidationResult!['is_valid'] == true) {
+      premiumDiscount = double.tryParse(premium.cartValidationResult!['discount']?.toString() ?? '0') ?? 0.0;
+      hasFreeItem = premium.cartValidationResult!['free_item'] == true;
+      usedPremium = true;
+    }
+
+    // 💰 حساب الإجمالي النهائي (مع طرح خصم العرض المميز)
     double total = widget.cart.totalPrice - widget.cart.totalDiscountAmount;
-    double grandTotal = total + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
+    double grandTotal = total - premiumDiscount + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
+
+    // حماية من أن يكون المجموع أقل من صفر
+    if (grandTotal < 0) grandTotal = 0;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
@@ -10833,7 +11800,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // 📍 1. قسم تحديد الموقع والخريطة (التفاعلي)
+            // 📍 1. قسم تحديد الموقع والخريطة
             Card(
               elevation: 2,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -10945,8 +11912,26 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
               child: Column(
                 children: [
                   _buildSummaryRow("سعر الطلبات:", widget.cart.totalPrice),
+
                   if (widget.cart.totalDiscountAmount > 0)
                     _buildSummaryRow("الخصم (البروموكود):", -widget.cart.totalDiscountAmount, isDiscount: true),
+
+                  // 🔥 عرض خصم المطاعم المميزة (إذا كان مفعلاً)
+                  if (premiumDiscount > 0)
+                    _buildSummaryRow("خصم العرض المميز 🔥:", -premiumDiscount, isDiscount: true),
+
+                  // 🔥 عرض الهدية المجانية (بيبسي)
+                  if (hasFreeItem)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("هدية العرض:", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                          const Text("بيبسي مجاني 🎁", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
+                        ],
+                      ),
+                    ),
 
                   _buildSummaryRow("رسوم التوصيل:", _deliveryFee == -1.0 ? 0 : _deliveryFee, isLoading: _deliveryFee == -1.0),
 
@@ -10974,7 +11959,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                     final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
                     final int? firstRestaurantId = widget.cart.items.isNotEmpty ? widget.cart.items.first.categoryId : null;
 
-                    // 🚀 إرسال الطلب النهائي للسيرفر باستخدام الموقع المحدث (_capturedPosition)
+                    // 🚀 إرسال الطلب النهائي للسيرفر (شاملاً حالة العرض المميز)
                     final createdOrder = await ApiService().submitOrder(
                       name: _nameController.text,
                       phone: _phoneController.text,
@@ -10988,9 +11973,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       regionId: currentZoneId,
                       platformMarkupTotal: widget.cart.totalPlatformMarkup,
                       checkoutSessionId: const Uuid().v4(),
-                      // 👇👇 تمرير القيم التي حسبها التطبيق بدقة 👇👇
-                      discountAmount: widget.cart.totalDiscountAmount,
+                      discountAmount: widget.cart.totalDiscountAmount + premiumDiscount, // نجمع الخصمين
                       finalTotal: grandTotal,
+                      usedPremiumCampaign: usedPremium, // 👈 إخبار السيرفر لتفعيل الكاش باك الذكي
                     );
 
                     if (!mounted) return;
@@ -11003,7 +11988,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
 
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder)),
-                          (route) => route.isFirst, // الرجوع للصفحة الرئيسية في الخلفية
+                          (route) => route.isFirst,
                     );
 
                   } catch (e) {
@@ -11050,7 +12035,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     );
   }
 }
-
 
 
 class OrdersHistoryScreen extends StatefulWidget {

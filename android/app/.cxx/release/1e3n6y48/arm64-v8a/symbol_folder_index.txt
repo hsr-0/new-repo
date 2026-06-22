@@ -1,0 +1,1 @@
+C:\Users\aa\StudioProjects\new-repo-main\android\app\build\intermediates\cxx\release\1e3n6y48\obj\arm64-v8a

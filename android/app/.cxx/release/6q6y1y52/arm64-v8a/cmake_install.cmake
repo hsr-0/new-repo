@@ -39,7 +39,7 @@ endif()
 
 # Set default install directory permissions.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "C:/Users/NSR-BM/AppData/Local/Android/Sdk/ndk/29.0.14033849/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-objdump.exe")
+  set(CMAKE_OBJDUMP "C:/Users/aa/AppData/Local/Android/Sdk/ndk/29.0.14033849/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-objdump.exe")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT)
@@ -50,5 +50,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "C:/Users/NSR-BM/StudioProjects/new-repo/android/app/.cxx/release/6q6y1y52/arm64-v8a/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "C:/Users/aa/StudioProjects/new-repo-main/android/app/.cxx/release/6q6y1y52/arm64-v8a/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
