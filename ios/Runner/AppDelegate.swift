@@ -63,7 +63,7 @@ extension AppDelegate: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
-        writeLog("تم حفظ التوكن")
+        writeLog("✅ تم حفظ التوكن: \(tokenHex.prefix(15))...")
     }
 
     // 🔥 هنا تم تصحيح اسم الدالة لتطابق iOS 11+ وتمنع تسريب الإشعار لـ Flutter
@@ -72,35 +72,47 @@ extension AppDelegate: PKPushRegistryDelegate {
         writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
 
         if let dict = payload.dictionaryPayload as? [String: Any] {
-            let callerName = dict["driver_name"] as? String ?? "الكابتن"
-            let orderId = dict["order_id"] as? String ?? ""
-            let validCallKitId = UUID().uuidString
+
+            // 🔥 التكيف مع هيكل السيرفر الجديد (CallKit Structure)
+            // السيرفر الآن يرسل 'name' بدلاً من 'driver_name' في الجذر
+            let callerName = dict["name"] as? String ?? (dict["driver_name"] as? String ?? "الكابتن")
+            let callId = dict["id"] as? String ?? UUID().uuidString
+            let handle = dict["handle"] as? String ?? ""
+            let avatar = dict["avatar"] as? String ?? ""
+            let duration = dict["duration"] as? Int ?? 60000
+
+            // 🔥 استخراج الـ extra التي تحتوي على channel_name و agora_app_id
+            // إذا لم تكن موجودة (في حال كان السيرفر قديماً)، نأخذ الـ dict كاملاً كاحتياط
+            let extra = dict["extra"] as? [String: Any] ?? dict
 
             let callkitData: [String: Any] = [
-                "id": validCallKitId,
+                "id": callId,
                 "nameCaller": callerName,
                 "appName": "مطاعم بيتي",
-                "handle": "طلب رقم \(orderId)",
+                "handle": handle,
+                "avatar": avatar,
                 "type": 0,
-                "duration": 30000,
-                "extra": dict
+                "duration": duration,
+                "extra": extra // 👈 هنا يمرر الـ channel_name لتطبيق فلاتر بنجاح
             ]
 
             let data = flutter_callkit_incoming.Data(args: callkitData)
 
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
                 plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح.")
+                writeLog("✅ الشاشة رنت بنجاح. الـ Extra: \(extra.keys)")
             } else {
                 writeLog("❌ المكتبة غير جاهزة.")
             }
         }
 
         // 🔥 تأخير الرد لآبل بجزء من الثانية لضمان تشغيل شاشة المكالمة بنجاح
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             completion()
         }
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        writeLog("❌ تم إبطال التوكن")
+    }
 }

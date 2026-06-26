@@ -1,0 +1,2 @@
+C:/Users/aa/StudioProjects/new-repo/android/app/.cxx/release/4m4wj473/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/Users/aa/StudioProjects/new-repo/android/app/.cxx/release/4m4wj473/arm64-v8a/CMakeFiles/rebuild_cache.dir

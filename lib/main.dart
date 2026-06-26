@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert'; // للمعالجة JSON
 import 'dart:io';      // لمعرفة نوع النظام Platform
+import 'package:audio_session/audio_session.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/inbox/ride_message_screen.dart';
 import 'package:http/http.dart' as http; // للتعامل مع الطلبات
 import 'package:shared_preferences/shared_preferences.dart'; // لحفظ التوكن محلياً
@@ -662,6 +663,18 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       return;
     }
 
+    // 🔴🔴🔴 الحل الجذري للآيفون: تفعيل جلسة الصوت قبل المحرك 🔴🔴🔴
+    if (Platform.isIOS) {
+      final session = await AudioSession.instance;
+      await session.configure(AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
+        AVAudioSessionCategoryOptions.defaultToSpeaker,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+      ));
+    }
+
     try {
       _engine = createAgoraRtcEngine();
       await _engine.initialize(RtcEngineContext(
@@ -674,6 +687,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           if (mounted) {
             setState(() => _localUserJoined = true);
             _engine.setEnableSpeakerphone(_isSpeaker);
+            print("✅ الزبون دخل القناة بنجاح");
           }
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
@@ -683,11 +697,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
               _remoteUid = remoteUid;
             });
             _startTimer();
+            print("✅ السائق دخل الغرفة: $remoteUid");
           }
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
           if (mounted && _localUserJoined) {
-            print("📞 الطرف الآخر أنهى المكالمة. جاري الإغلاق التلقائي...");
+            print("📞 الطرف الآخر أنهى المكالمة.");
             _endCall();
           }
         },
@@ -702,7 +717,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       ));
 
       await _engine.enableAudio();
-      await _engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
 
       const ChannelMediaOptions options = ChannelMediaOptions(
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
