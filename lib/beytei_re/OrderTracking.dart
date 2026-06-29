@@ -6,7 +6,7 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 
-import '../beytei_re/re.dart'; // تأكد من المسار الصحيح لكلاس CustomerChatPage و AuthProvider
+import '../beytei_re/re.dart'; // تأكد من المسار الصحيح لكلاس CustomerChatPage و AuthProvider و SmartWalletProvider
 
 class OrderTrackingScreen extends StatefulWidget {
   final dynamic order;
@@ -21,6 +21,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   String? _driverName;
   bool _isSyncing = false;
   StreamSubscription<RemoteMessage>? _fcmSubscription;
+
+  // 🔥 متغير لمنع منح الصندوق مرتين لنفس الطلب في الجلسة الواحدة
+  bool _boxAlreadyClaimedThisSession = false;
 
   @override
   void initState() {
@@ -41,7 +44,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     if (!mounted) return;
     setState(() => _isSyncing = true);
 
-    bool syncedViaTaxi = await _syncWithTaxiServer();
+    await _syncWithTaxiServer();
 
     if (mounted) setState(() => _isSyncing = false);
   }
@@ -73,6 +76,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         });
 
         await _updateLocalStorage(widget.order.id, taxiStatus);
+
+        // 🔥🔥🔥 التحقق من اكتمال الطلب ومنح الصندوق 🔥🔥🔥
+        await _checkAndClaimBoxOnDelivery(taxiStatus);
+
         return true;
       }
     } catch (e) {
@@ -109,6 +116,118 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
+  // 🔥🔥🔥 الدالة الجديدة: التحقق من اكتمال الطلب ومنح الصندوق 🔥🔥🔥
+  Future<void> _checkAndClaimBoxOnDelivery(String status) async {
+    // 1. هل الحالة هي "تم التوصيل"؟
+    if (status.toLowerCase() != 'delivered' && status.toLowerCase() != 'completed') {
+      return;
+    }
+
+    // 2. هل تم منح الصندوق لهذا الطلب بالفعل في هذه الجلسة؟
+    if (_boxAlreadyClaimedThisSession) {
+      print("ℹ️ تم منح الصندوق لهذا الطلب مسبقاً في هذه الجلسة.");
+      return;
+    }
+
+    // 3. هل تم منح الصندوق لهذا الطلب في جلسات سابقة؟ (حماية من التكرار)
+    final hasClaimed = await _hasClaimedBoxForOrder(widget.order.id);
+    if (hasClaimed) {
+      print("ℹ️ تم منح الصندوق للطلب #${widget.order.id} مسبقاً.");
+      _boxAlreadyClaimedThisSession = true;
+      return;
+    }
+
+    // 4. جلب منطقة الزبون
+    final prefs = await SharedPreferences.getInstance();
+    final int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+    // 5. منطقة الكوت (84) لها نظام كاش باك مختلف، لا نعطيها صندوق
+    if (areaId == 84) {
+      print("ℹ️ منطقة الكوت (84) - نظام الكاش باك فقط، لا صناديق.");
+      return;
+    }
+
+    // 6. منح الصندوق الفضي
+    try {
+      print("🎁 جاري منح صندوق فضي للطلب #${widget.order.id}...");
+
+      if (mounted) {
+        final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
+        await wallet.claimBoxOnDelivery(areaId);
+
+        // 7. حفظ معرف الطلب كـ "تم منحه" لمنع التكرار
+        await _markOrderAsBoxClaimed(widget.order.id);
+        _boxAlreadyClaimedThisSession = true;
+
+        print("✅ تم منح الصندوق الفضي بنجاح للطلب #${widget.order.id}");
+
+        // 8. إظهار إشعار لطيف للزبون
+        if (mounted) {
+          _showBoxRewardSnackbar();
+        }
+      }
+    } catch (e) {
+      print("❌ فشل منح الصندوق: $e");
+    }
+  }
+
+  // 🔍 التحقق من SharedPreferences هل تم منح الصندوق لهذا الطلب
+  Future<bool> _hasClaimedBoxForOrder(int orderId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> claimedOrders = prefs.getStringList('claimed_box_orders') ?? [];
+      return claimedOrders.contains(orderId.toString());
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 💾 حفظ معرف الطلب كـ "تم منحه صندوق"
+  Future<void> _markOrderAsBoxClaimed(int orderId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> claimedOrders = prefs.getStringList('claimed_box_orders') ?? [];
+      if (!claimedOrders.contains(orderId.toString())) {
+        claimedOrders.add(orderId.toString());
+        await prefs.setStringList('claimed_box_orders', claimedOrders);
+      }
+    } catch (e) {
+      print("❌ فشل حفظ حالة المنح: $e");
+    }
+  }
+
+  // 🎉 إظهار Snackbar لطيف للزبون عند حصوله على صندوق
+  void _showBoxRewardSnackbar() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: const [
+            Icon(Icons.inventory_2, color: Colors.white),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                "🎁 مبروك! حصلت على صندوق فضي جديد!",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFF00BCD4),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        action: SnackBarAction(
+          label: 'فتح الآن',
+          textColor: Colors.white,
+          onPressed: () {
+            // يمكن الانتقال لشاشة الصناديق هنا إذا أردت
+            // Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerWalletScreen()));
+          },
+        ),
+      ),
+    );
+  }
+
   void _listenToTaxiUpdates() {
     _fcmSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       if (message.data.isNotEmpty && message.data['order_id'] == widget.order.id.toString()) {
@@ -124,6 +243,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
         if (newStatus != null) {
           _updateLocalStorage(widget.order.id, newStatus);
+
+          // 🔥 التحقق من اكتمال الطلب عند استقبال إشعار لحظي
+          _checkAndClaimBoxOnDelivery(newStatus);
         }
       }
     });

@@ -29,7 +29,6 @@ import 'package:shimmer/shimmer.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
-import '../cr.dart';
 import '../main.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -3279,9 +3278,24 @@ class CartProvider with ChangeNotifier {
   int _usageCount = 0;
   double _loyaltyDiscountPercentage = 0.0;
 
+  // 🔥🔥🔥 الجديد: متغيرات مكافآت الصناديق
+  double _boxRewardDiscount = 0.0;
+  String? _boxRewardTitle;
+  String? _boxRewardSource;
+  String? _boxRewardRestaurantName;
+  int? _boxRewardRestaurantId;
+
   String? get appliedCoupon => _appliedCoupon;
   String? get promoterCode => _promoterCode;
   int get usageCount => _usageCount;
+
+  // 🔥🔥🔥 الجديد: Getters لمكافآت الصناديق
+  double get boxRewardDiscount => _boxRewardDiscount;
+  String? get boxRewardTitle => _boxRewardTitle;
+  String? get boxRewardSource => _boxRewardSource;
+  String? get boxRewardRestaurantName => _boxRewardRestaurantName;
+  int? get boxRewardRestaurantId => _boxRewardRestaurantId;
+  bool get hasBoxReward => _boxRewardDiscount > 0;
 
   bool _weightsAreEqual(double w1, double w2) => (w1 - w2).abs() < 0.001;
 
@@ -3293,7 +3307,9 @@ class CartProvider with ChangeNotifier {
       couponDiscount = totalPrice * (_discountPercentage / 100);
     }
     double loyaltyDiscount = totalPrice * (_loyaltyDiscountPercentage / 100);
-    return max(couponDiscount, loyaltyDiscount);
+
+    // 🔥 الجديد: إضافة خصم الصندوق
+    return max(couponDiscount, loyaltyDiscount) + _boxRewardDiscount;
   }
 
   double get discountedTotal => (totalPrice - totalDiscountAmount).clamp(0, double.infinity);
@@ -3337,7 +3353,50 @@ class CartProvider with ChangeNotifier {
     _discountType = '';
     _promoterCode = null;
     _loyaltyDiscountPercentage = 0.0;
+    // 🔥 لا نمسح خصم الصندوق هنا لأنه منفصل
     notifyListeners();
+  }
+
+  // 🔥🔥🔥 الجديد: تطبيق مكافأة الصندوق
+  void applyBoxReward({
+    required double amount,
+    required String title,
+    String? source,
+    int? restaurantId,
+    String? restaurantName,
+  }) {
+    _boxRewardDiscount = amount;
+    _boxRewardTitle = title;
+    _boxRewardSource = source ?? 'صندوق بيتي 🎁';
+    _boxRewardRestaurantId = restaurantId;
+    _boxRewardRestaurantName = restaurantName;
+    notifyListeners();
+    print("✅ تم تطبيق خصم الصندوق: $amount د.ع - $title");
+  }
+
+  // 🔥🔥🔥 الجديد: إزالة مكافأة الصندوق
+  void removeBoxReward() {
+    _boxRewardDiscount = 0.0;
+    _boxRewardTitle = null;
+    _boxRewardSource = null;
+    _boxRewardRestaurantId = null;
+    _boxRewardRestaurantName = null;
+    notifyListeners();
+  }
+
+  // 🔥🔥🔥 الجديد: التحقق من صلاحية الجائزة للمطعم الحالي
+  bool isBoxRewardValidForCurrentRestaurant() {
+    if (!hasBoxReward) return false;
+    if (_items.isEmpty) return false;
+
+    // إذا لم يكن هناك مطعم محدد → صالحة لكل المطاعم
+    if (_boxRewardRestaurantId == null || _boxRewardRestaurantId == 0) {
+      return true;
+    }
+
+    // التحقق من أن كل عناصر السلة من نفس المطعم المحدد
+    final currentRestaurantId = _items.first.categoryId;
+    return currentRestaurantId == _boxRewardRestaurantId;
   }
 
   // 🔥🔥🔥 التعديل الجذري هنا: جلب المنطقة ومعرف الجهاز وتمريرهما للسيرفر 🔥🔥🔥
@@ -3446,8 +3505,15 @@ class CartProvider with ChangeNotifier {
     }
   }
 
-  void clearCart() { _items.clear(); removeCoupon(); notifyListeners(); }
+  void clearCart() {
+    _items.clear();
+    removeCoupon();
+    removeBoxReward(); // 🔥 الجديد: مسح خصم الصندوق عند تفريغ السلة
+    notifyListeners();
+  }
 }
+
+
 class FoodItemBottomSheet extends StatefulWidget {
   final FoodItem foodItem;
   final bool isMarket;
@@ -8626,6 +8692,7 @@ class TestNotificationFAB extends StatelessWidget {
     );
   }
 }
+
 class CustomerWalletScreen extends StatefulWidget {
   const CustomerWalletScreen({super.key});
 
@@ -8634,28 +8701,55 @@ class CustomerWalletScreen extends StatefulWidget {
 }
 
 class _CustomerWalletScreenState extends State<CustomerWalletScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   int _areaId = 0;
   bool _isCheckingArea = true;
 
-  //  متغيرات العجلة الديناميكية
-  List<Map<String, dynamic>> _wheelPrizes = [];
-  bool _isLoadingPrizes = true;
-  int _totalSlices = 0;
-  double _currentRotation = 0.0;
-  bool _isSpinning = false;
-
-  late AnimationController _wheelController;
-  late Animation<double> _spinAnimation;
+  // 🔥 الجديد: حماية من الاستدعاء المتكرر (منع الحلقة اللانهائية)
+  DateTime? _lastFetchTime;
+  static const _minFetchInterval = Duration(seconds: 2);
 
   @override
   void initState() {
     super.initState();
-    _wheelController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 5),
-    );
+    // 🔥 إضافة مراقب دورة حياة التطبيق
+    WidgetsBinding.instance.addObserver(this);
     _checkAreaAndLoadData();
+  }
+
+  // 🔥 مراقبة دورة حياة التطبيق (عند العودة من الخلفية فقط)
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // عند استئناف التطبيق من الخلفية → جلب البيانات المحدثة
+    if (state == AppLifecycleState.resumed && !_isCheckingArea) {
+      _safeFetchWalletStatus("التطبيق استؤنف من الخلفية");
+    }
+  }
+
+  // ❌ تم حذف didChangeDependencies نهائياً لأنه سبب الحلقة اللانهائية
+  // (كان يُستدعى مع كل notifyListeners مما يسبب استدعاء fetchWalletStatus بشكل متكرر)
+
+  // 🔥 دالة آمنة لجلب البيانات مع حماية من التكرار
+  void _safeFetchWalletStatus(String source) {
+    // التحقق من عدم الاستدعاء المتكرر خلال ثانيتين
+    final now = DateTime.now();
+    if (_lastFetchTime != null &&
+        now.difference(_lastFetchTime!) < _minFetchInterval) {
+      print("⏭️ [WalletScreen] تم تجاهل الاستدعاء من ($source) - قريب جداً من السابق");
+      return;
+    }
+
+    _lastFetchTime = now;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        print("🔄 [WalletScreen] $source - جلب البيانات...");
+        Provider.of<SmartWalletProvider>(context, listen: false)
+            .fetchWalletStatus(_areaId);
+      }
+    });
   }
 
   Future<void> _checkAreaAndLoadData() async {
@@ -8665,294 +8759,33 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
       _isCheckingArea = false;
     });
 
-    // 🔥 جلب جوائز العجلة من السيرفر
-    await _fetchWheelPrizes();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<SmartWalletProvider>(context, listen: false)
-          .fetchWalletStatus(_areaId);
-    });
-  }
-
-  // 🔥 جلب الجوائز من السيرفر
-  Future<void> _fetchWheelPrizes() async {
-    setState(() => _isLoadingPrizes = true);
-    try {
-      final response = await http.get(
-        Uri.parse(
-            'https://re.beytei.com/wp-json/restaurant-app/v1/get-wheel-config'),
-      ).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['success'] == true && data['prizes'] != null) {
-          setState(() {
-            _wheelPrizes = List<Map<String, dynamic>>.from(data['prizes']);
-            _totalSlices = _wheelPrizes.length;
-            _isLoadingPrizes = false;
-          });
-          print("✅ تم جلب ${_wheelPrizes.length} جائزة للعجلة");
-        }
-      }
-    } catch (e) {
-      print("⚠️ فشل جلب جوائز العجلة: $e");
-      setState(() => _isLoadingPrizes = false);
-    }
+    // استدعاء أولي للبيانات
+    _safeFetchWalletStatus("أول استدعاء - Area ID: $_areaId");
   }
 
   @override
   void dispose() {
-    _wheelController.dispose();
+    // 🔥 إزالة مراقب دورة الحياة
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  // 🔥 دالة تدوير العجلة
-  Future<void> _spinWheel() async {
-    if (_isSpinning || _wheelPrizes.isEmpty) return;
-
-    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
-    if (wallet.spinAttempts <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text("لا توجد محاولات متبقية!"),
-            backgroundColor: Colors.orange),
-      );
-      return;
-    }
-
-    setState(() => _isSpinning = true);
-
-    try {
-      // 1️⃣ طلب النتيجة من السيرفر
-      final prefs = await SharedPreferences.getInstance();
-      final deviceId = prefs.getString('unique_device_id') ?? '';
-
-      final response = await http.post(
-        Uri.parse(
-            'https://re.beytei.com/wp-json/restaurant-app/v1/spin-wheel-guest'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'device_id': deviceId,
-          'area_id': _areaId,
-        }),
-      ).timeout(const Duration(seconds: 15));
-
-      final data = json.decode(response.body);
-
-      if (response.statusCode == 200 && data['success'] == true) {
-        // 2️⃣ الحصول على زاوية التوقف من السيرفر
-        final stopAngle = data['stop_angle']?.toDouble() ?? 0.0;
-        final totalSlices = data['total_slices'] ?? _totalSlices;
-        final isConsolation = data['is_consolation'] ?? false;
-
-        // 3️⃣ تحديث عدد المحاولات
-        await wallet.fetchWalletStatus(_areaId);
-
-        // 4️ تدوير العجلة للزاوية الصحيحة
-        await _animateToStopAngle(stopAngle);
-
-        // 5️⃣ انتظار انتهاء الأنيميشن ثم عرض النتيجة
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        if (mounted) {
-          if (isConsolation) {
-            _showConsolationDialog();
-          } else {
-            _showWinDialog(
-              prizeName: data['prize_name'] ?? 'جائزة',
-              prizeType: data['prize_type'] ?? '',
-              prizeValue: data['prize_value'] ?? 0,
-              couponCode: data['coupon_code'],
-            );
-          }
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(data['message'] ?? 'حدث خطأ'),
-                backgroundColor: Colors.red),
-          );
-        }
-      }
-    } catch (e) {
-      print("❌ خطأ في تدوير العجلة: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text("فشل الاتصال بالسيرفر"),
-              backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSpinning = false);
-    }
-  }
-
-  // 🔥 أنيميشن التوقف الدقيق
-  Future<void> _animateToStopAngle(double stopAngle) async {
-    // إضافة دورات كاملة (5 دورات) + الزاوية المطلوبة
-    final fullRotations = 5 * 360.0;
-    final targetRotation = _currentRotation + fullRotations + stopAngle;
-
-    await _wheelController.animateTo(
-      1.0,
-      duration: const Duration(seconds: 5),
-      curve: Curves.easeOutQuart,
-    );
-
-    setState(() {
-      _currentRotation = targetRotation % 360.0;
-    });
-
-    _wheelController.reset();
-  }
-
-  // 🔥 نافذة الفوز
-  void _showWinDialog({
-    required String prizeName,
-    required String prizeType,
-    required double prizeValue,
-    String? couponCode,
-  }) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Column(
-          children: [
-            const Icon(Icons.celebration, color: Colors.amber, size: 60),
-            const SizedBox(height: 10),
-            const Text("مبروك! 🎉",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ],
+  // =========================================================
+  // 📦 فتح صندوق (ينتقل إلى شاشة الأنيميشن)
+  // =========================================================
+  void _openBox(String boxType) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BoxOpeningAnimation(
+          boxType: boxType,
+          areaId: _areaId,
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              "لقد فزت بـ: $prizeName",
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16),
-            ),
-            if (prizeType == 'coupon_percent')
-              Text(
-                "خصم ${prizeValue.toInt()}%",
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.green),
-              ),
-            if (prizeType == 'coupon_fixed')
-              Text(
-                "${NumberFormat('#,###').format(prizeValue)} د.ع",
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.green),
-              ),
-            if (prizeType == 'extra_spin')
-              const Text(
-                "محاولة إضافية!",
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue),
-              ),
-            if (couponCode != null) ...[
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  border: Border.all(color: Theme.of(context).primaryColor, width: 2),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  children: [
-                    const Text("كود الخصم الخاص بك:",
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    const SizedBox(height: 5),
-                    SelectableText(
-                      couponCode,
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).primaryColor,
-                        letterSpacing: 2,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                "سيتم تطبيقه تلقائياً في سلة المشتريات",
-                style: TextStyle(fontSize: 11, color: Colors.grey),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).primaryColor,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: () {
-                if (couponCode != null) {
-                  Clipboard.setData(ClipboardData(text: couponCode));
-                }
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text("تم نسخ الكود بنجاح! "),
-                      backgroundColor: Colors.green),
-                );
-              },
-              child: const Text("نسخ الكود وإغلاق",
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          )
-        ],
       ),
     );
-  }
 
-  // 🔥 نافذة الحظ الأوفر
-  void _showConsolationDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Column(
-          children: [
-            Icon(Icons.sentiment_satisfied, color: Colors.orange, size: 60),
-            SizedBox(height: 10),
-            Text("حظ أوفر! 🍀",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-        content: const Text(
-          "لا توجد جوائز متاحة حالياً. حاول مرة أخرى في المرة القادمة!",
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("حسناً"),
-          ),
-        ],
-      ),
-    );
+    // 🔥 تحديث البيانات بعد العودة من شاشة الصندوق
+    _safeFetchWalletStatus("العودة من فتح الصندوق");
   }
 
   @override
@@ -8966,28 +8799,46 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FD),
       appBar: AppBar(
-        title: const Text('آلة بيتي زون اليومي 🎡',
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
+        title: Text(
+          _areaId == 84 ? 'محفظة الكاش باك 💰' : 'صناديق بيتي 🎁',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+        ),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.black87),
+            tooltip: "تحديث البيانات",
+            onPressed: () {
+              _safeFetchWalletStatus("تحديث يدوي");
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('جاري تحديث البيانات...'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+            },
+          ),
+        ],
       ),
-      body: wallet.isLoading || _isLoadingPrizes
+      body: wallet.isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
         onRefresh: () async {
-          await _fetchWheelPrizes();
-          await wallet.fetchWalletStatus(_areaId);
+          _safeFetchWalletStatus("سحب للتحديث");
+          // انتظار بسيط لإظهار مؤشر السحب
+          await Future.delayed(const Duration(milliseconds: 500));
         },
         child: _areaId == 84
             ? _buildKutCashbackSystem(wallet)
-            : _buildWheelOfFortuneSystem(wallet),
+            : _buildBoxSystem(wallet),
       ),
     );
   }
 
   // =========================================================
-  // 🔥 نظام الكوت: الكاش باك التراكمي (Area 84)
+  // 🔥 نظام الكوت: الكاش باك التراكمي (Area 84) - لم يتغير
   // =========================================================
   Widget _buildKutCashbackSystem(SmartWalletProvider wallet) {
     return ListView(
@@ -9006,7 +8857,9 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
             borderRadius: BorderRadius.circular(25),
             boxShadow: [
               BoxShadow(
-                  color: Colors.black26, blurRadius: 15, offset: const Offset(0, 8))
+                  color: Colors.black26,
+                  blurRadius: 15,
+                  offset: const Offset(0, 8))
             ],
           ),
           child: Column(
@@ -9018,7 +8871,9 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
               Text(
                 "${NumberFormat('#,###').format(wallet.accumulatedDiscount)} د.ع",
                 style: const TextStyle(
-                    color: Colors.amber, fontSize: 45, fontWeight: FontWeight.bold),
+                    color: Colors.amber,
+                    fontSize: 45,
+                    fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 10),
               Container(
@@ -9142,13 +8997,15 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(message,
-                textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
                 color: Colors.grey.shade100,
-                border: Border.all(color: Theme.of(context).primaryColor, width: 2),
+                border: Border.all(
+                    color: Theme.of(context).primaryColor, width: 2),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: SelectableText(
@@ -9199,129 +9056,239 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
   }
 
   // =========================================================
-  // 🔥 نظام المناطق الأخرى: عجلة الحظ الديناميكية
+  // 🎁 نظام المناطق الأخرى: نظام الصناديق (بديل العجلة)
   // =========================================================
-  Widget _buildWheelOfFortuneSystem(SmartWalletProvider wallet) {
+  Widget _buildBoxSystem(SmartWalletProvider wallet) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        const Text("آلة بيتي زون اليومي ",
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 10),
-        const Text("اربح معنا مع كل طلب! محاولة واحدة لكل طلب يوصلك.",
-            textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-        const SizedBox(height: 40),
-
-        // 🔥 العجلة الديناميكية المرسومة برمجياً
-        Center(
-          child: Stack(
-            alignment: Alignment.center,
+        // 🎯 بطاقة الترحيب
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF00BCD4), Color(0xFF0097A7)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF00BCD4).withOpacity(0.3),
+                blurRadius: 15,
+              )
+            ],
+          ),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // مؤشر السهم في الأعلى
-              Positioned(
-                top: -10,
-                child: Container(
-                  width: 0,
-                  height: 0,
-                  decoration: BoxDecoration(
-                    border: Border(
-                      left: BorderSide(
-                          width: 15, color: Colors.transparent),
-                      right: BorderSide(
-                          width: 15, color: Colors.transparent),
-                      top: BorderSide(width: 25, color: Colors.red.shade700),
-                    ),
-                  ),
-                ),
-              ),
-
-              // العجلة المرسومة
-              AnimatedBuilder(
-                animation: _wheelController,
-                builder: (context, child) {
-                  return Transform.rotate(
-                    angle: _wheelController.value * 2 * pi,
-                    child: CustomPaint(
-                      size: const Size(280, 280),
-                      painter: WheelPainter(prizes: _wheelPrizes),
-                    ),
-                  );
-                },
-              ),
-
-              // دائرة المركز
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black26, blurRadius: 8, offset: const Offset(0, 4))
-                  ],
-                ),
-                child: Center(
-                  child: Text(
-                    "Beytei",
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).primaryColor,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
+              Text("🎁 مكافآت بيتي",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold)),
+              SizedBox(height: 8),
+              Text("أكمل طلبك واحصل على صناديق تحتوي جوائز حصرية!",
+                  style: TextStyle(color: Colors.white70, fontSize: 14)),
             ],
           ),
         ),
 
-        const SizedBox(height: 50),
+        const SizedBox(height: 25),
 
-        // عداد المحاولات
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.blue.shade50,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            "المحاولات المتبقية: ${wallet.spinAttempts}",
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.blue.shade800),
-          ),
-        ),
+        // 🔥 🔥 🔥 الجديد: بطاقة الكود المحفوظ (بارزة جداً)
+        if (wallet.hasSavedCoupon)
+          _buildSavedCouponCard(wallet),
 
-        const SizedBox(height: 30),
-
-        // زر التدوير
-        SizedBox(
-          width: double.infinity,
-          height: 55,
-          child: ElevatedButton(
-            onPressed: (wallet.spinAttempts <= 0 || _isSpinning || _wheelPrizes.isEmpty)
-                ? null
-                : _spinWheel,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.amber.shade600,
-              foregroundColor: Colors.black,
-              elevation: wallet.spinAttempts > 0 ? 5 : 0,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(15)),
+        // 📦 عداد الصناديق (ثلاث بطاقات)
+        Row(
+          children: [
+            Expanded(
+              child: _buildBoxCounter(
+                icon: Icons.inventory_2,
+                count: wallet.silverBoxes,
+                label: 'فضي',
+                color: const Color(0xFF90A4AE),
+                type: 'silver',
+                onTap: wallet.silverBoxes > 0 ? () => _openBox('silver') : null,
+              ),
             ),
-            child: _isSpinning
-                ? const CircularProgressIndicator(color: Colors.black)
-                : const Text("افتر العجلة وجرب حظك!",
-                style: TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildBoxCounter(
+                icon: Icons.workspace_premium,
+                count: wallet.goldBoxes,
+                label: 'ذهبي',
+                color: const Color(0xFFFFC107),
+                type: 'gold',
+                onTap: wallet.goldBoxes > 0 ? () => _openBox('gold') : null,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildBoxCounter(
+                icon: Icons.diamond,
+                count: wallet.diamondBoxes,
+                label: 'ألماسي',
+                color: const Color(0xFF00BCD4),
+                type: 'diamond',
+                onTap: wallet.diamondBoxes > 0 ? () => _openBox('diamond') : null,
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 25),
+
+        // 🏆 شريط التقدم للصندوق الذهبي
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blue.shade50,
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              )
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.emoji_events, color: Colors.amber, size: 22),
+                  SizedBox(width: 8),
+                  Text('🔥 تقدم الصندوق الذهبي',
+                      style:
+                      TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: LinearProgressIndicator(
+                  value: wallet.ordersProgressForGold / 10,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor: const AlwaysStoppedAnimation(Color(0xFFFFC107)),
+                  minHeight: 10,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                wallet.ordersProgressForGold < 10
+                    ? 'تبقى لك ${10 - wallet.ordersProgressForGold} طلبات للحصول على صندوق ذهبي 🥇'
+                    : '🎉 اكتمل! لديك صندوق ذهبي جاهز للفتح',
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+              ),
+              if (wallet.isStreakActive) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '⏱️ Streak نشط: باقي ${wallet.streakDaysLeft} أيام',
+                    style: TextStyle(
+                        color: Colors.green.shade700,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
 
-        if (wallet.wonCouponCode != null) ...[
+        const SizedBox(height: 25),
+
+        // 🎯 أزرار فتح الصناديق
+        if (wallet.silverBoxes > 0)
+          _buildOpenBoxBtn(
+            'silver',
+            'فتح صندوق فضي 🥈',
+            const Color(0xFF90A4AE),
+            wallet.silverBoxes,
+          ),
+        if (wallet.goldBoxes > 0) ...[
+          const SizedBox(height: 12),
+          _buildOpenBoxBtn(
+            'gold',
+            'فتح صندوق ذهبي 🥇',
+            const Color(0xFFFFC107),
+            wallet.goldBoxes,
+          ),
+        ],
+        if (wallet.diamondBoxes > 0) ...[
+          const SizedBox(height: 12),
+          _buildOpenBoxBtn(
+            'diamond',
+            'فتح صندوق ألماسي 💎',
+            const Color(0xFF00BCD4),
+            wallet.diamondBoxes,
+          ),
+        ],
+        if (wallet.silverBoxes == 0 &&
+            wallet.goldBoxes == 0 &&
+            wallet.diamondBoxes == 0)
+          Container(
+            padding: const EdgeInsets.all(30),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: const Column(
+              children: [
+                Icon(Icons.inventory_2_outlined,
+                    size: 60, color: Colors.grey),
+                SizedBox(height: 10),
+                Text('لا توجد صناديق متاحة حالياً',
+                    style: TextStyle(
+                        color: Colors.grey,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
+                SizedBox(height: 5),
+                Text('أكمل طلبك القادم للحصول على صندوق فضي!',
+                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                    textAlign: TextAlign.center),
+              ],
+            ),
+          ),
+
+        const SizedBox(height: 25),
+
+        // 📜 شرح النظام
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('🎯 كيف تحصل على الصناديق؟',
+                  style:
+                  TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 12),
+              _buildInfoRow(
+                  '🥈', 'صندوق فضي', 'مع كل طلب يوصلك'),
+              _buildInfoRow(
+                  '🥇', 'صندوق ذهبي', 'بعد إكمال 10 طلبات'),
+              _buildInfoRow(
+                  '💎', 'صندوق ألماسي', 'نادر جداً - حملات خاصة'),
+            ],
+          ),
+        ),
+
+        // 🎫 آخر جائزة فزت بها
+        if (wallet.lastWonPrizeName != null) ...[
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(15),
@@ -9331,20 +9298,23 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
               border: Border.all(color: Colors.green.shade200),
             ),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("آخر جائزة فزت بها:",
-                    style: TextStyle(
-                        color: Colors.green, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 5),
-                Text(wallet.wonPrize ?? '',
-                    style: const TextStyle(fontSize: 16)),
-                const SizedBox(height: 5),
-                SelectableText(
-                  wallet.wonCouponCode!,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                      letterSpacing: 2),
+                const Row(
+                  children: [
+                    Icon(Icons.celebration, color: Colors.green, size: 22),
+                    SizedBox(width: 8),
+                    Text("آخر جائزة فزت بها:",
+                        style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  wallet.lastWonPrizeName!,
+                  style: const TextStyle(fontSize: 16),
                 ),
               ],
             ),
@@ -9353,8 +9323,428 @@ class _CustomerWalletScreenState extends State<CustomerWalletScreen>
       ],
     );
   }
-}
 
+// 🔥 🔥 🔥 الجديد: بطاقة الكود المحفوظ (بارزة جداً)
+  Widget _buildSavedCouponCard(SmartWalletProvider wallet) {
+    final isExpired = wallet.savedCouponExpiry != null &&
+        wallet.savedCouponExpiry!.isBefore(DateTime.now());
+
+    if (isExpired) {
+      // إذا كان منتهي الصلاحية، نحذفه
+      Future.microtask(() => wallet.clearSavedCoupon());
+      return const SizedBox.shrink();
+    }
+
+    final daysLeft = wallet.savedCouponExpiry != null
+        ? wallet.savedCouponExpiry!.difference(DateTime.now()).inDays
+        : null;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.amber.shade400,
+            Colors.orange.shade500,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.amber.shade400.withOpacity(0.4),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // الرأس
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: const Icon(
+                    Icons.card_giftcard,
+                    color: Colors.amber,
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(width: 15),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '🎁 جائزتك جاهزة!',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        wallet.savedCouponTitle ?? 'جائزة الصندوق',
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (daysLeft != null && daysLeft > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '⏰ $daysLeft يوم',
+                      style: TextStyle(
+                        color: Colors.amber.shade700,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // الكود
+          Container(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                // قيمة الخصم
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: Colors.amber.shade300, width: 2),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        wallet.savedCouponType == 'discount' || wallet.savedCouponType == 'coupon_percent'
+                            ? Icons.percent
+                            : Icons.attach_money,
+                        color: Colors.amber.shade700,
+                        size: 24,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        wallet.savedCouponType == 'discount' || wallet.savedCouponType == 'coupon_percent'
+                            ? 'خصم ${wallet.savedCouponValue.toInt()}%'
+                            : '${NumberFormat('#,###', 'en_US').format(wallet.savedCouponValue)} د.ع',
+                        style: TextStyle(
+                          color: Colors.amber.shade800,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                // كود الخصم
+                Container(
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.shade300, width: 2, style: BorderStyle.solid),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'كود الخصم:',
+                        style: TextStyle(
+                          color: Colors.amber.shade700,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SelectableText(
+                        wallet.savedCouponCode!,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 3,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                // المطعم المحدد
+                if (wallet.savedCouponRestaurant != null && wallet.savedCouponRestaurant!.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.store, color: Colors.blue.shade700, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'مخصص لـ: ${wallet.savedCouponRestaurant}',
+                          style: TextStyle(
+                            color: Colors.blue.shade800,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                const SizedBox(height: 20),
+
+                // الأزرار
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: wallet.savedCouponCode!));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('✅ تم نسخ الكود بنجاح!'),
+                              backgroundColor: Colors.green,
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, color: Colors.white),
+                        label: const Text(
+                          'نسخ الكود',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.amber.shade600,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          // الانتقال للسلة
+                          Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
+                        },
+                        icon: const Icon(Icons.shopping_cart, color: Colors.white),
+                        label: const Text(
+                          'استخدم الآن',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green.shade600,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 10),
+
+                // زر الحذف
+                TextButton.icon(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('حذف الكود؟'),
+                        content: const Text('هل أنت متأكد من حذف هذا الكود؟ لن تتمكن من استعادته.'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('إلغاء'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              wallet.clearSavedCoupon();
+                              Navigator.pop(ctx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('🗑️ تم حذف الكود'),
+                                  backgroundColor: Colors.orange,
+                                ),
+                              );
+                            },
+                            child: const Text(
+                              'حذف',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.delete_outline, color: Colors.white54, size: 18),
+                  label: const Text(
+                    'حذف الكود',
+                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  // =========================================================
+  // 🎨 ويدجتات مساعدة
+  // =========================================================
+  Widget _buildBoxCounter({
+    required IconData icon,
+    required int count,
+    required String label,
+    required Color color,
+    required String type,
+    VoidCallback? onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [color.withOpacity(0.15), color.withOpacity(0.05)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withOpacity(0.3), width: 1.5),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 32),
+            const SizedBox(height: 6),
+            Text('$count',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: color)),
+            Text(label,
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            if (count > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text('افتح',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOpenBoxBtn(
+      String type,
+      String title,
+      Color color,
+      int count,
+      ) {
+    return SizedBox(
+      width: double.infinity,
+      height: 55,
+      child: ElevatedButton.icon(
+        onPressed: () => _openBox(type),
+        icon: const Icon(Icons.lock_open, color: Colors.white),
+        label: Text('$title ($count)',
+            style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.white)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          elevation: 5,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String emoji, String title, String desc) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 20)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 14)),
+                Text(desc,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 // =======================================================================
 // 🎡 رسام العجلة الديناميكي (يرسم الجوائز من السيرفر)
 // =======================================================================
@@ -11857,6 +12247,7 @@ class DetailScreen extends StatelessWidget {
 }
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
+
   @override
   State<CartScreen> createState() => _CartScreenState();
 }
@@ -12137,19 +12528,35 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
     );
   }
 
+  // 🔥🔥🔥 الدالة المعدلة: ملخص السلة مع دعم جوائز الصناديق 🔥🔥🔥
   Widget _buildCartSummary(BuildContext context, CartProvider cart) {
-    return Consumer<PremiumCampaignProvider>(
-        builder: (context, premium, child) {
+    // 🔥 استخدام Consumer2 لربط المحركين معاً
+    return Consumer2<PremiumCampaignProvider, SmartWalletProvider>(
+        builder: (context, premium, wallet, child) {
           int restaurantId = cart.items.isNotEmpty ? cart.items.first.categoryId : 0;
 
           // 💰 المجموع الأصلي بدون خصم
           double rawTotal = cart.totalPrice;
 
-          // 💰 حساب قيمة الخصم من المحرك
+          // 💰 حساب قيمة الخصم من المحرك (العرض المميز)
           double premiumDiscount = premium.calculateActualDiscount(cart.items, restaurantId);
 
-          // 💰 المجموع النهائي بعد الخصم
-          double finalTotal = rawTotal - premiumDiscount;
+          // 🔥 الجديد: خصم الصندوق
+          double boxRewardDiscount = cart.boxRewardDiscount;
+          String? boxRewardTitle = cart.boxRewardTitle;
+          String? boxRewardSource = cart.boxRewardSource;
+
+          // 🔥 التحقق من صلاحية الصندوق للمطعم الحالي
+          bool isBoxRewardValid = cart.isBoxRewardValidForCurrentRestaurant();
+          String? boxRewardWarning;
+
+          if (cart.hasBoxReward && !isBoxRewardValid) {
+            boxRewardWarning = '⚠️ هذه الجائزة مخصصة لـ "${cart.boxRewardRestaurantName}" فقط';
+            boxRewardDiscount = 0; // لا تُطبق
+          }
+
+          // 💰 المجموع النهائي بعد كل الخصومات
+          double finalTotal = rawTotal - premiumDiscount - boxRewardDiscount;
           if (finalTotal < 0) finalTotal = 0;
 
           return Container(
@@ -12162,6 +12569,42 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
             child: SafeArea(
               child: Column(
                 children: [
+                  // 🔥 تحذير إذا كان الصندوق لمطعم آخر
+                  if (boxRewardWarning != null)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 15),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              boxRewardWarning,
+                              style: TextStyle(
+                                color: Colors.orange.shade900,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              cart.removeBoxReward();
+                              wallet.clearBoxReward();
+                            },
+                            child: const Text('إزالة',
+                                style: TextStyle(color: Colors.red, fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ),
+
                   // 🔥 تفصيل الخصم في السلة
                   if (premiumDiscount > 0) ...[
                     Row(
@@ -12179,8 +12622,75 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
                         Text('- ${NumberFormat('#,###').format(premiumDiscount)} د.ع', style: const TextStyle(fontSize: 14, color: Colors.red, fontWeight: FontWeight.bold)),
                       ],
                     ),
-                    const Divider(),
                   ],
+
+                  // 🔥 الجديد: عرض خصم الصندوق
+                  if (boxRewardDiscount > 0 && isBoxRewardValid) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.amber.shade100,
+                            Colors.orange.shade100,
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.card_giftcard,
+                              color: Colors.amber.shade800, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  boxRewardTitle ?? 'جائزة الصندوق 🎁',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.amber.shade900,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                if (boxRewardSource != null)
+                                  Text(
+                                    'من ${boxRewardSource}',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.amber.shade800,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            '- ${NumberFormat('#,###').format(boxRewardDiscount)} د.ع',
+                            style: TextStyle(
+                              fontSize: 15,
+                              color: Colors.amber.shade900,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            color: Colors.amber.shade800,
+                            onPressed: () {
+                              cart.removeBoxReward();
+                              wallet.clearBoxReward();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  if (premiumDiscount > 0 || boxRewardDiscount > 0)
+                    const Divider(height: 20),
+
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -12219,7 +12729,6 @@ class CheckoutScreen extends StatefulWidget {
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
 }
-
 
 class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
@@ -12312,6 +12821,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
   Widget build(BuildContext context) {
     // 🌟 1. جلب بيانات العرض المميز وحساب الخصم محلياً (الحل الجذري)
     final premium = Provider.of<PremiumCampaignProvider>(context);
+    final wallet = Provider.of<SmartWalletProvider>(context);
     int restaurantId = widget.cart.items.isNotEmpty ? widget.cart.items.first.categoryId : 0;
 
     double premiumDiscount = 0.0;
@@ -12338,10 +12848,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     double couponDiscount = usedPremium ? 0.0 : widget.cart.totalDiscountAmount;
     String? finalCouponCode = usedPremium ? null : widget.cart.appliedCoupon;
 
-    // 💰 3. حساب الإجمالي النهائي
+    // 🔥 3. الجديد: خصم الصندوق (مع التحقق من الصلاحية)
+    double boxRewardDiscount = 0.0;
+    String? boxRewardTitle;
+    bool isBoxRewardValid = false;
+
+    if (widget.cart.hasBoxReward) {
+      // التحقق من صلاحية الصندوق للمطعم الحالي
+      isBoxRewardValid = widget.cart.isBoxRewardValidForCurrentRestaurant();
+      if (isBoxRewardValid) {
+        boxRewardDiscount = widget.cart.boxRewardDiscount;
+        boxRewardTitle = widget.cart.boxRewardTitle;
+      }
+    }
+
+    // 💰 4. حساب الإجمالي النهائي
     double total = widget.cart.totalPrice - couponDiscount;
-    double grandTotal = total - premiumDiscount + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
+    double grandTotal = total - premiumDiscount - boxRewardDiscount + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
     if (grandTotal < 0) grandTotal = 0;
+
+    // 🔥 المجموع الكلي للخصومات لإرساله للسيرفر
+    double totalDiscountSent = couponDiscount + premiumDiscount + boxRewardDiscount;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
@@ -12354,6 +12881,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            // 🔥 تحذير إذا كان الصندوق لمطعم آخر
+            if (widget.cart.hasBoxReward && !isBoxRewardValid)
+              Container(
+                margin: const EdgeInsets.only(bottom: 15),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '⚠️ هذه الجائزة مخصصة لـ "${widget.cart.boxRewardRestaurantName}" فقط',
+                        style: TextStyle(
+                          color: Colors.orange.shade900,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // 📍 الموقع
             Card(
               elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -12440,6 +12995,36 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                 _buildSummaryRow("سعر الطلبات:", widget.cart.totalPrice),
                 if (couponDiscount > 0) _buildSummaryRow("الخصم (البروموكود):", -couponDiscount, isDiscount: true),
                 if (premiumDiscount > 0) _buildSummaryRow("خصم العرض المميز 🔥:", -premiumDiscount, isDiscount: true),
+
+                // 🔥 الجديد: عرض خصم الصندوق
+                if (boxRewardDiscount > 0 && isBoxRewardValid)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 6.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.card_giftcard, color: Colors.amber.shade800, size: 16),
+                            const SizedBox(width: 6),
+                            Text(
+                              "${boxRewardTitle ?? 'جائزة الصندوق'} 🎁:",
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.amber.shade900),
+                            ),
+                          ],
+                        ),
+                        Text("- ${NumberFormat('#,###').format(boxRewardDiscount)} د.ع",
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.amber.shade900)),
+                      ],
+                    ),
+                  ),
+
                 if (hasFreeItem) Padding(padding: const EdgeInsets.symmetric(vertical: 6.0), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text("هدية العرض:", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
                   const Text("بيبسي مجاني 🎁", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
@@ -12478,14 +13063,18 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       regionId: currentZoneId,
                       platformMarkupTotal: widget.cart.totalPlatformMarkup,
                       checkoutSessionId: const Uuid().v4(),
-                      // 👇 جمع الخصمين وإرسالهما للسيرفر في حقل واحد
-                      discountAmount: couponDiscount + premiumDiscount,
+                      // 🔥 الجديد: إرسال مجموع الخصومات (بما فيها خصم الصندوق)
+                      discountAmount: totalDiscountSent,
                       finalTotal: grandTotal,
                       usedPremiumCampaign: usedPremium, // 👈 إخبار السيرفر لتفعيل الكاش باك الذكي
                     );
 
                     if (!mounted) return;
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
+
+                    // 🔥 الجديد: مسح خصم الصندوق بعد نجاح الطلب
+                    widget.cart.removeBoxReward();
+                    wallet.clearBoxReward();
 
                     widget.cart.clearCart();
                     Provider.of<NotificationProvider>(context, listen: false).triggerRefresh();
@@ -12531,7 +13120,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     );
   }
 }
-
 
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
@@ -13981,77 +14569,490 @@ class _EditProductScreenState extends State<EditProductScreen> {
 
 
 
-
-
 class SmartWalletProvider with ChangeNotifier {
-  // --- بيانات منطقة الكوت (84) ---
+  // ========== بيانات منطقة الكوت (84) - الكاش باك ==========
   int _currentOrders = 0;
   double _accumulatedDiscount = 0.0;
   String? _lastCouponCode;
 
-  // --- بيانات المناطق الأخرى (عجلة الحظ) ---
-  int _spinAttempts = 0;
-  String? _wonPrize;
-  String? _wonCouponCode;
+  // ========== بيانات المناطق الأخرى - نظام الصناديق ==========
+  int _silverBoxes = 0;
+  int _goldBoxes = 0;
+  int _diamondBoxes = 0;
+  int _ordersProgressForGold = 0;
+  bool _isStreakActive = false;
+  int _streakDaysLeft = 0;
 
-  bool _isLoading = false;
-  bool _isClaiming = false;
-  bool _isSpinning = false;
+  // ========== حالة الفتح والإشعارات ==========
+  bool _isOpening = false;
+  bool _pendingSilverReward = false;
+  Map<String, dynamic>? _currentPrize;
+  String? _lastWonPrizeName;
 
-  // Getters
+  // ========== 🔥 الجديد: بيانات جائزة الصندوق الحالية ==========
+  Map<String, dynamic>? _activeBoxReward;
+  bool _hasUnclaimedBoxReward = false;
+
+  // ========== 🔥 🔥 🔥 الجديد: حفظ الكود بشكل دائم ==========
+  String? _savedCouponCode; // الكود المحفوظ
+  String? _savedCouponTitle; // عنوان الجائزة
+  String? _savedCouponType; // نوع الخصم
+  double _savedCouponValue = 0.0; // قيمة الخصم
+  String? _savedCouponRestaurant; // المطعم المحدد
+  DateTime? _savedCouponExpiry; // تاريخ الانتهاء
+  int? _savedRewardId; // معرف الجائزة النشطة
+
+  // ========== Getters ==========
   int get currentOrders => _currentOrders;
   double get accumulatedDiscount => _accumulatedDiscount;
   String? get lastCouponCode => _lastCouponCode;
-  int get spinAttempts => _spinAttempts;
-  String? get wonPrize => _wonPrize;
-  String? get wonCouponCode => _wonCouponCode;
+  int get silverBoxes => _silverBoxes;
+  int get goldBoxes => _goldBoxes;
+  int get diamondBoxes => _diamondBoxes;
+  int get ordersProgressForGold => _ordersProgressForGold;
+  bool get isStreakActive => _isStreakActive;
+  int get streakDaysLeft => _streakDaysLeft;
+  bool get isPendingSilverReward => _pendingSilverReward;
+  Map<String, dynamic>? get currentPrize => _currentPrize;
+  String? get lastWonPrizeName => _lastWonPrizeName;
   bool get isLoading => _isLoading;
   bool get isClaiming => _isClaiming;
-  bool get isSpinning => _isSpinning;
 
+  // 🔥 Getters الجديدة للكود المحفوظ
+  String? get savedCouponCode => _savedCouponCode;
+  String? get savedCouponTitle => _savedCouponTitle;
+  String? get savedCouponType => _savedCouponType;
+  double get savedCouponValue => _savedCouponValue;
+  String? get savedCouponRestaurant => _savedCouponRestaurant;
+  DateTime? get savedCouponExpiry => _savedCouponExpiry;
+  int? get savedRewardId => _savedRewardId;
+  bool get hasSavedCoupon => _savedCouponCode != null && _savedCouponCode!.isNotEmpty;
+
+  // 🔥 Getters للجائزة النشطة
+  Map<String, dynamic>? get activeBoxReward => _activeBoxReward;
+  bool get hasUnclaimedBoxReward => _hasUnclaimedBoxReward;
+
+  bool _isLoading = false;
+  bool _isClaiming = false;
   final String baseUrl = 'https://re.beytei.com/wp-json/restaurant-app/v1';
 
+  // ========== 🔥 الجديد: التحقق من صلاحية الجائزة لمطعم معين ==========
+  Map<String, dynamic> validateBoxRewardForRestaurant(int restaurantId) {
+    if (_activeBoxReward == null) {
+      return {'can_use': false, 'reason': 'لا توجد جائزة نشطة'};
+    }
+    final allowedRestaurantId = _activeBoxReward!['restaurant_id'];
+    final allowedRestaurantName = _activeBoxReward!['restaurant_name'];
+
+    if (allowedRestaurantId == null || allowedRestaurantId == 0) {
+      return {'can_use': true, 'reason': ''};
+    }
+
+    if (allowedRestaurantId == restaurantId) {
+      return {'can_use': true, 'reason': ''};
+    }
+
+    return {
+      'can_use': false,
+      'reason': 'هذه الجائزة مخصصة لـ "$allowedRestaurantName" فقط',
+      'allowed_restaurant_name': allowedRestaurantName,
+      'allowed_restaurant_id': allowedRestaurantId,
+    };
+  }
+
+  // ========== 🔥 الجديد: تطبيق الجائزة على السلة ==========
+  bool applyBoxRewardToCart(double cartTotal, int restaurantId) {
+    if (_activeBoxReward == null) return false;
+
+    final validation = validateBoxRewardForRestaurant(restaurantId);
+    if (!validation['can_use']) {
+      print("⚠️ [BoxReward] الجائزة غير صالحة لهذا المطعم: ${validation['reason']}");
+      return false;
+    }
+
+    final minOrder = double.tryParse(_activeBoxReward!['min_order']?.toString() ?? '0') ?? 0.0;
+    if (cartTotal < minOrder) {
+      print("⚠️ [BoxReward] السلة أقل من الحد الأدنى: $minOrder");
+      return false;
+    }
+
+    _hasUnclaimedBoxReward = true;
+    notifyListeners();
+    return true;
+  }
+
+  // ========== 🔥 الجديد: حساب قيمة الخصم ==========
+  double getBoxRewardDiscountAmount(double cartTotal) {
+    if (_activeBoxReward == null || !_hasUnclaimedBoxReward) return 0.0;
+
+    final type = _activeBoxReward!['type'];
+    final value = double.tryParse(_activeBoxReward!['value']?.toString() ?? '0') ?? 0.0;
+
+    double discount = 0.0;
+    if (type == 'coupon_fixed' || type == 'discount') {
+      discount = value;
+    } else if (type == 'coupon_percent') {
+      discount = cartTotal * (value / 100);
+    } else if (type == 'free_item') {
+      discount = 0;
+    }
+
+    if (discount > cartTotal) discount = cartTotal;
+    return discount;
+  }
+
+  // ========== 🔥 الجديد: الحصول على اسم الجائزة للعرض ==========
+  String get boxRewardDisplayName {
+    if (_activeBoxReward == null) return '';
+    return _activeBoxReward!['title'] ?? 'جائزة الصندوق';
+  }
+
+  // ========== 🔥 الجديد: مسح الجائزة ==========
+  void clearBoxReward() {
+    _activeBoxReward = null;
+    _hasUnclaimedBoxReward = false;
+    notifyListeners();
+  }
+
+  // ========== 🔥 🔥 🔥 الجديد: حفظ الكود محلياً ==========
+  Future<void> saveCouponLocally({
+    required String code,
+    required String title,
+    required String type,
+    required double value,
+    String? restaurant,
+    DateTime? expiry,
+    int? rewardId,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_coupon_code', code);
+      await prefs.setString('saved_coupon_title', title);
+      await prefs.setString('saved_coupon_type', type);
+      await prefs.setDouble('saved_coupon_value', value);
+      if (restaurant != null) await prefs.setString('saved_coupon_restaurant', restaurant);
+      if (expiry != null) await prefs.setInt('saved_coupon_expiry', expiry.millisecondsSinceEpoch);
+      if (rewardId != null) await prefs.setInt('saved_reward_id', rewardId);
+
+      // تحديث المتغيرات
+      _savedCouponCode = code;
+      _savedCouponTitle = title;
+      _savedCouponType = type;
+      _savedCouponValue = value;
+      _savedCouponRestaurant = restaurant;
+      _savedCouponExpiry = expiry;
+      _savedRewardId = rewardId;
+
+      print("💾 [SmartWallet] تم حفظ الكود محلياً: $code");
+      notifyListeners();
+    } catch (e) {
+      print("⚠️ [SmartWallet] خطأ في حفظ الكود: $e");
+    }
+  }
+
+  // ========== 🔥 🔥 🔥 الجديد: تحميل الكود المحفوظ ==========
+  Future<void> loadSavedCoupon() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _savedCouponCode = prefs.getString('saved_coupon_code');
+      _savedCouponTitle = prefs.getString('saved_coupon_title');
+      _savedCouponType = prefs.getString('saved_coupon_type');
+      _savedCouponValue = prefs.getDouble('saved_coupon_value') ?? 0.0;
+      _savedCouponRestaurant = prefs.getString('saved_coupon_restaurant');
+
+      final expiryTimestamp = prefs.getInt('saved_coupon_expiry');
+      if (expiryTimestamp != null) {
+        _savedCouponExpiry = DateTime.fromMillisecondsSinceEpoch(expiryTimestamp);
+      }
+
+      _savedRewardId = prefs.getInt('saved_reward_id');
+
+      // التحقق من انتهاء الصلاحية
+      if (_savedCouponExpiry != null && _savedCouponExpiry!.isBefore(DateTime.now())) {
+        print("⏰ [SmartWallet] الكود منتهي الصلاحية، سيتم حذفه");
+        await clearSavedCoupon();
+      } else if (_savedCouponCode != null) {
+        print("✅ [SmartWallet] تم تحميل الكود المحفوظ: $_savedCouponCode");
+      }
+
+      notifyListeners();
+    } catch (e) {
+      print("⚠️ [SmartWallet] خطأ في تحميل الكود: $e");
+    }
+  }
+
+  // ========== 🔥 🔥 🔥 الجديد: حذف الكود المحفوظ ==========
+  Future<void> clearSavedCoupon() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('saved_coupon_code');
+      await prefs.remove('saved_coupon_title');
+      await prefs.remove('saved_coupon_type');
+      await prefs.remove('saved_coupon_value');
+      await prefs.remove('saved_coupon_restaurant');
+      await prefs.remove('saved_coupon_expiry');
+      await prefs.remove('saved_reward_id');
+
+      _savedCouponCode = null;
+      _savedCouponTitle = null;
+      _savedCouponType = null;
+      _savedCouponValue = 0.0;
+      _savedCouponRestaurant = null;
+      _savedCouponExpiry = null;
+      _savedRewardId = null;
+
+      print("🗑️ [SmartWallet] تم حذف الكود المحفوظ");
+      notifyListeners();
+    } catch (e) {
+      print("⚠️ [SmartWallet] خطأ في حذف الكود: $e");
+    }
+  }
+
+  // ========== جلب حالة المحفظة ==========
   Future<void> fetchWalletStatus(int areaId) async {
+    if (_isLoading) {
+      print("⏳ [SmartWallet] جاري التحميل بالفعل، تجاهل الطلب الجديد");
+      return;
+    }
     _isLoading = true;
     notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
       String? deviceId = prefs.getString('unique_device_id');
+
       if (deviceId == null || deviceId.isEmpty) {
         deviceId = const Uuid().v4();
         await prefs.setString('unique_device_id', deviceId);
-        print("🆕 تم توليد Device ID جديد: $deviceId");
+        print("🆕 [SmartWallet] تم إنشاء Device ID جديد: $deviceId");
       }
 
-      print("📡 جاري الاتصال بـ API المحفظة... device_id=$deviceId | areaId=$areaId");
+      print("📱 [SmartWallet] جلب البيانات - Device: $deviceId, Area: $areaId");
 
       final response = await http.get(
-        Uri.parse('$baseUrl/smart-wallet-guest?device_id=$deviceId&area_id=$areaId'),
+        Uri.parse('$baseUrl/smart-wallet-guest?device_id=$deviceId&area_id=$areaId&_nocache=${DateTime.now().millisecondsSinceEpoch}'),
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
       ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        print("✅ بيانات المحفظة وصلت: $data");
+        print("✅ [SmartWallet] البيانات المستلمة: $data");
 
-        // ✅ الحل الجذري: قراءة جميع البيانات دائماً بغض النظر عن المنطقة
         _currentOrders = data['current_orders'] ?? 0;
-        _accumulatedDiscount = double.tryParse(data['accumulated_discount'].toString()) ?? 0.0;
-        _lastCouponCode = data['active_coupon'];
-        _spinAttempts = data['spin_attempts'] ?? 0;
-        _wonPrize = data['last_won_prize'];
-        _wonCouponCode = data['last_won_coupon'];
+        _accumulatedDiscount = double.tryParse(data['accumulated_discount']?.toString() ?? '0') ?? 0.0;
+        _lastCouponCode = data['active_coupon']?.toString();
+        _silverBoxes = data['silver_boxes'] ?? 0;
+        _goldBoxes = data['gold_boxes'] ?? 0;
+        _diamondBoxes = data['diamond_boxes'] ?? 0;
+        _ordersProgressForGold = data['orders_progress'] ?? 0;
+        _isStreakActive = data['is_streak_active'] ?? false;
+        _streakDaysLeft = data['streak_days_left'] ?? 0;
+        _lastWonPrizeName = data['last_won_prize']?.toString();
 
-        print("✅ تم التحديث: orders=$_currentOrders | cashback=$_accumulatedDiscount | spins=$_spinAttempts");
+        if (data['active_box_reward'] != null) {
+          _activeBoxReward = Map<String, dynamic>.from(data['active_box_reward']);
+          _hasUnclaimedBoxReward = true;
+          print("🎁 [SmartWallet] تم استرجاع جائزة نشطة: ${_activeBoxReward!['title']}");
+
+          // 🔥 حفظ الكود محلياً إذا كان موجوداً
+          if (_activeBoxReward!['coupon_code'] != null && _activeBoxReward!['coupon_code'].toString().isNotEmpty) {
+            final expiryStr = _activeBoxReward!['expires_at'];
+            DateTime? expiry;
+            if (expiryStr != null) {
+              try {
+                expiry = DateTime.parse(expiryStr);
+              } catch (e) {
+                print("⚠️ [SmartWallet] خطأ في تحليل تاريخ الانتهاء: $e");
+              }
+            }
+
+            await saveCouponLocally(
+              code: _activeBoxReward!['coupon_code'].toString(),
+              title: _activeBoxReward!['title']?.toString() ?? 'جائزة الصندوق',
+              type: _activeBoxReward!['type']?.toString() ?? 'discount',
+              value: double.tryParse(_activeBoxReward!['value']?.toString() ?? '0') ?? 0.0,
+              restaurant: _activeBoxReward!['restaurant_name']?.toString(),
+              expiry: expiry,
+              rewardId: _activeBoxReward!['id'] is int ? _activeBoxReward!['id'] : int.tryParse(_activeBoxReward!['id']?.toString() ?? '0'),
+            );
+          }
+        } else {
+          _activeBoxReward = null;
+          _hasUnclaimedBoxReward = false;
+        }
+
+        await _saveToLocalStorage();
+        print("💰 [SmartWallet] الصناديق: فضي=$_silverBoxes, ذهبي=$_goldBoxes, ألماسي=$_diamondBoxes");
       } else {
-        print("❌ خطأ من السيرفر: ${response.statusCode} - ${response.body}");
+        print("❌ [SmartWallet] فشل جلب البيانات: HTTP ${response.statusCode}");
+        await _loadFromLocalStorage();
       }
     } catch (e) {
-      print("⚠️ خطأ في جلب بيانات المحفظة: $e");
+      print("⚠️ [SmartWallet] خطأ في جلب البيانات: $e");
+      await _loadFromLocalStorage();
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
+
+  // ========== حفظ البيانات محلياً ==========
+  Future<void> _saveToLocalStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('silver_boxes', _silverBoxes);
+      await prefs.setInt('gold_boxes', _goldBoxes);
+      await prefs.setInt('diamond_boxes', _diamondBoxes);
+      await prefs.setInt('orders_progress', _ordersProgressForGold);
+      await prefs.setDouble('accumulated_discount', _accumulatedDiscount);
+      await prefs.setInt('current_orders', _currentOrders);
+      if (_lastCouponCode != null) {
+        await prefs.setString('last_coupon_code', _lastCouponCode!);
+      }
+      if (_lastWonPrizeName != null) {
+        await prefs.setString('last_won_prize', _lastWonPrizeName!);
+      }
+      print("💾 [SmartWallet] تم حفظ البيانات محلياً");
+    } catch (e) {
+      print("⚠️ [SmartWallet] خطأ في حفظ البيانات محلياً: $e");
+    }
+  }
+
+  // ========== تحميل البيانات من التخزين المحلي ==========
+  Future<void> _loadFromLocalStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _silverBoxes = prefs.getInt('silver_boxes') ?? 0;
+      _goldBoxes = prefs.getInt('gold_boxes') ?? 0;
+      _diamondBoxes = prefs.getInt('diamond_boxes') ?? 0;
+      _ordersProgressForGold = prefs.getInt('orders_progress') ?? 0;
+      _accumulatedDiscount = prefs.getDouble('accumulated_discount') ?? 0.0;
+      _currentOrders = prefs.getInt('current_orders') ?? 0;
+      _lastCouponCode = prefs.getString('last_coupon_code');
+      _lastWonPrizeName = prefs.getString('last_won_prize');
+
+      // 🔥 تحميل الكود المحفوظ
+      await loadSavedCoupon();
+
+      print("📂 [SmartWallet] تم تحميل البيانات من التخزين المحلي");
+    } catch (e) {
+      print("⚠️ [SmartWallet] خطأ في تحميل البيانات محلياً: $e");
+    }
+  }
+
+  // ========== استلام صندوق فضي ==========
+  Future<void> claimBoxOnDelivery(int areaId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = prefs.getString('unique_device_id') ?? '';
+      final response = await http.post(
+        Uri.parse('$baseUrl/box-system/claim-on-delivery'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'device_id': deviceId, 'area_id': areaId}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _silverBoxes = data['new_silver_count'] ?? _silverBoxes;
+          _ordersProgressForGold = data['orders_progress'] ?? _ordersProgressForGold;
+          _pendingSilverReward = true;
+          notifyListeners();
+          Future.delayed(const Duration(minutes: 2), () {
+            _pendingSilverReward = false;
+            notifyListeners();
+          });
+        }
+      }
+    } catch (e) {
+      print('❌ خطأ في استلام الصندوق: $e');
+    }
+  }
+
+  // ========== فتح صندوق ==========
+  Future<Map<String, dynamic>?> openBox(String boxType, int areaId) async {
+    if (_isOpening) return null;
+    if (boxType == 'silver' && _silverBoxes <= 0) return null;
+    if (boxType == 'gold' && _goldBoxes <= 0) return null;
+    if (boxType == 'diamond' && _diamondBoxes <= 0) return null;
+
+    _isOpening = true;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = prefs.getString('unique_device_id') ?? '';
+      final response = await http.post(
+        Uri.parse('$baseUrl/box-system/open'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'device_id': deviceId,
+          'box_type': boxType,
+          'area_id': areaId,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _silverBoxes = data['remaining_silver'] ?? _silverBoxes;
+          _goldBoxes = data['remaining_gold'] ?? _goldBoxes;
+          _diamondBoxes = data['remaining_diamond'] ?? _diamondBoxes;
+          _currentPrize = data['prize'];
+          _lastWonPrizeName = data['prize']?['title'];
+
+          if (_currentPrize != null) {
+            final prizeType = _currentPrize!['type'] ?? '';
+            if (prizeType == 'coupon_fixed' ||
+                prizeType == 'coupon_percent' ||
+                prizeType == 'discount' ||
+                prizeType == 'free_item') {
+              _activeBoxReward = _currentPrize;
+              _hasUnclaimedBoxReward = true;
+              print("🎁 تم حفظ جائزة الصندوق: ${_currentPrize!['title']}");
+              print("🏪 المطعم المحدد: ${_currentPrize!['restaurant_name'] ?? 'جميع المطاعم'}");
+
+              // 🔥 حفظ الكود محلياً فوراً
+              if (_currentPrize!['coupon_code'] != null && _currentPrize!['coupon_code'].toString().isNotEmpty) {
+                final expiryStr = _currentPrize!['expires_at'];
+                DateTime? expiry;
+                if (expiryStr != null) {
+                  try {
+                    expiry = DateTime.parse(expiryStr);
+                  } catch (e) {
+                    print("⚠️ خطأ في تحليل تاريخ الانتهاء: $e");
+                  }
+                }
+
+                await saveCouponLocally(
+                  code: _currentPrize!['coupon_code'].toString(),
+                  title: _currentPrize!['title']?.toString() ?? 'جائزة الصندوق',
+                  type: prizeType,
+                  value: double.tryParse(_currentPrize!['value']?.toString() ?? '0') ?? 0.0,
+                  restaurant: _currentPrize!['restaurant_name']?.toString(),
+                  expiry: expiry,
+                  rewardId: _currentPrize!['id'] is int ? _currentPrize!['id'] : int.tryParse(_currentPrize!['id']?.toString() ?? '0'),
+                );
+              }
+            }
+          }
+
+          _isOpening = false;
+          notifyListeners();
+          return _currentPrize;
+        }
+      }
+    } catch (e) {
+      print('❌ خطأ في فتح الصندوق: $e');
+    }
+    _isOpening = false;
+    notifyListeners();
+    return null;
+  }
+
+  // ========== المطالبة بالكاش باك ==========
   Future<bool> claimCashback() async {
     _isClaiming = true;
     notifyListeners();
@@ -14076,44 +15077,524 @@ class SmartWalletProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      print("❌ خطأ في claimCashback: $e");
       return false;
     } finally {
       _isClaiming = false;
       notifyListeners();
     }
   }
-  // 🎡 دالة لف عجلة الحظ (للمناطق الأخرى)
-  Future<bool> spinWheel() async {
-    _isSpinning = true;
-    notifyListeners();
+}
 
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final deviceId = prefs.getString('unique_device_id') ?? '';
 
-      final response = await http.post(
-        Uri.parse('$baseUrl/spin-wheel-guest'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'device_id': deviceId}),
-      );
+class BoxOpeningAnimation extends StatefulWidget {
+  final String boxType;
+  final int areaId;
+  const BoxOpeningAnimation({super.key, required this.boxType, required this.areaId});
 
-      final data = json.decode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        _spinAttempts = data['remaining_attempts'] ?? 0;
-        _wonPrize = data['prize_name'];
-        _wonCouponCode = data['coupon_code'];
-        return true;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    } finally {
-      _isSpinning = false;
-      notifyListeners();
+  @override
+  State<BoxOpeningAnimation> createState() => _BoxOpeningAnimationState();
+}
+
+class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
+    with TickerProviderStateMixin {
+  late AnimationController _shakeCtrl;
+  late Animation<double> _shakeAnim;
+  late AnimationController _openCtrl;
+  bool _isOpen = false;
+  bool _showLight = false;
+  Map<String, dynamic>? _prize;
+  final AudioPlayer _player = AudioPlayer();
+
+  // 🔥 الجديد: حالة تطبيق الخصم
+  bool _rewardApplied = false;
+  String? _applicationMessage;
+  bool _applicationSuccess = false;
+
+  Color get _boxColor {
+    switch (widget.boxType) {
+      case 'silver':
+        return const Color(0xFF90A4AE);
+      case 'gold':
+        return const Color(0xFFFFC107);
+      case 'diamond':
+        return const Color(0xFF00BCD4);
+      default:
+        return const Color(0xFF90A4AE);
     }
   }
-}
+
+  String get _boxTitle {
+    switch (widget.boxType) {
+      case 'silver':
+        return 'الصندوق الفضي 🥈';
+      case 'gold':
+        return 'الصندوق الذهبي 🥇';
+      case 'diamond':
+        return 'الصندوق الألماسي 💎';
+      default:
+        return 'الصندوق';
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _shakeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _shakeAnim = Tween<double>(begin: -0.08, end: 0.08)
+        .animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.easeInOut))
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) _shakeCtrl.reverse();
+        if (status == AnimationStatus.dismissed && !_isOpen) _shakeCtrl.forward();
+      });
+    _openCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    _startOpeningSequence();
+  }
+
+  Future<void> _startOpeningSequence() async {
+    await HapticFeedback.mediumImpact();
+    await Future.delayed(const Duration(milliseconds: 200));
+    await HapticFeedback.vibrate();
+
+    try {
+      await _player.play(AssetSource('sounds/tick.mp3'));
+    } catch (_) {}
+    _shakeCtrl.forward();
+
+    await Future.delayed(const Duration(seconds: 3));
+    _shakeCtrl.stop();
+    if (!mounted) return;
+    setState(() => _showLight = true);
+    _openCtrl.forward();
+
+    // 4. جلب الجائزة من السيرفر
+    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
+    final prize = await wallet.openBox(widget.boxType, widget.areaId);
+
+    if (!mounted) return;
+    setState(() {
+      _prize = prize;
+      _isOpen = true;
+    });
+
+    // 🔥 الجديد: محاولة تطبيق الجائزة على السلة
+    if (prize != null) {
+      await _tryApplyBoxReward(prize);
+    }
+
+    try {
+      await _player.play(AssetSource('sounds/open.mp3'));
+    } catch (_) {}
+    await HapticFeedback.heavyImpact();
+  }
+
+  // 🔥 الجديد: دالة محاولة تطبيق الجائزة
+  Future<void> _tryApplyBoxReward(Map<String, dynamic> prize) async {
+    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
+    final cart = Provider.of<CartProvider>(context, listen: false);
+
+    // 1. التحقق من وجود عناصر في السلة
+    if (cart.items.isEmpty) {
+      setState(() {
+        _rewardApplied = false;
+        _applicationSuccess = false;
+        _applicationMessage = 'السلة فارغة، سيتم تطبيق الجائزة عند إضافة منتجات';
+      });
+      return;
+    }
+
+    // 2. التحقق من صلاحية المطعم
+    final currentRestaurantId = cart.items.first.categoryId;
+    final validation = wallet.validateBoxRewardForRestaurant(currentRestaurantId);
+
+    if (!validation['can_use']) {
+      setState(() {
+        _rewardApplied = false;
+        _applicationSuccess = false;
+        _applicationMessage = validation['reason'];
+      });
+      return;
+    }
+
+    // 3. حساب قيمة الخصم
+    final discountAmount = wallet.getBoxRewardDiscountAmount(cart.totalPrice);
+
+    // 4. تطبيق الخصم على السلة
+    cart.applyBoxReward(
+      amount: discountAmount,
+      title: prize['title'] ?? 'جائزة الصندوق',
+      source: _boxTitle,
+      restaurantId: prize['restaurant_id'],
+      restaurantName: prize['restaurant_name'],
+    );
+
+    setState(() {
+      _rewardApplied = true;
+      _applicationSuccess = true;
+      _applicationMessage = 'تم تطبيق "${prize['title']}" على سلتك!';
+    });
+
+    // 5. إظهار SnackBar تأكيد
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('🎉 ${_applicationMessage!}'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _shakeCtrl.dispose();
+    _openCtrl.dispose();
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black87,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            ...List.generate(20, (i) => _buildStar(i)),
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(_boxTitle,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 40),
+                  AnimatedBuilder(
+                    animation: _shakeAnim,
+                    builder: (_, child) => Transform.rotate(
+                      angle: _isOpen ? 0 : _shakeAnim.value,
+                      child: child,
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        if (_showLight)
+                          AnimatedBuilder(
+                            animation: _openCtrl,
+                            builder: (_, __) => Container(
+                              width: 300 * _openCtrl.value,
+                              height: 300 * _openCtrl.value,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: RadialGradient(colors: [
+                                  _boxColor.withOpacity(0.7),
+                                  Colors.transparent,
+                                ]),
+                              ),
+                            ),
+                          ),
+                        Container(
+                          width: 180,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            color: _boxColor,
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _boxColor.withOpacity(0.6),
+                                blurRadius: 30,
+                                spreadRadius: 5,
+                              ),
+                            ],
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                _boxColor,
+                                _boxColor.withOpacity(0.7),
+                              ],
+                            ),
+                          ),
+                          child: Icon(
+                            widget.boxType == 'silver'
+                                ? Icons.inventory_2
+                                : widget.boxType == 'gold'
+                                ? Icons.workspace_premium
+                                : Icons.diamond,
+                            size: 80,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 50),
+                  if (_isOpen && _prize != null)
+                    AnimatedBuilder(
+                      animation: _openCtrl,
+                      builder: (_, __) => Transform.translate(
+                        offset: Offset(0, -50 * _openCtrl.value),
+                        child: Opacity(
+                          opacity: _openCtrl.value,
+                          child: _buildPrizeCard(),
+                        ),
+                      ),
+                    )
+                  else if (_isOpen && _prize == null)
+                    const Text('جاري التحميل...',
+                        style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 20),
+
+                  // 🔥 الجديد: رسالة حالة التطبيق
+                  if (_applicationMessage != null)
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 30),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: _applicationSuccess
+                            ? Colors.green.withOpacity(0.2)
+                            : Colors.orange.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _applicationSuccess ? Colors.green : Colors.orange,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _applicationSuccess
+                                ? Icons.check_circle
+                                : Icons.info_outline,
+                            color: _applicationSuccess ? Colors.green : Colors.orange,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _applicationMessage!,
+                              style: TextStyle(
+                                color: _applicationSuccess
+                                    ? Colors.green.shade100
+                                    : Colors.orange.shade100,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  const SizedBox(height: 20),
+                  if (_isOpen)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 40),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: Text(
+                            _rewardApplied ? 'إغلاق والذهاب للسلة 🛒' : 'إغلاق',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStar(int i) {
+    final random = Random();
+    return Positioned(
+      left: random.nextDouble() * MediaQuery.of(context).size.width,
+      top: random.nextDouble() * MediaQuery.of(context).size.height,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: Duration(seconds: 1 + random.nextInt(3)),
+        builder: (_, value, child) => Opacity(
+          opacity: value,
+          child: Transform.scale(scale: value, child: child),
+        ),
+        child: const Icon(Icons.star, color: Colors.white, size: 12),
+      ),
+    );
+  }
+
+  Widget _buildPrizeCard() {
+    final type = _prize!['type'] ?? 'discount';
+    final title = _prize!['title'] ?? 'مبروك!';
+    final rawValue = _prize!['value'];
+    final num value = rawValue != null ? (num.tryParse(rawValue.toString()) ?? 0) : 0;
+    final restaurantName = _prize!['restaurant_name'];
+    final couponCode = _prize!['coupon_code']; // 🔥 كود الخصم
+    final isLimited = _prize!['is_limited'] ?? false;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 30),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(color: _boxColor.withOpacity(0.5), blurRadius: 20),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.celebration, size: 50, color: Colors.amber),
+          const SizedBox(height: 10),
+          Text('🎉 مبروك!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _boxColor)),
+          const SizedBox(height: 8),
+          Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+
+          // 🔥 عرض اسم المطعم المحدد
+          if (restaurantName != null && restaurantName.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.store, color: Colors.blue.shade700, size: 16),
+                  const SizedBox(width: 6),
+                  Text('مخصص من: $restaurantName', style: TextStyle(color: Colors.blue.shade800, fontSize: 12, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
+              child: const Text('✅ صالح لجميع المطاعم', style: TextStyle(color: Colors.grey, fontSize: 11)),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+
+          // عرض القيمة حسب النوع
+          if (type == 'discount' || type == 'coupon_percent')
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Text('خصم ${value.toInt()}%', style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.bold, fontSize: 18)),
+            ),
+          if (type == 'coupon_fixed')
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Text('${NumberFormat('#,###', 'en_US').format(value)} د.ع', style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.bold, fontSize: 18)),
+            ),
+          if (type == 'free_item')
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.purple.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.purple.shade200),
+              ),
+              child: Text('🎁 $title', style: TextStyle(color: Colors.purple.shade800, fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+
+          // 🔥 🔥 🔥 الجديد: عرض كود الخصم بشكل مميز
+          if (couponCode != null && couponCode.isNotEmpty) ...[
+            const SizedBox(height: 15),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.amber.shade100, Colors.orange.shade100],
+                ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade400, width: 2),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.card_giftcard, color: Colors.amber.shade800, size: 20),
+                      const SizedBox(width: 8),
+                      Text('كود الخصم الخاص بك', style: TextStyle(fontSize: 14, color: Colors.amber.shade900, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.shade300),
+                    ),
+                    child: SelectableText(
+                      couponCode,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 3,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('سيتم تطبيقه تلقائياً في سلتك', style: TextStyle(fontSize: 11, color: Colors.amber.shade800)),
+                ],
+              ),
+            ),
+          ],
+
+          if (isLimited) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
+              child: const Text('🔥 جائزة محدودة العدد', style: TextStyle(color: Colors.red, fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }}
+
+
 
 
 class CustomerChatPage extends StatefulWidget {
