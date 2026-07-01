@@ -4368,7 +4368,7 @@ class ApiService {
     });
   }
 
-  Future<List<FoodItem>> getOnSaleItems() => _getProducts('on_sale=true&per_page=20', 'onsale_items');
+  Future<List<FoodItem>> getOnSaleItems() => _getProducts('on_sale=true&per_page=100', 'onsale_items');
 
   Future<List<FoodItem>> searchProducts({required String query}) => _getProducts('search=$query&per_page=20', 'search_$query');
 
@@ -10454,6 +10454,9 @@ class ModernVerticalRestaurantCard extends StatelessWidget {
 // =======================================================================
 // --- شاشة الزبون الرئيسية (HomeScreen) ---
 // =======================================================================
+// =======================================================================
+// --- شاشة الزبون الرئيسية (HomeScreen) - النسخة النهائية المحسّنة ---
+// =======================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -10473,15 +10476,39 @@ class HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    // ✅ الحل الجذري: قراءة المنطقة فوراً قبل بناء الواجهة لتجنب ظهور "يرجى تحديد منطقة"
+    _loadAreaFromPrefs();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
+  }
+
+  // ✅ دالة جديدة: قراءة المنطقة فوراً من الذاكرة المحلية (بأقصى سرعة)
+  Future<void> _loadAreaFromPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final areaId = prefs.getInt('selectedAreaId');
+    final areaName = prefs.getString('selectedAreaName');
+    if (areaId != null) {
+      setState(() {
+        _selectedAreaId = areaId;
+        _selectedAreaName = areaName;
+      });
+    }
   }
 
   Future<void> _loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
 
-    _selectedAreaId = prefs.getInt('selectedAreaId');
-    _selectedAreaName = prefs.getString('selectedAreaName');
+    // ✅ تعيين القيم فوراً قبل أي await طويل (حماية إضافية)
+    final areaId = prefs.getInt('selectedAreaId');
+    final areaName = prefs.getString('selectedAreaName');
+
+    if (areaId != null && _selectedAreaId == null) {
+      setState(() {
+        _selectedAreaId = areaId;
+        _selectedAreaName = areaName;
+      });
+    }
 
     Provider.of<DeliveryConfigProvider>(context, listen: false).fetchAndCacheConfig();
 
@@ -10490,24 +10517,12 @@ class HomeScreenState extends State<HomeScreen> {
       provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
       provider.fetchOffers(_selectedAreaId!);
 
-      // 🔥 1. استدعاء بيانات الحملة المميزة للتحقق من المنطقة (Geo-Fencing)
+      // 🔥 استدعاء بيانات الحملة المميزة (بدون await لتسريع الواجهة)
       final premiumProvider = Provider.of<PremiumCampaignProvider>(context, listen: false);
-      await premiumProvider.fetchCampaignConfig(_selectedAreaId!);
-
-      // 🔥 2. عرض النافذة المنبثقة إذا كانت مستوفية الشروط الجغرافية ولم تظهر مسبقاً
-      if (premiumProvider.shouldShowPopup && mounted) {
-        premiumProvider.markPopupAsShown(); // لمنع الإزعاج وتكرار الظهور
-        showDialog(
-          context: context,
-          builder: (dialogContext) => PremiumPromoDialog(
-            config: premiumProvider.config!,
-            parentContext: context, // 🔥 نمرر سياق الشاشة الرئيسية بدلاً من النافذة
-          ),
-        );
-      }
+      premiumProvider.fetchCampaignConfig(_selectedAreaId!); // 👈 إزالة await
     }
-    setState(() {});
   }
+
   void _onSearchSubmitted(String query) {
     if (query.isNotEmpty && _selectedAreaId != null) {
       Navigator.of(context).push(MaterialPageRoute(
@@ -10520,7 +10535,6 @@ class HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
       appBar: _buildProMaxAppBar(),
-      // 🔥 تم الحل هنا: استخدام Consumer متداخل بدلاً من Consumer2 لتجنب أخطاء الأنواع
       body: Consumer<CustomerProvider>(
         builder: (context, provider, child) {
           return Consumer<PremiumCampaignProvider>(
@@ -10584,7 +10598,7 @@ class HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                           ),
-                          child: _buildTopCategories(premiumProvider.config != null), // نمرر حالة العرض
+                          child: _buildTopCategories(premiumProvider.config != null),
                         ),
                         height: 95.0,
                       ),
@@ -10598,30 +10612,61 @@ class HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 20),
 
                           // ==========================================
-                          // 🔥 القسم الأول: العروض الحصرية (تم تصغيره وتوسيط العنوان)
+                          // 🔥 القسم الأول: العروض الحصرية
                           // ==========================================
                           if (provider.activeOffers.isNotEmpty && (_activeMainCategory == 'all' || _activeMainCategory == 'offers')) ...[
-                            const Center(
-                              child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
-                            ),
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              height: 180, // تصغير الارتفاع ليكون أنيق وملموم
-                              child: ListView.builder(
-                                scrollDirection: Axis.horizontal,
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                itemCount: provider.activeOffers.length,
-                                itemBuilder: (ctx, i) => Container(
-                                  width: 140, // تصغير عرض البطاقة
-                                  margin: const EdgeInsets.only(left: 12),
-                                  child: ModernOfferCard(
+                            // 🎯 الحالة 1: في الصفحة الرئيسية (all) - عرض أفقي قابل للتمرير بالكامل
+                            if (_activeMainCategory == 'all') ...[
+                              const Center(
+                                child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                height: 200, // ارتفاع مناسب للبطاقات
+                                child: ListView.builder(
+                                  scrollDirection: Axis.horizontal,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  itemCount: provider.activeOffers.length,
+                                  itemBuilder: (ctx, i) => Container(
+                                    width: 150,
+                                    margin: const EdgeInsets.only(left: 12),
+                                    child: ModernOfferCard(
+                                      offer: provider.activeOffers[i],
+                                      allStores: allStores,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 25),
+                            ],
+
+                            // 🎯 الحالة 2: عند الضغط على أيقونة "عروض" - عرض جميع العروض في Grid
+                            if (_activeMainCategory == 'offers') ...[
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
+                                child: Text("جميع الوجبات المخفضة 🔥", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                              ),
+                              if (provider.activeOffers.isEmpty)
+                                const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد عروض حالياً.")))
+                              else
+                                GridView.builder(
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  shrinkWrap: true,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    childAspectRatio: 0.70,
+                                    crossAxisSpacing: 10,
+                                    mainAxisSpacing: 10,
+                                  ),
+                                  itemCount: provider.activeOffers.length,
+                                  itemBuilder: (ctx, i) => ModernOfferCard(
                                     offer: provider.activeOffers[i],
                                     allStores: allStores,
                                   ),
                                 ),
-                              ),
-                            ),
-                            const SizedBox(height: 25),
+                              const SizedBox(height: 30),
+                            ],
                           ],
 
                           // ==========================================
@@ -10634,14 +10679,23 @@ class HomeScreenState extends State<HomeScreen> {
 
                               if (premiumStores.isEmpty) return const SizedBox.shrink();
 
-                              // تحديد نص الخصم ليظهر في البطاقة
+                              // 🔥 قراءة قيمة الخصم الحقيقية
+                              double discountValue = double.tryParse(premiumProvider.config!['discount_value'].toString()) ?? 0.0;
+                              String discountType = premiumProvider.config!['discount_type'] ?? 'percent';
+
+                              // 🔥 هل الخصم صفر؟ (الهدية المجانية لا تُعتبر صفراً)
+                              bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item');
+
+                              // 🔥 تجهيز النص حسب الحالة
                               String discountText = "";
-                              if (premiumProvider.config!['discount_type'] == 'percent') {
-                                discountText = "خصم ${premiumProvider.config!['discount_value']}%";
-                              } else if (premiumProvider.config!['discount_type'] == 'fixed') {
-                                discountText = "خصم ${NumberFormat('#,###').format(premiumProvider.config!['discount_value'])} د.ع";
-                              } else {
-                                discountText = "هدية مجانية 🎁";
+                              if (!isZeroDiscount) {
+                                if (discountType == 'percent') {
+                                  discountText = "خصم ${discountValue.toInt()}%";
+                                } else if (discountType == 'fixed') {
+                                  discountText = "خصم ${NumberFormat('#,###').format(discountValue)} د.ع";
+                                } else {
+                                  discountText = "هدية مجانية 🎁";
+                                }
                               }
 
                               return Column(
@@ -10662,7 +10716,7 @@ class HomeScreenState extends State<HomeScreen> {
                                           return Container(
                                             width: 150,
                                             margin: const EdgeInsets.only(left: 12),
-                                            child: _buildPremiumStoreCard(store, discountText, context),
+                                            child: _buildPremiumStoreCard(store, discountText, context, isZeroDiscount: isZeroDiscount),
                                           );
                                         }
                                     ),
@@ -10714,9 +10768,16 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🔥 ويدجت بناء بطاقة المطعم للحملة التسويقية (تصميم خاص)
-  Widget _buildPremiumStoreCard(Restaurant restaurant, String discountText, BuildContext context) {
+  // 🔥 ويدجت بناء بطاقة المطعم للحملة التسويقية (مع دعم خصم 0 = صندوق الهدايا)
+  Widget _buildPremiumStoreCard(Restaurant restaurant, String discountText, BuildContext context, {bool isZeroDiscount = false}) {
     bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
+
+    // 🔥 تغيير الألوان والأيقونة حسب نوع الرسالة
+    Color badgeBgColor = isZeroDiscount ? Colors.amber.shade50 : Colors.red.shade50;
+    Color badgeBorderColor = isZeroDiscount ? Colors.amber.shade400 : Colors.red.shade400;
+    Color badgeTextColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
+    IconData badgeIcon = isZeroDiscount ? Icons.inventory_2 : Icons.local_fire_department;
+    String displayText = isZeroDiscount ? "اطلب وربح  🎁" : discountText;
 
     return GestureDetector(
       onTap: () {
@@ -10730,7 +10791,7 @@ class HomeScreenState extends State<HomeScreen> {
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         elevation: 4,
-        shadowColor: Colors.red.withOpacity(0.3),
+        shadowColor: (isZeroDiscount ? Colors.amber : Colors.red).withOpacity(0.3),
         child: Stack(
           children: [
             Column(
@@ -10761,13 +10822,20 @@ class HomeScreenState extends State<HomeScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: Colors.red.shade50,
+                            color: badgeBgColor,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.red.shade400, width: 1),
+                            border: Border.all(color: badgeBorderColor, width: 1),
                           ),
-                          child: Text(
-                            discountText,
-                            style: TextStyle(color: Colors.red.shade700, fontSize: 10, fontWeight: FontWeight.bold),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(badgeIcon, color: badgeTextColor, size: 12),
+                              const SizedBox(width: 3),
+                              Text(
+                                displayText,
+                                style: TextStyle(color: badgeTextColor, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ],
                           ),
                         )
                       ],
@@ -10819,7 +10887,8 @@ class HomeScreenState extends State<HomeScreen> {
       case 'grocery': return "الماركت والبقالة";
       case 'meat': return "القصابة واللحوم";
       case 'restaurant': return "المطاعم المتاحة";
-      case 'premium': return "المطاعم المميزة 🌟"; // 🔥 إضافة عنوان القسم الجديد
+      case 'premium': return "المطاعم المميزة 🌟";
+      case 'offers': return "جميع العروض الحصرية 🔥";
       default: return "أفضل المتاجر";
     }
   }
@@ -10908,7 +10977,7 @@ class HomeScreenState extends State<HomeScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 5.0),
       child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal, // لجعل الأيقونات قابلة للتمرير في الشاشات الصغيرة
+        scrollDirection: Axis.horizontal,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -10918,7 +10987,7 @@ class HomeScreenState extends State<HomeScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4.0),
                 child: _buildCategoryImage(
-                  title: "مميزة 🌟",
+                  title: "اربح وياطلبك 🌟",
                   imagePath: 'assets/icon/premium_icon.png',
                   isSelected: _activeMainCategory == 'premium',
                   onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'premium' ? 'all' : 'premium'),
@@ -11029,7 +11098,9 @@ class HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// الكلاس المساعد للشريط الثابت
+// =======================================================================
+// --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
+// =======================================================================
 class _StickyTopCategoriesDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
   final double height;
@@ -11052,9 +11123,7 @@ class _StickyTopCategoriesDelegate extends SliverPersistentHeaderDelegate {
     return true;
   }
 }
-// =======================================================================
-// --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
-// =======================================================================
+
 
 
 // =======================================================================
@@ -11803,55 +11872,82 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
             // 🔥 شريط التنبيه الذكي للمنيو
+            // 🔥 شريط التنبيه الذكي للمنيو (يدعم الخصم 0 = رسالة الصناديق)
             SliverToBoxAdapter(
               child: Consumer<PremiumCampaignProvider>(
-                  builder: (context, premium, child) {
-                    if (premium.config == null) return const SizedBox.shrink();
+                builder: (context, premium, child) {
+                  if (premium.config == null) return const SizedBox.shrink();
+                  final includedIds = List<int>.from(premium.config!['included_restaurants'] ?? []);
+                  if (!includedIds.contains(widget.restaurant.id)) return const SizedBox.shrink();
 
-                    final includedIds = List<int>.from(premium.config!['included_restaurants'] ?? []);
-                    if (!includedIds.contains(widget.restaurant.id)) return const SizedBox.shrink();
+                  // 🔥 1. قراءة قيمة الخصم الحقيقية من السيرفر
+                  double discountValue = double.tryParse(premium.config!['discount_value'].toString()) ?? 0.0;
+                  String discountType = premium.config!['discount_type'] ?? 'percent';
 
-                    String discountText = "";
-                    if (premium.config!['discount_type'] == 'percent') {
-                      discountText = "خصم ${premium.config!['discount_value']}%";
-                    } else if (premium.config!['discount_type'] == 'fixed') {
-                      discountText = "خصم ${NumberFormat('#,###', 'ar_IQ').format(premium.config!['discount_value'])} د.ع";
+                  // 🔥 2. هل الخصم صفر؟ (نعامل الهدية المجانية كخصم فعلي وليس صفر)
+                  bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item');
+
+                  // 🔥 3. تجهيز النص حسب الحالة
+                  String discountText = "";
+                  if (!isZeroDiscount) {
+                    if (discountType == 'percent') {
+                      discountText = "خصم ${discountValue.toInt()}%";
+                    } else if (discountType == 'fixed') {
+                      discountText = "خصم ${NumberFormat('#,###', 'ar_IQ').format(discountValue)} د.ع";
                     } else {
                       discountText = "هدية مجانية 🎁";
                     }
-
-                    return Container(
-                      margin: const EdgeInsets.fromLTRB(15, 15, 15, 5),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          border: Border.all(color: Colors.red.shade300, width: 1.5),
-                          borderRadius: BorderRadius.circular(12)
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.local_fire_department, color: Colors.red.shade700, size: 28),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "هذا المطعم مشمول بـ $discountText!",
-                                  style: TextStyle(color: Colors.red.shade800, fontWeight: FontWeight.bold, fontSize: 14),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  "اطلب الآن والخصم يطبق تلقائياً في السلة.",
-                                  style: TextStyle(color: Colors.red.shade600, fontSize: 11),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
                   }
+
+                  // 🔥 4. تغيير الألوان والأيقونة حسب نوع الرسالة
+                  IconData boxIcon = isZeroDiscount ? Icons.inventory_2_outlined : Icons.local_fire_department;
+                  Color mainColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
+                  Color subColor  = isZeroDiscount ? Colors.amber.shade700 : Colors.red.shade600;
+                  Color bgColor   = isZeroDiscount ? Colors.amber.shade50  : Colors.red.shade50;
+                  Color borderColor = isZeroDiscount ? Colors.amber.shade300 : Colors.red.shade300;
+
+                  return Container(
+                    margin: const EdgeInsets.fromLTRB(15, 15, 15, 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: bgColor,
+                      border: Border.all(color: borderColor, width: 1.5),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(boxIcon, color: mainColor, size: 28),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // 🔥 العنوان الرئيسي (يتغير حسب الحالة)
+                              Text(
+                                isZeroDiscount
+                                    ? "هذا المطعم مشمول بالعروض الصندوك 🎁"
+                                    : "هذا المطعم مشمول بـخصم $discountText!",
+                                style: TextStyle(
+                                  color: mainColor,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              // 🔥 النص الثانوي (يتغير حسب الحالة)
+                              Text(
+                                isZeroDiscount
+                                    ? "على طلبك القادم اطلب هسه واربح صندوق الهدايا!"
+                                    : "اطلب الآن والخصم يطبق تلقائياً في السلة.",
+                                style: TextStyle(color: subColor, fontSize: 11),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
             SliverPersistentHeader(

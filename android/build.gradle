@@ -11,7 +11,6 @@ allprojects {
         mavenCentral()
 
         // 2. إعداد مستودع Mapbox الآمن
-        // يتم جلب كلمة المرور من ملف local.properties لضمان عدم رفض GitHub للرفع
         maven {
             url 'https://api.mapbox.com/downloads/v2/releases/maven'
             authentication {
@@ -25,23 +24,15 @@ allprojects {
     }
 }
 
-/**
- * إعداد مجلد البناء (Build Directory).
- * تم تعديل المسار ليكون داخل مجلد المشروع لضمان عثور Flutter على الـ APK الناتج تلقائياً.
- */
 rootProject.layout.buildDirectory.set(rootProject.file("${rootProject.projectDir}/../build"))
 
+// الكتلة الأولى: إعدادات البناء والمكتبات (تم حذف evaluationDependsOn منها)
 subprojects {
     // تعيين مجلد البناء لكل مشروع فرعي (مثل المكتبات)
     project.layout.buildDirectory.set(rootProject.layout.buildDirectory.dir(project.name))
 
-    // ضمان ترتيب التقييم الصحيح
-    project.evaluationDependsOn(':app')
-
     /**
-     * إعدادات Kotlin:
-     * يتم تطبيقها فور اكتشاف وجود إضافة Kotlin لضمان استخدام JVM 11
-     * مما يوفر التوافق مع الكود الحديث.
+     * إعدادات Kotlin
      */
     project.plugins.withId('org.jetbrains.kotlin.android') {
         project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
@@ -52,9 +43,7 @@ subprojects {
     }
 
     /**
-     * إعدادات Android:
-     * تطبيق compileSdkVersion 36 لجميع المكتبات لضمان عدم حدوث تعارض
-     * وتحديد Namespace تلقائياً للمكتبات التي تفتقر إليه.
+     * إعدادات Android
      */
     project.plugins.whenPluginAdded { plugin ->
         if (plugin.class.name.contains("com.android.build.gradle.AppPlugin") ||
@@ -69,7 +58,12 @@ subprojects {
     }
 }
 
-// مهمة التنظيف (Clean Task) لضمان مسح المجلدات القديمة عند الحاجة
+// الكتلة الثانية المنفصلة تماماً (هذا هو الحل الجذري لمشكلة VM snapshot invalid)
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+// مهمة التنظيف
 tasks.register("clean", Delete) {
     delete rootProject.layout.buildDirectory
 }
