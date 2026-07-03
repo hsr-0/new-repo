@@ -29,9 +29,6 @@ import 'package:cosmetic_store/taxi/lib/presentation/components/dialog/app_dialo
 import 'package:cosmetic_store/taxi/lib/presentation/components/snack_bar/show_custom_snackbar.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/home/widgets/bottomsheet/ride_distance_warning_bottom_sheet.dart';
 
-// ملاحظة: إذا أردت تمرير البيانات مباشرة لكنترولر الرحلة، يمكنك تفعيل هذا الاستيراد:
-// import 'package:cosmetic_store/taxi/lib/presentation/controllers/ride_map_controller.dart';
-
 class HomeController extends GetxController {
   HomeRepo homeRepo;
   AppLocationController appLocationController;
@@ -39,6 +36,19 @@ class HomeController extends GetxController {
 
   TextEditingController amountController = TextEditingController();
   TextEditingController noteController = TextEditingController();
+
+  // ==========================================
+  // 🔥 متغيرات نظام الخصومات (Promo Code)
+  // ==========================================
+  TextEditingController promoCodeController = TextEditingController();
+  bool isCouponApplied = false;
+  String appliedCouponCode = '';
+  String appliedCouponId = '';
+  double discountAmount = 0.0;
+  double originalAmount = 0.0; // حفظ السعر الأصلي قبل الخصم
+  List<dynamic> availableCoupons = [];
+  // ==========================================
+
   double mainAmount = 0;
   String email = "";
   bool isLoading = true;
@@ -60,8 +70,14 @@ class HomeController extends GetxController {
   bool isKycVerified = true;
   bool isKycPending = false;
 
-  // 🔥 قائمة لحفظ السائقين القريبين (السيارات والتكتك) لتمريرها للخريطة
+  // قائمة لحفظ السائقين القريبين
   List<dynamic> nearbyDrivers = [];
+
+  @override
+  void onClose() {
+    promoCodeController.dispose();
+    super.onClose();
+  }
 
   void updatePassenger(bool isIncrement) {
     if (isIncrement) {
@@ -73,6 +89,7 @@ class HomeController extends GetxController {
   }
 
   GeneralSettingResponseModel generalSettingResponseModel = GeneralSettingResponseModel();
+
   Future<void> initialData({bool shouldLoad = true}) async {
     isLoading = shouldLoad;
     defaultCurrency = homeRepo.apiClient.getCurrency();
@@ -81,8 +98,10 @@ class HomeController extends GetxController {
     email = homeRepo.apiClient.getUserEmail();
     generalSettingResponseModel = homeRepo.apiClient.getGeneralSettings();
     minimumDistance = double.tryParse(homeRepo.apiClient.getMinimumRideDistance()) ?? 0.0;
+
     fetchLocation();
     await loadData(shouldLoad: shouldLoad);
+
     if (selectedLocations.length > 1) {
       await getRideFare();
     }
@@ -90,15 +109,15 @@ class HomeController extends GetxController {
     update();
   }
 
-  // Start location permission check but don't await yet
   Future<void> fetchLocation() async {
     bool hasPermission = await MyUtils.checkAppLocationPermission(onsuccess: () {
       initialData();
     });
-    printX(hasPermission);
+
     if (hasPermission) {
       currentPosition = await appLocationController.getCurrentPosition();
       currentAddress = appLocationController.currentAddress;
+
       if (selectedLocations.length != 2) {
         SelectedLocationInfo location = SelectedLocationInfo(
           address: currentAddress,
@@ -109,12 +128,11 @@ class HomeController extends GetxController {
         addLocationAtIndex(location, 0);
       }
 
-      // 🚀 جلب السيارات فور معرفة موقع الزبون عند فتح التطبيق
       if (currentPosition != null) {
         fetchNearbyDrivers(currentPosition!.latitude, currentPosition!.longitude);
       }
 
-      update(); // Ensure UI reflects added location
+      update();
     }
   }
 
@@ -124,7 +142,6 @@ class HomeController extends GetxController {
     try {
       ResponseModel responseModel = await homeRepo.getData();
       if (responseModel.statusCode == 200) {
-        printX(responseModel.responseJson);
         DashBoardResponseModel model = DashBoardResponseModel.fromJson((responseModel.responseJson));
         if (model.status == MyStrings.success && model.data != null) {
           appServicesList = model.data?.services ?? [];
@@ -134,9 +151,7 @@ class HomeController extends GetxController {
           serviceImagePath = model.data?.serviceImagePath ?? '';
           gatewayImagePath = model.data?.gatewayImagePath ?? '';
           userImagePath = model.data?.userImagePath ?? '';
-          printX(
-            "RunningRideService.instance.isRunningShow ${RunningRideService.instance.isRunningShow}",
-          );
+
           if (model.data?.runningRide != null && RunningRideService.instance.isRunningShow == false) {
             RunningRideService.instance.setIsRunning(true);
             runningRide = model.data!.runningRide!;
@@ -154,17 +169,12 @@ class HomeController extends GetxController {
               onClose: () {
                 Get.closeAllSnackbars();
                 Get.back();
-                printX(
-                  "RunningRideService.instance.isRunningShow ${RunningRideService.instance.isRunningShow}",
-                );
               },
             );
           }
           update();
         } else {
-          CustomSnackBar.error(
-            errorList: model.message ?? [MyStrings.somethingWentWrong],
-          );
+          CustomSnackBar.error(errorList: model.message ?? [MyStrings.somethingWentWrong]);
         }
       } else {
         CustomSnackBar.error(errorList: [responseModel.message]);
@@ -182,6 +192,12 @@ class HomeController extends GetxController {
     isSubmitLoading = true;
     update();
     try {
+      // إرسال تنبيه في الملاحظات للسيرفر بوجود خصم كإجراء احتياطي
+      String finalNote = noteController.text;
+      if (isCouponApplied) {
+        finalNote = "$finalNote [تم تطبيق كود خصم: $appliedCouponCode]";
+      }
+
       ResponseModel responseModel = await homeRepo.createRide(
         data: CreateRideRequestModel(
           serviceId: selectedService.id!,
@@ -194,8 +210,8 @@ class HomeController extends GetxController {
           isIntercity: rideFare.rideType?.toString() ?? '',
           pickUpDateTime: DateConverter.estimatedDate(DateTime.now()),
           numberOfPassenger: passenger.toString(),
-          note: noteController.text,
-          offerAmount: mainAmount.toString(),
+          note: finalNote,
+          offerAmount: mainAmount.toString(), // يتم إرسال السعر المخفض
           paymentType: selectedPaymentMethod.id == "-9" ? "2" : '1',
           gatewayCurrencyId: selectedPaymentMethod.id!,
         ),
@@ -203,7 +219,6 @@ class HomeController extends GetxController {
       if (responseModel.statusCode == 200) {
         CreateRideResponseModel model = CreateRideResponseModel.fromJson((responseModel.responseJson));
         if (model.status == MyStrings.success) {
-          printX(model.remark);
           clearData();
           if (Get.currentRoute != RouteHelper.rideDetailsScreen) {
             Get.toNamed(
@@ -212,10 +227,7 @@ class HomeController extends GetxController {
             );
           }
         } else {
-          printD(model.toJson());
-          CustomSnackBar.error(
-            errorList: model.message ?? [MyStrings.somethingWentWrong],
-          );
+          CustomSnackBar.error(errorList: model.message ?? [MyStrings.somethingWentWrong]);
         }
       } else {
         CustomSnackBar.error(errorList: [responseModel.message]);
@@ -272,9 +284,7 @@ class HomeController extends GetxController {
           }
         } else {
           rideFare = RideFareModel();
-          CustomSnackBar.error(
-            errorList: model.message ?? [MyStrings.somethingWentWrong],
-          );
+          CustomSnackBar.error(errorList: model.message ?? [MyStrings.somethingWentWrong]);
         }
       } else {
         isPriceLocked = true;
@@ -314,44 +324,32 @@ class HomeController extends GetxController {
     }
     update();
 
-    // 🚀 جلب السيارات فوراً إذا قام الزبون بتغيير "نقطة الانطلاق" (index == 0)
     if (index == 0 && newLocation.latitude != null && newLocation.longitude != null) {
       fetchNearbyDrivers(newLocation.latitude!, newLocation.longitude!);
     }
 
     if (selectedLocations.length >= 2 && selectedService.id != "-99" && getFareData == true) {
       getRideFare();
+      removePromoCode(); // إلغاء الخصم في حال تغيير المسار لتجنب الأخطاء
     }
   }
 
-  // ===========================================================================
-  // 🔥 دالة جلب السائقين القريبين من سيرفر Laravel (Beytei)
-  // ===========================================================================
   Future<void> fetchNearbyDrivers(double lat, double lng) async {
     try {
       final String url = 'https://taxi.beytei.com/api/nearby-drivers?lat=$lat&lng=$lng';
-
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-
         if (data['success'] == true) {
-          nearbyDrivers = data['data']; // حفظ القائمة
-
-          // يمكنك إرسال البيانات فوراً لـ RideMapController إذا كان مفعلاً
-          // if (Get.isRegistered<RideMapController>()) {
-          //   Get.find<RideMapController>().updateNearbyDriversOnMap(nearbyDrivers);
-          // }
-
-          update(); // تحديث الواجهة
+          nearbyDrivers = data['data'];
+          update();
         }
       }
     } catch (e) {
       print("❌ خطأ في جلب السائقين القريبين: $e");
     }
   }
-  // ===========================================================================
 
   SelectedLocationInfo? getSelectedLocationInfoAtIndex(int index) {
     if (index >= 0 && index < selectedLocations.length) {
@@ -364,17 +362,14 @@ class HomeController extends GetxController {
   double distance = -1;
   double minimumDistance = -1;
 
-  //Handle Ride Functionality Start From here END
   void updateMainAmount(double amount) {
     mainAmount = amount;
     amountController.text = StringConverter.formatNumber(mainAmount.toString());
-
     update();
   }
 
   AppPaymentMethod selectedPaymentMethod = MyUtils.getDefaultPaymentMethod()[0];
   void selectPaymentMethod(AppPaymentMethod method) {
-    printX(method.id);
     selectedPaymentMethod = method;
     update();
     Get.back();
@@ -392,19 +387,139 @@ class HomeController extends GetxController {
         if (shouldLoadFare) {
           await getRideFare();
         }
-        mainAmount = StringConverter.formatDouble(service.recommendAmount.toString());
-        amountController.text = StringConverter.formatDouble(service.recommendAmount.toString()).toString();
+
+        // حفظ السعر الأصلي قبل أي خصم
+        originalAmount = StringConverter.formatDouble(service.recommendAmount.toString());
+        mainAmount = originalAmount;
+        amountController.text = mainAmount.toString();
+
+        // إلغاء كود الخصم إذا كان مطبقاً لكي لا يختل الحساب عند تغيير نوع السيارة
+        removePromoCode();
+
       } else {
-        CustomSnackBar.error(
-          errorList: [MyStrings.pleaseSelectPickupAndDestination],
-        );
+        CustomSnackBar.error(errorList: [MyStrings.pleaseSelectPickupAndDestination]);
       }
     } catch (e) {
       printE(e);
     }
   }
 
-  // ride alert methods
+  // ===========================================================================
+  // 🔥 دوال إدارة نظام كود الخصم
+  // ===========================================================================
+
+  // 1. جلب الخصومات المتاحة للزبون
+  Future<void> getAvailableCoupons() async {
+    try {
+      final url = 'https://taxi.beytei.com/api/coupons';
+      // يتم استخدام التوكن إذا كانت الدالة محمية
+      String? token = homeRepo.apiClient.sharedPreferences.getString('token'); // تأكد من مفتاح التوكن في نظامك
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          availableCoupons = data['data'] ?? [];
+          update();
+        }
+      }
+    } catch (e) {
+      printX("❌ خطأ في جلب الخصومات: $e");
+    }
+  }
+
+  // 2. التحقق من كود الخصم المكتوب وتطبيقه
+  Future<void> verifyPromoCode() async {
+    String code = promoCodeController.text.trim();
+    if (code.isEmpty) {
+      CustomSnackBar.error(errorList: ['الرجاء إدخال كود الخصم']);
+      return;
+    }
+
+    // التأكد من أن الزبون اختار المسار والسيارة وظهر له السعر
+    if (originalAmount <= 0) {
+      CustomSnackBar.error(errorList: ['الرجاء اختيار نقطة الانطلاق والوصول والسيارة لمعرفة السعر أولاً']);
+      return;
+    }
+
+    try {
+      isSubmitLoading = true;
+      update();
+
+      String? token = homeRepo.apiClient.sharedPreferences.getString('token');
+
+      final url = 'https://taxi.beytei.com/api/verify-coupon';
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: {
+          'coupon_code': code,
+          'estimated_amount': originalAmount.toString(),
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          isCouponApplied = true;
+          appliedCouponCode = code;
+          appliedCouponId = data['data']['coupon_id'].toString();
+          discountAmount = double.tryParse(data['data']['discount_amount'].toString()) ?? 0.0;
+
+          // تحديث السعر النهائي ليراه الزبون مخصوماً
+          double newTotal = double.tryParse(data['data']['new_total'].toString()) ?? (originalAmount - discountAmount);
+          updateMainAmount(newTotal);
+
+          CustomSnackBar.success(successList: ['تم تطبيق كود الخصم بنجاح!']);
+        } else {
+          // استخراج رسالة الخطأ من السيرفر
+          String errorMsg = 'الكود غير صالح';
+          if (data['message'] != null && data['message']['error'] != null) {
+            errorMsg = data['message']['error'][0];
+          }
+          CustomSnackBar.error(errorList: [errorMsg]);
+        }
+      } else {
+        CustomSnackBar.error(errorList: ['تعذر التحقق من الخصم، حاول مرة أخرى']);
+      }
+    } catch (e) {
+      printX("❌ خطأ أثناء التحقق من الخصم: $e");
+    } finally {
+      isSubmitLoading = false;
+      update();
+    }
+  }
+
+  // 3. إلغاء كود الخصم وإرجاع السعر الأصلي
+  void removePromoCode() {
+    if (isCouponApplied) {
+      isCouponApplied = false;
+      appliedCouponCode = '';
+      appliedCouponId = '';
+      discountAmount = 0.0;
+      promoCodeController.clear();
+
+      // استرجاع السعر الأصلي
+      if (originalAmount > 0) {
+        updateMainAmount(originalAmount);
+      }
+
+      update();
+    }
+  }
+  // ===========================================================================
+
+
   void distanceAlert() {
     CustomBottomSheet(
       child: RideDistanceWarningBottomSheetBody(
@@ -429,6 +544,7 @@ class HomeController extends GetxController {
 
   void clearData() {
     mainAmount = 0;
+    originalAmount = 0;
     rideFare = RideFareModel();
     selectedService = AppService(id: '-99');
     amountController.text = '';
@@ -436,6 +552,7 @@ class HomeController extends GetxController {
     passenger = 1;
     isServiceShake = false;
     isLocationShake = false;
+    removePromoCode(); // تصفير كود الخصم عند تنظيف البيانات
     update();
   }
 }
