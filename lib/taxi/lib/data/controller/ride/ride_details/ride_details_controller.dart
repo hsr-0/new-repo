@@ -1,11 +1,9 @@
+import 'dart:async'; // ✅ تمت إضافة هذه المكتبة لدعم المؤقت (Timer)
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
-// ---------------------------------------------------------
-// ✅ التغيير هنا: استبدلنا خرائط جوجل بمكتبة الإحداثيات المجانية
 import 'package:latlong2/latlong.dart';
-// ---------------------------------------------------------
 import 'package:cosmetic_store/taxi/lib/core/helper/string_format_helper.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_strings.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/url_container.dart';
@@ -31,8 +29,8 @@ class RideDetailsController extends GetxController {
   String currencySym = '';
   bool isLoading = true;
   bool isPaymentRequested = false;
-  LatLng pickupLatLng = const LatLng(0, 0); // الآن هذا النوع يأتي من latlong2
-  LatLng destinationLatLng = const LatLng(0, 0); // وهذا أيضاً
+  LatLng pickupLatLng = const LatLng(0, 0);
+  LatLng destinationLatLng = const LatLng(0, 0);
   String rideId = '-1';
   String serviceImagePath = '';
   String brandImagePath = '';
@@ -41,6 +39,41 @@ class RideDetailsController extends GetxController {
   List<String> tipsList = [];
 
   TextEditingController tipsController = TextEditingController();
+
+  // ==========================================
+  // 🔥 بداية إضافة المؤقت الذكي (Polling Fallback)
+  // ==========================================
+  Timer? _fallbackTimer;
+
+  @override
+  void onClose() {
+    stopPollingFallback(); // إيقاف المؤقت عند إغلاق الشاشة لمنع استهلاك البطارية
+    super.onClose();
+  }
+
+  void startPollingFallback(String id) {
+    stopPollingFallback(); // التأكد من عدم تشغيل أكثر من مؤقت
+
+    // تشغيل المؤقت كل 10 ثواني (يمكنك تقليلها إلى 5 ثواني إذا أردت استجابة أسرع)
+    _fallbackTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      // إذا اكتملت الرحلة أو تم إلغاؤها، نوقف المؤقت لكي لا نضغط على السيرفر
+      if (ride.status == "3" || ride.status == "4" || ride.status == "9") {
+        stopPollingFallback();
+        return;
+      }
+
+      // تحديث بيانات الرحلة وقائمة السائقين بصمت (بدون إظهار دائرة التحميل)
+      await getRideBidList(id);
+      await getRideDetails(id, shouldLoading: false);
+    });
+  }
+
+  void stopPollingFallback() {
+    _fallbackTimer?.cancel();
+  }
+  // ==========================================
+  // نهاية قسم المؤقت الذكي
+  // ==========================================
 
   void updateTips(String amount) {
     tipsController.text = amount;
@@ -69,12 +102,16 @@ class RideDetailsController extends GetxController {
     isPaymentRequested = false;
     tipsList = repo.apiClient.getTipsList();
     update();
+
     await Future.wait([
       getRideBidList(id),
       getRideDetails(id),
     ]);
     isLoading = false;
     update();
+
+    // ✅ تشغيل المؤقت الذكي بمجرد فتح الشاشة وانتهاء التحميل الأولي
+    startPollingFallback(id);
   }
 
   //ride
@@ -83,7 +120,7 @@ class RideDetailsController extends GetxController {
     currencySym = repo.apiClient.getCurrency(isSymbol: true);
     rideId = id;
 
-    bids = [];
+    if (shouldLoading) bids = [];
     isLoading = shouldLoading;
     update();
 
@@ -96,7 +133,6 @@ class RideDetailsController extends GetxController {
           ride = tempRide;
           driverTotalCompletedRide = model.data?.driverTotalRide ?? '';
 
-          // تحويل الإحداثيات باستخدام مكتبة latlong2
           pickupLatLng = LatLng(
             StringConverter.formatDouble(
               tempRide.pickupLatitude.toString(),
@@ -121,12 +157,7 @@ class RideDetailsController extends GetxController {
         serviceImagePath = '${UrlContainer.domainUrl}/${model.data?.serviceImagePath ?? ''}';
         brandImagePath = '${UrlContainer.domainUrl}/${model.data?.brandImagePath ?? ''}';
         driverImagePath = '${UrlContainer.domainUrl}/${model.data?.driverImagePath}';
-        printD(
-          'pickupLatLng>>> : ${pickupLatLng.latitude}, ${pickupLatLng.longitude} || ${ride.pickupLatitude}, ${ride.pickupLongitude}',
-        );
-        printD(
-          'destinationLatLng>>> : ${destinationLatLng.latitude}, ${destinationLatLng.longitude} || ${ride.destinationLatitude}, ${ride.destinationLongitude}',
-        );
+
         update();
         mapController.loadMap(
           pickup: pickupLatLng,
@@ -134,13 +165,10 @@ class RideDetailsController extends GetxController {
           isRunning: ride.status == "3",
         );
       } else {
-        Get.back();
-        CustomSnackBar.error(
-          errorList: model.message ?? [MyStrings.somethingWentWrong],
-        );
+        if (shouldLoading) Get.back();
       }
     } else {
-      CustomSnackBar.error(errorList: [responseModel.message]);
+      if (shouldLoading) CustomSnackBar.error(errorList: [responseModel.message]);
     }
     isLoading = false;
     update();
@@ -150,6 +178,7 @@ class RideDetailsController extends GetxController {
   List<BidModel> bids = [];
   List<BidModel> tempBids = [];
   int totalBids = 0;
+
   Future<void> getRideBidList(String id) async {
     try {
       ResponseModel responseModel = await repo.getRideBidList(id: id);
@@ -158,12 +187,8 @@ class RideDetailsController extends GetxController {
         if (model.status == "success") {
           bids = model.data?.bids ?? [];
           totalBids = bids.length;
-          update();
-        } else {
-          CustomSnackBar.error(errorList: model.message ?? [""]);
+          update(); // هذا التحديث سيجعل قائمة السائقين تظهر للزبون حتى لو تعطل Pusher
         }
-      } else {
-        CustomSnackBar.error(errorList: [responseModel.message]);
       }
     } catch (e) {
       printX(e);
@@ -186,7 +211,6 @@ class RideDetailsController extends GetxController {
       totalBids++;
     }
     update();
-    printX('update total bids $totalBids');
   }
 
   bool isAcceptLoading = false;
@@ -260,14 +284,13 @@ class RideDetailsController extends GetxController {
   bool isSosLoading = false;
   Future<void> sos(String id) async {
     isSosLoading = true;
-
     update();
     Position position = await MyUtils.getCurrentPosition();
     try {
       ResponseModel responseModel = await repo.sos(
         id: ride.id ?? "-1",
         msg: sosMsgController.text,
-        latLng: LatLng(position.latitude, position.longitude), // متوافق مع latlong2 الآن
+        latLng: LatLng(position.latitude, position.longitude),
       );
       if (responseModel.statusCode == 200) {
         AuthorizationResponseModel model = AuthorizationResponseModel.fromJson((responseModel.responseJson));
@@ -290,7 +313,6 @@ class RideDetailsController extends GetxController {
   }
 
   //cancel
-
   bool isCancelLoading = false;
   TextEditingController cancelReasonController = TextEditingController();
   Future<void> cancelRide() async {
@@ -346,7 +368,6 @@ class RideDetailsController extends GetxController {
           rating = 0.0;
           update();
 
-          // Get.offAllNamed(RouteHelper.dashboard);
           Get.back();
           CustomSnackBar.success(successList: model.message ?? []);
         } else {
