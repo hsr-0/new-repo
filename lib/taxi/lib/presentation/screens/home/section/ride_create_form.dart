@@ -108,7 +108,7 @@ class RideCreateForm extends StatelessWidget {
                             child: TextField(
                               controller: controller.promoCodeController,
                               decoration: InputDecoration(
-                                hintText: 'أدخل كود الخصم',
+                                hintText: '  أدخل كود الخصم في حال لديك',
                                 hintStyle: regularDefault.copyWith(color: MyColor.getRideSubTitleColor()),
                                 border: InputBorder.none,
                                 enabledBorder: InputBorder.none,
