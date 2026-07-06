@@ -21,56 +21,6 @@ import 'package:cosmetic_store/taxi/lib/presentation/screens/home/widgets/passen
 class RideCreateForm extends StatelessWidget {
   const RideCreateForm({super.key});
 
-  // نقلنا النافذة المنبثقة للخصومات إلى هنا لتعمل من داخل الفورم
-  void _showCouponsBottomSheet(BuildContext context, HomeController controller) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: MyColor.colorWhite,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(Dimensions.space20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'الخصومات المتاحة',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 15),
-              controller.availableCoupons.isEmpty
-                  ? const Center(child: Text('لا توجد خصومات متاحة حالياً'))
-                  : ListView.builder(
-                shrinkWrap: true,
-                itemCount: controller.availableCoupons.length,
-                itemBuilder: (context, index) {
-                  final coupon = controller.availableCoupons[index];
-                  return Card(
-                    elevation: 1,
-                    margin: const EdgeInsets.only(bottom: 10),
-                    child: ListTile(
-                      leading: const Icon(Icons.local_offer, color: MyColor.primaryColor),
-                      title: Text(coupon['code'] ?? ''),
-                      subtitle: const Text('اضغط لتطبيق الخصم'),
-                      onTap: () {
-                        controller.promoCodeController.text = coupon['code'];
-                        controller.verifyPromoCode();
-                        Navigator.pop(context);
-                      },
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return GetBuilder<HomeController>(
@@ -138,36 +88,40 @@ class RideCreateForm extends StatelessWidget {
                   ],
                 ),
               )
-                  : // حالة: إدخال الكود
+                  : // حالة: إدخال الكود (بحجم أقل وبدون زر عرض الخصومات)
               Column(
                 children: [
                   Row(
                     children: [
                       Expanded(
-                        child: InnerShadowContainer(
-                          backgroundColor: MyColor.neutral50,
-                          borderRadius: Dimensions.largeRadius,
-                          blur: 6,
-                          offset: const Offset(3, 3),
-                          shadowColor: MyColor.colorBlack.withValues(alpha: 0.04),
-                          isShadowTopLeft: true,
-                          isShadowBottomRight: true,
-                          padding: const EdgeInsets.symmetric(horizontal: Dimensions.space16),
-                          child: TextField(
-                            controller: controller.promoCodeController,
-                            decoration: InputDecoration(
-                              hintText: 'أدخل كود الخصم',
-                              hintStyle: regularDefault.copyWith(color: MyColor.getRideSubTitleColor()),
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
+                        child: SizedBox(
+                          height: 45, // تم تقليل الارتفاع هنا
+                          child: InnerShadowContainer(
+                            backgroundColor: MyColor.neutral50,
+                            borderRadius: Dimensions.largeRadius,
+                            blur: 6,
+                            offset: const Offset(3, 3),
+                            shadowColor: MyColor.colorBlack.withValues(alpha: 0.04),
+                            isShadowTopLeft: true,
+                            isShadowBottomRight: true,
+                            padding: const EdgeInsets.symmetric(horizontal: Dimensions.space16),
+                            child: TextField(
+                              controller: controller.promoCodeController,
+                              decoration: InputDecoration(
+                                hintText: 'أدخل كود الخصم',
+                                hintStyle: regularDefault.copyWith(color: MyColor.getRideSubTitleColor()),
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 10), // لضبط النص في المنتصف مع الحجم الجديد
+                              ),
                             ),
                           ),
                         ),
                       ),
                       const SizedBox(width: 10),
                       SizedBox(
-                        height: 50, // تناسق مع ارتفاع InnerShadowContainer
+                        height: 45, // نفس الارتفاع ليكون متناسقاً مع الحقل
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: MyColor.primaryColor,
@@ -184,25 +138,6 @@ class RideCreateForm extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  GestureDetector(
-                    onTap: () => _showCouponsBottomSheet(context, controller),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.local_offer_outlined, size: 16, color: MyColor.primaryColor),
-                        SizedBox(width: 5),
-                        Text(
-                          'عرض الخصومات المتاحة',
-                          style: TextStyle(
-                            color: MyColor.primaryColor,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
               // ==========================================
@@ -211,7 +146,7 @@ class RideCreateForm extends StatelessWidget {
 
               spaceDown(Dimensions.space15),
 
-              // قسم السعر وعدد الأشخاص (لم يتغير)
+              // قسم السعر وعدد الأشخاص
               IntrinsicHeight(
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
