@@ -2,21 +2,26 @@ import UIKit
 import Flutter
 import Firebase
 import PushKit
+import CallKit
 import flutter_callkit_incoming
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
     var voipRegistry: PKPushRegistry?
+    var callKitProvider: CXProvider?
+    var callKitCallController: CXCallController?
 
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
         let timeString = formatter.string(from: Date())
         let logMessage = "[\(timeString)] 🍏 \(message)"
+        print(logMessage)
+
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
-        if logs.count > 50 { logs.removeFirst() }
+        if logs.count > 100 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
     }
 
@@ -28,7 +33,18 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
+        // 🔥 إعداد CallKit Provider
+        let configuration = CXProviderConfiguration(localizedName: "منصة بيتي")
+        configuration.maximumCallGroups = 2
+        configuration.maximumCallsPerCallGroup = 1
+        configuration.supportsVideo = false
+        configuration.supportedHandleTypes = [.generic]
+
+        self.callKitProvider = CXProvider(configuration: configuration)
+        self.callKitCallController = CXCallController()
+
+        // 🔥 إعداد Flutter Method Channel للتشخيص
+        let controller: FlutterViewController = window?.rootViewController as! FlutterViewController
         let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
 
         debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
@@ -41,14 +57,26 @@ import flutter_callkit_incoming
             }
         })
 
+        // 🔥 إعداد VoIP Registry
         self.voipRegistry = PKPushRegistry(queue: .main)
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
 
+        // 🔥 طلب إذن الإشعارات
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if granted {
+                self.writeLog("✅ تم منح إذن الإشعارات")
+            } else {
+                self.writeLog("❌ تم رفض إذن الإشعارات")
+            }
+        }
+
+        application.registerForRemoteNotifications()
+
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // 🔥 هذا الدرع الواقي يمنع محرك Flutter من الفحص الخاطئ عند وصول إشعار عادي
+    // 🔥 معالجة الإشعارات العادية (غير VoIP)
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -58,61 +86,133 @@ import flutter_callkit_incoming
     }
 }
 
+// =======================================================================
+// 🔥 VoIP Push Registry Delegate
+// =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
+    // ✅ تحديث التوكن
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
+        guard type == .voIP else { return }
+
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
-        writeLog("✅ تم حفظ التوكن: \(tokenHex.prefix(15))...")
+        writeLog("✅ تم تحديث توكن VoIP: \(tokenHex.prefix(20))...")
+
+        // 🔥 إرسال التوكن للسيرفر تلقائياً
+        sendTokenToServer(tokenHex)
     }
 
-    // 🔥 هنا تم تصحيح اسم الدالة لتطابق iOS 11+ وتمنع تسريب الإشعار لـ Flutter
+    // 🔥 استقبال إشعار VoIP وارد
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
-        writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
+        guard type == .voIP else {
+            completion()
+            return
+        }
 
-        if let dict = payload.dictionaryPayload as? [String: Any] {
+        writeLog("📞 تم استلام إشعار VoIP!")
 
-            // 🔥 التكيف مع هيكل السيرفر الجديد (CallKit Structure)
-            // السيرفر الآن يرسل 'name' بدلاً من 'driver_name' في الجذر
+        guard let dict = payload.dictionaryPayload as? [String: Any] else {
+            writeLog("❌ البيانات فارغة أو غير صالحة")
+            completion()
+            return
+        }
+
+        // 🔥 التحقق من نوع الإشعار
+        let messageType = dict["type"] as? String ?? "voip_call"
+
+        // ✅ معالجة إلغاء المكالمة
+        if messageType == "cancel_call" {
+            writeLog("🚫 تم استلام أمر إلغاء المكالمة")
+            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                plugin.endAllCalls()
+            }
+            completion()
+            return
+        }
+
+        // 🔥 معالجة مكالمة جديدة
+        if messageType == "voip_call" {
+            writeLog("📞 مكالمة جديدة واردة!")
+
+            // استخراج البيانات
             let callerName = dict["name"] as? String ?? (dict["driver_name"] as? String ?? "الكابتن")
             let callId = dict["id"] as? String ?? UUID().uuidString
             let handle = dict["handle"] as? String ?? ""
             let avatar = dict["avatar"] as? String ?? ""
             let duration = dict["duration"] as? Int ?? 60000
-
-            // 🔥 استخراج الـ extra التي تحتوي على channel_name و agora_app_id
-            // إذا لم تكن موجودة (في حال كان السيرفر قديماً)، نأخذ الـ dict كاملاً كاحتياط
             let extra = dict["extra"] as? [String: Any] ?? dict
 
+            writeLog("📋 البيانات: name=\(callerName), id=\(callId)")
+
+            // 🔥 تجهيز بيانات CallKit
             let callkitData: [String: Any] = [
                 "id": callId,
                 "nameCaller": callerName,
-                "appName": "مطاعم بيتي",
+                "appName": "منصة بيتي",
                 "handle": handle,
                 "avatar": avatar,
                 "type": 0,
                 "duration": duration,
-                "extra": extra // 👈 هنا يمرر الـ channel_name لتطبيق فلاتر بنجاح
+                "extra": extra
             ]
 
             let data = flutter_callkit_incoming.Data(args: callkitData)
 
+            // 🔥 إظهار شاشة المكالمة
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
                 plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح. الـ Extra: \(extra.keys)")
+                writeLog("✅ تم عرض شاشة المكالمة بنجاح")
             } else {
-                writeLog("❌ المكتبة غير جاهزة.")
+                writeLog("❌ مكتبة CallKit غير جاهزة!")
             }
         }
 
-        // 🔥 تأخير الرد لآبل بجزء من الثانية لضمان تشغيل شاشة المكالمة بنجاح
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            completion()
-        }
+        // ✅ استدعاء completion فوراً (بدون تأخير!)
+        completion()
     }
 
+    // ✅ إبطال التوكن
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
-        writeLog("❌ تم إبطال التوكن")
+        guard type == .voIP else { return }
+        writeLog("❌ تم إبطال توكن VoIP")
+        UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
+    }
+}
+
+// =======================================================================
+// 🔥 دالة إرسال التوكن للسيرفر
+// =======================================================================
+extension AppDelegate {
+    func sendTokenToServer(_ voipToken: String) {
+        let url = URL(string: "https://re.beytei.com/wp-json/restaurant-app/v1/register-device")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // جلب توكن FCM العادي
+        let fcmToken = UserDefaults.standard.string(forKey: "fcm_token") ?? ""
+
+        let body: [String: Any] = [
+            "token": fcmToken,
+            "voip_token": voipToken,
+            "platform": "ios"
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                self.writeLog("❌ فشل إرسال التوكن: \(error.localizedDescription)")
+                return
+            }
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                self.writeLog("✅ تم إرسال توكن VoIP للسيرفر بنجاح")
+            } else {
+                self.writeLog("⚠️ استجابة غير متوقعة من السيرفر")
+            }
+        }.resume()
     }
 }
