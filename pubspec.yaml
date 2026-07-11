@@ -1,6 +1,6 @@
 name: cosmetic_store
 description: Platform Beytei with OvoRide Integration (Auto Resolve).
-version: 1.3.6+59
+version: 1.3.6+60
 publish_to: 'none'
 
 environment:
