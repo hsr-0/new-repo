@@ -2,7 +2,8 @@ import UIKit
 import Flutter
 import Firebase
 import PushKit
-import CallKit
+import CallKit          // ✅ ضروري لـ CXProviderDelegate
+import AVFoundation     // ✅ ضروري لـ AVAudioSession
 import flutter_callkit_incoming
 
 @main
@@ -11,6 +12,8 @@ import flutter_callkit_incoming
     var voipRegistry: PKPushRegistry?
     var callKitProvider: CXProvider?
     var callKitCallController: CXCallController?
+
+    // متغير لتتبع حالة المكالمة الحالية
     private var currentCallUUID: UUID?
 
     func writeLog(_ message: String) {
@@ -34,6 +37,7 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
+        // إعداد CallKit Provider
         let configuration = CXProviderConfiguration(localizedName: "منصة بيتي")
         configuration.maximumCallGroups = 2
         configuration.maximumCallsPerCallGroup = 1
@@ -44,6 +48,7 @@ import flutter_callkit_incoming
         self.callKitProvider?.setDelegate(self, queue: nil)
         self.callKitCallController = CXCallController()
 
+        // إعداد Flutter Method Channel للتشخيص
         let controller: FlutterViewController = window?.rootViewController as! FlutterViewController
         let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
 
@@ -57,6 +62,7 @@ import flutter_callkit_incoming
             }
         })
 
+        // إعداد VoIP Registry
         self.voipRegistry = PKPushRegistry(queue: .main)
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
@@ -64,6 +70,7 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
+    // معالجة الإشعارات العادية (غير VoIP)
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -73,8 +80,12 @@ import flutter_callkit_incoming
     }
 }
 
+// =======================================================================
+// VoIP Push Registry Delegate
+// =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
+    // تحديث التوكن
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
 
@@ -82,38 +93,11 @@ extension AppDelegate: PKPushRegistryDelegate {
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
         writeLog("✅ تم تحديث توكن VoIP: \(tokenHex.prefix(20))...")
 
-        // 🔥 إرسال التوكن للسيرفر
+        // إرسال التوكن للسيرفر
         sendTokenToServer(voipToken: tokenHex)
     }
 
-    func sendTokenToServer(voipToken: String) {
-        let url = URL(string: "https://re.beytei.com/wp-json/restaurant-app/v1/register-device")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let fcmToken = UserDefaults.standard.string(forKey: "fcm_token") ?? ""
-
-        let body: [String: Any] = [
-            "token": fcmToken,
-            "voip_token": voipToken,
-            "platform": "ios"
-        ]
-
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                self.writeLog("❌ فشل إرسال التوكن: \(error.localizedDescription)")
-                return
-            }
-
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                self.writeLog("✅ تم إرسال توكن VoIP للسيرفر بنجاح")
-            }
-        }.resume()
-    }
-
+    // استقبال إشعار VoIP وارد
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
         guard type == .voIP else {
@@ -129,14 +113,7 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // 🔥 التحقق من وجود channel_name
-        let extra = dict["extra"] as? [String: Any] ?? dict
-        guard let _ = extra["channel_name"] as? String else {
-            writeLog("❌ channel_name مفقود!")
-            completion()
-            return
-        }
-
+        // فحص نوع الإشعار
         let messageType = dict["type"] as? String ?? "voip_call"
 
         if messageType == "cancel_call" {
@@ -154,6 +131,7 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
+        // معالجة مكالمة جديدة
         if messageType == "voip_call" {
             writeLog("📞 مكالمة جديدة واردة!")
 
@@ -203,35 +181,73 @@ extension AppDelegate: PKPushRegistryDelegate {
         }
     }
 
+    // إبطال التوكن
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         guard type == .voIP else { return }
         writeLog("❌ تم إبطال توكن VoIP")
         UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
     }
+
+    // إرسال التوكن للسيرفر
+    func sendTokenToServer(_ voipToken: String) {
+        let url = URL(string: "https://re.beytei.com/wp-json/restaurant-app/v1/register-device")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let fcmToken = UserDefaults.standard.string(forKey: "fcm_token") ?? ""
+
+        let body: [String: Any] = [
+            "token": fcmToken,
+            "voip_token": voipToken,
+            "platform": "ios"
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                self.writeLog("❌ فشل إرسال التوكن: \(error.localizedDescription)")
+                return
+            }
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                self.writeLog("✅ تم إرسال توكن VoIP للسيرفر بنجاح")
+            }
+        }.resume()
+    }
 }
 
+// =======================================================================
+// CXProvider Delegate (معالجة أحداث المكالمة)
+// =======================================================================
 extension AppDelegate: CXProviderDelegate {
 
+    // النظام يطلب بدء المكالمة
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         writeLog("📞 بدء المكالمة: \(action.callUUID)")
         action.fulfill()
     }
 
+    // المستخدم رد على المكالمة
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         writeLog("✅ المستخدم رد على المكالمة: \(action.callUUID)")
         action.fulfill()
     }
 
+    // المستخدم أنهى المكالمة
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         writeLog("❌ المستخدم أنهى المكالمة: \(action.callUUID)")
         currentCallUUID = nil
         action.fulfill()
     }
 
+    // النظام يطلب تفعيل الصوت
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         writeLog("🔊 تم تفعيل جلسة الصوت")
     }
 
+    // النظام يطلب إلغاء جلسة الصوت
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         writeLog("🔇 تم إلغاء جلسة الصوت")
     }
