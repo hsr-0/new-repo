@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert'; // ✅ ضروري لتحويل JSON
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http; // ✅ ضروري لطلبات الشبكة
 
 // مكتبات الخرائط
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
@@ -45,8 +47,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
   bool isMapReady = false;
   bool _markersUpdated = false;
-
-  // ✅ متغير التحكم في شاشة التحميل الاحترافية أثناء جلب الإحداثيات
   bool isFetchingCoords = false;
 
   ap.BitmapDescriptor? pickUpIconApple;
@@ -58,19 +58,20 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
   final GlobalKey _secondContainerKey = GlobalKey();
   double? _secondContainerHeight;
   int index = 0;
-
   bool isFirstTime = true;
 
   final myDeBouncer = MyDeBouncer(delay: const Duration(milliseconds: 600));
-
   final FocusNode destinationFocusNode = FocusNode();
 
-  // ✅ دالة ذكية للتخلص من موقع (الكوت) الثابت وجلب أفضل موقع متوفر
+  // ✅ متغيرات التخزين المؤقت (Cache) لتسريع تحميل الأماكن وتجنب طلب السيرفر في كل مرة
+  static Map<String, dynamic>? _cachedCustomPlaces;
+  static bool _isFetchingPlaces = false;
+
   double get startLat {
     final c = Get.find<SelectLocationController>();
     if (c.pickupLatlong.latitude != 0) return c.pickupLatlong.latitude;
     if (c.selectedLatitude != 0) return c.selectedLatitude;
-    return 33.3152; // بغداد كافتراضي عام
+    return 33.3152;
   }
 
   double get startLng {
@@ -251,7 +252,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     return true;
   }
 
-  // 🔥 تصميم الهيكل الوهمي العصري (Shimmer Effect)
   Widget _buildModernShimmerLoader() {
     return SizedBox(
       height: context.height * .3,
@@ -309,7 +309,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                   child: Platform.isIOS ? _buildAppleMap(controller) : _buildFreeMap(controller),
                 ),
 
-                // 🔥 تأثير التغبيش وصندوق التحميل
                 if (isFetchingCoords)
                   Positioned.fill(
                     child: BackdropFilter(
@@ -367,6 +366,74 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     );
   }
 
+  // ✅ الدالة المحسنة والجديدة: تجلب البيانات مرة واحدة فقط وتخزنها
+  Future<void> _loadAndDrawCustomPlaces(ml.MapLibreMapController controller) async {
+    // 1. إذا كانت البيانات مخزنة مسبقاً في الذاكرة، ارسمها فوراً (سرعة 0 مللي ثانية)
+    if (_cachedCustomPlaces != null) {
+      _drawPlacesOnMap(controller, _cachedCustomPlaces!);
+      return;
+    }
+
+    // 2. إذا كان هناك طلب جارٍ بالفعل، لا تقم بإنشاء طلب جديد
+    if (_isFetchingPlaces) return;
+
+    _isFetchingPlaces = true;
+    try {
+      final response = await http.get(Uri.parse('https://taxi.beytei.com/api/custom-places'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        _cachedCustomPlaces = data; // ✅ حفظ البيانات في الذاكرة للاستخدام المستقبلي
+
+        if (mounted) {
+          _drawPlacesOnMap(controller, data);
+        }
+      }
+    } catch (e) {
+      print('❌ فشل في جلب أماكن الخريطة المخصصة: $e');
+    } finally {
+      _isFetchingPlaces = false;
+    }
+  }
+
+  // ✅ دالة منفصلة للرسم فقط لضمان السلاسة والأداء العالي
+  void _drawPlacesOnMap(ml.MapLibreMapController controller, Map<String, dynamic> geoJsonData) {
+    try {
+      final int placesCount = geoJsonData['features']?.length ?? 0;
+
+      controller.addSource(
+        "custom_places_source",
+        ml.GeojsonSourceProperties(data: jsonEncode(geoJsonData)),
+      ).then((_) {
+        if (!mounted) return;
+        controller.addLayer(
+          "custom_places_source",
+          "custom_places_layer",
+          ml.SymbolLayerProperties(
+            iconImage: "pickup_icon", // يمكن استخدام أيقونة صغيرة مخصصة للأماكن لاحقاً
+            iconSize: 0.5,
+            iconAnchor: "center",
+            textField: ['get', 'name'],
+            textSize: 13.0,
+            textFont: ["Noto Sans Arabic Regular"],
+            textAnchor: "top",
+            textOffset: [0.0, 1.8],
+            textHaloColor: "#000000",
+            textHaloWidth: 2.5,
+            textColor: [
+              'match',
+              ['get', 'type'],
+              'street', '#FFD700', // ذهبي للشوارع
+              '#FFFFFF', // أبيض للأماكن
+            ],
+          ),
+        );
+        print('✅ تم رسم $placesCount مكان بنجاح (من الذاكرة أو الشبكة)');
+      });
+    } catch (e) {
+      print('❌ خطأ في رسم طبقة الأماكن: $e');
+    }
+  }
+
   Widget _buildFreeMap(SelectLocationController controller) {
     return ml.MapLibreMap(
       styleString: 'https://tiles.openfreemap.org/styles/liberty',
@@ -391,7 +458,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
         } catch(e) {
           print('❌ Image Load Error: $e');
         }
-        if (mounted) _updateStaticMarkers(controller);
+        if (mounted) {
+          _updateStaticMarkers(controller);
+          _loadAndDrawCustomPlaces(mapLibreController!); // ✅ استدعاء الدالة المحسنة هنا
+        }
       },
       myLocationEnabled: true,
       myLocationRenderMode: ml.MyLocationRenderMode.normal,
@@ -437,7 +507,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                   alignment: Alignment.topCenter,
                   child: Container(height: 5, width: 50, decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), color: MyColor.colorGrey.withOpacity(0.2))),
                 ),
-                spaceDown(Dimensions.space10),
+                const SizedBox(height: Dimensions.space10),
 
                 Container(
                   width: MediaQuery.of(context).size.width,
@@ -451,7 +521,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             LabelText(text: MyStrings.pickUpLocation),
-                            spaceDown(Dimensions.space5),
+                            const SizedBox(height: Dimensions.space5),
                             GestureDetector(
                               onTap: () {
                                 controller.changeIndex(1);
@@ -484,9 +554,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                                 ),
                               ),
                             ),
-                            spaceDown(Dimensions.space15),
+                            const SizedBox(height: Dimensions.space15),
                             LabelText(text: MyStrings.destination),
-                            spaceDown(Dimensions.space5),
+                            const SizedBox(height: Dimensions.space5),
                             LocationPickTextField(
                               focusNode: destinationFocusNode,
                               fillColor: controller.selectedLocationIndex == 1 ? MyColor.colorWhite : MyColor.textFieldBgColor,
@@ -528,9 +598,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                   ),
                 ),
 
-                spaceDown(Dimensions.space15),
+                const SizedBox(height: Dimensions.space15),
 
-                // 🔥 إخفاء الزر في الأندرويد وإظهاره فقط في الـ iOS
                 if (Platform.isIOS) ...[
                   InkWell(
                     onTap: () async {
@@ -562,10 +631,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                       ),
                     ),
                   ),
-                  spaceDown(Dimensions.space15),
+                  const SizedBox(height: Dimensions.space15),
                 ],
 
-                // 🔥 إدارة عرض النتائج بشكل عصري
                 controller.isSearched && controller.allPredictions.isEmpty
                     ? _buildModernShimmerLoader()
                     : controller.allPredictions.isNotEmpty
@@ -621,7 +689,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                                     decoration: BoxDecoration(color: MyColor.primaryColor.withOpacity(0.1), shape: BoxShape.circle),
                                     child: const Icon(Icons.location_on_rounded, size: 18.0, color: MyColor.primaryColor),
                                   ),
-                                  spaceSide(Dimensions.space12),
+                                  const SizedBox(width: Dimensions.space12),
                                   Expanded(child: Text("${item.description}", style: regularDefault.copyWith(color: MyColor.colorBlack, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis)),
                                 ],
                               ),
@@ -634,9 +702,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                 )
                     : const SizedBox.shrink(),
 
-                spaceDown(Dimensions.space15),
+                const SizedBox(height: Dimensions.space15),
 
-                // 🔥 الزر الذكي (يكون رمادي إذا الوجهة فارغة أو إذا كانت هناك مقترحات بحث لم تُختر بعد)
                 RoundedButton(
                   text: MyStrings.confirmLocation,
                   bgColor: (controller.destinationLatlong.latitude != 0 && controller.allPredictions.isEmpty)

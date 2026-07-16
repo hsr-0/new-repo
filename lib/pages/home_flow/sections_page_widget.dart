@@ -26,7 +26,6 @@ import 'package:facebook_app_events/facebook_app_events.dart';
 import '../../beytei_re/re.dart';
 import '../../chat/chatsupport.dart';
 import '../../doctore/medical_home_screen.dart';
-import '../../f.dart';
 import '../../taxi/lib/main.dart';
 import '../../zone.dart';
 import '../webview_flow/webview_page.dart';
@@ -130,8 +129,6 @@ class LocationService {
   }
 
   /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
-  /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
-  /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
   static Future<geolocator.Position?> tryAutoDetectSilent({Duration timeout = const Duration(seconds: 5)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -142,7 +139,6 @@ class LocationService {
         return null;
       }
 
-      // 🔥 التعديل الجذري: استخدام دقة منخفضة + إجبار الدالة على التوقف بعد 5 ثواني
       geolocator.Position position = await geolocator.Geolocator.getCurrentPosition(
         desiredAccuracy: geolocator.LocationAccuracy.low,
       ).timeout(timeout);
@@ -152,7 +148,9 @@ class LocationService {
       print('❌ Silent auto-detect location failed: $e');
       return null;
     }
-  }  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
+  }
+
+  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
   static Future<geolocator.Position?> tryAutoDetectWithPermission({Duration timeout = const Duration(seconds: 20)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -183,6 +181,7 @@ class LocationService {
     return geolocator.Geolocator.distanceBetween(lat1, lng1, lat2, lng2);
   }
 }
+
 // --- كلاس طلب التقييم ---
 class AppReviewManager {
   final InAppReview _inAppReview = InAppReview.instance;
@@ -214,7 +213,6 @@ class BannerItem {
       BannerItem(imageUrl: json['imageUrl'], targetType: json['targetType'], targetUrl: json['targetUrl']);
 }
 
-
 class SectionsPageWidget extends StatefulWidget {
   const SectionsPageWidget({Key? key}) : super(key: key);
   @override
@@ -226,7 +224,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   bool showBanners = false;
 
   // 📍 متغيرات حالة الموقع
-  bool _isCheckingLocation = true;
+  bool _isCheckingLocation = false; // 🔥 تغيير الافتراضي إلى false لكي لا نعطل الواجهة
   bool _locationDialogShown = false;
   ({double lat, double lng, String source, bool isExpired})? _savedLocation;
   Timer? _backgroundLocationTimer;
@@ -247,10 +245,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   Future<void> _initializeApp() async {
     await _checkAndHandleLocation();
     _startBackgroundTasks();
-    _startSilentBackgroundLocationUpdates();
   }
 
-  /// 🛡️ التأكد من صلاحية الموقع
+  /// 🛡️ التأكد من صلاحية الموقع (تُرجع true إذا كانت الصلاحية متاحة)
   Future<bool> _ensureLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -273,7 +270,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     return permission == LocationPermission.whileInUse || permission == LocationPermission.always;
   }
 
-  /// ⚙️ عرض رسالة إجبارية تطلب من المستخدم فتح الإعدادات
+  /// ⚙️ عرض رسالة إجبارية تطلب من المستخدم فتح الإعدادات لمنح الصلاحية
   void _showSettingsDialog() {
     showDialog(
       context: context,
@@ -305,7 +302,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 Navigator.of(context).pop();
                 await Geolocator.openAppSettings();
               },
-              child: const Text('فتح الإعدادات لتفعيل اذن الموقع', style: TextStyle(color: Colors.white)),
+              child: const Text('فتح الإعدادات', style: TextStyle(color: Colors.white)),
             ),
           ],
         );
@@ -313,11 +310,26 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 
-  /// 📍 المنطق الرئيسي للتحقق من الموقع
+  /// 📍 المنطق الرئيسي للتحقق من الموقع (الآن يعمل في الخلفية دون تعطيل الواجهة)
   Future<void> _checkAndHandleLocation() async {
     if (!mounted) return;
+
+    // 1. فحص الموقع المحفوظ أولاً
+    _savedLocation = await LocationService.getSavedLocation();
+    if (_savedLocation != null) {
+      _startSilentBackgroundLocationUpdates();
+      return;
+    }
+
+    // 2. إذا لم يكن هناك موقع محفوظ، نعرض المؤشر الصغير في الواجهة (بدون إخفاء التطبيق)
     setState(() => _isCheckingLocation = true);
 
+    // 3. جلب الموقع في الخلفية
+    _fetchLocationInBackgroundAndHandle();
+  }
+
+  /// 📍 جلب الموقع في الخلفية وإظهار نافذة التحديد اليدوي في حال الفشل
+  Future<void> _fetchLocationInBackgroundAndHandle() async {
     try {
       bool hasPermission = await _ensureLocationPermission();
 
@@ -327,7 +339,9 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           await LocationService.saveLocation(lastKnown.latitude, lastKnown.longitude, source: 'auto_fast');
           setState(() {
             _savedLocation = (lat: lastKnown.latitude, lng: lastKnown.longitude, source: 'auto_fast', isExpired: false);
+            _isCheckingLocation = false;
           });
+          _startSilentBackgroundLocationUpdates();
           return;
         }
 
@@ -336,54 +350,43 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto');
           setState(() {
             _savedLocation = (lat: position.latitude, lng: position.longitude, source: 'auto', isExpired: false);
+            _isCheckingLocation = false;
           });
+          _startSilentBackgroundLocationUpdates();
           return;
         }
       }
 
-      _savedLocation = await LocationService.getSavedLocation();
-      if (_savedLocation != null) {
-        return;
-      }
-
-      if (mounted && !_locationDialogShown) {
-        _locationDialogShown = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showLocationPickerDialog();
-        });
-      }
-    } catch (e) {
-      print('❌ Error in Location Check: $e');
-    } finally {
+      // إذا فشل الجلب أو لم يتم منح الصلاحية
       if (mounted) {
         setState(() => _isCheckingLocation = false);
-        _startSilentBackgroundLocationUpdates();
+        if (!_locationDialogShown) {
+          _locationDialogShown = true;
+          _showLocationPickerDialog();
+        }
+      }
+    } catch (e) {
+      print('❌ Error in background location fetch: $e');
+      if (mounted) {
+        setState(() => _isCheckingLocation = false);
+        if (!_locationDialogShown) {
+          _locationDialogShown = true;
+          _showLocationPickerDialog();
+        }
       }
     }
   }
 
-  /// 🔄 محاولة تحديث الموقع في الخلفية
+  /// 🔄 محاولة تحديث الموقع في الخلفية (بدون إزعاج المستخدم)
   Future<void> _tryUpdateLocationInBackground() async {
     if (_savedLocation == null) return;
-
     final newPosition = await LocationService.tryAutoDetectSilent();
     if (newPosition != null && mounted) {
-      await LocationService.saveLocation(
-        newPosition.latitude,
-        newPosition.longitude,
-        source: 'auto',
-      );
+      await LocationService.saveLocation(newPosition.latitude, newPosition.longitude, source: 'auto');
       setState(() {
-        _savedLocation = (
-        lat: newPosition.latitude,
-        lng: newPosition.longitude,
-        source: 'auto',
-        isExpired: false,
-        );
+        _savedLocation = (lat: newPosition.latitude, lng: newPosition.longitude, source: 'auto', isExpired: false);
       });
       print('✅ Location updated in background');
-    } else {
-      print('ℹ️ Keeping old location, background update failed');
     }
   }
 
@@ -397,11 +400,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     });
   }
 
-  void _startBackgroundLocationUpdate() {
-    _tryUpdateLocationInBackground();
-  }
-
-  /// 🗺️ حوار تحديد الموقع
+  /// 🗺️ حوار تحديد الموقع الحديث
   void _showLocationPickerDialog() {
     showDialog(
       context: context,
@@ -427,6 +426,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Header
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 20),
                   decoration: const BoxDecoration(
@@ -452,6 +452,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     ],
                   ),
                 ),
+                // Content
                 Padding(
                   padding: const EdgeInsets.all(25),
                   child: Column(
@@ -462,6 +463,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 25),
+                      // Buttons
                       Row(
                         children: [
                           Expanded(
@@ -609,7 +611,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         });
 
         _startSilentBackgroundLocationUpdates();
-
         return true;
       }
       return false;
@@ -618,10 +619,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       return false;
     }
   }
-
-  // =========================================================================
-  // باقي الدوال
-  // =========================================================================
 
   void _startBackgroundTasks() async {
     _requestAllPermissions();
@@ -672,16 +669,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         ),
       );
     }
-  }
-
-  /// ✅ دالة فتح شاشة التشخيص (جديدة)
-  void _openDiagnosticsScreen() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const DiagnosticsScreen(),
-      ),
-    );
   }
 
   Future<void> _showPromoDialog() async {
@@ -909,7 +896,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
         child: Row(
           children: [
-            Icon(Icons.check_circle_rounded, color: Colors.green, size: 16),
+            const Icon(Icons.check_circle_rounded, color: Colors.green, size: 16),
             const SizedBox(width: 6),
             Text(
               'تم تحديد الموقع ✓ $sourceText',
@@ -931,42 +918,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
   @override
   Widget build(BuildContext context) {
-    // 🎯 أثناء التحقق من الموقع: عرض شاشة تحميل أنيقة
-    if (_isCheckingLocation) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [Colors.orange, Colors.deepOrange]),
-                  shape: BoxShape.circle,
-                  boxShadow: [BoxShadow(color: Colors.orange.withOpacity(0.4), blurRadius: 20)],
-                ),
-                child: const Icon(Icons.location_searching_rounded, color: Colors.white, size: 40),
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'جاري تحديد موقعك...',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'لتوفير أفضل تجربة توصيل',
-                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-              ),
-              const SizedBox(height: 30),
-              const CircularProgressIndicator(color: Colors.orange),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // ✅ الواجهة الرئيسية بعد تحديد الموقع
+    // 🔥 تم حذف شاشة التحميل الكاملة التي كانت توقف التطبيق
     return Scaffold(
       appBar: AppBar(
         title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -989,7 +941,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                   ),
                   borderRadius: BorderRadius.circular(25),
                   boxShadow: [
-                    BoxShadow(color: const Color(0xFF0083B0).withOpacity(0.4), blurRadius: 8, offset: Offset(0, 3))
+                    BoxShadow(color: const Color(0xFF0083B0).withOpacity(0.4), blurRadius: 8, offset: const Offset(0, 3))
                   ],
                 ),
                 child: const Row(
@@ -1012,8 +964,10 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 📍 مؤشر حالة الموقع الأنيق (يعمل أثناء الاستخدام)
               if (_buildLocationIndicator() != null) _buildLocationIndicator()!,
 
+              // البانرات
               if (showBanners && banners.isNotEmpty) ...[
                 const Padding(
                   padding: EdgeInsets.fromLTRB(15, 10, 15, 10),
@@ -1049,6 +1003,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
               ),
               const SizedBox(height: 10),
 
+              // الشبكة
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: GridView.count(
@@ -1104,8 +1059,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           BottomNavigationBarItem(icon: Icon(Icons.stars), label: 'بيتي زون'),
         ],
       ),
-      // ✅ الزر العائم لفتح شاشة التشخيص (يظهر فقط في Debug Mode)
-
     );
   }
 

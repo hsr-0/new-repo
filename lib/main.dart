@@ -17,6 +17,7 @@ import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart'; // 🔥 تم الإضافة لجلب الموقع في الخلفية
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -44,7 +45,7 @@ final ValueNotifier<Map<String, dynamic>?> activeChatNotifier = ValueNotifier(nu
 final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifier(null);
 final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifier(null);
 
-// دالة التوجيه الموحدة (كما هي في الكود القديم)
+// دالة التوجيه الموحدة
 void handleNotificationClick(Map<String, dynamic> data) {
   if (data['type'] == 'voip_call') {
     showIncomingCall(data);
@@ -68,9 +69,8 @@ void handleNotificationClick(Map<String, dynamic> data) {
 }
 
 // =======================================================================
-// 🔥 1. دوال مساعدة لإظهار المكالمة (كما هي في الكود القديم)
+// 🔥 1. دوال مساعدة لإظهار المكالمة
 // =======================================================================
-
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
@@ -128,7 +128,7 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 }
 
 // =======================================================================
-// 🔥 2. معالج الخلفية (كما هو في الكود القديم - بدون أي تعديل)
+// 🔥 2. معالج الخلفية
 // =======================================================================
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -147,7 +147,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
-// ✅ كما هو في الكود القديم
 void _showLocalNotification(RemoteMessage message) {
   if (message.data['type'] == 'voip_call') return;
 
@@ -176,10 +175,9 @@ void _showLocalNotification(RemoteMessage message) {
   );
 }
 
-
 Future<void> _handleTokenRefresh() async {
   FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-    print("🔄 [FCM] Token refreshed: ${newToken.substring(0, 20)}...");
+    print("🔄 [FCM] Token refreshed");
     await _saveAndRegisterToken(newToken);
   });
 }
@@ -195,66 +193,61 @@ Future<void> _saveAndRegisterToken(String token) async {
       voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
       if (voipToken != null && voipToken.isNotEmpty) {
         await prefs.setString('voip_token', voipToken);
-        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: $voipToken");
+        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح");
       }
     } catch (e) {
       print("⚠️ فشل جلب توكن VoIP: $e");
     }
   }
-
-
 }
 
 // =======================================================================
-// 🔥 4. ✅ إصلاح تداخل الأذونات (التعديل الوحيد هنا)
+// 🔥 3. استراتيجية الأذونات (عدم تعطيل واجهة المستخدم)
 // =======================================================================
 
-Future<void> _requestPermissionsSequentially() async {
-  bool isRequesting = false;
+/// طلب إذن الموقع وجلبه في الخلفية بشكل صامت دون تعليق التطبيق
+Future<void> requestLocationPermissionOnly() async {
+  print("🔐 التحقق من إذن الموقع...");
+  final status = await Permission.location.status;
 
-  Future<PermissionStatus> safeRequest(Permission permission, String name) async {
-    if (isRequesting) {
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-
-    isRequesting = true;
-    try {
-      print("🔍 [$name] جاري الطلب...");
-
-      // ✅ فحص الحالة الحالية أولاً
-      final currentStatus = await permission.status;
-      if (currentStatus.isGranted || currentStatus.isPermanentlyDenied) {
-        print("✅ [$name] الحالة: $currentStatus");
-        isRequesting = false;
-        return currentStatus;
-      }
-
-      final status = await permission.request().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => PermissionStatus.denied,
-      );
-
-      print("✅ [$name] النتيجة: $status");
-      isRequesting = false;
-
-      // ✅ تأخير بين الطلبات
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      return status;
-    } catch (e) {
-      print("❌ [$name] خطأ: $e");
-      isRequesting = false;
-      return PermissionStatus.denied;
-    }
+  if (!status.isGranted && !status.isPermanentlyDenied) {
+    print("🔍 جاري طلب إذن الموقع...");
+    await Permission.location.request();
   }
 
-  await safeRequest(Permission.location, 'الموقع');
-  await safeRequest(Permission.notification, 'الإشعارات');
-  await safeRequest(Permission.microphone, 'المايكروفون');
+  // 🔥 البدء فوراً في جلب الإحداثيات وتخزينها في الخلفية دون await
+  _fetchLocationInBackground();
+}
+
+void _fetchLocationInBackground() async {
+  try {
+    print("📍 [الخلفية] جاري تحديد الموقع بصمت...");
+    Position position = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+      timeLimit: const Duration(seconds: 10),
+    );
+    print("✅ [الخلفية] تم التقاط الموقع: ${position.latitude}, ${position.longitude}");
+    // يمكنك حفظه هنا في SharedPreferences إذا أردت
+  } catch (e) {
+    print("⚠️ [الخلفية] فشل التقاط الموقع: $e");
+  }
+}
+
+/// دالة مساعدة لطلب الأذونات الإضافية في وقت لاحق (يُفضل استدعاؤها في الرئيسية)
+Future<void> requestSecondaryPermissions() async {
+  final notifStatus = await Permission.notification.status;
+  if (!notifStatus.isGranted && !notifStatus.isPermanentlyDenied) {
+    await Permission.notification.request();
+  }
+
+  final micStatus = await Permission.microphone.status;
+  if (!micStatus.isGranted && !micStatus.isPermanentlyDenied) {
+    await Permission.microphone.request();
+  }
 }
 
 // =======================================================================
-// 🔥 5. الدالة الرئيسية (MAIN) - مع إصلاح بسيط
+// 🔥 4. الدالة الرئيسية (MAIN)
 // =======================================================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -348,11 +341,8 @@ void main() async {
     handleNotificationClick(initialMessage.data);
   }
 
-  // ✅ استخدام دالة الأذونات المحسّنة
-  await _requestPermissionsSequentially();
-
   await actions.connected();
-  await actions.notificationPermission();
+  // 🔥 تم حذف await actions.notificationPermission(); لمنع التعليق عند بدء التشغيل
   await actions.notificationInit();
   await actions.lockOrientation();
 
@@ -368,7 +358,7 @@ void main() async {
 }
 
 // =======================================================================
-// 🔥 6. التطبيق الرئيسي (MyApp) - مع إصلاح setState أثناء البناء
+// 🔥 5. التطبيق الرئيسي (MyApp)
 // =======================================================================
 class MyApp extends StatefulWidget {
   @override
@@ -403,17 +393,11 @@ class _MyAppState extends State<MyApp> {
           handleNotificationClick(message.data);
         }
       });
+
+      // 🔥 بدء جلب إذن الموقع بشكل سلس وغير معطل للواجهة
+      requestLocationPermissionOnly();
     });
 
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      if (message.data['type'] == 'cancel_call') {
-        if (mounted) {
-          activeCallNotifier.value = null;
-        }
-      }
-    });
-
-    // ✅ الإصلاح: نقل addListener إلى addPostFrameCallback
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _router.routerDelegate.addListener(() {
         if (mounted) setState(() {});
@@ -629,7 +613,7 @@ class _MyAppState extends State<MyApp> {
 }
 
 // =======================================================================
-// 🔥 7. شاشة المكالمة - مع إصلاح Double Release + Overflow
+// 🔥 6. شاشة المكالمة
 // =======================================================================
 class ActiveVoiceCallScreen extends StatefulWidget {
   final String channelName;
@@ -664,7 +648,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   bool _hasError = false;
   String _errorMessage = "";
 
-  // ✅ الإصلاح الوحيد: علم لمنع Double Release
   bool _isEngineReleased = false;
 
   @override
@@ -794,9 +777,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     _engine.setEnableSpeakerphone(_isSpeaker);
   }
 
-  // ✅ الإصلاح: منع Double Release
   void _endCall() async {
-    if (_isEngineReleased) return;  // ✅ منع التنفيذ المزدوج
+    if (_isEngineReleased) return;
     _isEngineReleased = true;
 
     _durationTimer?.cancel();
@@ -820,7 +802,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     _durationTimer?.cancel();
     _timeoutTimer?.cancel();
 
-    // ✅ الإطلاق مرة واحدة فقط
     if (!_isEngineReleased) {
       _isEngineReleased = true;
       try {
@@ -953,7 +934,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
               const Spacer(flex: 3),
 
-              // ✅ الإصلاح: استخدام LayoutBuilder + Expanded لمنع Overflow
               Container(
                 padding: const EdgeInsets.only(bottom: 40, top: 25),
                 decoration: BoxDecoration(
