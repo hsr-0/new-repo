@@ -113,7 +113,6 @@ dependencies:
   flutter_chat_ui: ^1.6.8
   flutter_chat_types: ^3.6.0
   cupertino_icons: ^1.0.8
-  agora_rtc_engine: ^6.3.0       # للصوت
   flutter_callkit_incoming: ^2.0.2 # لشاشة الرنين والاهتزاز
 
 
