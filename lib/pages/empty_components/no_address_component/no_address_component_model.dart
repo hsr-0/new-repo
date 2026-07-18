@@ -10,8 +10,7 @@ import 'package:provider/provider.dart';
 
 class NoAddressComponentModel
     extends FlutterFlowModel<NoAddressComponentWidget> {
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {}
@@ -19,22 +18,5 @@ class NoAddressComponentModel
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=NoAddressComponent',
-        searchReference:
-            'reference=OhJOb0FkZHJlc3NDb21wb25lbnRQAFoSTm9BZGRyZXNzQ29tcG9uZW50',
-        widgetClassName: 'NoAddressComponent',
-      );
+
 }

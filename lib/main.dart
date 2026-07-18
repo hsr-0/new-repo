@@ -15,15 +15,14 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:geolocator/geolocator.dart'; // 🔥 تم الإضافة لجلب الموقع في الخلفية
+import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:easy_debounce/easy_debounce.dart';
-
 import 'package:facebook_app_events/facebook_app_events.dart';
+import 'package:livekit_client/livekit_client.dart' hide ConnectionState, Priority;
 
 import 'beytei_re/OrderTracking.dart';
 import 'webview_screen.dart';
@@ -49,19 +48,16 @@ final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifie
 void handleNotificationClick(Map<String, dynamic> data) {
   if (data['type'] == 'voip_call') {
     showIncomingCall(data);
-  }
-  else if (data['type'] == 'taxi_chat_message' || data['act'] == 'NEW_MESSAGE') {
+  } else if (data['type'] == 'taxi_chat_message' || data['act'] == 'NEW_MESSAGE') {
     print("🚀 [Routing] توجيه لدردشة التاكسي - الرحلة: ${data['ride_id']}");
     Future.delayed(const Duration(milliseconds: 1500), () {
       activeTaxiChatNotifier.value = data;
     });
-  }
-  else if (data['type'] == 'chat_message') {
+  } else if (data['type'] == 'chat_message') {
     Future.delayed(const Duration(milliseconds: 1500), () {
       activeChatNotifier.value = data;
     });
-  }
-  else if (data['type'] == 'status_update') {
+  } else if (data['type'] == 'status_update') {
     Future.delayed(const Duration(milliseconds: 1500), () {
       activeTrackingNotifier.value = data;
     });
@@ -69,7 +65,7 @@ void handleNotificationClick(Map<String, dynamic> data) {
 }
 
 // =======================================================================
-// 🔥 1. دوال مساعدة لإظهار المكالمة
+// 🔥 1. دوال مساعدة لإظهار المكالمة (محدثة لـ LiveKit)
 // =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
@@ -91,11 +87,13 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
       subtitle: 'مكالمة فائتة',
       callbackText: 'عاود الاتصال',
     ),
+    // 🔥 هنا نمرر بيانات LiveKit الجاهزة (بما فيها الـ Token)
     extra: <String, dynamic>{
-      'channel_name': data['channel_name'],
+      'room_name': data['room_name'],
+      'livekit_url': data['livekit_url'],
+      'token': data['token'], // 🔥 هذا هو سر حل مشكلة الآيفون
       'driver_name': data['driver_name'],
       'order_id': data['order_id'],
-      'agora_app_id': data['agora_app_id'] ?? '3924f8eebe7048f8a65cb3bd4a4adcec',
     },
     headers: <String, dynamic>{'apiKey': 'Abc@123!', 'platform': 'flutter'},
     android: const AndroidParams(
@@ -202,10 +200,8 @@ Future<void> _saveAndRegisterToken(String token) async {
 }
 
 // =======================================================================
-// 🔥 3. استراتيجية الأذونات (عدم تعطيل واجهة المستخدم)
+// 🔥 3. استراتيجية الأذونات
 // =======================================================================
-
-/// طلب إذن الموقع وجلبه في الخلفية بشكل صامت دون تعليق التطبيق
 Future<void> requestLocationPermissionOnly() async {
   print("🔐 التحقق من إذن الموقع...");
   final status = await Permission.location.status;
@@ -214,8 +210,6 @@ Future<void> requestLocationPermissionOnly() async {
     print("🔍 جاري طلب إذن الموقع...");
     await Permission.location.request();
   }
-
-  // 🔥 البدء فوراً في جلب الإحداثيات وتخزينها في الخلفية دون await
   _fetchLocationInBackground();
 }
 
@@ -227,13 +221,11 @@ void _fetchLocationInBackground() async {
       timeLimit: const Duration(seconds: 10),
     );
     print("✅ [الخلفية] تم التقاط الموقع: ${position.latitude}, ${position.longitude}");
-    // يمكنك حفظه هنا في SharedPreferences إذا أردت
   } catch (e) {
     print("⚠️ [الخلفية] فشل التقاط الموقع: $e");
   }
 }
 
-/// دالة مساعدة لطلب الأذونات الإضافية في وقت لاحق (يُفضل استدعاؤها في الرئيسية)
 Future<void> requestSecondaryPermissions() async {
   final notifStatus = await Permission.notification.status;
   if (!notifStatus.isGranted && !notifStatus.isPermanentlyDenied) {
@@ -342,7 +334,6 @@ void main() async {
   }
 
   await actions.connected();
-  // 🔥 تم حذف await actions.notificationPermission(); لمنع التعليق عند بدء التشغيل
   await actions.notificationInit();
   await actions.lockOrientation();
 
@@ -394,7 +385,6 @@ class _MyAppState extends State<MyApp> {
         }
       });
 
-      // 🔥 بدء جلب إذن الموقع بشكل سلس وغير معطل للواجهة
       requestLocationPermissionOnly();
     });
 
@@ -441,6 +431,7 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
+  // 🔥 استخراج بيانات المكالمة المحدثة لـ LiveKit
   Map<String, String> _extractCallData(Map<String, dynamic> rawData) {
     Map<String, dynamic> extraData = {};
     if (rawData['extra'] != null) {
@@ -451,9 +442,10 @@ class _MyAppState extends State<MyApp> {
       }
     }
     return {
-      'channelName': extraData['channelName']?.toString() ?? extraData['channel_name']?.toString() ?? rawData['channel_name']?.toString() ?? '',
-      'driverName': extraData['driverName']?.toString() ?? extraData['driver_name']?.toString() ?? rawData['driver_name']?.toString() ?? 'كابتن بيتي',
-      'appId': extraData['agoraAppId']?.toString() ?? extraData['agora_app_id']?.toString() ?? rawData['agora_app_id']?.toString() ?? '3924f8eebe7048f8a65cb3bd4a4adcec',
+      'roomName': extraData['room_name']?.toString() ?? rawData['room_name']?.toString() ?? '',
+      'livekitUrl': extraData['livekit_url']?.toString() ?? rawData['livekit_url']?.toString() ?? 'wss://call.beytei.com',
+      'token': extraData['token']?.toString() ?? rawData['token']?.toString() ?? '',
+      'driverName': extraData['driver_name']?.toString() ?? rawData['driver_name']?.toString() ?? 'كابتن بيتي',
     };
   }
 
@@ -467,8 +459,7 @@ class _MyAppState extends State<MyApp> {
   });
 
   String getRoute([RouteMatch? routeMatch]) {
-    final RouteMatch lastMatch =
-        routeMatch ?? _router.routerDelegate.currentConfiguration.last;
+    final RouteMatch lastMatch = routeMatch ?? _router.routerDelegate.currentConfiguration.last;
     final RouteMatchList matchList = lastMatch is ImperativeRouteMatch
         ? lastMatch.matches
         : _router.routerDelegate.currentConfiguration;
@@ -510,7 +501,7 @@ class _MyAppState extends State<MyApp> {
             children: [
               if (child != null) child,
 
-              // 1. المكالمة الصوتية
+              // 1. المكالمة الصوتية (محدثة لـ LiveKit)
               ValueListenableBuilder<Map<String, dynamic>?>(
                 valueListenable: activeCallNotifier,
                 builder: (context, callData, _) {
@@ -518,14 +509,16 @@ class _MyAppState extends State<MyApp> {
 
                   final extractedData = _extractCallData(callData);
 
-                  if (extractedData['channelName']!.isEmpty) {
+                  // 🔥 التحقق من وجود البيانات الأساسية قبل فتح الشاشة
+                  if (extractedData['roomName']!.isEmpty || extractedData['token']!.isEmpty) {
                     return const SizedBox.shrink();
                   }
 
                   return ActiveVoiceCallScreen(
-                    channelName: extractedData['channelName']!,
+                    roomName: extractedData['roomName']!,
+                    livekitUrl: extractedData['livekitUrl']!,
+                    token: extractedData['token']!,
                     remoteName: extractedData['driverName']!,
-                    agoraAppId: extractedData['appId']!,
                     onCallEnded: () {
                       activeCallNotifier.value = null;
                     },
@@ -613,20 +606,22 @@ class _MyAppState extends State<MyApp> {
 }
 
 // =======================================================================
-// 🔥 6. شاشة المكالمة
+// 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit)
 // =======================================================================
 class ActiveVoiceCallScreen extends StatefulWidget {
-  final String channelName;
+  final String roomName;
+  final String livekitUrl;
+  final String token;
   final String remoteName;
-  final String agoraAppId;
   final VoidCallback onCallEnded;
 
   const ActiveVoiceCallScreen({
     super.key,
-    required this.channelName,
+    required this.roomName,
+    required this.livekitUrl,
+    required this.token,
     required this.remoteName,
     required this.onCallEnded,
-    this.agoraAppId = "3924f8eebe7048f8a65cb3bd4a4adcec",
   });
 
   @override
@@ -634,12 +629,14 @@ class ActiveVoiceCallScreen extends StatefulWidget {
 }
 
 class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
-  late RtcEngine _engine;
+  Room? _room;
+  EventsListener<RoomEvent>? _listener; // 🆕 المستمع الجديد لنسخة LiveKit الحديثة
+
   bool _localUserJoined = false;
-  int? _remoteUid;
+  bool _isDriverConnected = false; // لمعرفة هل السائق دخل الغرفة
 
   bool _isMuted = false;
-  bool _isSpeaker = false;
+  bool _isSpeaker = true;
 
   int _callDuration = 0;
   Timer? _durationTimer;
@@ -647,23 +644,23 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   bool _hasError = false;
   String _errorMessage = "";
-
   bool _isEngineReleased = false;
 
   @override
   void initState() {
     super.initState();
-    _initAgora();
+    _initLiveKit();
 
-    _timeoutTimer = Timer(const Duration(seconds: 30), () {
-      if (_remoteUid == null && !_isEngineReleased) {
+    // إغلاق المكالمة تلقائياً بعد 45 ثانية إذا لم يرد السائق
+    _timeoutTimer = Timer(const Duration(seconds: 45), () {
+      if (!_isDriverConnected && !_isEngineReleased) {
         print("⏳ انتهى الوقت ولم يتم الاتصال بالسائق، جاري إنهاء المكالمة.");
         _endCall();
       }
     });
   }
 
-  Future<void> _initAgora() async {
+  Future<void> _initLiveKit() async {
     final status = await Permission.microphone.request();
     if (status.isDenied || status.isPermanentlyDenied) {
       if (mounted) {
@@ -687,60 +684,48 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
 
     try {
-      _engine = createAgoraRtcEngine();
-      await _engine.initialize(RtcEngineContext(
-        appId: widget.agoraAppId,
-        channelProfile: ChannelProfileType.channelProfileCommunication,
-      ));
+      _room = Room();
+      _listener = _room!.createListener(); // 🆕 إنشاء المستمع
 
-      _engine.registerEventHandler(RtcEngineEventHandler(
-        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          if (mounted && !_isEngineReleased) {
-            setState(() => _localUserJoined = true);
-            _engine.setEnableSpeakerphone(_isSpeaker);
-            print("✅ الزبون دخل القناة بنجاح");
-          }
-        },
-        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          if (mounted && !_hasError && !_isEngineReleased) {
-            _timeoutTimer?.cancel();
-            setState(() {
-              _remoteUid = remoteUid;
-            });
-            _startTimer();
-            print("✅ السائق دخل الغرفة: $remoteUid");
-          }
-        },
-        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          if (mounted && _localUserJoined && !_isEngineReleased) {
-            print("📞 الطرف الآخر أنهى المكالمة.");
-            _endCall();
-          }
-        },
-        onError: (ErrorCodeType err, String msg) {
-          if (mounted && !_hasError) {
-            setState(() {
-              _hasError = true;
-              _errorMessage = "خطأ في الاتصال: $msg";
-            });
-          }
-        },
-      ));
+      // 🆕 الاستماع للأحداث بالطريقة الحديثة
+      _listener!.on<ParticipantConnectedEvent>((event) {
+        if (mounted && !_isEngineReleased) {
+          _timeoutTimer?.cancel();
+          setState(() {
+            _isDriverConnected = true;
+          });
+          _startTimer();
+          print("✅ السائق دخل الغرفة");
+        }
+      });
 
-      await _engine.enableAudio();
+      _listener!.on<ParticipantDisconnectedEvent>((event) {
+        if (mounted && _localUserJoined && !_isEngineReleased) {
+          print("📞 الطرف الآخر أنهى المكالمة.");
+          _endCall();
+        }
+      });
 
-      const ChannelMediaOptions options = ChannelMediaOptions(
-        clientRoleType: ClientRoleType.clientRoleBroadcaster,
-        publishMicrophoneTrack: true,
-        autoSubscribeAudio: true,
+      _listener!.on<RoomDisconnectedEvent>((event) {
+        if (mounted && !_isEngineReleased) {
+          _endCall();
+        }
+      });
+
+      // الاتصال بالغرفة باستخدام الـ Token الجاهز
+      await _room!.connect(
+        widget.livekitUrl,
+        widget.token,
+        roomOptions: const RoomOptions(
+          adaptiveStream: true,
+          dynacast: true,
+          defaultAudioPublishOptions: AudioPublishOptions(),
+        ),
       );
 
-      await _engine.joinChannel(
-        token: "",
-        channelId: widget.channelName,
-        uid: 0,
-        options: options,
-      );
+      setState(() => _localUserJoined = true);
+      await _room!.localParticipant?.setMicrophoneEnabled(true);
+      await Hardware.instance.setSpeakerphoneOn(_isSpeaker); // 🆕 الطريقة الحديثة لتشغيل السبيكر
 
     } catch (e) {
       if (mounted) {
@@ -755,7 +740,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   void _startTimer() {
     _durationTimer?.cancel();
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted && _remoteUid != null) {
+      if (mounted && _isDriverConnected) {
         setState(() => _callDuration++);
       }
     });
@@ -767,14 +752,14 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
-  void _toggleMute() {
+  Future<void> _toggleMute() async {
     setState(() => _isMuted = !_isMuted);
-    _engine.muteLocalAudioStream(_isMuted);
+    await _room?.localParticipant?.setMicrophoneEnabled(!_isMuted);
   }
 
-  void _toggleSpeaker() {
+  Future<void> _toggleSpeaker() async {
     setState(() => _isSpeaker = !_isSpeaker);
-    _engine.setEnableSpeakerphone(_isSpeaker);
+    await Hardware.instance.setSpeakerphoneOn(_isSpeaker); // 🆕 الطريقة الحديثة
   }
 
   void _endCall() async {
@@ -785,10 +770,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     _timeoutTimer?.cancel();
 
     try {
-      await _engine.leaveChannel();
-      await _engine.release();
+      await _listener?.dispose(); // 🆕 تنظيف المستمع بالطريقة الجديدة
+      await _room?.disconnect();
+      _room = null;
     } catch (e) {
-      print("Error releasing Agora engine: $e");
+      print("Error releasing LiveKit room: $e");
     }
 
     await FlutterCallkitIncoming.endAllCalls();
@@ -805,8 +791,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     if (!_isEngineReleased) {
       _isEngineReleased = true;
       try {
-        _engine.leaveChannel();
-        _engine.release();
+        _listener?.dispose();
+        _room?.disconnect();
       } catch (e) {
         print("Error in dispose: $e");
       }
@@ -818,7 +804,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   String _getCallStatus() {
     if (_hasError) return _errorMessage;
-    if (_remoteUid != null) return "متصل الآن 🟢";
+    if (_isDriverConnected) return "متصل الآن 🟢";
     if (_localUserJoined) return "جاري الاتصال بالكابتن... ⏳";
     return "تهيئة الاتصال...";
   }
@@ -890,7 +876,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                   const SizedBox(height: 8),
 
                   Text(
-                    "رقم الغرفة: ${widget.channelName}",
+                    "غرفة: ${widget.roomName}",
                     style: const TextStyle(fontSize: 12, color: Colors.yellow),
                   ),
                   const SizedBox(height: 20),
@@ -900,12 +886,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                     decoration: BoxDecoration(
                       color: _hasError
                           ? Colors.red.withOpacity(0.2)
-                          : (_remoteUid != null ? Colors.green.withOpacity(0.2) : Colors.blue.withOpacity(0.2)),
+                          : (_isDriverConnected ? Colors.green.withOpacity(0.2) : Colors.blue.withOpacity(0.2)),
                       borderRadius: BorderRadius.circular(25),
                       border: Border.all(
                         color: _hasError
                             ? Colors.red
-                            : (_remoteUid != null ? Colors.green : Colors.blue),
+                            : (_isDriverConnected ? Colors.green : Colors.blue),
                         width: 1.5,
                       ),
                     ),
@@ -915,8 +901,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                         Icon(
                           _hasError
                               ? Icons.error
-                              : (_remoteUid != null ? Icons.check_circle : Icons.access_time),
-                          color: _hasError ? Colors.red : (_remoteUid != null ? Colors.green : Colors.blue),
+                              : (_isDriverConnected ? Icons.check_circle : Icons.access_time),
+                          color: _hasError ? Colors.red : (_isDriverConnected ? Colors.green : Colors.blue),
                           size: 20,
                         ),
                         const SizedBox(width: 8),

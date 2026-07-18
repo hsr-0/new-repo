@@ -171,17 +171,7 @@ class _WishlistPageWidgetState extends State<WishlistPageWidget>
                                     if (wishList.isEmpty) {
                                       return NoFavouriteComponentWidget();
                                     }
-                                    _model.debugGeneratorVariables[
-                                            'wishList${wishList.length > 100 ? ' (first 100)' : ''}'] =
-                                        debugSerializeParam(
-                                      wishList.take(100),
-                                      ParamType.String,
-                                      isList: true,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WishlistPage',
-                                      name: 'String',
-                                      nullable: false,
-                                    );
+
                                     debugLogWidgetClass(_model);
 
                                     return GridView.builder(
@@ -286,28 +276,8 @@ class _WishlistPageWidgetState extends State<WishlistPageWidget>
                                               }
                                               final containerProductDetailResponse =
                                                   snapshot.data!;
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_statusCode_Container_tfnjul4a'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .statusCode,
-                                                ParamType.int,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WishlistPage',
-                                                name: 'int',
-                                                nullable: false,
-                                              );
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_responseBody_Container_tfnjul4a'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .bodyText,
-                                                ParamType.String,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WishlistPage',
-                                                name: 'String',
-                                                nullable: false,
-                                              );
+
+
                                               debugLogWidgetClass(_model);
 
                                               return Container(

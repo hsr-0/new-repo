@@ -215,18 +215,7 @@ class _ReviewsShimmerWidgetState extends State<ReviewsShimmerWidget>
                   final dataList = List.generate(
                       random_data.randomInteger(2, 2),
                       (index) => random_data.randomName(true, false)).toList();
-                  _model.debugGeneratorVariables[
-                          'dataList${dataList.length > 100 ? ' (first 100)' : ''}'] =
-                      debugSerializeParam(
-                    dataList.take(100),
-                    ParamType.String,
-                    isList: true,
-                    link:
-                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ReviewsShimmer',
-                    name: 'String',
-                    nullable: false,
-                  );
-                  debugLogWidgetClass(_model);
+
 
                   return Column(
                     mainAxisSize: MainAxisSize.max,

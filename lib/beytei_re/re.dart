@@ -8274,6 +8274,7 @@ class RestaurantModule extends StatefulWidget {
   State<RestaurantModule> createState() => _RestaurantModuleState();
 }
 
+
 class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBindingObserver {
 
   @override
@@ -8287,6 +8288,7 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
+      // تأكد أن هذه الدالة معرفة ومستمرة في ملفك
       BackgroundLocationRefresher.silentRefresh();
     }
   }
@@ -8305,20 +8307,31 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
   }
 
   Future<void> _handleBackgroundMessage(RemoteMessage message) async {
-    if (message.data['type'] == 'voip_call') {
-      final channelName = message.data['channelName'] ?? message.data['channel_name'];
-      final driverName = message.data['driverName'] ?? message.data['driver_name'] ?? 'الكابتن';
+    print("🔔 [Background Message] Received: ${message.data}");
 
+    if (message.data['type'] == 'voip_call') {
+      // 🔥 1. استخراج البيانات الجديدة الخاصة بـ LiveKit من الإشعار
+      final roomName = message.data['room_name'] ?? message.data['channel_name'] ?? '';
+      final livekitUrl = message.data['livekit_url'] ?? 'wss://call.beytei.com';
+      final token = message.data['token'] ?? ''; // يجب أن يرسلها السيرفر في Payload
+      final driverName = message.data['driver_name'] ?? message.data['driverName'] ?? 'الكابتن';
+
+      // 2. حفظ البيانات محلياً للاستخدام لاحقاً
       SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.setString('pending_call_channel', channelName ?? '');
+      await prefs.setString('pending_call_room', roomName);
       await prefs.setString('pending_call_driver', driverName);
+      await prefs.setString('pending_call_token', token);
+      await prefs.setString('pending_call_url', livekitUrl);
       await prefs.setBool('has_pending_call', true);
 
+      // 3. توجيه المستخدم إلى شاشة المكالمة المحدثة
       if (navigatorKey.currentState != null) {
         navigatorKey.currentState?.push(
           MaterialPageRoute(
             builder: (context) => ActiveVoiceCallScreen(
-              channelName: channelName,
+              roomName: roomName,       // ✅ تم التعديل من channelName
+              livekitUrl: livekitUrl,   // ✅ إضافة جديدة مطلوبة
+              token: token,             // ✅ إضافة جديدة مطلوبة
               remoteName: driverName,
               onCallEnded: () {
                 if (Navigator.canPop(context)) {
@@ -8363,8 +8376,6 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
         ChangeNotifierProvider(create: (_) => DeliveryProvider()),
         ChangeNotifierProvider(create: (_) => DeliveryConfigProvider()),
         ChangeNotifierProvider(create: (_) => SmartWalletProvider()),
-
-        // 🔥🔥🔥 الإضافة التي تحل مشكلة الشاشة الحمراء 🔥🔥🔥
         ChangeNotifierProvider(create: (_) => PremiumCampaignProvider()),
 
         ChangeNotifierProxyProvider<AuthProvider, DashboardProvider>(
@@ -8426,7 +8437,6 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
     );
   }
 }
-
 
 class MapLocationPicker extends StatefulWidget {
   final double? initialLat;
@@ -16041,7 +16051,12 @@ class SmartWalletProvider with ChangeNotifier {
 class BoxOpeningAnimation extends StatefulWidget {
   final String boxType;
   final int areaId;
-  const BoxOpeningAnimation({super.key, required this.boxType, required this.areaId});
+
+  const BoxOpeningAnimation({
+    super.key,
+    required this.boxType,
+    required this.areaId,
+  });
 
   @override
   State<BoxOpeningAnimation> createState() => _BoxOpeningAnimationState();
@@ -16049,163 +16064,86 @@ class BoxOpeningAnimation extends StatefulWidget {
 
 class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
     with TickerProviderStateMixin {
-  late AnimationController _shakeCtrl;
-  late Animation<double> _shakeAnim;
-  late AnimationController _openCtrl;
   bool _isOpen = false;
-  bool _showLight = false;
-  Map<String, dynamic>? _prize;
+  bool _isLoading = true;
+  Map<String, dynamic>? _prizeData;
+
+  // 🔥 متحركات الأنيميشن والصوت
+  late AnimationController _shakeCtrl;
+  late AnimationController _openCtrl;
+  late Animation<double> _shakeAnimation;
   final AudioPlayer _player = AudioPlayer();
-
-  // 🔥 الجديد: حالة تطبيق الخصم
-  bool _rewardApplied = false;
-  String? _applicationMessage;
-  bool _applicationSuccess = false;
-
-  Color get _boxColor {
-    switch (widget.boxType) {
-      case 'silver':
-        return const Color(0xFF90A4AE);
-      case 'gold':
-        return const Color(0xFFFFC107);
-      case 'diamond':
-        return const Color(0xFF00BCD4);
-      default:
-        return const Color(0xFF90A4AE);
-    }
-  }
-
-  String get _boxTitle {
-    switch (widget.boxType) {
-      case 'silver':
-        return 'الصندوق الفضي 🥈';
-      case 'gold':
-        return 'الصندوق الذهبي 🥇';
-      case 'diamond':
-        return 'الصندوق الألماسي 💎';
-      default:
-        return 'الصندوق';
-    }
-  }
 
   @override
   void initState() {
     super.initState();
+
+    // إعداد الأنيميشن
     _shakeCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 500),
+      duration: const Duration(milliseconds: 100),
+    )..repeat(reverse: true);
+
+    _shakeAnimation = Tween<double>(begin: -0.05, end: 0.05).animate(
+      CurvedAnimation(parent: _shakeCtrl, curve: Curves.easeInOut),
     );
-    _shakeAnim = Tween<double>(begin: -0.08, end: 0.08)
-        .animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.easeInOut))
-      ..addStatusListener((status) {
-        if (status == AnimationStatus.completed) _shakeCtrl.reverse();
-        if (status == AnimationStatus.dismissed && !_isOpen) _shakeCtrl.forward();
-      });
+
     _openCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 800),
     );
-    _startOpeningSequence();
+
+    // بدء عملية فتح الصندوق فوراً
+    _simulateBoxOpening();
   }
 
-  Future<void> _startOpeningSequence() async {
-    await HapticFeedback.mediumImpact();
-    await Future.delayed(const Duration(milliseconds: 200));
-    await HapticFeedback.vibrate();
-
+  Future<void> _simulateBoxOpening() async {
     try {
-      await _player.play(AssetSource('sounds/tick.mp3'));
-    } catch (_) {}
-    _shakeCtrl.forward();
+      // 🔥 هنا يتم استدعاء دالة فتح الصندوق من الـ Provider أو ApiService الخاص بك
+      // مثال: final result = await Provider.of<SmartWalletProvider>(context, listen: false).openBox(widget.boxType, widget.areaId);
 
-    await Future.delayed(const Duration(seconds: 3));
+      // محاكاة تأخير الشبكة والأنيميشن (استبدل هذا باستدعاء الـ API الفعلي لديك)
+      await Future.delayed(const Duration(seconds: 2));
+
+      setState(() {
+        _isLoading = false;
+        _isOpen = true;
+        // _prizeData = result; // قم بتعيين البيانات الحقيقية هنا
+      });
+
+      // تشغيل أنيميشن الفتح والصوت
+      _openCtrl.forward();
+      await _player.play(AssetSource('sounds/box_open.mp3')); // تأكد من وجود الملف في assets
+
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('حدث خطأ: $e'), backgroundColor: Colors.red),
+        );
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  // 🔥🔥🔥 دالة التنظيف الجذرية لمنع التعليق والانهيار 🔥🔥🔥
+  void _cleanupAndNavigate(Widget destinationScreen) {
+    // 1. إيقاف جميع الأنيميشن فوراً
     _shakeCtrl.stop();
-    if (!mounted) return;
-    setState(() => _showLight = true);
-    _openCtrl.forward();
+    _openCtrl.stop();
 
-    // 4. جلب الجائزة من السيرفر
-    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
-    final prize = await wallet.openBox(widget.boxType, widget.areaId);
+    // 2. إيقاف الصوت فوراً
+    _player.stop();
 
-    if (!mounted) return;
-    setState(() {
-      _prize = prize;
-      _isOpen = true;
-    });
-
-    // 🔥 الجديد: محاولة تطبيق الجائزة على السلة
-    if (prize != null) {
-      await _tryApplyBoxReward(prize);
-    }
-
-    try {
-      await _player.play(AssetSource('sounds/open.mp3'));
-    } catch (_) {}
-    await HapticFeedback.heavyImpact();
-  }
-
-  // 🔥 الجديد: دالة محاولة تطبيق الجائزة
-  Future<void> _tryApplyBoxReward(Map<String, dynamic> prize) async {
-    final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
-    final cart = Provider.of<CartProvider>(context, listen: false);
-
-    // 1. التحقق من وجود عناصر في السلة
-    if (cart.items.isEmpty) {
-      setState(() {
-        _rewardApplied = false;
-        _applicationSuccess = false;
-        _applicationMessage = 'السلة فارغة، سيتم تطبيق الجائزة عند إضافة منتجات';
-      });
-      return;
-    }
-
-    // 2. التحقق من صلاحية المطعم
-    final currentRestaurantId = cart.items.first.categoryId;
-    final validation = wallet.validateBoxRewardForRestaurant(currentRestaurantId);
-
-    if (!validation['can_use']) {
-      setState(() {
-        _rewardApplied = false;
-        _applicationSuccess = false;
-        _applicationMessage = validation['reason'];
-      });
-      return;
-    }
-
-    // 3. حساب قيمة الخصم
-    final discountAmount = wallet.getBoxRewardDiscountAmount(cart.totalPrice);
-
-    // 4. تطبيق الخصم على السلة
-    cart.applyBoxReward(
-      amount: discountAmount,
-      title: prize['title'] ?? 'جائزة الصندوق',
-      source: _boxTitle,
-      restaurantId: prize['restaurant_id'],
-      restaurantName: prize['restaurant_name'],
+    // 3. الانتقال للشاشة الجديدة ومسح شاشة الأنيميشن من الذاكرة تماماً
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => destinationScreen),
+          (route) => route.isFirst, // يعود للشاشة الرئيسية ثم يفتح الشاشة الجديدة فوقها
     );
-
-    setState(() {
-      _rewardApplied = true;
-      _applicationSuccess = true;
-      _applicationMessage = 'تم تطبيق "${prize['title']}" على سلتك!';
-    });
-
-    // 5. إظهار SnackBar تأكيد
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('🎉 ${_applicationMessage!}'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 3),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
   }
 
   @override
   void dispose() {
+    // تنظيف الموارد عند إغلاق الشاشة بأي طريقة
     _shakeCtrl.dispose();
     _openCtrl.dispose();
     _player.dispose();
@@ -16214,339 +16152,142 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
 
   @override
   Widget build(BuildContext context) {
+    // تحديد أيقونة ولون الصندوق حسب النوع
+    IconData boxIcon = Icons.inventory_2;
+    Color boxColor = Colors.grey;
+    if (widget.boxType == 'gold') {
+      boxIcon = Icons.workspace_premium;
+      boxColor = const Color(0xFFFFC107);
+    } else if (widget.boxType == 'diamond') {
+      boxIcon = Icons.diamond;
+      boxColor = const Color(0xFF00BCD4);
+    }
+
     return Scaffold(
       backgroundColor: Colors.black87,
-      body: SafeArea(
-        child: Stack(
+      body: Center(
+        child: _isLoading
+            ? const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ...List.generate(20, (i) => _buildStar(i)),
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(_boxTitle,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 40),
-                  AnimatedBuilder(
-                    animation: _shakeAnim,
-                    builder: (_, child) => Transform.rotate(
-                      angle: _isOpen ? 0 : _shakeAnim.value,
-                      child: child,
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        if (_showLight)
-                          AnimatedBuilder(
-                            animation: _openCtrl,
-                            builder: (_, __) => Container(
-                              width: 300 * _openCtrl.value,
-                              height: 300 * _openCtrl.value,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: RadialGradient(colors: [
-                                  _boxColor.withOpacity(0.7),
-                                  Colors.transparent,
-                                ]),
-                              ),
-                            ),
-                          ),
-                        Container(
-                          width: 180,
-                          height: 180,
-                          decoration: BoxDecoration(
-                            color: _boxColor,
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: _boxColor.withOpacity(0.6),
-                                blurRadius: 30,
-                                spreadRadius: 5,
-                              ),
-                            ],
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                _boxColor,
-                                _boxColor.withOpacity(0.7),
-                              ],
-                            ),
-                          ),
-                          child: Icon(
-                            widget.boxType == 'silver'
-                                ? Icons.inventory_2
-                                : widget.boxType == 'gold'
-                                ? Icons.workspace_premium
-                                : Icons.diamond,
-                            size: 80,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 50),
-                  if (_isOpen && _prize != null)
-                    AnimatedBuilder(
-                      animation: _openCtrl,
-                      builder: (_, __) => Transform.translate(
-                        offset: Offset(0, -50 * _openCtrl.value),
-                        child: Opacity(
-                          opacity: _openCtrl.value,
-                          child: _buildPrizeCard(),
-                        ),
-                      ),
-                    )
-                  else if (_isOpen && _prize == null)
-                    const Text('جاري التحميل...',
-                        style: TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 20),
-
-                  // 🔥 الجديد: رسالة حالة التطبيق
-                  if (_applicationMessage != null)
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 30),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _applicationSuccess
-                            ? Colors.green.withOpacity(0.2)
-                            : Colors.orange.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: _applicationSuccess ? Colors.green : Colors.orange,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            _applicationSuccess
-                                ? Icons.check_circle
-                                : Icons.info_outline,
-                            color: _applicationSuccess ? Colors.green : Colors.orange,
-                            size: 24,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              _applicationMessage!,
-                              style: TextStyle(
-                                color: _applicationSuccess
-                                    ? Colors.green.shade100
-                                    : Colors.orange.shade100,
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  const SizedBox(height: 20),
-                  if (_isOpen)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 40),
-                      child: SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: Text(
-                            _rewardApplied ? 'إغلاق والذهاب للسلة 🛒' : 'إغلاق',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            CircularProgressIndicator(color: Colors.amber),
+            SizedBox(height: 20),
+            Text('جاري فتح الصندوق...', style: TextStyle(color: Colors.white, fontSize: 18)),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStar(int i) {
-    final random = Random();
-    return Positioned(
-      left: random.nextDouble() * MediaQuery.of(context).size.width,
-      top: random.nextDouble() * MediaQuery.of(context).size.height,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0.0, end: 1.0),
-        duration: Duration(seconds: 1 + random.nextInt(3)),
-        builder: (_, value, child) => Opacity(
-          opacity: value,
-          child: Transform.scale(scale: value, child: child),
-        ),
-        child: const Icon(Icons.star, color: Colors.white, size: 12),
-      ),
-    );
-  }
-
-  Widget _buildPrizeCard() {
-    final type = _prize!['type'] ?? 'discount';
-    final title = _prize!['title'] ?? 'مبروك!';
-    final rawValue = _prize!['value'];
-    final num value = rawValue != null ? (num.tryParse(rawValue.toString()) ?? 0) : 0;
-    final restaurantName = _prize!['restaurant_name'];
-    final couponCode = _prize!['coupon_code']; // 🔥 كود الخصم
-    final isLimited = _prize!['is_limited'] ?? false;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 30),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(color: _boxColor.withOpacity(0.5), blurRadius: 20),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.celebration, size: 50, color: Colors.amber),
-          const SizedBox(height: 10),
-          Text('🎉 مبروك!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _boxColor)),
-          const SizedBox(height: 8),
-          Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-
-          // 🔥 عرض اسم المطعم المحدد
-          if (restaurantName != null && restaurantName.isNotEmpty) ...[
-            const SizedBox(height: 8),
+        )
+            : Stack(
+          alignment: Alignment.center,
+          children: [
+            // خلفية متوهجة
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              width: double.infinity,
+              height: double.infinity,
               decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.store, color: Colors.blue.shade700, size: 16),
-                  const SizedBox(width: 6),
-                  Text('مخصص من: $restaurantName', style: TextStyle(color: Colors.blue.shade800, fontSize: 12, fontWeight: FontWeight.bold)),
-                ],
-              ),
-            ),
-          ] else ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
-              child: const Text('✅ صالح لجميع المطاعم', style: TextStyle(color: Colors.grey, fontSize: 11)),
-            ),
-          ],
-
-          const SizedBox(height: 12),
-
-          // عرض القيمة حسب النوع
-          if (type == 'discount' || type == 'coupon_percent')
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.green.shade200),
-              ),
-              child: Text('خصم ${value.toInt()}%', style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.bold, fontSize: 18)),
-            ),
-          if (type == 'coupon_fixed')
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.green.shade200),
-              ),
-              child: Text('${NumberFormat('#,###', 'en_US').format(value)} د.ع', style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.bold, fontSize: 18)),
-            ),
-          if (type == 'free_item')
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.purple.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.purple.shade200),
-              ),
-              child: Text('🎁 $title', style: TextStyle(color: Colors.purple.shade800, fontWeight: FontWeight.bold, fontSize: 16)),
-            ),
-
-          // 🔥 🔥 🔥 الجديد: عرض كود الخصم بشكل مميز
-          if (couponCode != null && couponCode.isNotEmpty) ...[
-            const SizedBox(height: 15),
-            Container(
-              padding: const EdgeInsets.all(15),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.amber.shade100, Colors.orange.shade100],
+                gradient: RadialGradient(
+                  colors: [boxColor.withOpacity(0.3), Colors.transparent],
+                  center: Alignment.center,
+                  radius: 0.8,
                 ),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.amber.shade400, width: 2),
               ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.card_giftcard, color: Colors.amber.shade800, size: 20),
-                      const SizedBox(width: 8),
-                      Text('كود الخصم الخاص بك', style: TextStyle(fontSize: 14, color: Colors.amber.shade900, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.amber.shade300),
+            ),
+
+            // 🎁 الصندوق والأنيميشن
+            AnimatedBuilder(
+              animation: _shakeCtrl,
+              builder: (context, child) {
+                return Transform.rotate(
+                  angle: _isOpen ? 0 : _shakeAnimation.value,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 800),
+                    curve: Curves.elasticOut,
+                    transform: _isOpen
+                        ? (Matrix4.identity()..scale(1.2)) // تكبير عند الفتح
+                        : Matrix4.identity(),
+                    child: Icon(
+                      _isOpen ? Icons.card_giftcard : boxIcon,
+                      size: _isOpen ? 120 : 100,
+                      color: _isOpen ? Colors.amber : boxColor,
                     ),
-                    child: SelectableText(
-                      couponCode,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 3,
-                        color: Colors.black87,
+                  ),
+                );
+              },
+            ),
+
+            // 🔥🔥🔥 هنا التعديل الجذري لحل مشكلة التعليق وإضافة الأزرار الواضحة 🔥🔥🔥
+            if (_isOpen)
+              Positioned(
+                bottom: 80,
+                left: 30,
+                right: 30,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // الزر الأول والأهم: عرض الكود في المحفظة
+                    SizedBox(
+                      width: double.infinity,
+                      height: 55,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          _cleanupAndNavigate(const CustomerWalletScreen());
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.amber,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                          elevation: 4,
+                        ),
+                        icon: const Icon(Icons.card_giftcard, size: 24),
+                        label: const Text(
+                          'عرض الكود في المحفظة 💳',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('سيتم تطبيقه تلقائياً في سلتك', style: TextStyle(fontSize: 11, color: Colors.amber.shade800)),
-                ],
-              ),
-            ),
-          ],
 
-          if (isLimited) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
-              child: const Text('🔥 جائزة محدودة العدد', style: TextStyle(color: Colors.red, fontSize: 11, fontWeight: FontWeight.bold)),
-            ),
+                    const SizedBox(height: 15),
+
+                    // الزر الثاني: الذهاب للسلة لاستخدام الجائزة فوراً
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          // 1. إيقاف الأنيميشن والصوت
+                          _shakeCtrl.stop();
+                          _openCtrl.stop();
+                          _player.stop();
+
+                          // 2. العودة للشاشة الرئيسية
+                          Navigator.of(context).popUntil((route) => route.isFirst);
+
+                          // 3. تحويل التبويب تلقائياً إلى السلة (رقم 3 هو السلة حسب نظامك)
+                          Future.delayed(const Duration(milliseconds: 100), () {
+                            if (mounted) {
+                              // استبدل NavigationProvider بالمزود الصحيح في تطبيقك
+                              // Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
+                            }
+                          });
+                        },
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.amber, width: 2),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                        ),
+                        icon: const Icon(Icons.shopping_cart, size: 20, color: Colors.amber),
+                        label: const Text(
+                          'الذهاب للسلة لاستخدامه 🛒',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.amber),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
-        ],
+        ),
       ),
     );
-  }}
-
-
+  }
+}
 
 
 class CustomerChatPage extends StatefulWidget {

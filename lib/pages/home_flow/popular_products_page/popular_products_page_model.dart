@@ -49,8 +49,7 @@ class PopularProductsPageModel
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -129,42 +128,5 @@ class PopularProductsPageModel
         );
       });
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        localStates: {
-          'filter': debugSerializeParam(
-            filter,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PopularProductsPage',
-            searchReference:
-                'reference=QhsKDwoGZmlsdGVyEgVldTIzcCoCEgByBAgDIAFQAVoGZmlsdGVyYhNQb3B1bGFyUHJvZHVjdHNQYWdl',
-            name: 'String',
-            nullable: false,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainSearchFilterAppbarModel (MainSearchFilterAppbar)':
-              mainSearchFilterAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'mainComponentModels (List<MainComponent>)':
-              mainComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=PopularProductsPage',
-        searchReference:
-            'reference=OhNQb3B1bGFyUHJvZHVjdHNQYWdlUAFaE1BvcHVsYXJQcm9kdWN0c1BhZ2U=',
-        widgetClassName: 'PopularProductsPage',
-      );
+
 }

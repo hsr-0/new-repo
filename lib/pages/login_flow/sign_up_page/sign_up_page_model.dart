@@ -126,8 +126,7 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
 
   ApiCallResponse? get customerData => _customerData;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -156,113 +155,5 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
     textController4?.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'isInner': debugSerializeParam(
-            widget?.isInner,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            searchReference:
-                'reference=SiEKEQoHaXNJbm5lchIGNzFnZjUxKgYSBHRydWVyBAgFIAFQAVoHaXNJbm5lcg==',
-            name: 'bool',
-            nullable: false,
-          )
-        }.withoutNulls,
-        localStates: {
-          'isCheck': debugSerializeParam(
-            isCheck,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            searchReference:
-                'reference=QiEKEAoHaXNDaGVjaxIFMHp0cmUqBxIFZmFsc2VyBAgFIABQAVoHaXNDaGVja2IKU2lnblVwUGFnZQ==',
-            name: 'bool',
-            nullable: true,
-          )
-        },
-        widgetStates: {
-          'textFieldText1': debugSerializeParam(
-            textController1?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'String',
-            nullable: true,
-          ),
-          'textFieldText2': debugSerializeParam(
-            textController2?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'String',
-            nullable: true,
-          ),
-          'textFieldText3': debugSerializeParam(
-            textController3?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'String',
-            nullable: true,
-          ),
-          'textFieldText4': debugSerializeParam(
-            textController4?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'String',
-            nullable: true,
-          )
-        },
-        actionOutputs: {
-          'signup': debugSerializeParam(
-            signup,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'login': debugSerializeParam(
-            login,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'id': debugSerializeParam(
-            id,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'String',
-            nullable: true,
-          ),
-          'customerData': debugSerializeParam(
-            customerData,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SignUpPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=SignUpPage',
-        searchReference: 'reference=OgpTaWduVXBQYWdlUAFaClNpZ25VcFBhZ2U=',
-        widgetClassName: 'SignUpPage',
-      );
+
 }

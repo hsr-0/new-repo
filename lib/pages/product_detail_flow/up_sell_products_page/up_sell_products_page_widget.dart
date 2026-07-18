@@ -179,17 +179,7 @@ class _UpSellProductsPageWidgetState extends State<UpSellProductsPageWidget>
                                     if (upSellProductList.isEmpty) {
                                       return NoProductsComponentWidget();
                                     }
-                                    _model.debugGeneratorVariables[
-                                            'upSellProductList${upSellProductList.length > 100 ? ' (first 100)' : ''}'] =
-                                        debugSerializeParam(
-                                      upSellProductList.take(100),
-                                      ParamType.String,
-                                      isList: true,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=UpSellProductsPage',
-                                      name: 'String',
-                                      nullable: false,
-                                    );
+
                                     debugLogWidgetClass(_model);
 
                                     return GridView.builder(
@@ -298,28 +288,7 @@ class _UpSellProductsPageWidgetState extends State<UpSellProductsPageWidget>
                                               }
                                               final containerProductDetailResponse =
                                                   snapshot.data!;
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_statusCode_Container_bydeiuh9'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .statusCode,
-                                                ParamType.int,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=UpSellProductsPage',
-                                                name: 'int',
-                                                nullable: false,
-                                              );
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_responseBody_Container_bydeiuh9'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .bodyText,
-                                                ParamType.String,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=UpSellProductsPage',
-                                                name: 'String',
-                                                nullable: false,
-                                              );
+
                                               debugLogWidgetClass(_model);
 
                                               return Container(

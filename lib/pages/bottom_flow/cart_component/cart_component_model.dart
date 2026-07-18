@@ -130,9 +130,10 @@ class CartComponentModel extends FlutterFlowModel<CartComponentWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
+
+  get debugGeneratorVariables => null;
   @override
   void initState(BuildContext context) {
     centerAppbarModel = createModel(context, () => CenterAppbarModel());
@@ -166,136 +167,4 @@ class CartComponentModel extends FlutterFlowModel<CartComponentWidget> {
     }
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'isBack': debugSerializeParam(
-            widget?.isBack,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            searchReference:
-                'reference=SiEKEAoGaXNCYWNrEgZ4Y2FvcHYqBxIFZmFsc2VyBAgFIAFQAFoGaXNCYWNr',
-            name: 'bool',
-            nullable: false,
-          )
-        }.withoutNulls,
-        localStates: {
-          'shipping': debugSerializeParam(
-            shipping,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            searchReference:
-                'reference=QhkKEQoIc2hpcHBpbmcSBTl4OWk5cgQIASABUABaCHNoaXBwaW5nYg1DYXJ0Q29tcG9uZW50',
-            name: 'int',
-            nullable: false,
-          ),
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            searchReference:
-                'reference=QhgKEAoHcHJvY2VzcxIFbHh6MWhyBAgFIAFQAFoHcHJvY2Vzc2INQ2FydENvbXBvbmVudA==',
-            name: 'bool',
-            nullable: false,
-          ),
-          'keyId': debugSerializeParam(
-            keyId,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            searchReference:
-                'reference=QhoKDgoFa2V5SWQSBTk4NGgyKgISAHIECAMgAVAAWgVrZXlJZGINQ2FydENvbXBvbmVudA==',
-            name: 'String',
-            nullable: false,
-          ),
-          'mainProcess': debugSerializeParam(
-            mainProcess,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            searchReference:
-                'reference=QiUKFAoLbWFpblByb2Nlc3MSBXFzc2JzKgcSBWZhbHNlcgQIBSABUABaC21haW5Qcm9jZXNzYg1DYXJ0Q29tcG9uZW50',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        actionOutputs: {
-          'success': debugSerializeParam(
-            success,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            name: 'bool',
-            nullable: true,
-          ),
-          'removeCouponCopy': debugSerializeParam(
-            removeCouponCopy,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'successUpdate': debugSerializeParam(
-            successUpdate,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            name: 'bool',
-            nullable: true,
-          ),
-          'successUpdateCopy': debugSerializeParam(
-            successUpdateCopy,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            name: 'bool',
-            nullable: true,
-          ),
-          'removeCoupon': debugSerializeParam(
-            removeCoupon,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'updateShipping': debugSerializeParam(
-            updateShipping,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'centerAppbarModel (CenterAppbar)':
-              centerAppbarModel?.toWidgetClassDebugData(),
-          'noCartComponentModel (NoCartComponent)':
-              noCartComponentModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'mainComponentModels (List<MainComponent>)':
-              mainComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=CartComponent',
-        searchReference:
-            'reference=Og1DYXJ0Q29tcG9uZW50UABaDUNhcnRDb21wb25lbnQ=',
-        widgetClassName: 'CartComponent',
-      );
 }

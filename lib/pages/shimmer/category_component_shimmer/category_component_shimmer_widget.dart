@@ -152,17 +152,7 @@ class _CategoryComponentShimmerWidgetState
                   final categoryList = List.generate(
                       random_data.randomInteger(9, 9),
                       (index) => random_data.randomName(true, true)).toList();
-                  _model.debugGeneratorVariables[
-                          'categoryList${categoryList.length > 100 ? ' (first 100)' : ''}'] =
-                      debugSerializeParam(
-                    categoryList.take(100),
-                    ParamType.String,
-                    isList: true,
-                    link:
-                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryComponentShimmer',
-                    name: 'String',
-                    nullable: false,
-                  );
+
                   debugLogWidgetClass(_model);
 
                   return Wrap(

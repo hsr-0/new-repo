@@ -10,9 +10,9 @@ import '/flutter_flow/flutter_flow_theme.dart';
 import 'flutter_flow_util.dart';
 import 'package:collection/collection.dart';
 import 'package:easy_debounce/easy_debounce.dart';
-import 'package:debug_panel_proto/debug_panel_proto.dart';
 
-bool kEnableDebugLogging = true;
+// تم تعطيل تسجيل الديباج كإجراء احترازي بعد حذف المكتبة
+bool kEnableDebugLogging = false;
 
 /// A inherited widget that provides the root model of the current page, as well
 /// as a callback to link the current model to its parent model for debug logging
@@ -42,7 +42,7 @@ class DebugFlutterFlowModelContext extends InheritedWidget {
   @override
   bool updateShouldNotify(DebugFlutterFlowModelContext oldWidget) =>
       rootModel != oldWidget.rootModel ||
-      parentModelCallback != oldWidget.parentModelCallback;
+          parentModelCallback != oldWidget.parentModelCallback;
 }
 
 /// replace ModalRoute.of(context), needed because of the issue in Flutter 3.19.x
@@ -63,10 +63,6 @@ class DebugModalRoute {
   }
 }
 
-extension SerializationExtensions on GeneratedMessage {
-  String get serializedBufferString => base64.encode(writeToBuffer());
-}
-
 void debugLogging(String info) {
   devtools.postEvent(
     'ext.flutterflow_debug_panel.updateDebugData',
@@ -76,9 +72,9 @@ void debugLogging(String info) {
 
 /// Debounce the logging call for different channel (tag) every 500ms
 void debouncedDebugLogging(
-  String tag,
-  Map<String, dynamic> Function() debugInfo,
-) {
+    String tag,
+    Map<String, dynamic> Function() debugInfo,
+    ) {
   if (!kEnableDebugLogging) {
     return;
   }
@@ -87,119 +83,31 @@ void debouncedDebugLogging(
     EasyDebounce.debounce(
       tag,
       const Duration(milliseconds: 1000),
-      () => debugLogging(json.encode(debugInfo())),
+          () => debugLogging(json.encode(debugInfo())),
     );
   } catch (_) {}
 }
 
+// تم تفريغ الدوال التالية لتجنب الأخطاء المتعلقة بمكتبة debug_panel_proto المحذوفة
 void debugLogGlobalProperty(
-  BuildContext context, {
-  String? locale,
-  String? routePath,
-  List<String>? routeStack,
-}) async {
-  debouncedDebugLogging(
-      '405ebf2ff50c295c675b5802889ea941f081fd51',
-      () => {
-            'event_type': 'variable',
-            'data_source': 'globalProperty',
-            'data': GlobalPropertyDebugData(
-                    values: context.mounted
-                        ? {
-                            'screenWidth': debugSerializeParam(
-                              MediaQuery.sizeOf(context).width,
-                              ParamType.double,
-                              nullable: false,
-                            ),
-                            'screenHeight': debugSerializeParam(
-                              MediaQuery.sizeOf(context).height,
-                              ParamType.double,
-                              nullable: false,
-                            ),
-                            'platform': debugSerializeParam(
-                              kIsWeb ? 'web' : Platform.operatingSystem,
-                              ParamType.String,
-                              nullable: false,
-                            ),
-                            'currentTime': debugSerializeParam(
-                              getCurrentTimestamp,
-                              ParamType.DateTime,
-                              nullable: false,
-                            ),
-                            'locale': debugSerializeParam(
-                              locale ?? MyApp.of(context).locale?.toString(),
-                              ParamType.String,
-                              nullable: true,
-                            ),
-                            'route': debugSerializeParam(
-                              (routePath ?? MyApp.of(context).getRoute())
-                                  .toString(),
-                              ParamType.String,
-                              nullable: false,
-                              link: debugRouteLinkMap[
-                                  (routePath ?? MyApp.of(context).getRoute())
-                                      .toString()],
-                            ),
-                            'routeStack': DebugDataField(
-                              type: DebugDataField_ParamType.STRING,
-                              listValue: ListDebugDataField(
-                                values: (routeStack ??
-                                        MyApp.of(context).getRouteStack())
-                                    .map((e) => DebugDataField(
-                                          type: DebugDataField_ParamType.STRING,
-                                          serializedValue: e,
-                                          link: debugRouteLinkMap[e],
-                                          nullable: false,
-                                        ))
-                                    .toList(),
-                              ),
-                              nullable: false,
-                            ),
-                          }
-                        : {})
-                .serializedBufferString
-          });
+    BuildContext context, {
+      String? locale,
+      String? routePath,
+      List<String>? routeStack,
+    }) async {
+  // Stubbed out to remove dependency on debug_panel_proto
 }
 
 void debugLogAppState(FFAppState appState) {
-  debouncedDebugLogging(
-      'fbcc19a787981a30d86b10103c2f3951604b2ae6',
-      () => {
-            'event_type': 'variable',
-            'data_source': 'appState',
-            'data': AppStateDebugData(values: appState.toDebugSerializableMap())
-                .serializedBufferString,
-          });
+  // Stubbed out to remove dependency on debug_panel_proto
 }
 
 void debugLogAppConstant() {
-  debouncedDebugLogging(
-      '01fb7fae5dd1febbd23f5104f58cd88e8443668b',
-      () => {
-            'event_type': 'variable',
-            'data_source': 'appConstant',
-            'data': AppConstantDebugData(
-                    values: FFAppConstants.toDebugSerializableMap())
-                .serializedBufferString,
-          });
+  // Stubbed out to remove dependency on debug_panel_proto
 }
 
 void debugLogWidgetClass(FlutterFlowModel widgetClassModel) {
-  WidgetsBinding.instance.addPostFrameCallback(
-    (_) {
-      if (widgetClassModel.isRouteVisible) {
-        debouncedDebugLogging(
-            '508f3c74205c87928b71f49040062e732f9c20b0',
-            () => {
-                  'event_type': 'variable',
-                  'data_source': 'widgetClass',
-                  'data': widgetClassModel.rootModel
-                      .toWidgetClassDebugData()
-                      .serializedBufferString,
-                });
-      }
-    },
-  );
+  // Stubbed out to remove dependency on debug_panel_proto
 }
 
 mixin DebugLoggable {

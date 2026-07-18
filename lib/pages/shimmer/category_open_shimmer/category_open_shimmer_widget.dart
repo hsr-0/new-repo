@@ -208,18 +208,7 @@ class _CategoryOpenShimmerWidgetState extends State<CategoryOpenShimmerWidget>
                   final categoryRelatedList = List.generate(
                       random_data.randomInteger(4, 4),
                       (index) => random_data.randomName(true, false)).toList();
-                  _model.debugGeneratorVariables[
-                          'categoryRelatedList${categoryRelatedList.length > 100 ? ' (first 100)' : ''}'] =
-                      debugSerializeParam(
-                    categoryRelatedList.take(100),
-                    ParamType.String,
-                    isList: true,
-                    link:
-                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenShimmer',
-                    name: 'String',
-                    nullable: false,
-                  );
-                  debugLogWidgetClass(_model);
+
 
                   return Column(
                     mainAxisSize: MainAxisSize.max,
@@ -305,18 +294,6 @@ class _CategoryOpenShimmerWidgetState extends State<CategoryOpenShimmerWidget>
                         ),
                       );
                     }
-                    _model.debugGeneratorVariables[
-                            'categoryOpenList${categoryOpenList.length > 100 ? ' (first 100)' : ''}'] =
-                        debugSerializeParam(
-                      categoryOpenList.take(100),
-                      ParamType.String,
-                      isList: true,
-                      link:
-                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenShimmer',
-                      name: 'String',
-                      nullable: false,
-                    );
-                    debugLogWidgetClass(_model);
 
                     return Wrap(
                       spacing: 12.0,

@@ -190,26 +190,8 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                       }
                                       final cartGetCartResponse =
                                           snapshot.data!;
-                                      _model.debugBackendQueries[
-                                              'PlantShopGroup.getCartCall_statusCode_Container_64z9716f'] =
-                                          debugSerializeParam(
-                                        cartGetCartResponse.statusCode,
-                                        ParamType.int,
-                                        link:
-                                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                        name: 'int',
-                                        nullable: false,
-                                      );
-                                      _model.debugBackendQueries[
-                                              'PlantShopGroup.getCartCall_responseBody_Container_64z9716f'] =
-                                          debugSerializeParam(
-                                        cartGetCartResponse.bodyText,
-                                        ParamType.String,
-                                        link:
-                                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                        name: 'String',
-                                        nullable: false,
-                                      );
+
+
                                       debugLogWidgetClass(_model);
 
                                       return Container(
@@ -1875,17 +1857,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                   )
                                                                   ?.toList() ??
                                                               [];
-                                                      _model.debugGeneratorVariables[
-                                                              'cartList${cartList.length > 100 ? ' (first 100)' : ''}'] =
-                                                          debugSerializeParam(
-                                                        cartList.take(100),
-                                                        ParamType.JSON,
-                                                        isList: true,
-                                                        link:
-                                                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                                        name: 'dynamic',
-                                                        nullable: false,
-                                                      );
+
                                                       debugLogWidgetClass(
                                                           _model);
 
@@ -2083,13 +2055,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                                   cartListItem,
                                                                                   r'''$.variation''',
                                                                                 ).toList();
-                                                                                _model.debugGeneratorVariables['variationList${variationList.length > 100 ? ' (first 100)' : ''}'] = debugSerializeParam(
-                                                                                  variationList.take(100),
-                                                                                  ParamType.JSON,
-                                                                                  link: 'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                                                                  name: 'dynamic',
-                                                                                  nullable: false,
-                                                                                );
+
                                                                                 debugLogWidgetClass(_model);
 
                                                                                 return Column(
@@ -2735,23 +2701,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                           )
                                                                           ?.toList() ??
                                                                       [];
-                                                                  _model.debugGeneratorVariables[
-                                                                          'couponeList${couponeList.length > 100 ? ' (first 100)' : ''}'] =
-                                                                      debugSerializeParam(
-                                                                    couponeList
-                                                                        .take(
-                                                                            100),
-                                                                    ParamType
-                                                                        .JSON,
-                                                                    isList:
-                                                                        true,
-                                                                    link:
-                                                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                                                    name:
-                                                                        'dynamic',
-                                                                    nullable:
-                                                                        false,
-                                                                  );
+
                                                                   debugLogWidgetClass(
                                                                       _model);
 
@@ -3012,23 +2962,6 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                           )
                                                                           ?.toList() ??
                                                                       [];
-                                                                  _model.debugGeneratorVariables[
-                                                                          'shippingRatesList${shippingRatesList.length > 100 ? ' (first 100)' : ''}'] =
-                                                                      debugSerializeParam(
-                                                                    shippingRatesList
-                                                                        .take(
-                                                                            100),
-                                                                    ParamType
-                                                                        .JSON,
-                                                                    isList:
-                                                                        true,
-                                                                    link:
-                                                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                                                    name:
-                                                                        'dynamic',
-                                                                    nullable:
-                                                                        false,
-                                                                  );
                                                                   debugLogWidgetClass(
                                                                       _model);
 
@@ -3411,22 +3344,7 @@ class _CheckoutPageWidgetState extends State<CheckoutPageWidget>
                                                                         NoPaymentMethodesComponentWidget(),
                                                                   );
                                                                 }
-                                                                _model.debugGeneratorVariables[
-                                                                        'paymentList${paymentList.length > 100 ? ' (first 100)' : ''}'] =
-                                                                    debugSerializeParam(
-                                                                  paymentList
-                                                                      .take(
-                                                                          100),
-                                                                  ParamType
-                                                                      .JSON,
-                                                                  isList: true,
-                                                                  link:
-                                                                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CheckoutPage',
-                                                                  name:
-                                                                      'dynamic',
-                                                                  nullable:
-                                                                      false,
-                                                                );
+
                                                                 debugLogWidgetClass(
                                                                     _model);
 

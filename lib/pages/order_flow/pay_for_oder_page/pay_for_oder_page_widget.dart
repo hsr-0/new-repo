@@ -208,17 +208,7 @@ class _PayForOderPageWidgetState extends State<PayForOderPageWidget>
                                                             ).toString()))
                                                     .toList())
                                                 .toList();
-                                            _model.debugGeneratorVariables[
-                                                    'paymentGetwaysList${paymentGetwaysList.length > 100 ? ' (first 100)' : ''}'] =
-                                                debugSerializeParam(
-                                              paymentGetwaysList.take(100),
-                                              ParamType.JSON,
-                                              isList: true,
-                                              link:
-                                                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-                                              name: 'dynamic',
-                                              nullable: false,
-                                            );
+
                                             debugLogWidgetClass(_model);
 
                                             return ListView.separated(

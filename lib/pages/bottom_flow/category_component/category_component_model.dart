@@ -53,8 +53,7 @@ class CategoryComponentModel extends FlutterFlowModel<CategoryComponentWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -94,54 +93,4 @@ class CategoryComponentModel extends FlutterFlowModel<CategoryComponentWidget> {
     }
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        localStates: {
-          'search': debugSerializeParam(
-            search,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryComponent',
-            searchReference:
-                'reference=QiAKDwoGc2VhcmNoEgVlbXRheioHEgVmYWxzZXIECAUgAVAAWgZzZWFyY2hiEUNhdGVnb3J5Q29tcG9uZW50',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        widgetStates: {
-          'textFieldText': debugSerializeParam(
-            textController?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryComponent',
-            name: 'String',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'categoryAppbarModel (CategoryAppbar)':
-              categoryAppbarModel?.toWidgetClassDebugData(),
-          'noProductsComponentModel (NoProductsComponent)':
-              noProductsComponentModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'categoriesSingleComponentModels (List<CategoriesSingleComponent>)':
-              categoriesSingleComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=CategoryComponent',
-        searchReference:
-            'reference=OhFDYXRlZ29yeUNvbXBvbmVudFAAWhFDYXRlZ29yeUNvbXBvbmVudA==',
-        widgetClassName: 'CategoryComponent',
-      );
 }

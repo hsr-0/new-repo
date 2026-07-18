@@ -85,8 +85,7 @@ class VariationBottomSheetModel
 
   bool? get success => _success;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -99,123 +98,5 @@ class VariationBottomSheetModel
     customDropDownModels.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'qty': debugSerializeParam(
-            widget?.qty,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=ShoKDQoDcXR5EgZmeHBuejAqAxIBMXIECAEgAVAAWgNxdHk=',
-            name: 'int',
-            nullable: false,
-          ),
-          'attributesList': debugSerializeParam(
-            widget?.attributesList,
-            ParamType.JSON,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=SiIKGAoOYXR0cmlidXRlc0xpc3QSBnZueTNvaXIGEgIICSABUABaDmF0dHJpYnV0ZXNMaXN0',
-            name: 'dynamic',
-            nullable: true,
-          ),
-          'allVariationsList': debugSerializeParam(
-            widget?.allVariationsList,
-            ParamType.JSON,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=SiUKGwoRYWxsVmFyaWF0aW9uc0xpc3QSBmo1NzNnOXIGEgIICSABUABaEWFsbFZhcmlhdGlvbnNMaXN0',
-            name: 'dynamic',
-            nullable: true,
-          )
-        }.withoutNulls,
-        localStates: {
-          'qty': debugSerializeParam(
-            qty,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=QhQKDAoDcXR5EgVuaTBicXIECAEgAVAAWgNxdHliFFZhcmlhdGlvbkJvdHRvbVNoZWV0',
-            name: 'int',
-            nullable: false,
-          ),
-          'selectedValuesList': debugSerializeParam(
-            selectedValuesList,
-            ParamType.String,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=QiUKGwoSc2VsZWN0ZWRWYWx1ZXNMaXN0EgV2NGw3eHIGEgIIAyABUABaEnNlbGVjdGVkVmFsdWVzTGlzdGIUVmFyaWF0aW9uQm90dG9tU2hlZXQ=',
-            name: 'String',
-            nullable: false,
-          ),
-          'index': debugSerializeParam(
-            index,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=QhYKDgoFaW5kZXgSBXY1OTdrcgQIASABUABaBWluZGV4YhRWYXJpYXRpb25Cb3R0b21TaGVldA==',
-            name: 'int',
-            nullable: false,
-          ),
-          'productDetail': debugSerializeParam(
-            productDetail,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=QhwKFgoNcHJvZHVjdERldGFpbBIFM2RqcXhyAggJUABaDXByb2R1Y3REZXRhaWxiFFZhcmlhdGlvbkJvdHRvbVNoZWV0',
-            name: 'dynamic',
-            nullable: true,
-          ),
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            searchReference:
-                'reference=QiEKEAoHcHJvY2VzcxIFdDFyNmgqBxIFZmFsc2VyBAgFIAFQAFoHcHJvY2Vzc2IUVmFyaWF0aW9uQm90dG9tU2hlZXQ=',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        actionOutputs: {
-          'success': debugSerializeParam(
-            success,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-            name: 'bool',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'customDropDownModels (List<CustomDropDown>)':
-              customDropDownModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=VariationBottomSheet',
-        searchReference:
-            'reference=OhRWYXJpYXRpb25Cb3R0b21TaGVldFAAWhRWYXJpYXRpb25Cb3R0b21TaGVldA==',
-        widgetClassName: 'VariationBottomSheet',
-      );
+
 }

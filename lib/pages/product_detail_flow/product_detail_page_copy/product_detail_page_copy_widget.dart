@@ -456,17 +456,7 @@ class _ProductDetailPageCopyWidgetState
                                                     final imagesList = widget!
                                                         .imagesList!
                                                         .toList();
-                                                    _model.debugGeneratorVariables[
-                                                            'imagesList${imagesList.length > 100 ? ' (first 100)' : ''}'] =
-                                                        debugSerializeParam(
-                                                      imagesList.take(100),
-                                                      ParamType.JSON,
-                                                      isList: true,
-                                                      link:
-                                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                      name: 'dynamic',
-                                                      nullable: false,
-                                                    );
+
                                                     debugLogWidgetClass(_model);
 
                                                     return Container(
@@ -1740,28 +1730,7 @@ class _ProductDetailPageCopyWidgetState
                                                 }
                                                 final reviewsProductReviewResponse =
                                                     snapshot.data!;
-                                                _model.debugBackendQueries[
-                                                        'PlantShopGroup.productReviewCall_statusCode_Container_h07mlx1z'] =
-                                                    debugSerializeParam(
-                                                  reviewsProductReviewResponse
-                                                      .statusCode,
-                                                  ParamType.int,
-                                                  link:
-                                                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                  name: 'int',
-                                                  nullable: false,
-                                                );
-                                                _model.debugBackendQueries[
-                                                        'PlantShopGroup.productReviewCall_responseBody_Container_h07mlx1z'] =
-                                                    debugSerializeParam(
-                                                  reviewsProductReviewResponse
-                                                      .bodyText,
-                                                  ParamType.String,
-                                                  link:
-                                                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                  name: 'String',
-                                                  nullable: false,
-                                                );
+
                                                 debugLogWidgetClass(_model);
 
                                                 return Container(
@@ -1957,23 +1926,7 @@ class _ProductDetailPageCopyWidgetState
                                                                           .toList()
                                                                           ?.toList() ??
                                                                       [];
-                                                                  _model.debugGeneratorVariables[
-                                                                          'reviewList${reviewList.length > 100 ? ' (first 100)' : ''}'] =
-                                                                      debugSerializeParam(
-                                                                    reviewList
-                                                                        .take(
-                                                                            100),
-                                                                    ParamType
-                                                                        .JSON,
-                                                                    isList:
-                                                                        true,
-                                                                    link:
-                                                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                                    name:
-                                                                        'dynamic',
-                                                                    nullable:
-                                                                        false,
-                                                                  );
+
                                                                   debugLogWidgetClass(
                                                                       _model);
 
@@ -2223,18 +2176,7 @@ class _ProductDetailPageCopyWidgetState
                                                                   .toList()
                                                                   .take(6)
                                                                   .toList();
-                                                          _model.debugGeneratorVariables[
-                                                                  'upSellIdsList${upSellIdsList.length > 100 ? ' (first 100)' : ''}'] =
-                                                              debugSerializeParam(
-                                                            upSellIdsList
-                                                                .take(100),
-                                                            ParamType.String,
-                                                            isList: true,
-                                                            link:
-                                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                            name: 'String',
-                                                            nullable: false,
-                                                          );
+
                                                           debugLogWidgetClass(
                                                               _model);
 
@@ -2283,34 +2225,7 @@ class _ProductDetailPageCopyWidgetState
                                                                     final containerProductDetailResponse =
                                                                         snapshot
                                                                             .data!;
-                                                                    _model.debugBackendQueries[
-                                                                            'PlantShopGroup.productDetailCall_statusCode_Container_rf2y4dk9'] =
-                                                                        debugSerializeParam(
-                                                                      containerProductDetailResponse
-                                                                          .statusCode,
-                                                                      ParamType
-                                                                          .int,
-                                                                      link:
-                                                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                                      name:
-                                                                          'int',
-                                                                      nullable:
-                                                                          false,
-                                                                    );
-                                                                    _model.debugBackendQueries[
-                                                                            'PlantShopGroup.productDetailCall_responseBody_Container_rf2y4dk9'] =
-                                                                        debugSerializeParam(
-                                                                      containerProductDetailResponse
-                                                                          .bodyText,
-                                                                      ParamType
-                                                                          .String,
-                                                                      link:
-                                                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                                      name:
-                                                                          'String',
-                                                                      nullable:
-                                                                          false,
-                                                                    );
+
                                                                     debugLogWidgetClass(
                                                                         _model);
 
@@ -2712,18 +2627,7 @@ class _ProductDetailPageCopyWidgetState
                                                                   .toList()
                                                                   .take(6)
                                                                   .toList();
-                                                          _model.debugGeneratorVariables[
-                                                                  'relatedIdsList${relatedIdsList.length > 100 ? ' (first 100)' : ''}'] =
-                                                              debugSerializeParam(
-                                                            relatedIdsList
-                                                                .take(100),
-                                                            ParamType.String,
-                                                            isList: true,
-                                                            link:
-                                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                            name: 'String',
-                                                            nullable: false,
-                                                          );
+
                                                           debugLogWidgetClass(
                                                               _model);
 
@@ -2772,34 +2676,7 @@ class _ProductDetailPageCopyWidgetState
                                                                     final containerProductDetailResponse =
                                                                         snapshot
                                                                             .data!;
-                                                                    _model.debugBackendQueries[
-                                                                            'PlantShopGroup.productDetailCall_statusCode_Container_f3ywgbvw'] =
-                                                                        debugSerializeParam(
-                                                                      containerProductDetailResponse
-                                                                          .statusCode,
-                                                                      ParamType
-                                                                          .int,
-                                                                      link:
-                                                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                                      name:
-                                                                          'int',
-                                                                      nullable:
-                                                                          false,
-                                                                    );
-                                                                    _model.debugBackendQueries[
-                                                                            'PlantShopGroup.productDetailCall_responseBody_Container_f3ywgbvw'] =
-                                                                        debugSerializeParam(
-                                                                      containerProductDetailResponse
-                                                                          .bodyText,
-                                                                      ParamType
-                                                                          .String,
-                                                                      link:
-                                                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPageCopy',
-                                                                      name:
-                                                                          'String',
-                                                                      nullable:
-                                                                          false,
-                                                                    );
+
                                                                     debugLogWidgetClass(
                                                                         _model);
 

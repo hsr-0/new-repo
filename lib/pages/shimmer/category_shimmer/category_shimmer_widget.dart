@@ -192,18 +192,7 @@ class _CategoryShimmerWidgetState extends State<CategoryShimmerWidget>
                           .toList()
                           .take(8)
                           .toList();
-                      _model.debugGeneratorVariables[
-                              'categoriesList${categoriesList.length > 100 ? ' (first 100)' : ''}'] =
-                          debugSerializeParam(
-                        categoriesList.take(100),
-                        ParamType.String,
-                        isList: true,
-                        link:
-                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryShimmer',
-                        name: 'String',
-                        nullable: false,
-                      );
-                      debugLogWidgetClass(_model);
+
 
                       return SingleChildScrollView(
                         scrollDirection: Axis.horizontal,

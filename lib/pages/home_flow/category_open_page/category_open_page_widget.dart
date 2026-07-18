@@ -286,26 +286,8 @@ class _CategoryOpenPageWidgetState extends State<CategoryOpenPageWidget>
                                   }
                                   final rowCategoryOpenSubResponse =
                                       snapshot.data!;
-                                  _model.debugBackendQueries[
-                                          'PlantShopGroup.categoryOpenSubCall_statusCode_Row_nlpqacnp'] =
-                                      debugSerializeParam(
-                                    rowCategoryOpenSubResponse.statusCode,
-                                    ParamType.int,
-                                    link:
-                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-                                    name: 'int',
-                                    nullable: false,
-                                  );
-                                  _model.debugBackendQueries[
-                                          'PlantShopGroup.categoryOpenSubCall_responseBody_Row_nlpqacnp'] =
-                                      debugSerializeParam(
-                                    rowCategoryOpenSubResponse.bodyText,
-                                    ParamType.String,
-                                    link:
-                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-                                    name: 'String',
-                                    nullable: false,
-                                  );
+
+
                                   debugLogWidgetClass(_model);
 
                                   return Row(
@@ -500,18 +482,7 @@ class _CategoryOpenPageWidgetState extends State<CategoryOpenPageWidget>
                                                               )
                                                               ?.toList() ??
                                                           [];
-                                                  _model.debugGeneratorVariables[
-                                                          'categoryOpenSubList${categoryOpenSubList.length > 100 ? ' (first 100)' : ''}'] =
-                                                      debugSerializeParam(
-                                                    categoryOpenSubList
-                                                        .take(100),
-                                                    ParamType.JSON,
-                                                    isList: true,
-                                                    link:
-                                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-                                                    name: 'dynamic',
-                                                    nullable: false,
-                                                  );
+
                                                   debugLogWidgetClass(_model);
 
                                                   return Column(

@@ -32,8 +32,7 @@ class WriteReviewPageModel extends FlutterFlowModel<WriteReviewPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -50,48 +49,5 @@ class WriteReviewPageModel extends FlutterFlowModel<WriteReviewPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'productDetail': debugSerializeParam(
-            widget?.productDetail,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewPage',
-            searchReference:
-                'reference=Sh8KFwoNcHJvZHVjdERldGFpbBIGeDB3NTdncgQICSABUAFaDXByb2R1Y3REZXRhaWw=',
-            name: 'dynamic',
-            nullable: true,
-          )
-        }.withoutNulls,
-        widgetStates: {
-          'ratingBarValue': debugSerializeParam(
-            ratingBarValue,
-            ParamType.double,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewPage',
-            name: 'double',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=WriteReviewPage',
-        searchReference:
-            'reference=Og9Xcml0ZVJldmlld1BhZ2VQAVoPV3JpdGVSZXZpZXdQYWdl',
-        widgetClassName: 'WriteReviewPage',
-      );
+
 }

@@ -30,8 +30,7 @@ class CartPageModel extends FlutterFlowModel<CartPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -48,37 +47,4 @@ class CartPageModel extends FlutterFlowModel<CartPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        localStates: {
-          'shipping': debugSerializeParam(
-            shipping,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartPage',
-            searchReference:
-                'reference=QhkKEQoIc2hpcHBpbmcSBW1sd3FncgQIASABUAFaCHNoaXBwaW5nYghDYXJ0UGFnZQ==',
-            name: 'int',
-            nullable: false,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'cartComponentModel (CartComponent)':
-              cartComponentModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=CartPage',
-        searchReference: 'reference=OghDYXJ0UGFnZVABWghDYXJ0UGFnZQ==',
-        widgetClassName: 'CartPage',
-      );
 }

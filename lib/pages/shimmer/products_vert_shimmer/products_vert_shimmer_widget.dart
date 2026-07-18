@@ -98,18 +98,7 @@ class _ProductsVertShimmerWidgetState extends State<ProductsVertShimmerWidget>
             builder: (context) {
               final dataList = List.generate(random_data.randomInteger(6, 6),
                   (index) => random_data.randomName(true, false)).toList();
-              _model.debugGeneratorVariables[
-                      'dataList${dataList.length > 100 ? ' (first 100)' : ''}'] =
-                  debugSerializeParam(
-                dataList.take(100),
-                ParamType.String,
-                isList: true,
-                link:
-                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductsVertShimmer',
-                name: 'String',
-                nullable: false,
-              );
-              debugLogWidgetClass(_model);
+
 
               return Wrap(
                 spacing: 12.0,

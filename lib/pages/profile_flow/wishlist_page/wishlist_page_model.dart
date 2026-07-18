@@ -30,8 +30,7 @@ class WishlistPageModel extends FlutterFlowModel<WishlistPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -50,29 +49,4 @@ class WishlistPageModel extends FlutterFlowModel<WishlistPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'mainComponentModels (List<MainComponent>)':
-              mainComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=WishlistPage',
-        searchReference: 'reference=OgxXaXNobGlzdFBhZ2VQAVoMV2lzaGxpc3RQYWdl',
-        widgetClassName: 'WishlistPage',
-      );
 }

@@ -199,26 +199,8 @@ class _OrderDetailsPageWidgetState extends State<OrderDetailsPageWidget>
                                   }
                                   final listViewOrderDetailResponse =
                                       snapshot.data!;
-                                  _model.debugBackendQueries[
-                                          'PlantShopGroup.orderDetailCall_statusCode_ListView_uqu45xyy'] =
-                                      debugSerializeParam(
-                                    listViewOrderDetailResponse.statusCode,
-                                    ParamType.int,
-                                    link:
-                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-                                    name: 'int',
-                                    nullable: false,
-                                  );
-                                  _model.debugBackendQueries[
-                                          'PlantShopGroup.orderDetailCall_responseBody_ListView_uqu45xyy'] =
-                                      debugSerializeParam(
-                                    listViewOrderDetailResponse.bodyText,
-                                    ParamType.String,
-                                    link:
-                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-                                    name: 'String',
-                                    nullable: false,
-                                  );
+
+
                                   debugLogWidgetClass(_model);
 
                                   return RefreshIndicator(
@@ -961,16 +943,7 @@ class _OrderDetailsPageWidgetState extends State<OrderDetailsPageWidget>
                                               ),
                                               r'''$.line_items''',
                                             ).toList();
-                                            _model.debugGeneratorVariables[
-                                                    'productList${productList.length > 100 ? ' (first 100)' : ''}'] =
-                                                debugSerializeParam(
-                                              productList.take(100),
-                                              ParamType.JSON,
-                                              link:
-                                                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-                                              name: 'dynamic',
-                                              nullable: false,
-                                            );
+
                                             debugLogWidgetClass(_model);
 
                                             return Column(
@@ -1164,13 +1137,7 @@ class _OrderDetailsPageWidgetState extends State<OrderDetailsPageWidget>
                                                                                   productListItem,
                                                                                   r'''$.meta_data''',
                                                                                 ).toList();
-                                                                                _model.debugGeneratorVariables['variationList${variationList.length > 100 ? ' (first 100)' : ''}'] = debugSerializeParam(
-                                                                                  variationList.take(100),
-                                                                                  ParamType.JSON,
-                                                                                  link: 'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-                                                                                  name: 'dynamic',
-                                                                                  nullable: false,
-                                                                                );
+
                                                                                 debugLogWidgetClass(_model);
 
                                                                                 return Column(
@@ -2094,17 +2061,7 @@ class _OrderDetailsPageWidgetState extends State<OrderDetailsPageWidget>
                                                             ),
                                                             r'''$.coupon_lines''',
                                                           ).toList();
-                                                          _model.debugGeneratorVariables[
-                                                                  'couponLinesList${couponLinesList.length > 100 ? ' (first 100)' : ''}'] =
-                                                              debugSerializeParam(
-                                                            couponLinesList
-                                                                .take(100),
-                                                            ParamType.JSON,
-                                                            link:
-                                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-                                                            name: 'dynamic',
-                                                            nullable: false,
-                                                          );
+
                                                           debugLogWidgetClass(
                                                               _model);
 
@@ -2305,17 +2262,7 @@ class _OrderDetailsPageWidgetState extends State<OrderDetailsPageWidget>
                                                           ),
                                                           r'''$.shipping_lines''',
                                                         ).toList();
-                                                        _model.debugGeneratorVariables[
-                                                                'shippingList${shippingList.length > 100 ? ' (first 100)' : ''}'] =
-                                                            debugSerializeParam(
-                                                          shippingList
-                                                              .take(100),
-                                                          ParamType.JSON,
-                                                          link:
-                                                              'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-                                                          name: 'dynamic',
-                                                          nullable: false,
-                                                        );
+
                                                         debugLogWidgetClass(
                                                             _model);
 

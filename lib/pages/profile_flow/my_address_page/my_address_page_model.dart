@@ -26,8 +26,7 @@ class MyAddressPageModel extends FlutterFlowModel<MyAddressPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -47,28 +46,4 @@ class MyAddressPageModel extends FlutterFlowModel<MyAddressPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'noAddressComponentModel (NoAddressComponent)':
-              noAddressComponentModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=MyAddressPage',
-        searchReference:
-            'reference=Og1NeUFkZHJlc3NQYWdlUAFaDU15QWRkcmVzc1BhZ2U=',
-        widgetClassName: 'MyAddressPage',
-      );
 }

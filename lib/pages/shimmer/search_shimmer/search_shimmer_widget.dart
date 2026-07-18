@@ -188,18 +188,7 @@ class _SearchShimmerWidgetState extends State<SearchShimmerWidget>
                     false,
                     false,
                   )).toList();
-          _model.debugGeneratorVariables[
-                  'searchList${searchList.length > 100 ? ' (first 100)' : ''}'] =
-              debugSerializeParam(
-            searchList.take(100),
-            ParamType.String,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SearchShimmer',
-            name: 'String',
-            nullable: false,
-          );
-          debugLogWidgetClass(_model);
+
 
           return SingleChildScrollView(
             child: Column(

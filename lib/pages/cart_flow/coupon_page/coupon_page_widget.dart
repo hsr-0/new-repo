@@ -448,17 +448,7 @@ class _CouponPageWidgetState extends State<CouponPageWidget>
                                               child: NoCouponComponentWidget(),
                                             );
                                           }
-                                          _model.debugGeneratorVariables[
-                                                  'couponsList${couponsList.length > 100 ? ' (first 100)' : ''}'] =
-                                              debugSerializeParam(
-                                            couponsList.take(100),
-                                            ParamType.JSON,
-                                            isList: true,
-                                            link:
-                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-                                            name: 'dynamic',
-                                            nullable: false,
-                                          );
+
                                           debugLogWidgetClass(_model);
 
                                           return Column(
@@ -586,17 +576,7 @@ class _CouponPageWidgetState extends State<CouponPageWidget>
                                               random_data.randomInteger(4, 4),
                                               (index) => random_data.randomName(
                                                   true, false)).toList();
-                                          _model.debugGeneratorVariables[
-                                                  'list${list.length > 100 ? ' (first 100)' : ''}'] =
-                                              debugSerializeParam(
-                                            list.take(100),
-                                            ParamType.String,
-                                            isList: true,
-                                            link:
-                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-                                            name: 'String',
-                                            nullable: false,
-                                          );
+
                                           debugLogWidgetClass(_model);
 
                                           return Column(

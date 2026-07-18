@@ -63,8 +63,7 @@ class CouponPageModel extends FlutterFlowModel<CouponPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -84,77 +83,5 @@ class CouponPageModel extends FlutterFlowModel<CouponPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'nonce': debugSerializeParam(
-            widget?.nonce,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-            searchReference:
-                'reference=ShcKDwoFbm9uY2USBjVhZmdiaXIECAMgAVABWgVub25jZQ==',
-            name: 'String',
-            nullable: true,
-          )
-        }.withoutNulls,
-        localStates: {
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-            searchReference:
-                'reference=QiEKEAoHcHJvY2VzcxIFeGY5ZnQqBxIFZmFsc2VyBAgFIAFQAVoHcHJvY2Vzc2IKQ291cG9uUGFnZQ==',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        widgetStates: {
-          'textFieldText': debugSerializeParam(
-            textController?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-            name: 'String',
-            nullable: true,
-          )
-        },
-        actionOutputs: {
-          'coupons': debugSerializeParam(
-            coupons,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'apply': debugSerializeParam(
-            apply,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CouponPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=CouponPage',
-        searchReference: 'reference=OgpDb3Vwb25QYWdlUAFaCkNvdXBvblBhZ2U=',
-        widgetClassName: 'CouponPage',
-      );
+
 }

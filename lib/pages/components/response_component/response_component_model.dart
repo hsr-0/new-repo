@@ -7,8 +7,7 @@ import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 
 class ResponseComponentModel extends FlutterFlowModel<ResponseComponentWidget> {
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {}
@@ -16,22 +15,4 @@ class ResponseComponentModel extends FlutterFlowModel<ResponseComponentWidget> {
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=responseComponent',
-        searchReference:
-            'reference=OhFyZXNwb25zZUNvbXBvbmVudFAAWhFyZXNwb25zZUNvbXBvbmVudA==',
-        widgetClassName: 'responseComponent',
-      );
 }

@@ -175,18 +175,7 @@ class _SaleProductsShimmerWidgetState extends State<SaleProductsShimmerWidget>
                           .toList()
                           .take(4)
                           .toList();
-                      _model.debugGeneratorVariables[
-                              'featuredCollectionListSale${featuredCollectionListSale.length > 100 ? ' (first 100)' : ''}'] =
-                          debugSerializeParam(
-                        featuredCollectionListSale.take(100),
-                        ParamType.String,
-                        isList: true,
-                        link:
-                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SaleProductsShimmer',
-                        name: 'String',
-                        nullable: false,
-                      );
-                      debugLogWidgetClass(_model);
+
 
                       return Wrap(
                         spacing: 12.0,

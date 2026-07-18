@@ -166,18 +166,7 @@ class _ProductsHoreShimmerWidgetState extends State<ProductsHoreShimmerWidget>
                         .toList()
                         .take(6)
                         .toList();
-                    _model.debugGeneratorVariables[
-                            'trendingProductsList${trendingProductsList.length > 100 ? ' (first 100)' : ''}'] =
-                        debugSerializeParam(
-                      trendingProductsList.take(100),
-                      ParamType.String,
-                      isList: true,
-                      link:
-                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductsHoreShimmer',
-                      name: 'String',
-                      nullable: false,
-                    );
-                    debugLogWidgetClass(_model);
+
 
                     return SingleChildScrollView(
                       scrollDirection: Axis.horizontal,

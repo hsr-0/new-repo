@@ -26,8 +26,7 @@ class OnboardingPageModel extends FlutterFlowModel<OnboardingPageWidget> {
       ? pageViewController!.page!.round()
       : 0;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -37,45 +36,5 @@ class OnboardingPageModel extends FlutterFlowModel<OnboardingPageWidget> {
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'introList': debugSerializeParam(
-            widget?.introList,
-            ParamType.JSON,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OnboardingPage',
-            searchReference:
-                'reference=Sh0KEwoJaW50cm9MaXN0EgZnMTd2eTVyBhICCAkgAVABWglpbnRyb0xpc3Q=',
-            name: 'dynamic',
-            nullable: true,
-          )
-        }.withoutNulls,
-        widgetStates: {
-          'pageViewCurrentIndex': debugSerializeParam(
-            pageViewCurrentIndex,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OnboardingPage',
-            name: 'int',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=OnboardingPage',
-        searchReference:
-            'reference=Og5PbmJvYXJkaW5nUGFnZVABWg5PbmJvYXJkaW5nUGFnZQ==',
-        widgetClassName: 'OnboardingPage',
-      );
+
 }

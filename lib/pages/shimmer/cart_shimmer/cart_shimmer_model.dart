@@ -13,8 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 class CartShimmerModel extends FlutterFlowModel<CartShimmerWidget> {
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {}
@@ -22,21 +21,4 @@ class CartShimmerModel extends FlutterFlowModel<CartShimmerWidget> {
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=CartShimmer',
-        searchReference: 'reference=OgtDYXJ0U2hpbW1lclAAWgtDYXJ0U2hpbW1lcg==',
-        widgetClassName: 'CartShimmer',
-      );
 }

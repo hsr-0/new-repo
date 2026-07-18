@@ -339,26 +339,8 @@ class _CategoryComponentWidgetState extends State<CategoryComponentWidget>
                               return CategoryComponentShimmerWidget();
                             }
                             final containerCategoriesResponse = snapshot.data!;
-                            _model.debugBackendQueries[
-                                    'PlantShopGroup.categoriesCall_statusCode_Container_kkg2mrsk'] =
-                                debugSerializeParam(
-                              containerCategoriesResponse.statusCode,
-                              ParamType.int,
-                              link:
-                                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryComponent',
-                              name: 'int',
-                              nullable: false,
-                            );
-                            _model.debugBackendQueries[
-                                    'PlantShopGroup.categoriesCall_responseBody_Container_kkg2mrsk'] =
-                                debugSerializeParam(
-                              containerCategoriesResponse.bodyText,
-                              ParamType.String,
-                              link:
-                                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryComponent',
-                              name: 'String',
-                              nullable: false,
-                            );
+
+
                             debugLogWidgetClass(_model);
 
                             return Container(
@@ -436,18 +418,7 @@ class _CategoryComponentWidgetState extends State<CategoryComponentWidget>
                                                                     )
                                                                     ?.toList() ??
                                                                 [];
-                                                        _model.debugGeneratorVariables[
-                                                                'categoryList${categoryList.length > 100 ? ' (first 100)' : ''}'] =
-                                                            debugSerializeParam(
-                                                          categoryList
-                                                              .take(100),
-                                                          ParamType.JSON,
-                                                          isList: true,
-                                                          link:
-                                                              'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryComponent',
-                                                          name: 'dynamic',
-                                                          nullable: false,
-                                                        );
+
                                                         debugLogWidgetClass(
                                                             _model);
 

@@ -26,8 +26,7 @@ class BannerShimmerModel extends FlutterFlowModel<BannerShimmerWidget> {
 
   int get carouselCurrentIndex => _carouselCurrentIndex;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {}
@@ -35,54 +34,5 @@ class BannerShimmerModel extends FlutterFlowModel<BannerShimmerWidget> {
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'isBig': debugSerializeParam(
-            widget?.isBig,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BannerShimmer',
-            searchReference:
-                'reference=SiAKDwoFaXNCaWcSBnRvNmo1dCoHEgVmYWxzZXIECAUgAVAAWgVpc0JpZw==',
-            name: 'bool',
-            nullable: false,
-          ),
-          'image': debugSerializeParam(
-            widget?.image,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BannerShimmer',
-            searchReference:
-                'reference=ShcKDwoFaW1hZ2USBml1eXU4Y3IECAQgAVAAWgVpbWFnZQ==',
-            name: 'String',
-            nullable: true,
-          )
-        }.withoutNulls,
-        widgetStates: {
-          'carouselCurrentIndex': debugSerializeParam(
-            carouselCurrentIndex,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BannerShimmer',
-            name: 'int',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=BannerShimmer',
-        searchReference:
-            'reference=Og1CYW5uZXJTaGltbWVyUABaDUJhbm5lclNoaW1tZXI=',
-        widgetClassName: 'BannerShimmer',
-      );
+
 }

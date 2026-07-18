@@ -42,8 +42,7 @@ class OrderDetailsPageModel extends FlutterFlowModel<OrderDetailsPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -76,48 +75,5 @@ class OrderDetailsPageModel extends FlutterFlowModel<OrderDetailsPageWidget> {
     }
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'orderId': debugSerializeParam(
-            widget?.orderId,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-            searchReference:
-                'reference=ShkKEQoHb3JkZXJJZBIGb24ybG1zcgQIASABUAFaB29yZGVySWQ=',
-            name: 'int',
-            nullable: true,
-          )
-        }.withoutNulls,
-        actionOutputs: {
-          'sucess': debugSerializeParam(
-            sucess,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailsPage',
-            name: 'bool',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=OrderDetailsPage',
-        searchReference:
-            'reference=OhBPcmRlckRldGFpbHNQYWdlUAFaEE9yZGVyRGV0YWlsc1BhZ2U=',
-        widgetClassName: 'OrderDetailsPage',
-      );
+
 }

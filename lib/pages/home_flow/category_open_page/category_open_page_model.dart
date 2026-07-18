@@ -76,8 +76,7 @@ class CategoryOpenPageModel extends FlutterFlowModel<CategoryOpenPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -155,104 +154,5 @@ class CategoryOpenPageModel extends FlutterFlowModel<CategoryOpenPageWidget> {
         );
       });
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'title': debugSerializeParam(
-            widget?.title,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            searchReference:
-                'reference=ShcKDwoFdGl0bGUSBjU0djB3MHIECAMgAVABWgV0aXRsZQ==',
-            name: 'String',
-            nullable: true,
-          ),
-          'catId': debugSerializeParam(
-            widget?.catId,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            searchReference:
-                'reference=ShcKDwoFY2F0SWQSBnR5cHFmc3IECAMgAVABWgVjYXRJZA==',
-            name: 'String',
-            nullable: true,
-          ),
-          'cateImage': debugSerializeParam(
-            widget?.cateImage,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            searchReference:
-                'reference=ShsKEwoJY2F0ZUltYWdlEgY5Y2wyMGRyBAgEIAFQAVoJY2F0ZUltYWdl',
-            name: 'String',
-            nullable: true,
-          )
-        }.withoutNulls,
-        localStates: {
-          'categorySelected': debugSerializeParam(
-            categorySelected,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            searchReference:
-                'reference=QiUKGQoQY2F0ZWdvcnlTZWxlY3RlZBIFZ2gzM2YqAhIAcgQIAyABUAFaEGNhdGVnb3J5U2VsZWN0ZWRiEENhdGVnb3J5T3BlblBhZ2U=',
-            name: 'String',
-            nullable: false,
-          ),
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            searchReference:
-                'reference=QiEKEAoHcHJvY2VzcxIFbmk0M3YqBxIFZmFsc2VyBAgFIAFQAVoHcHJvY2Vzc2IQQ2F0ZWdvcnlPcGVuUGFnZQ==',
-            name: 'bool',
-            nullable: false,
-          ),
-          'filter': debugSerializeParam(
-            filter,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            searchReference:
-                'reference=QhsKDwoGZmlsdGVyEgU4emd4ZCoCEgByBAgDIAFQAVoGZmlsdGVyYhBDYXRlZ29yeU9wZW5QYWdl',
-            name: 'String',
-            nullable: false,
-          )
-        },
-        actionOutputs: {
-          'catOpenSub': debugSerializeParam(
-            catOpenSub,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CategoryOpenPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainSearchFilterAppbarModel (MainSearchFilterAppbar)':
-              mainSearchFilterAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'mainComponentModels (List<MainComponent>)':
-              mainComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=CategoryOpenPage',
-        searchReference:
-            'reference=OhBDYXRlZ29yeU9wZW5QYWdlUAFaEENhdGVnb3J5T3BlblBhZ2U=',
-        widgetClassName: 'CategoryOpenPage',
-      );
+
 }

@@ -26,8 +26,7 @@ class BlogDetailPageModel extends FlutterFlowModel<BlogDetailPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -44,68 +43,4 @@ class BlogDetailPageModel extends FlutterFlowModel<BlogDetailPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'title': debugSerializeParam(
-            widget?.title,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogDetailPage',
-            searchReference:
-                'reference=ShcKDwoFdGl0bGUSBmJwaTRncnIECAMgAVABWgV0aXRsZQ==',
-            name: 'String',
-            nullable: true,
-          ),
-          'date': debugSerializeParam(
-            widget?.date,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogDetailPage',
-            searchReference:
-                'reference=ShYKDgoEZGF0ZRIGNHpqaWphcgQIAyABUAFaBGRhdGU=',
-            name: 'String',
-            nullable: true,
-          ),
-          'detail': debugSerializeParam(
-            widget?.detail,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogDetailPage',
-            searchReference:
-                'reference=ShgKEAoGZGV0YWlsEgZwMHhqeXZyBAgDIAFQAVoGZGV0YWls',
-            name: 'String',
-            nullable: true,
-          ),
-          'shareUrl': debugSerializeParam(
-            widget?.shareUrl,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogDetailPage',
-            searchReference:
-                'reference=ShoKEgoIc2hhcmVVcmwSBjBva3Z0aHIECAMgAVABWghzaGFyZVVybA==',
-            name: 'String',
-            nullable: true,
-          )
-        }.withoutNulls,
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=BlogDetailPage',
-        searchReference:
-            'reference=Og5CbG9nRGV0YWlsUGFnZVABWg5CbG9nRGV0YWlsUGFnZQ==',
-        widgetClassName: 'BlogDetailPage',
-      );
 }

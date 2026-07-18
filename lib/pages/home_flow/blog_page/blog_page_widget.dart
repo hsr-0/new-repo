@@ -193,26 +193,8 @@ class _BlogPageWidgetState extends State<BlogPageWidget>
                                           }
                                           final wrapBlogResponse =
                                               snapshot.data!;
-                                          _model.debugBackendQueries[
-                                                  'PlantShopGroup.blogCall_statusCode_ListView_7ysv12lf'] =
-                                              debugSerializeParam(
-                                            wrapBlogResponse.statusCode,
-                                            ParamType.int,
-                                            link:
-                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogPage',
-                                            name: 'int',
-                                            nullable: false,
-                                          );
-                                          _model.debugBackendQueries[
-                                                  'PlantShopGroup.blogCall_responseBody_ListView_7ysv12lf'] =
-                                              debugSerializeParam(
-                                            wrapBlogResponse.bodyText,
-                                            ParamType.String,
-                                            link:
-                                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogPage',
-                                            name: 'String',
-                                            nullable: false,
-                                          );
+
+
                                           debugLogWidgetClass(_model);
 
                                           return Builder(
@@ -225,17 +207,7 @@ class _BlogPageWidgetState extends State<BlogPageWidget>
                                                           )
                                                           ?.toList() ??
                                                       [];
-                                              _model.debugGeneratorVariables[
-                                                      'blogList${blogList.length > 100 ? ' (first 100)' : ''}'] =
-                                                  debugSerializeParam(
-                                                blogList.take(100),
-                                                ParamType.JSON,
-                                                isList: true,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogPage',
-                                                name: 'dynamic',
-                                                nullable: false,
-                                              );
+
                                               debugLogWidgetClass(_model);
 
                                               return Wrap(

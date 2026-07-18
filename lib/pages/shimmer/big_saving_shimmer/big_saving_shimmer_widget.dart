@@ -166,17 +166,7 @@ products 🔥 */
                             .toList()
                             .take(6)
                             .toList();
-                        _model.debugGeneratorVariables[
-                                'newArrivalList${newArrivalList.length > 100 ? ' (first 100)' : ''}'] =
-                            debugSerializeParam(
-                          newArrivalList.take(100),
-                          ParamType.String,
-                          isList: true,
-                          link:
-                              'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BigSavingShimmer',
-                          name: 'String',
-                          nullable: false,
-                        );
+
                         debugLogWidgetClass(_model);
 
                         return Row(

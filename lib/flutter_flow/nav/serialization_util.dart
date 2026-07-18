@@ -7,7 +7,48 @@ import '../../flutter_flow/lat_lng.dart';
 import '../../flutter_flow/place.dart';
 import '../../flutter_flow/uploaded_file.dart';
 
-import 'package:debug_panel_proto/debug_panel_proto.dart';
+// تم إيقاف استدعاء المكتبة المحذوفة
+// import 'package:debug_panel_proto/debug_panel_proto.dart';
+
+// --- فئات وهمية (Dummy Classes/Enums) لتعويض غياب المكتبة ومنع الأخطاء ---
+class DebugDataField {
+  DebugDataField({
+    dynamic serializedValue,
+    dynamic type,
+    dynamic link,
+    dynamic searchReference,
+    dynamic name,
+    dynamic nullable,
+    dynamic listValue,
+    dynamic mapValue,
+  });
+}
+
+class ListDebugDataField {
+  ListDebugDataField({dynamic values});
+}
+
+class MapDebugDataField {
+  MapDebugDataField({dynamic values});
+}
+
+enum DebugDataField_ParamType {
+  INT,
+  DOUBLE,
+  STRING,
+  BOOL,
+  DATE_TIME,
+  DATE_TIME_RANGE,
+  LAT_LNG,
+  COLOR,
+  FF_PLACE,
+  FF_UPLOADED_FILE,
+  JSON,
+  ACTION,
+  WIDGET,
+  DATA_STRUCT
+}
+// -----------------------------------------------------------------
 
 /// SERIALIZATION HELPERS
 
@@ -18,23 +59,23 @@ String dateTimeRangeToString(DateTimeRange dateTimeRange) {
 }
 
 String placeToString(FFPlace place) => jsonEncode({
-      'latLng': place.latLng.serialize(),
-      'name': place.name,
-      'address': place.address,
-      'city': place.city,
-      'state': place.state,
-      'country': place.country,
-      'zipCode': place.zipCode,
-    });
+  'latLng': place.latLng.serialize(),
+  'name': place.name,
+  'address': place.address,
+  'city': place.city,
+  'state': place.state,
+  'country': place.country,
+  'zipCode': place.zipCode,
+});
 
 String uploadedFileToString(FFUploadedFile uploadedFile) =>
     uploadedFile.serialize();
 
 String? serializeParam(
-  dynamic param,
-  ParamType paramType, {
-  bool isList = false,
-}) {
+    dynamic param,
+    ParamType paramType, {
+      bool isList = false,
+    }) {
   try {
     if (param == null) {
       return null;
@@ -83,22 +124,22 @@ String? serializeParam(
 }
 
 DebugDataField debugSerializeParam(
-  dynamic param,
-  ParamType paramType, {
-  bool isList = false,
-  String? link,
-  String? searchReference,
-  String? name,
-  bool? nullable,
-}) {
+    dynamic param,
+    ParamType paramType, {
+      bool isList = false,
+      String? link,
+      String? searchReference,
+      String? name,
+      bool? nullable,
+    }) {
   try {
     if (isList) {
       final values = (param as Iterable?)
           ?.map((p) => debugSerializeParam(
-                p,
-                paramType,
-                isList: false,
-              ))
+        p,
+        paramType,
+        isList: false,
+      ))
           .toList();
       return DebugDataField(
         type: _kParamTypeProtoMap[paramType],
@@ -145,7 +186,7 @@ DebugDataField debugSerializeParam(
             mapValue: MapDebugDataField(
               values: {
                 'statusCode':
-                    debugSerializeParam(param.statusCode, ParamType.int),
+                debugSerializeParam(param.statusCode, ParamType.int),
                 'body': debugSerializeParam(param.bodyText, ParamType.String),
               },
             ),
@@ -258,10 +299,10 @@ const _kParamTypeProtoMap = {
 };
 
 dynamic deserializeParam<T>(
-  String? param,
-  ParamType paramType,
-  bool isList,
-) {
+    String? param,
+    ParamType paramType,
+    bool isList,
+    ) {
   try {
     if (param == null) {
       return null;

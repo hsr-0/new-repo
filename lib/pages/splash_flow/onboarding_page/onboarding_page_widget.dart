@@ -147,17 +147,7 @@ class _OnboardingPageWidgetState extends State<OnboardingPageWidget>
             Builder(
               builder: (context) {
                 final introList = widget!.introList!.toList();
-                _model.debugGeneratorVariables[
-                        'introList${introList.length > 100 ? ' (first 100)' : ''}'] =
-                    debugSerializeParam(
-                  introList.take(100),
-                  ParamType.JSON,
-                  isList: true,
-                  link:
-                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OnboardingPage',
-                  name: 'dynamic',
-                  nullable: false,
-                );
+
                 debugLogWidgetClass(_model);
 
                 return Container(
@@ -335,17 +325,7 @@ class _OnboardingPageWidgetState extends State<OnboardingPageWidget>
                   Builder(
                     builder: (context) {
                       final list = widget!.introList!.toList();
-                      _model.debugGeneratorVariables[
-                              'list${list.length > 100 ? ' (first 100)' : ''}'] =
-                          debugSerializeParam(
-                        list.take(100),
-                        ParamType.JSON,
-                        isList: true,
-                        link:
-                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OnboardingPage',
-                        name: 'dynamic',
-                        nullable: false,
-                      );
+
                       debugLogWidgetClass(_model);
 
                       return Row(

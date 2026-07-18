@@ -21,8 +21,7 @@ class ProfileComponentModel extends FlutterFlowModel<ProfileComponentWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -37,26 +36,5 @@ class ProfileComponentModel extends FlutterFlowModel<ProfileComponentWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'centerAppbarModel (CenterAppbar)':
-              centerAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=ProfileComponent',
-        searchReference:
-            'reference=OhBQcm9maWxlQ29tcG9uZW50UABaEFByb2ZpbGVDb21wb25lbnQ=',
-        widgetClassName: 'ProfileComponent',
-      );
+
 }

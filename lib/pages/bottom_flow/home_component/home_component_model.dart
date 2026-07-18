@@ -100,8 +100,7 @@ class HomeComponentModel extends FlutterFlowModel<HomeComponentWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -280,67 +279,5 @@ class HomeComponentModel extends FlutterFlowModel<HomeComponentWidget> {
     }
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetStates: {
-          'carouselCurrentIndex1': debugSerializeParam(
-            carouselCurrentIndex1,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=HomeComponent',
-            name: 'int',
-            nullable: true,
-          ),
-          'carouselCurrentIndex2': debugSerializeParam(
-            carouselCurrentIndex2,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=HomeComponent',
-            name: 'int',
-            nullable: true,
-          ),
-          'carouselCurrentIndex3': debugSerializeParam(
-            carouselCurrentIndex3,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=HomeComponent',
-            name: 'int',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'logoComponentModel (LogoComponent)':
-              logoComponentModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'categoriesSingleHomeComponentModels (List<CategoriesSingleHomeComponent>)':
-              categoriesSingleHomeComponentModels
-                  ?.toDynamicWidgetClassDebugData(),
-          'mainComponentModels1 (List<MainComponent>)':
-              mainComponentModels1?.toDynamicWidgetClassDebugData(),
-          'mainComponentModels2 (List<MainComponent>)':
-              mainComponentModels2?.toDynamicWidgetClassDebugData(),
-          'mainComponentModels3 (List<MainComponent>)':
-              mainComponentModels3?.toDynamicWidgetClassDebugData(),
-          'mainComponentModels4 (List<MainComponent>)':
-              mainComponentModels4?.toDynamicWidgetClassDebugData(),
-          'mainComponentModels5 (List<MainComponent>)':
-              mainComponentModels5?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=HomeComponent',
-        searchReference:
-            'reference=Og1Ib21lQ29tcG9uZW50UABaDUhvbWVDb21wb25lbnQ=',
-        widgetClassName: 'HomeComponent',
-      );
+
 }

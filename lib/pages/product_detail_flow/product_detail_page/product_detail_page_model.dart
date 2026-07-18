@@ -62,8 +62,7 @@ class ProductDetailPageModel extends FlutterFlowModel<ProductDetailPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -78,111 +77,5 @@ class ProductDetailPageModel extends FlutterFlowModel<ProductDetailPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'productDetail': debugSerializeParam(
-            widget?.productDetail,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=Sh8KFwoNcHJvZHVjdERldGFpbBIGdG1wNjU3cgQICSABUAFaDXByb2R1Y3REZXRhaWw=',
-            name: 'dynamic',
-            nullable: true,
-          ),
-          'upsellIdsList': debugSerializeParam(
-            widget?.upsellIdsList,
-            ParamType.String,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=SiEKFwoNdXBzZWxsSWRzTGlzdBIGZTV3ZnJpcgYSAggDIAFQAVoNdXBzZWxsSWRzTGlzdA==',
-            name: 'String',
-            nullable: true,
-          ),
-          'relatedIdsList': debugSerializeParam(
-            widget?.relatedIdsList,
-            ParamType.String,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=SiIKGAoOcmVsYXRlZElkc0xpc3QSBnQ0MnNqd3IGEgIIAyABUAFaDnJlbGF0ZWRJZHNMaXN0',
-            name: 'String',
-            nullable: true,
-          ),
-          'imagesList': debugSerializeParam(
-            widget?.imagesList,
-            ParamType.JSON,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=Sh4KFAoKaW1hZ2VzTGlzdBIGaWowZnA4cgYSAggJIAFQAVoKaW1hZ2VzTGlzdA==',
-            name: 'dynamic',
-            nullable: true,
-          )
-        }.withoutNulls,
-        localStates: {
-          'dataTapIndex': debugSerializeParam(
-            dataTapIndex,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=QhsKFQoMZGF0YVRhcEluZGV4EgV4aTl6aHICCAFQAVoMZGF0YVRhcEluZGV4YhFQcm9kdWN0RGV0YWlsUGFnZQ==',
-            name: 'int',
-            nullable: true,
-          ),
-          'qty': debugSerializeParam(
-            qty,
-            ParamType.int,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=QhQKDAoDcXR5EgVqbTJ0dXIECAEgAVABWgNxdHliEVByb2R1Y3REZXRhaWxQYWdl',
-            name: 'int',
-            nullable: false,
-          ),
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            searchReference:
-                'reference=QiEKEAoHcHJvY2VzcxIFeDlqeG8qBxIFZmFsc2VyBAgFIAFQAVoHcHJvY2Vzc2IRUHJvZHVjdERldGFpbFBhZ2U=',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        actionOutputs: {
-          'productVariation': debugSerializeParam(
-            productVariation,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ProductDetailPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=ProductDetailPage',
-        searchReference:
-            'reference=OhFQcm9kdWN0RGV0YWlsUGFnZVABWhFQcm9kdWN0RGV0YWlsUGFnZQ==',
-        widgetClassName: 'ProductDetailPage',
-      );
+
 }

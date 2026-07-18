@@ -45,8 +45,7 @@ class SearchPageModel extends FlutterFlowModel<SearchPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -83,47 +82,5 @@ class SearchPageModel extends FlutterFlowModel<SearchPageWidget> {
     }
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        localStates: {
-          'isSearch': debugSerializeParam(
-            isSearch,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SearchPage',
-            searchReference:
-                'reference=QiIKEQoIaXNTZWFyY2gSBTZvMnk1KgcSBWZhbHNlcgQIBSABUAFaCGlzU2VhcmNoYgpTZWFyY2hQYWdl',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        widgetStates: {
-          'textFieldText': debugSerializeParam(
-            textController?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SearchPage',
-            name: 'String',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'noSearchComponentModel (NoSearchComponent)':
-              noSearchComponentModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=SearchPage',
-        searchReference: 'reference=OgpTZWFyY2hQYWdlUAFaClNlYXJjaFBhZ2U=',
-        widgetClassName: 'SearchPage',
-      );
+
 }

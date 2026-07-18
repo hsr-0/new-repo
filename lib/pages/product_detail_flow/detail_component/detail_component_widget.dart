@@ -760,26 +760,8 @@ class _DetailComponentWidgetState extends State<DetailComponentWidget>
                   return ReviewsShimmerWidget();
                 }
                 final reviewsProductReviewResponse = snapshot.data!;
-                _model.debugBackendQueries[
-                        'PlantShopGroup.productReviewCall_statusCode_Container_vvlj66s2'] =
-                    debugSerializeParam(
-                  reviewsProductReviewResponse.statusCode,
-                  ParamType.int,
-                  link:
-                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                  name: 'int',
-                  nullable: false,
-                );
-                _model.debugBackendQueries[
-                        'PlantShopGroup.productReviewCall_responseBody_Container_vvlj66s2'] =
-                    debugSerializeParam(
-                  reviewsProductReviewResponse.bodyText,
-                  ParamType.String,
-                  link:
-                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                  name: 'String',
-                  nullable: false,
-                );
+
+
                 debugLogWidgetClass(_model);
 
                 return Container(
@@ -906,17 +888,7 @@ class _DetailComponentWidgetState extends State<DetailComponentWidget>
                                               .toList()
                                               ?.toList() ??
                                           [];
-                                  _model.debugGeneratorVariables[
-                                          'reviewList${reviewList.length > 100 ? ' (first 100)' : ''}'] =
-                                      debugSerializeParam(
-                                    reviewList.take(100),
-                                    ParamType.JSON,
-                                    isList: true,
-                                    link:
-                                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                                    name: 'dynamic',
-                                    nullable: false,
-                                  );
+
                                   debugLogWidgetClass(_model);
 
                                   return Column(
@@ -1086,17 +1058,7 @@ class _DetailComponentWidgetState extends State<DetailComponentWidget>
                         builder: (context) {
                           final upSellIdsList =
                               widget!.upsellIdsList!.toList().take(6).toList();
-                          _model.debugGeneratorVariables[
-                                  'upSellIdsList${upSellIdsList.length > 100 ? ' (first 100)' : ''}'] =
-                              debugSerializeParam(
-                            upSellIdsList.take(100),
-                            ParamType.String,
-                            isList: true,
-                            link:
-                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                            name: 'String',
-                            nullable: false,
-                          );
+
                           debugLogWidgetClass(_model);
 
                           return SingleChildScrollView(
@@ -1126,26 +1088,7 @@ class _DetailComponentWidgetState extends State<DetailComponentWidget>
                                     }
                                     final containerProductDetailResponse =
                                         snapshot.data!;
-                                    _model.debugBackendQueries[
-                                            'PlantShopGroup.productDetailCall_statusCode_Container_6ze49wss'] =
-                                        debugSerializeParam(
-                                      containerProductDetailResponse.statusCode,
-                                      ParamType.int,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                                      name: 'int',
-                                      nullable: false,
-                                    );
-                                    _model.debugBackendQueries[
-                                            'PlantShopGroup.productDetailCall_responseBody_Container_6ze49wss'] =
-                                        debugSerializeParam(
-                                      containerProductDetailResponse.bodyText,
-                                      ParamType.String,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                                      name: 'String',
-                                      nullable: false,
-                                    );
+
                                     debugLogWidgetClass(_model);
 
                                     return Container(
@@ -1547,17 +1490,7 @@ class _DetailComponentWidgetState extends State<DetailComponentWidget>
                         builder: (context) {
                           final relatedIdsList =
                               widget!.relatedIdsList!.toList().take(6).toList();
-                          _model.debugGeneratorVariables[
-                                  'relatedIdsList${relatedIdsList.length > 100 ? ' (first 100)' : ''}'] =
-                              debugSerializeParam(
-                            relatedIdsList.take(100),
-                            ParamType.String,
-                            isList: true,
-                            link:
-                                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                            name: 'String',
-                            nullable: false,
-                          );
+
                           debugLogWidgetClass(_model);
 
                           return SingleChildScrollView(
@@ -1587,26 +1520,8 @@ class _DetailComponentWidgetState extends State<DetailComponentWidget>
                                     }
                                     final containerProductDetailResponse =
                                         snapshot.data!;
-                                    _model.debugBackendQueries[
-                                            'PlantShopGroup.productDetailCall_statusCode_Container_pk8debwz'] =
-                                        debugSerializeParam(
-                                      containerProductDetailResponse.statusCode,
-                                      ParamType.int,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                                      name: 'int',
-                                      nullable: false,
-                                    );
-                                    _model.debugBackendQueries[
-                                            'PlantShopGroup.productDetailCall_responseBody_Container_pk8debwz'] =
-                                        debugSerializeParam(
-                                      containerProductDetailResponse.bodyText,
-                                      ParamType.String,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=DetailComponent',
-                                      name: 'String',
-                                      nullable: false,
-                                    );
+
+
                                     debugLogWidgetClass(_model);
 
                                     return Container(

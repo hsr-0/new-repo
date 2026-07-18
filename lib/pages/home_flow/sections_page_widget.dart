@@ -329,11 +329,24 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   /// 📍 جلب الموقع في الخلفية وإظهار نافذة التحديد اليدوي في حال الفشل
+  /// 📍 جلب الموقع في الخلفية مع معالجة تأخر نظام التشغيل بعد السماح بالصلاحية
   Future<void> _fetchLocationInBackgroundAndHandle() async {
     try {
+      // 1. معرفة حالة الصلاحية قبل بدء أي إجراء (لمعرفة هل هي المرة الأولى أم لا)
+      LocationPermission initialPermission = await Geolocator.checkPermission();
+
+      // 2. طلب الصلاحية إذا لم تكن موجودة
       bool hasPermission = await _ensureLocationPermission();
 
       if (hasPermission) {
+
+        // 🔥 الحل الجذري للمشكلة: إذا تم منح الصلاحية للتو، ننتظر ثانية واحدة لكي يستوعب النظام تفعيل الـ GPS
+        if (initialPermission == LocationPermission.denied) {
+          print("⏳ تم منح الصلاحية للتو، ننتظر تهيئة مستشعر الـ GPS...");
+          await Future.delayed(const Duration(seconds: 1));
+        }
+
+        // 3. محاولة جلب آخر موقع معروف (سريع جداً في حال الدخول الثاني)
         final lastKnown = await Geolocator.getLastKnownPosition();
         if (lastKnown != null && mounted) {
           await LocationService.saveLocation(lastKnown.latitude, lastKnown.longitude, source: 'auto_fast');
@@ -345,19 +358,34 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           return;
         }
 
-        final position = await LocationService.tryAutoDetectSilent(timeout: const Duration(seconds: 5));
-        if (position != null && mounted) {
-          await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto');
-          setState(() {
-            _savedLocation = (lat: position.latitude, lng: position.longitude, source: 'auto', isExpired: false);
-            _isCheckingLocation = false;
-          });
-          _startSilentBackgroundLocationUpdates();
-          return;
+        // 4. محاولة التقاط الموقع مع إعادة المحاولة (Retry Logic) تحسباً لبطء المستشعر
+        for (int attempt = 1; attempt <= 2; attempt++) {
+          try {
+            final position = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.medium,
+              timeLimit: const Duration(seconds: 10),
+            );
+
+            if (mounted) {
+              await LocationService.saveLocation(position.latitude, position.longitude, source: 'auto');
+              setState(() {
+                _savedLocation = (lat: position.latitude, lng: position.longitude, source: 'auto', isExpired: false);
+                _isCheckingLocation = false;
+              });
+              _startSilentBackgroundLocationUpdates();
+              return; // ✅ نجحنا في التقاط الموقع، نخرج من الدالة
+            }
+          } catch (e) {
+            print('⚠️ المحاولة $attempt فشلت في التقاط الموقع: $e');
+            if (attempt == 1) {
+              // إذا فشلت المحاولة الأولى (المستشعر لم يستجب)، ننتظر ثانية ونحاول مرة أخيرة
+              await Future.delayed(const Duration(seconds: 1));
+            }
+          }
         }
       }
 
-      // إذا فشل الجلب أو لم يتم منح الصلاحية
+      // 5. إذا لم يتم منح الصلاحية، أو فشلت جميع محاولات التقاط الموقع
       if (mounted) {
         setState(() => _isCheckingLocation = false);
         if (!_locationDialogShown) {
@@ -376,7 +404,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       }
     }
   }
-
   /// 🔄 محاولة تحديث الموقع في الخلفية (بدون إزعاج المستخدم)
   Future<void> _tryUpdateLocationInBackground() async {
     if (_savedLocation == null) return;

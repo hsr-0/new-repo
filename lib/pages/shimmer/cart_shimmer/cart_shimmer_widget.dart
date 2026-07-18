@@ -613,17 +613,7 @@ class _CartShimmerWidgetState extends State<CartShimmerWidget>
                             false,
                             false,
                           )).toList();
-                  _model.debugGeneratorVariables[
-                          'cartList${cartList.length > 100 ? ' (first 100)' : ''}'] =
-                      debugSerializeParam(
-                    cartList.take(100),
-                    ParamType.String,
-                    isList: true,
-                    link:
-                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartShimmer',
-                    name: 'String',
-                    nullable: false,
-                  );
+
                   debugLogWidgetClass(_model);
 
                   return Column(
@@ -744,18 +734,7 @@ class _CartShimmerWidgetState extends State<CartShimmerWidget>
                                                                           false,
                                                                           false,
                                                                         )).toList();
-                                                            _model.debugGeneratorVariables[
-                                                                    'variationList${variationList.length > 100 ? ' (first 100)' : ''}'] =
-                                                                debugSerializeParam(
-                                                              variationList
-                                                                  .take(100),
-                                                              ParamType.String,
-                                                              isList: true,
-                                                              link:
-                                                                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartShimmer',
-                                                              name: 'String',
-                                                              nullable: false,
-                                                            );
+
                                                             debugLogWidgetClass(
                                                                 _model);
 

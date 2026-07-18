@@ -12,8 +12,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 class SearchShimmerModel extends FlutterFlowModel<SearchShimmerWidget> {
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {}
@@ -21,22 +20,4 @@ class SearchShimmerModel extends FlutterFlowModel<SearchShimmerWidget> {
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=SearchShimmer',
-        searchReference:
-            'reference=Og1TZWFyY2hTaGltbWVyUABaDVNlYXJjaFNoaW1tZXI=',
-        widgetClassName: 'SearchShimmer',
-      );
 }

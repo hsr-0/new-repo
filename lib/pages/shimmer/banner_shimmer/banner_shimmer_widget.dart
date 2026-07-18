@@ -142,17 +142,7 @@ class _BannerShimmerWidgetState extends State<BannerShimmerWidget>
                             random_data.randomInteger(3, 3),
                             (index) => random_data.randomName(true, false))
                         .toList();
-                    _model.debugGeneratorVariables[
-                            'bannerList${bannerList.length > 100 ? ' (first 100)' : ''}'] =
-                        debugSerializeParam(
-                      bannerList.take(100),
-                      ParamType.String,
-                      isList: true,
-                      link:
-                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BannerShimmer',
-                      name: 'String',
-                      nullable: false,
-                    );
+
                     debugLogWidgetClass(_model);
 
                     return Container(
@@ -211,17 +201,7 @@ class _BannerShimmerWidgetState extends State<BannerShimmerWidget>
                               random_data.randomInteger(3, 3),
                               (index) => random_data.randomName(true, false))
                           .toList();
-                      _model.debugGeneratorVariables[
-                              'rowList${rowList.length > 100 ? ' (first 100)' : ''}'] =
-                          debugSerializeParam(
-                        rowList.take(100),
-                        ParamType.String,
-                        isList: true,
-                        link:
-                            'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BannerShimmer',
-                        name: 'String',
-                        nullable: false,
-                      );
+
                       debugLogWidgetClass(_model);
 
                       return Row(

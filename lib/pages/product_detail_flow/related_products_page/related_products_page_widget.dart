@@ -179,17 +179,7 @@ class _RelatedProductsPageWidgetState extends State<RelatedProductsPageWidget>
                                     if (relatedProductList.isEmpty) {
                                       return NoProductsComponentWidget();
                                     }
-                                    _model.debugGeneratorVariables[
-                                            'relatedProductList${relatedProductList.length > 100 ? ' (first 100)' : ''}'] =
-                                        debugSerializeParam(
-                                      relatedProductList.take(100),
-                                      ParamType.String,
-                                      isList: true,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=RelatedProductsPage',
-                                      name: 'String',
-                                      nullable: false,
-                                    );
+
                                     debugLogWidgetClass(_model);
 
                                     return GridView.builder(
@@ -298,28 +288,7 @@ class _RelatedProductsPageWidgetState extends State<RelatedProductsPageWidget>
                                               }
                                               final containerProductDetailResponse =
                                                   snapshot.data!;
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_statusCode_Container_ekuastoj'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .statusCode,
-                                                ParamType.int,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=RelatedProductsPage',
-                                                name: 'int',
-                                                nullable: false,
-                                              );
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_responseBody_Container_ekuastoj'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .bodyText,
-                                                ParamType.String,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=RelatedProductsPage',
-                                                name: 'String',
-                                                nullable: false,
-                                              );
+
                                               debugLogWidgetClass(_model);
 
                                               return Container(

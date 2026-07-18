@@ -116,17 +116,7 @@ class _ImageComponentWidgetState extends State<ImageComponentWidget>
                 Builder(
                   builder: (context) {
                     final imagesList = widget!.imageList!.toList();
-                    _model.debugGeneratorVariables[
-                            'imagesList${imagesList.length > 100 ? ' (first 100)' : ''}'] =
-                        debugSerializeParam(
-                      imagesList.take(100),
-                      ParamType.JSON,
-                      isList: true,
-                      link:
-                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ImageComponent',
-                      name: 'dynamic',
-                      nullable: false,
-                    );
+
                     debugLogWidgetClass(_model);
 
                     return Container(

@@ -26,8 +26,7 @@ class ReviewPageModel extends FlutterFlowModel<ReviewPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -47,52 +46,4 @@ class ReviewPageModel extends FlutterFlowModel<ReviewPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'reviewsList': debugSerializeParam(
-            widget?.reviewsList,
-            ParamType.JSON,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ReviewPage',
-            searchReference:
-                'reference=Sh8KFQoLcmV2aWV3c0xpc3QSBm94dnkwbHIGEgIICSABUAFaC3Jldmlld3NMaXN0',
-            name: 'dynamic',
-            nullable: true,
-          ),
-          'averageRating': debugSerializeParam(
-            widget?.averageRating,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ReviewPage',
-            searchReference:
-                'reference=Sh8KFwoNYXZlcmFnZVJhdGluZxIGaGw1ZGNpcgQIAyABUAFaDWF2ZXJhZ2VSYXRpbmc=',
-            name: 'String',
-            nullable: true,
-          )
-        }.withoutNulls,
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'reviewComponentModels (List<ReviewComponent>)':
-              reviewComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=ReviewPage',
-        searchReference: 'reference=OgpSZXZpZXdQYWdlUAFaClJldmlld1BhZ2U=',
-        widgetClassName: 'ReviewPage',
-      );
 }

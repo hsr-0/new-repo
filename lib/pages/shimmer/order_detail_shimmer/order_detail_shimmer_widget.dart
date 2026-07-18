@@ -531,18 +531,7 @@ class _OrderDetailShimmerWidgetState extends State<OrderDetailShimmerWidget>
                       false,
                       false,
                     )).toList();
-            _model.debugGeneratorVariables[
-                    'productShimmerList${productShimmerList.length > 100 ? ' (first 100)' : ''}'] =
-                debugSerializeParam(
-              productShimmerList.take(100),
-              ParamType.String,
-              isList: true,
-              link:
-                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=OrderDetailShimmer',
-              name: 'String',
-              nullable: false,
-            );
-            debugLogWidgetClass(_model);
+
 
             return Column(
               mainAxisSize: MainAxisSize.max,

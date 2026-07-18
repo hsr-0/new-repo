@@ -26,7 +26,6 @@ class CustomBidDialog {
       autoCloseDuration: Duration(seconds: duration),
       alignment: Alignment.topCenter,
 
-      dismissDirection: DismissDirection.horizontal,
       builder: (BuildContext context, ToastificationItem holder) {
         return buildBidPoupDesign(
           holder: holder,

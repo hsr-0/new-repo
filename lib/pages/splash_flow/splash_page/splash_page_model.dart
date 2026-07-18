@@ -103,8 +103,7 @@ class SplashPageModel extends FlutterFlowModel<SplashPageWidget> {
   // Model for LogoComponent component.
   late LogoComponentModel logoComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -118,97 +117,5 @@ class SplashPageModel extends FlutterFlowModel<SplashPageWidget> {
     logoComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        actionOutputs: {
-          'isTokenExpired': debugSerializeParam(
-            isTokenExpired,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'bool',
-            nullable: true,
-          ),
-          'currency': debugSerializeParam(
-            currency,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'currencySymbol': debugSerializeParam(
-            currencySymbol,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'String',
-            nullable: true,
-          ),
-          'currencyPosition': debugSerializeParam(
-            currencyPosition,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'thousandSeparator': debugSerializeParam(
-            thousandSeparator,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'decimalSeparator': debugSerializeParam(
-            decimalSeparator,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'numberofDecimals': debugSerializeParam(
-            numberofDecimals,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'success': debugSerializeParam(
-            success,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'bool',
-            nullable: true,
-          ),
-          'allIntro': debugSerializeParam(
-            allIntro,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SplashPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'logoComponentModel (LogoComponent)':
-              logoComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=SplashPage',
-        searchReference: 'reference=OgpTcGxhc2hQYWdlUAFaClNwbGFzaFBhZ2U=',
-        widgetClassName: 'SplashPage',
-      );
+
 }

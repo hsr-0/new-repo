@@ -73,8 +73,7 @@ class EditProfilePageModel extends FlutterFlowModel<EditProfilePageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -102,70 +101,4 @@ class EditProfilePageModel extends FlutterFlowModel<EditProfilePageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetStates: {
-          'textFieldText1': debugSerializeParam(
-            textController1?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=EditProfilePage',
-            name: 'String',
-            nullable: true,
-          ),
-          'textFieldText2': debugSerializeParam(
-            textController2?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=EditProfilePage',
-            name: 'String',
-            nullable: true,
-          ),
-          'textFieldText3': debugSerializeParam(
-            textController3?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=EditProfilePage',
-            name: 'String',
-            nullable: true,
-          )
-        },
-        actionOutputs: {
-          'editUser': debugSerializeParam(
-            editUser,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=EditProfilePage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          ),
-          'success': debugSerializeParam(
-            success,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=EditProfilePage',
-            name: 'bool',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=EditProfilePage',
-        searchReference:
-            'reference=Og9FZGl0UHJvZmlsZVBhZ2VQAVoPRWRpdFByb2ZpbGVQYWdl',
-        widgetClassName: 'EditProfilePage',
-      );
 }

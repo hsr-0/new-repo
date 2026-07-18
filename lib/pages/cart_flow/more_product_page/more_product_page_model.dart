@@ -30,8 +30,7 @@ class MoreProductPageModel extends FlutterFlowModel<MoreProductPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -50,43 +49,4 @@ class MoreProductPageModel extends FlutterFlowModel<MoreProductPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'moreProductList': debugSerializeParam(
-            widget?.moreProductList,
-            ParamType.int,
-            isList: true,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=MoreProductPage',
-            searchReference:
-                'reference=SiMKGQoPbW9yZVByb2R1Y3RMaXN0EgYxZnNkczVyBhICCAEgAVABWg9tb3JlUHJvZHVjdExpc3Q=',
-            name: 'int',
-            nullable: true,
-          )
-        }.withoutNulls,
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'mainComponentModels (List<MainComponent>)':
-              mainComponentModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=MoreProductPage',
-        searchReference:
-            'reference=Og9Nb3JlUHJvZHVjdFBhZ2VQAVoPTW9yZVByb2R1Y3RQYWdl',
-        widgetClassName: 'MoreProductPage',
-      );
 }

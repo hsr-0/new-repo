@@ -876,17 +876,7 @@ class _ReviewPageWidgetState extends State<ReviewPageWidget> with RouteAware {
                                                 .toList()
                                                 .take(10)
                                                 .toList();
-                                            _model.debugGeneratorVariables[
-                                                    'reviewList${reviewList.length > 100 ? ' (first 100)' : ''}'] =
-                                                debugSerializeParam(
-                                              reviewList.take(100),
-                                              ParamType.JSON,
-                                              isList: true,
-                                              link:
-                                                  'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=ReviewPage',
-                                              name: 'dynamic',
-                                              nullable: false,
-                                            );
+
                                             debugLogWidgetClass(_model);
 
                                             return Column(

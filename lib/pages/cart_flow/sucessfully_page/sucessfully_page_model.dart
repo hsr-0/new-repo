@@ -11,8 +11,7 @@ import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 
 class SucessfullyPageModel extends FlutterFlowModel<SucessfullyPageWidget> {
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -22,34 +21,5 @@ class SucessfullyPageModel extends FlutterFlowModel<SucessfullyPageWidget> {
   @override
   void dispose() {}
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'orderDetail': debugSerializeParam(
-            widget?.orderDetail,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=SucessfullyPage',
-            searchReference:
-                'reference=Sh0KFQoLb3JkZXJEZXRhaWwSBjNjbTQwdHIECAkgAVABWgtvcmRlckRldGFpbA==',
-            name: 'dynamic',
-            nullable: true,
-          )
-        }.withoutNulls,
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=SucessfullyPage',
-        searchReference:
-            'reference=Og9TdWNlc3NmdWxseVBhZ2VQAVoPU3VjZXNzZnVsbHlQYWdl',
-        widgetClassName: 'SucessfullyPage',
-      );
+
 }

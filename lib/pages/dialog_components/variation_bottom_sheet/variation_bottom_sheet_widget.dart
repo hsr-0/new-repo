@@ -202,17 +202,7 @@ class _VariationBottomSheetWidgetState extends State<VariationBottomSheetWidget>
               child: Builder(
                 builder: (context) {
                   final attributesList = widget!.attributesList!.toList();
-                  _model.debugGeneratorVariables[
-                          'attributesList${attributesList.length > 100 ? ' (first 100)' : ''}'] =
-                      debugSerializeParam(
-                    attributesList.take(100),
-                    ParamType.JSON,
-                    isList: true,
-                    link:
-                        'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=VariationBottomSheet',
-                    name: 'dynamic',
-                    nullable: false,
-                  );
+
                   debugLogWidgetClass(_model);
 
                   return SingleChildScrollView(

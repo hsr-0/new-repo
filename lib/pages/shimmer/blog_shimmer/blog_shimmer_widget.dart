@@ -224,17 +224,7 @@ class _BlogShimmerWidgetState extends State<BlogShimmerWidget>
                     final list = List.generate(random_data.randomInteger(4, 4),
                             (index) => random_data.randomName(true, false))
                         .toList();
-                    _model.debugGeneratorVariables[
-                            'list${list.length > 100 ? ' (first 100)' : ''}'] =
-                        debugSerializeParam(
-                      list.take(100),
-                      ParamType.String,
-                      isList: true,
-                      link:
-                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=BlogShimmer',
-                      name: 'String',
-                      nullable: false,
-                    );
+
                     debugLogWidgetClass(_model);
 
                     return SingleChildScrollView(

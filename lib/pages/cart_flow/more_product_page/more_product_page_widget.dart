@@ -178,17 +178,7 @@ class _MoreProductPageWidgetState extends State<MoreProductPageWidget>
                                     if (moreProductList.isEmpty) {
                                       return NoProductsComponentWidget();
                                     }
-                                    _model.debugGeneratorVariables[
-                                            'moreProductList${moreProductList.length > 100 ? ' (first 100)' : ''}'] =
-                                        debugSerializeParam(
-                                      moreProductList.take(100),
-                                      ParamType.int,
-                                      isList: true,
-                                      link:
-                                          'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=MoreProductPage',
-                                      name: 'int',
-                                      nullable: false,
-                                    );
+
                                     debugLogWidgetClass(_model);
 
                                     return GridView.builder(
@@ -298,28 +288,7 @@ class _MoreProductPageWidgetState extends State<MoreProductPageWidget>
                                               }
                                               final containerProductDetailResponse =
                                                   snapshot.data!;
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_statusCode_Container_64ki74se'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .statusCode,
-                                                ParamType.int,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=MoreProductPage',
-                                                name: 'int',
-                                                nullable: false,
-                                              );
-                                              _model.debugBackendQueries[
-                                                      'PlantShopGroup.productDetailCall_responseBody_Container_64ki74se'] =
-                                                  debugSerializeParam(
-                                                containerProductDetailResponse
-                                                    .bodyText,
-                                                ParamType.String,
-                                                link:
-                                                    'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=MoreProductPage',
-                                                name: 'String',
-                                                nullable: false,
-                                              );
+
                                               debugLogWidgetClass(_model);
 
                                               return Container(

@@ -175,26 +175,8 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                   return CartShimmerWidget();
                                 }
                                 final cartGetCartResponse = snapshot.data!;
-                                _model.debugBackendQueries[
-                                        'PlantShopGroup.getCartCall_statusCode_Container_vqlr5bx8'] =
-                                    debugSerializeParam(
-                                  cartGetCartResponse.statusCode,
-                                  ParamType.int,
-                                  link:
-                                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-                                  name: 'int',
-                                  nullable: false,
-                                );
-                                _model.debugBackendQueries[
-                                        'PlantShopGroup.getCartCall_responseBody_Container_vqlr5bx8'] =
-                                    debugSerializeParam(
-                                  cartGetCartResponse.bodyText,
-                                  ParamType.String,
-                                  link:
-                                      'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-                                  name: 'String',
-                                  nullable: false,
-                                );
+
+
                                 debugLogWidgetClass(_model);
 
                                 return Container(
@@ -1286,20 +1268,8 @@ class _CartComponentWidgetState extends State<CartComponentWidget>
                                                                                   );
                                                                                 }
                                                                                 final containerProductDetailResponse = snapshot.data!;
-                                                                                _model.debugBackendQueries['PlantShopGroup.productDetailCall_statusCode_Container_pc052e4q'] = debugSerializeParam(
-                                                                                  containerProductDetailResponse.statusCode,
-                                                                                  ParamType.int,
-                                                                                  link: 'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-                                                                                  name: 'int',
-                                                                                  nullable: false,
-                                                                                );
-                                                                                _model.debugBackendQueries['PlantShopGroup.productDetailCall_responseBody_Container_pc052e4q'] = debugSerializeParam(
-                                                                                  containerProductDetailResponse.bodyText,
-                                                                                  ParamType.String,
-                                                                                  link: 'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=CartComponent',
-                                                                                  name: 'String',
-                                                                                  nullable: false,
-                                                                                );
+
+
                                                                                 debugLogWidgetClass(_model);
 
                                                                                 return Container(

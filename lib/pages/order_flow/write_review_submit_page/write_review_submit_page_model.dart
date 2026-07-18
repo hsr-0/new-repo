@@ -62,8 +62,7 @@ class WriteReviewSubmitPageModel
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -84,80 +83,5 @@ class WriteReviewSubmitPageModel
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'productDetail': debugSerializeParam(
-            widget?.productDetail,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewSubmitPage',
-            searchReference:
-                'reference=Sh8KFwoNcHJvZHVjdERldGFpbBIGODFmbGZicgQICSABUAFaDXByb2R1Y3REZXRhaWw=',
-            name: 'dynamic',
-            nullable: true,
-          ),
-          'rating': debugSerializeParam(
-            widget?.rating,
-            ParamType.double,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewSubmitPage',
-            searchReference:
-                'reference=ShgKEAoGcmF0aW5nEgY0dGY5Ym1yBAgCIAFQAVoGcmF0aW5n',
-            name: 'double',
-            nullable: true,
-          )
-        }.withoutNulls,
-        localStates: {
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewSubmitPage',
-            searchReference:
-                'reference=QiEKEAoHcHJvY2VzcxIFc3JzYmgqBxIFZmFsc2VyBAgFIAFQAVoHcHJvY2Vzc2IVV3JpdGVSZXZpZXdTdWJtaXRQYWdl',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        widgetStates: {
-          'textFieldText': debugSerializeParam(
-            textController?.text,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewSubmitPage',
-            name: 'String',
-            nullable: true,
-          )
-        },
-        actionOutputs: {
-          'review': debugSerializeParam(
-            review,
-            ParamType.ApiResponse,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=WriteReviewSubmitPage',
-            name: 'ApiCallResponse',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=WriteReviewSubmitPage',
-        searchReference:
-            'reference=OhVXcml0ZVJldmlld1N1Ym1pdFBhZ2VQAVoVV3JpdGVSZXZpZXdTdWJtaXRQYWdl',
-        widgetClassName: 'WriteReviewSubmitPage',
-      );
+
 }

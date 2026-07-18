@@ -89,8 +89,7 @@ class PayForOderPageModel extends FlutterFlowModel<PayForOderPageWidget> {
   // Model for responseComponent component.
   late ResponseComponentModel responseComponentModel;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -109,110 +108,5 @@ class PayForOderPageModel extends FlutterFlowModel<PayForOderPageWidget> {
     responseComponentModel.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        widgetParameters: {
-          'orderDetail': debugSerializeParam(
-            widget?.orderDetail,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            searchReference:
-                'reference=Sh0KFQoLb3JkZXJEZXRhaWwSBnJ3MXkxbHIECAkgAVABWgtvcmRlckRldGFpbA==',
-            name: 'dynamic',
-            nullable: true,
-          )
-        }.withoutNulls,
-        localStates: {
-          'select': debugSerializeParam(
-            select,
-            ParamType.String,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            searchReference:
-                'reference=QhsKDwoGc2VsZWN0EgVybW91MCoCEgByBAgDIABQAVoGc2VsZWN0Yg5QYXlGb3JPZGVyUGFnZQ==',
-            name: 'String',
-            nullable: true,
-          ),
-          'selectdMethod': debugSerializeParam(
-            selectdMethod,
-            ParamType.JSON,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            searchReference:
-                'reference=QhwKFgoNc2VsZWN0ZE1ldGhvZBIFNjBkdjByAggJUAFaDXNlbGVjdGRNZXRob2RiDlBheUZvck9kZXJQYWdl',
-            name: 'dynamic',
-            nullable: true,
-          ),
-          'process': debugSerializeParam(
-            process,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            searchReference:
-                'reference=QiEKEAoHcHJvY2VzcxIFZHlmaHcqBxIFZmFsc2VyBAgFIAFQAVoHcHJvY2Vzc2IOUGF5Rm9yT2RlclBhZ2U=',
-            name: 'bool',
-            nullable: false,
-          ),
-          'isBack': debugSerializeParam(
-            isBack,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            searchReference:
-                'reference=QiAKDwoGaXNCYWNrEgV0OWtpZCoHEgVmYWxzZXIECAUgAVABWgZpc0JhY2tiDlBheUZvck9kZXJQYWdl',
-            name: 'bool',
-            nullable: false,
-          )
-        },
-        actionOutputs: {
-          'sucessRazorPay': debugSerializeParam(
-            sucessRazorPay,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            name: 'bool',
-            nullable: true,
-          ),
-          'sucessStripe': debugSerializeParam(
-            sucessStripe,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            name: 'bool',
-            nullable: true,
-          ),
-          'sucessPayPal': debugSerializeParam(
-            sucessPayPal,
-            ParamType.bool,
-            link:
-                'https://app.flutterflow.io/project/plant-shop-brdbek?tab=uiBuilder&page=PayForOderPage',
-            name: 'bool',
-            nullable: true,
-          )
-        },
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          'mainAppbarModel (MainAppbar)':
-              mainAppbarModel?.toWidgetClassDebugData(),
-          'responseComponentModel (responseComponent)':
-              responseComponentModel?.toWidgetClassDebugData(),
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'paymentImagesModels (List<PaymentImages>)':
-              paymentImagesModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=PayForOderPage',
-        searchReference:
-            'reference=Og5QYXlGb3JPZGVyUGFnZVABWg5QYXlGb3JPZGVyUGFnZQ==',
-        widgetClassName: 'PayForOderPage',
-      );
+
 }

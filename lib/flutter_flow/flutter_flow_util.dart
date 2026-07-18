@@ -15,7 +15,6 @@ import 'debug_util.dart';
 
 export 'debug_util.dart';
 
-export 'package:debug_panel_proto/debug_panel_proto.dart';
 
 export 'nav/serialization_util.dart';
 

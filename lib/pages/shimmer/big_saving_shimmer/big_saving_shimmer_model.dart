@@ -15,8 +15,7 @@ class BigSavingShimmerModel extends FlutterFlowModel<BigSavingShimmerWidget> {
   late FlutterFlowDynamicModels<MainComponentShimmerModel>
       mainComponentShimmerModels;
 
-  final Map<String, DebugDataField> debugGeneratorVariables = {};
-  final Map<String, DebugDataField> debugBackendQueries = {};
+   
   final Map<String, FlutterFlowModel> widgetBuilderComponents = {};
   @override
   void initState(BuildContext context) {
@@ -29,26 +28,4 @@ class BigSavingShimmerModel extends FlutterFlowModel<BigSavingShimmerWidget> {
     mainComponentShimmerModels.dispose();
   }
 
-  @override
-  WidgetClassDebugData toWidgetClassDebugData() => WidgetClassDebugData(
-        generatorVariables: debugGeneratorVariables,
-        backendQueries: debugBackendQueries,
-        componentStates: {
-          ...widgetBuilderComponents.map(
-            (key, value) => MapEntry(
-              key,
-              value.toWidgetClassDebugData(),
-            ),
-          ),
-        }.withoutNulls,
-        dynamicComponentStates: {
-          'mainComponentShimmerModels (List<MainComponentShimmer>)':
-              mainComponentShimmerModels?.toDynamicWidgetClassDebugData(),
-        }.withoutNulls,
-        link:
-            'https://app.flutterflow.io/project/plant-shop-brdbek/tab=uiBuilder&page=BigSavingShimmer',
-        searchReference:
-            'reference=OhBCaWdTYXZpbmdTaGltbWVyUABaEEJpZ1NhdmluZ1NoaW1tZXI=',
-        widgetClassName: 'BigSavingShimmer',
-      );
 }
