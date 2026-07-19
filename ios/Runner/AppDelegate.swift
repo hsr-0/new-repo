@@ -75,7 +75,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
         writeLog("✅ تم تحديث توكن VoIP: \(tokenHex.prefix(20))...")
 
-        // ✅ إرسال التوكن للسيرفر (بدون تسمية وسيطة)
+        // ✅ إرسال التوكن للسيرفر
         sendTokenToServer(tokenHex)
     }
 
@@ -155,7 +155,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
     }
 
-    // ✅ دالة إرسال التوكن للسيرفر (بدون تسمية وسيطة)
+    // ✅ دالة إرسال التوكن للسيرفر
     func sendTokenToServer(_ voipToken: String) {
         let url = URL(string: "https://re.beytei.com/wp-json/restaurant-app/v1/register-device")!
         var request = URLRequest(url: url)
