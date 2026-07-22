@@ -1,14 +1,15 @@
 import 'dart:async';
+import 'dart:io'; // ✅ ضروري للتحقق من نظام التشغيل
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:livekit_client/livekit_client.dart' hide ConnectionState; // إخفاء ConnectionState لتجنب التعارض
-
+import 'package:livekit_client/livekit_client.dart' hide ConnectionState;
+import 'package:audio_session/audio_session.dart'; // ✅ ضروري جداً للآيفون
 class ActiveVoiceCallScreen extends StatefulWidget {
-  // ✅ تم تحديث المتغيرات لتتوافق مع LiveKit
   final String roomName;
   final String livekitUrl;
   final String token;
   final String remoteName;
+  final String? orderId; // ✅ أضف هذا السطر
 
   const ActiveVoiceCallScreen({
     super.key,
@@ -16,6 +17,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
     required this.livekitUrl,
     required this.token,
     required this.remoteName,
+    this.orderId, // ✅ أضف هذا السطر
   });
 
   @override
@@ -24,13 +26,13 @@ class ActiveVoiceCallScreen extends StatefulWidget {
 
 class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   Room? _room;
-  EventsListener<RoomEvent>? _listener; // 🆕 المستمع الجديد للأحداث
+  EventsListener<RoomEvent>? _listener;
 
   bool _isConnected = false;
-  bool _isRemoteConnected = false; // لمعرفة هل الطرف الآخر دخل الغرفة
+  bool _isRemoteConnected = false;
 
   bool _isMuted = false;
-  bool _isSpeaker = true; // السبيكر مفعل افتراضياً
+  bool _isSpeaker = true;
 
   int _callDuration = 0;
   Timer? _durationTimer;
@@ -44,12 +46,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     super.initState();
     _initLiveKit();
 
-    // إغلاق المكالمة تلقائياً بعد 30 ثانية إذا لم يرد الطرف الآخر
-    _timeoutTimer = Timer(const Duration(seconds: 30), () {
+    // إغلاق المكالمة تلقائياً بعد 45 ثانية إذا لم يرد السائق
+    _timeoutTimer = Timer(const Duration(seconds: 45), () {
       if (!_isRemoteConnected && mounted) {
         print("⏳ انتهى الوقت ولم يتم الاتصال، جاري إنهاء المكالمة.");
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('الطرف الآخر لا يرد حالياً'), backgroundColor: Colors.orange),
+          const SnackBar(content: Text('السائق لا يرد حالياً'), backgroundColor: Colors.orange),
         );
         _endCall();
       }
@@ -59,6 +61,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   Future<void> _initLiveKit() async {
     final status = await Permission.microphone.request();
     if (status.isDenied || status.isPermanentlyDenied) {
+      if (!mounted) return;
       setState(() {
         _hasError = true;
         _errorMessage = "يرجى منح صلاحية المايكروفون في إعدادات الجهاز";
@@ -67,30 +70,53 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
 
     try {
-      _room = Room();
-      _listener = _room!.createListener(); // 🆕 إنشاء المستمع
+      // ✅ 1. إعداد جلسة الصوت للآيفون (خطوة حاسمة لمنع مشاكل الصوت)
+      if (Platform.isIOS) {
+        final session = await AudioSession.instance;
+        await session.configure(AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
+          AVAudioSessionCategoryOptions.defaultToSpeaker,
+          avAudioSessionMode: AVAudioSessionMode.voiceChat,
+          avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        ));
+      }
 
-      // 🆕 الاستماع للأحداث بالطريقة الحديثة في LiveKit
+      _room = Room();
+      _listener = _room!.createListener();
+
+      // ✅ 2. الاستماع للأحداث (محدث ليشمل TrackSubscribedEvent لمنع التعليق)
       _listener!.on<ParticipantConnectedEvent>((event) {
-        if (!mounted) return;
-        _timeoutTimer?.cancel(); // إيقاف مؤقت الانتظار
-        setState(() => _isRemoteConnected = true);
-        _startTimer();
+        if (mounted && !_isRemoteConnected) {
+          _timeoutTimer?.cancel();
+          setState(() => _isRemoteConnected = true);
+          _startTimer();
+          print("✅ الزبون: السائق دخل الغرفة");
+        }
+      });
+
+      _listener!.on<TrackSubscribedEvent>((event) {
+        if (mounted && !_isRemoteConnected) {
+          _timeoutTimer?.cancel();
+          setState(() => _isRemoteConnected = true);
+          _startTimer();
+          print("✅ الزبون: تم استقبال مسار الصوت من السائق");
+        }
       });
 
       _listener!.on<ParticipantDisconnectedEvent>((event) {
-        if (!mounted) return;
-        if (_isConnected) {
-          _showCallEndedDialog("أنهى الطرف الآخر المكالمة");
+        if (mounted && _isConnected) {
+          _showCallEndedDialog("أنهى السائق المكالمة");
         }
       });
 
       _listener!.on<RoomDisconnectedEvent>((event) {
-        if (!mounted) return;
-        _showCallEndedDialog("انقطع الاتصال");
+        if (mounted) {
+          _showCallEndedDialog("انقطع الاتصال");
+        }
       });
 
-      // الاتصال بالغرفة باستخدام الـ Token الجاهز
+      // ✅ 3. الاتصال بالغرفة
       await _room!.connect(
         widget.livekitUrl,
         widget.token,
@@ -101,12 +127,25 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         ),
       );
 
-      setState(() => _isConnected = true);
+      if (mounted) {
+        setState(() => _isConnected = true);
 
-      // تفعيل المايكروفون والسماعة افتراضياً
-      await _room!.localParticipant?.setMicrophoneEnabled(true);
-      await Hardware.instance.setSpeakerphoneOn(_isSpeaker); // 🆕 الطريقة الحديثة
+        // ✅ 4. فحص فوري: هل السائق موجود بالفعل في الغرفة؟
+        // هذا يمنع مشكلة "التعليق" إذا كان السائق قد دخل قبل أن نجهز المستمع
+        if (_room!.remoteParticipants.isNotEmpty) {
+          setState(() => _isRemoteConnected = true);
+          _timeoutTimer?.cancel();
+          _startTimer();
+          print("✅ الزبون: السائق موجود مسبقاً في الغرفة!");
+        }
 
+        // تفعيل المايكروفون
+        await _room!.localParticipant?.setMicrophoneEnabled(true);
+
+        // ✅ 5. تأخير بسيط لضمان استقرار الصوت قبل تفعيل السماعة
+        await Future.delayed(const Duration(milliseconds: 300));
+        await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -179,7 +218,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   Future<void> _toggleSpeaker() async {
     setState(() => _isSpeaker = !_isSpeaker);
-    await Hardware.instance.setSpeakerphoneOn(_isSpeaker); // 🆕 الطريقة الحديثة
+    await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
   }
 
   void _endCall() async {
@@ -187,7 +226,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     _timeoutTimer?.cancel();
 
     try {
-      await _listener?.dispose(); // 🆕 تنظيف المستمع
+      await _listener?.dispose();
       await _room?.disconnect();
       _room = null;
     } catch (e) {
@@ -195,20 +234,21 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
 
     if (mounted) {
+      // ملاحظة: لا نحتاج لإرسال إشعار للسيرفر هنا، لأن LiveKit سيخبر السائق تلقائياً بانفصالك
       Navigator.pop(context);
     }
   }
 
   @override
   void dispose() {
-    _endCall(); // ضمان تنظيف الموارد
+    _endCall(); // ضمان تنظيف الموارد عند إغلاق الشاشة
     super.dispose();
   }
 
   String _getCallStatus() {
     if (_hasError) return _errorMessage;
     if (_isRemoteConnected) return "متصل الآن 🟢";
-    if (_isConnected) return "يرن عند الطرف الآخر... ⏳";
+    if (_isConnected) return "يرن عند السائق... ⏳";
     return "جاري الاتصال بالسيرفر...";
   }
 
@@ -264,10 +304,10 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white.withOpacity(0.5), width: 2),
                     ),
-                    child: CircleAvatar(
+                    child: const CircleAvatar(
                       radius: 70,
-                      backgroundColor: Colors.grey.shade800,
-                      child: const Icon(Icons.local_taxi, size: 70, color: Colors.white70),
+                      backgroundColor: Colors.grey,
+                      child: Icon(Icons.person, size: 70, color: Colors.white70),
                     ),
                   ),
                   const SizedBox(height: 25),
@@ -309,11 +349,13 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                           size: 20,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          _getCallStatus(),
-                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
-                          maxLines: 2,
-                          textAlign: TextAlign.center,
+                        Flexible(
+                          child: Text(
+                            _getCallStatus(),
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+                            maxLines: 2,
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                       ],
                     ),
