@@ -9,6 +9,7 @@ import flutter_callkit_incoming
 
     var voipRegistry: PKPushRegistry?
 
+    // دالة لكتابة السجلات محلياً للمساعدة في التشخيص
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
@@ -18,7 +19,7 @@ import flutter_callkit_incoming
 
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
-        if logs.count > 100 { logs.removeFirst() }
+        if logs.count > 100 { logs.removeFirst() } // الاحتفاظ بآخر 100 سجل فقط
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
     }
 
@@ -30,7 +31,7 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        // إعداد Flutter Method Channel للتشخيص
+        // إعداد Flutter Method Channel للتشخيص وقراءة السجلات من التطبيق
         if let controller = window?.rootViewController as? FlutterViewController {
             let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
             debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
@@ -44,7 +45,7 @@ import flutter_callkit_incoming
             })
         }
 
-        // إعداد VoIP Registry
+        // إعداد VoIP Registry لاستقبال مكالمات الخلفية
         self.voipRegistry = PKPushRegistry(queue: .main)
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
@@ -52,7 +53,7 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // معالجة الإشعارات العادية (غير VoIP)
+    // معالجة الإشعارات العادية (غير VoIP) في الخلفية
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -67,7 +68,7 @@ import flutter_callkit_incoming
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
-    // تحديث التوكن
+    // 1. تحديث توكن VoIP وإرساله للسيرفر
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
 
@@ -75,11 +76,11 @@ extension AppDelegate: PKPushRegistryDelegate {
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
         writeLog("✅ تم تحديث توكن VoIP: \(tokenHex.prefix(20))...")
 
-        // ✅ إرسال التوكن للسيرفر
+        // إرسال التوكن للسيرفر لحفظه
         sendTokenToServer(tokenHex)
     }
 
-    // استقبال إشعار VoIP وارد
+    // 2. استقبال إشعار VoIP وارد (المكالمة الواردة)
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
         guard type == .voIP else {
@@ -98,7 +99,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         // فحص نوع الإشعار
         let messageType = dict["type"] as? String ?? "voip_call"
 
-        // ✅ معالجة إلغاء المكالمة
+        // ✅ معالجة أمر إلغاء المكالمة
         if messageType == "cancel_call" {
             writeLog("🚫 تم استلام أمر إلغاء المكالمة")
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
@@ -108,17 +109,17 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // ✅ معالجة مكالمة جديدة
+        // ✅ معالجة مكالمة جديدة واردة
         if messageType == "voip_call" {
             writeLog("📞 مكالمة جديدة واردة!")
 
-            // 🔥 استخراج البيانات بطريقة آمنة (تتعامل مع String و Int)
+            // 🔥 استخراج البيانات بطريقة آمنة (تتعامل مع String و Int لمنع الكراش)
             let callerName = (dict["name"] as? String) ?? (dict["driver_name"] as? String) ?? "الكابتن"
             let callId = (dict["id"] as? String) ?? UUID().uuidString
             let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? ""
             let avatar = (dict["avatar"] as? String) ?? ""
 
-            // معالجة آمنة للمدة (Duration) لمنع الكراش إذا أرسلها السيرفر كنص
+            // معالجة آمنة للمدة (Duration)
             var duration = 60000
             if let durationInt = dict["duration"] as? Int {
                 duration = durationInt
@@ -128,21 +129,21 @@ extension AppDelegate: PKPushRegistryDelegate {
 
             let extra = (dict["extra"] as? [String: Any]) ?? dict
 
-            writeLog("📋 البيانات: name=\(callerName), id=\(callId), duration=\(duration)")
+            writeLog("📋 البيانات المستلمة: name=\(callerName), id=\(callId), duration=\(duration)")
 
-            // تجهيز بيانات CallKit
+            // تجهيز قاموس بيانات CallKit
             let callkitData: [String: Any] = [
                 "id": callId,
                 "nameCaller": callerName,
                 "appName": "منصة بيتي",
                 "handle": handle,
                 "avatar": avatar,
-                "type": 0,
+                "type": 0, // 0 للمكالمات الصوتية
                 "duration": duration,
                 "extra": extra
             ]
 
-            // 🔥 استخدام do-catch لمنع انهيار التطبيق في حال وجود خطأ في البيانات
+            // 🔥 استخدام do-catch لمنع انهيار التطبيق في حال وجود خطأ في بناء البيانات
             do {
                 let data = try flutter_callkit_incoming.Data(args: callkitData)
 
@@ -157,25 +158,25 @@ extension AppDelegate: PKPushRegistryDelegate {
             }
         }
 
-        // ✅ الحل الجذري: استدعاء completion فوراً (إلزامي من Apple)
+        // ✅ الحل الجذري والأهم: استدعاء completion فوراً (إلزامي من Apple)
         completion()
     }
 
-    // إبطال التوكن
+    // 3. إبطال التوكن عند تغييره أو إلغاء تسجيله
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         guard type == .voIP else { return }
         writeLog("❌ تم إبطال توكن VoIP")
         UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
     }
 
-    // ✅ دالة إرسال التوكن للسيرفر
+    // 4. دالة إرسال التوكن للسيرفر
     func sendTokenToServer(_ voipToken: String) {
         let url = URL(string: "https://re.beytei.com/wp-json/restaurant-app/v1/register-device")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // جلب توكن FCM العادي
+        // جلب توكن FCM العادي لإرساله مع توكن VoIP
         let fcmToken = UserDefaults.standard.string(forKey: "fcm_token") ?? ""
 
         let body: [String: Any] = [
