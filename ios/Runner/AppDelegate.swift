@@ -31,18 +31,18 @@ import flutter_callkit_incoming
         GeneratedPluginRegistrant.register(with: self)
 
         // إعداد Flutter Method Channel للتشخيص
-        let controller: FlutterViewController = window?.rootViewController as! FlutterViewController
-        let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
-
-        debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
-            if call.method == "getLogs" {
-                let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
-                let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
-                result(["logs": logs.joined(separator: "\n\n"), "token": token])
-            } else {
-                result(FlutterMethodNotImplemented)
-            }
-        })
+        if let controller = window?.rootViewController as? FlutterViewController {
+            let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
+            debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+                if call.method == "getLogs" {
+                    let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
+                    let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
+                    result(["logs": logs.joined(separator: "\n\n"), "token": token])
+                } else {
+                    result(FlutterMethodNotImplemented)
+                }
+            })
+        }
 
         // إعداد VoIP Registry
         self.voipRegistry = PKPushRegistry(queue: .main)
@@ -112,15 +112,23 @@ extension AppDelegate: PKPushRegistryDelegate {
         if messageType == "voip_call" {
             writeLog("📞 مكالمة جديدة واردة!")
 
-            // استخراج البيانات
-            let callerName = dict["name"] as? String ?? (dict["driver_name"] as? String ?? "الكابتن")
-            let callId = dict["id"] as? String ?? UUID().uuidString
-            let handle = dict["handle"] as? String ?? (dict["driver_phone"] as? String ?? "")
-            let avatar = dict["avatar"] as? String ?? ""
-            let duration = dict["duration"] as? Int ?? 60000
-            let extra = dict["extra"] as? [String: Any] ?? dict
+            // 🔥 استخراج البيانات بطريقة آمنة (تتعامل مع String و Int)
+            let callerName = (dict["name"] as? String) ?? (dict["driver_name"] as? String) ?? "الكابتن"
+            let callId = (dict["id"] as? String) ?? UUID().uuidString
+            let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? ""
+            let avatar = (dict["avatar"] as? String) ?? ""
 
-            writeLog("📋 البيانات: name=\(callerName), id=\(callId)")
+            // معالجة آمنة للمدة (Duration) لمنع الكراش إذا أرسلها السيرفر كنص
+            var duration = 60000
+            if let durationInt = dict["duration"] as? Int {
+                duration = durationInt
+            } else if let durationString = dict["duration"] as? String, let parsedInt = Int(durationString) {
+                duration = parsedInt
+            }
+
+            let extra = (dict["extra"] as? [String: Any]) ?? dict
+
+            writeLog("📋 البيانات: name=\(callerName), id=\(callId), duration=\(duration)")
 
             // تجهيز بيانات CallKit
             let callkitData: [String: Any] = [
@@ -134,17 +142,22 @@ extension AppDelegate: PKPushRegistryDelegate {
                 "extra": extra
             ]
 
-            let data = flutter_callkit_incoming.Data(args: callkitData)
+            // 🔥 استخدام do-catch لمنع انهيار التطبيق في حال وجود خطأ في البيانات
+            do {
+                let data = try flutter_callkit_incoming.Data(args: callkitData)
 
-            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ تم عرض شاشة المكالمة")
-            } else {
-                writeLog("❌ مكتبة CallKit غير جاهزة")
+                if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                    plugin.showCallkitIncoming(data, fromPushKit: true)
+                    writeLog("✅ تم عرض شاشة المكالمة بنجاح")
+                } else {
+                    writeLog("❌ مكتبة CallKit غير جاهزة (sharedInstance is nil)")
+                }
+            } catch {
+                writeLog("❌ خطأ فادح في بناء بيانات CallKit: \(error.localizedDescription)")
             }
         }
 
-        // ✅ الحل الجذري: استدعاء completion فوراً (بدون تأخير!)
+        // ✅ الحل الجذري: استدعاء completion فوراً (إلزامي من Apple)
         completion()
     }
 
@@ -182,7 +195,8 @@ extension AppDelegate: PKPushRegistryDelegate {
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
                 self.writeLog("✅ تم إرسال توكن VoIP للسيرفر بنجاح")
             } else {
-                self.writeLog("⚠️ استجابة غير متوقعة من السيرفر")
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                self.writeLog("⚠️ استجابة غير متوقعة من السيرفر: Code \(statusCode)")
             }
         }.resume()
     }
