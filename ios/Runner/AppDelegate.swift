@@ -79,15 +79,16 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // 🔥 دالة الطوارئ: تمنع آبل من إرسال (0xbaadca11 Crash) مهما حدث
+        // 🔥 دالة الطوارئ: تمنع آبل من إرسال (0xbaadca11 Crash)
         func reportFakeCallToSatisfyApple() {
             let fakeUUID = UUID().uuidString
             let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
-            if let data = try? flutter_callkit_incoming.Data(args: fakeData) {
-                SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
+            if let data = try? flutter_callkit_incoming.Data(args: fakeData),
+               let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                plugin.showCallkitIncoming(data, fromPushKit: true)
                 // إنهاء المكالمة الوهمية فوراً
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(data)
+                    plugin.endCall(data)
                 }
             }
             completion()
@@ -100,17 +101,15 @@ extension AppDelegate: PKPushRegistryDelegate {
         }
 
         // 1. استخراج نوع الإشعار (مكالمة جديدة أم إلغاء)
-        let isCancel = (dict["type"] as? String == "cancel_call")
+        let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
-        // 2. معالجة الـ ID (السبب الجذري للانهيار 0xbaadca11)
-        // يجب تحويل رقم الطلب (مثل 17511) إلى UUID مقبول لدى Apple
+        // 2. معالجة الـ ID
         let rawId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
         var validUUID = UUID().uuidString
 
         if let existingUUID = UUID(uuidString: rawId) {
             validUUID = existingUUID.uuidString
         } else if !rawId.isEmpty {
-            // تغليف الرقم القصير ليصبح UUID نظامي: 00000000-0000-0000-0000-000000017511
             let cleanString = String(rawId.prefix(12))
             let padded = String(repeating: "0", count: max(0, 12 - cleanString.count)) + cleanString
             validUUID = "00000000-0000-0000-0000-\(padded)"
@@ -127,7 +126,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         }
 
         let callkitData: [String: Any] = [
-            "id": validUUID, // استخدمنا الـ UUID الذي صنعناه
+            "id": validUUID,
             "nameCaller": callerName,
             "appName": "منصة بيتي",
             "handle": handle,
@@ -137,9 +136,11 @@ extension AppDelegate: PKPushRegistryDelegate {
             "extra": extra
         ]
 
-        let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin()
-        if SwiftFlutterCallkitIncomingPlugin.sharedInstance == nil {
-            SwiftFlutterCallkitIncomingPlugin.sharedInstance = plugin
+        // ✅ التعديل السحري: استخدام المتغير الجاهز مباشرة بدون محاولة تغييره
+        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
+            writeLog("❌ مكتبة CallKit غير جاهزة. جاري تنفيذ خطة الطوارئ.")
+            reportFakeCallToSatisfyApple()
+            return
         }
 
         do {
@@ -154,7 +155,7 @@ extension AppDelegate: PKPushRegistryDelegate {
                 plugin.showCallkitIncoming(data, fromPushKit: true)
                 writeLog("✅ الشاشة رنت بنجاح (UUID: \(validUUID)).")
             }
-            completion() // يجب استدعاؤها فوراً بعد الإبلاغ
+            completion()
 
         } catch {
             writeLog("❌ فشل بناء البيانات. جاري تنفيذ خطة الطوارئ.")
