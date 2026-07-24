@@ -19,7 +19,7 @@ import flutter_callkit_incoming
         logs.append(logMessage)
         if logs.count > 50 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
-        print(logMessage) // مفيد للـ Console
+        print(logMessage)
     }
 
     override func application(
@@ -30,7 +30,6 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        // استخدمنا as? لمنع الانهيار عند فتح التطبيق
         if let controller = window?.rootViewController as? FlutterViewController {
             let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
             debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
@@ -51,6 +50,7 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
+    // السماح لإشعارات فايربيس العادية بالمرور
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -88,30 +88,31 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // 🔥 التكيف التام مع السيرفر: السيرفر يرسل type كـ Integer (0)
         let callType = dict["type"] as? Int ?? 0
 
-        // إذا كان نوع الطلب 0 (وهو ما يرسله السيرفر للمكالمة)
         if callType == 0 {
             writeLog("📞 جاري تجهيز شاشة الرنين...")
 
             let callerName = dict["name"] as? String ?? "الكابتن"
-            let callId = dict["id"] as? String ?? UUID().uuidString
+
+            // 🔥 الإصلاح الأول: توليد UUID حقيقي يرضي شروط آبل لمنع الرفض الصامت
+            let validUUID = UUID().uuidString
+
             let handle = dict["handle"] as? String ?? ""
             let duration = dict["duration"] as? Int ?? 60000
+
+            // بيانات السيرفر الحقيقية (بما فيها رقم الطلب) تمر عبر extra ليفهمها الفلاتر
             let extra = dict["extra"] as? [String: Any] ?? dict
 
-            // 🔥 إصلاح رابط الصورة: نظام iOS يرفض http، يجب تحويله إلى https
             var avatar = dict["avatar"] as? String ?? ""
             if avatar.hasPrefix("http://") {
                 avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
-                writeLog("⚠️ تم تصحيح رابط الشعار إلى HTTPS")
             }
 
             let callkitData: [String: Any] = [
-                "id": callId,
+                "id": validUUID, // استخدمنا الـ UUID الحقيقي هنا
                 "nameCaller": callerName,
-                "appName": "مطاعم بيتي",
+                "appName": "منصة بيتي",
                 "handle": handle,
                 "avatar": avatar,
                 "type": 0,
@@ -119,29 +120,27 @@ extension AppDelegate: PKPushRegistryDelegate {
                 "extra": extra
             ]
 
-            // 🔥 الحماية القصوى: استخدام do-catch لمنع الانهيار
             do {
                 let data = try flutter_callkit_incoming.Data(args: callkitData)
                 if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
                     plugin.showCallkitIncoming(data, fromPushKit: true)
-                    writeLog("✅ الشاشة رنت بنجاح. بيانات Extra متوفرة.")
-                } else {
-                    writeLog("❌ المكتبة غير جاهزة (sharedInstance is nil).")
+                    writeLog("✅ الشاشة رنت بنجاح.")
                 }
             } catch {
-                writeLog("❌ خطأ فادح منع ظهور المكالمة: \(error.localizedDescription)")
+                writeLog("❌ خطأ فادح في البيانات: \(error.localizedDescription)")
             }
         }
         else {
-            writeLog("🚫 تم استلام نوع آخر من الإشعارات (إلغاء مكالمة ربما؟).")
+            writeLog("🚫 أمر إنهاء المكالمة.")
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
                 plugin.endAllCalls()
             }
         }
 
-        // 🔥 أبل تشترط إنهاء المهمة (completion) مباشرة في نفس دورة التنفيذ
-        // لا تضع تأخير (Delay) هنا أبدًا
-        completion()
+        // 🔥 الإصلاح الثاني: تأخير الرد لآبل قليلاً لإعطاء فرصة لشاشة الرنين بالظهور لمنع الـ Crash
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            completion()
+        }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
