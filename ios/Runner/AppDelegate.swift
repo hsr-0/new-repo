@@ -50,7 +50,7 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // السماح لإشعارات فايربيس العادية (FCM) بالمرور بسلاسة
+    // ترك إشعارات Firebase (FCM) تمر بسلام
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -79,17 +79,44 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        writeLog("⚠️ تم استلام إشعار مكالمة (VoIP)!")
+        // 🔥 دالة الطوارئ: تمنع آبل من إرسال (0xbaadca11 Crash) مهما حدث
+        func reportFakeCallToSatisfyApple() {
+            let fakeUUID = UUID().uuidString
+            let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
+            if let data = try? flutter_callkit_incoming.Data(args: fakeData) {
+                SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true)
+                // إنهاء المكالمة الوهمية فوراً
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(data)
+                }
+            }
+            completion()
+        }
 
         guard let dict = payload.dictionaryPayload as? [String: Any] else {
-            writeLog("❌ البيانات فارغة أو غير صالحة")
-            completion()
+            writeLog("❌ البيانات غير صالحة. جاري تنفيذ خطة الطوارئ لمنع الانهيار.")
+            reportFakeCallToSatisfyApple()
             return
         }
 
-        // 1. استخراج المتغيرات بمرونة تامة
+        // 1. استخراج نوع الإشعار (مكالمة جديدة أم إلغاء)
+        let isCancel = (dict["type"] as? String == "cancel_call")
+
+        // 2. معالجة الـ ID (السبب الجذري للانهيار 0xbaadca11)
+        // يجب تحويل رقم الطلب (مثل 17511) إلى UUID مقبول لدى Apple
+        let rawId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
+        var validUUID = UUID().uuidString
+
+        if let existingUUID = UUID(uuidString: rawId) {
+            validUUID = existingUUID.uuidString
+        } else if !rawId.isEmpty {
+            // تغليف الرقم القصير ليصبح UUID نظامي: 00000000-0000-0000-0000-000000017511
+            let cleanString = String(rawId.prefix(12))
+            let padded = String(repeating: "0", count: max(0, 12 - cleanString.count)) + cleanString
+            validUUID = "00000000-0000-0000-0000-\(padded)"
+        }
+
         let callerName = dict["name"] as? String ?? dict["driver_name"] as? String ?? "الكابتن"
-        let callId = dict["id"] as? String ?? dict["order_id"] as? String ?? UUID().uuidString
         let handle = dict["handle"] as? String ?? dict["driver_phone"] as? String ?? ""
         let duration = dict["duration"] as? Int ?? 60000
         let extra = dict["extra"] as? [String: Any] ?? dict
@@ -99,14 +126,8 @@ extension AppDelegate: PKPushRegistryDelegate {
             avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
         }
 
-        // 2. تحليل نوع الإشعار (مكالمة أم إلغاء)
-        var isCancel = false
-        if let typeStr = dict["type"] as? String, typeStr == "cancel_call" {
-            isCancel = true
-        }
-
         let callkitData: [String: Any] = [
-            "id": callId,
+            "id": validUUID, // استخدمنا الـ UUID الذي صنعناه
             "nameCaller": callerName,
             "appName": "منصة بيتي",
             "handle": handle,
@@ -116,7 +137,6 @@ extension AppDelegate: PKPushRegistryDelegate {
             "extra": extra
         ]
 
-        // 🔥 الإصلاح السحري 1: إيقاظ المكتبة بالقوة إذا كان التطبيق مغلقاً
         let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin()
         if SwiftFlutterCallkitIncomingPlugin.sharedInstance == nil {
             SwiftFlutterCallkitIncomingPlugin.sharedInstance = plugin
@@ -126,32 +146,24 @@ extension AppDelegate: PKPushRegistryDelegate {
             let data = try flutter_callkit_incoming.Data(args: callkitData)
 
             if isCancel {
-                // 🔥 الإصلاح السحري 2: الخداع المشروع لآبل
-                // آبل تعاقبنا إذا استلمنا VoIP ولم نرن. لذلك سنرن وهمياً ونلغي المكالمة فوراً!
+                // آبل تشترط الإبلاغ عن المكالمة حتى لو كانت رسالة إلغاء
                 plugin.showCallkitIncoming(data, fromPushKit: true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    plugin.endCall(data)
-                    writeLog("🚫 تم تنفيذ الإلغاء الآمن للمكالمة.")
-                }
+                plugin.endCall(data)
+                writeLog("🚫 تم تنفيذ الإلغاء بنجاح.")
             } else {
-                // مكالمة طبيعية
                 plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح.")
+                writeLog("✅ الشاشة رنت بنجاح (UUID: \(validUUID)).")
             }
+            completion() // يجب استدعاؤها فوراً بعد الإبلاغ
 
         } catch {
-            writeLog("❌ خطأ فادح في قراءة البيانات: \(error.localizedDescription)")
-        }
-
-        // 🔥 الإصلاح السحري 3: تأخير الرد لآبل بثانية واحدة فقط ليتمكن CallKit من رسم الشاشة
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            completion()
+            writeLog("❌ فشل بناء البيانات. جاري تنفيذ خطة الطوارئ.")
+            reportFakeCallToSatisfyApple()
         }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         guard type == .voIP else { return }
-        writeLog("❌ تم إبطال التوكن من قبل آبل")
         UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
     }
 }
