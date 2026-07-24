@@ -9,6 +9,9 @@ import flutter_callkit_incoming
 
     var voipRegistry: PKPushRegistry?
 
+    // =======================================================================
+    // 🛠️ نظام التشخيص وتسجيل الأحداث (Logger)
+    // =======================================================================
     func writeLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
@@ -17,6 +20,7 @@ import flutter_callkit_incoming
 
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
+        // الاحتفاظ بآخر 50 حدث فقط
         if logs.count > 50 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
         print(logMessage)
@@ -30,27 +34,33 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
+        // =======================================================================
+        // 📡 قناة فلاتر (MethodChannel) لإرسال التوكن والسجلات للتطبيق
+        // =======================================================================
         if let controller = window?.rootViewController as? FlutterViewController {
             let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
-            debugChannel.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+            debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
                 if call.method == "getLogs" {
                     let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
-                    let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
+                    let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ لا يوجد توكن VoIP مسجل"
                     result(["logs": logs.joined(separator: "\n\n"), "token": token])
+                    self?.writeLog("تم طلب السجلات من تطبيق فلاتر")
                 } else {
                     result(FlutterMethodNotImplemented)
                 }
             })
         }
 
+        // تفعيل استقبال مكالمات الإنترنت (VoIP)
         self.voipRegistry = PKPushRegistry(queue: .main)
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
 
+        writeLog("🚀 التطبيق بدأ العمل وتم تهيئة PushKit")
+
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // ترك إشعارات Firebase (FCM) تمر بسلام
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -61,17 +71,19 @@ import flutter_callkit_incoming
 }
 
 // =======================================================================
-// VoIP Push Registry Delegate
+// VoIP Push Registry Delegate - نظام الاتصال واستلام الإشعارات
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
+    // 1. تسجيل توكن الآيفون (VoIP Token)
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
-        writeLog("✅ تم حفظ التوكن: \(tokenHex.prefix(15))...")
+        writeLog("🔑 تم استلام توكن آبل بنجاح: \(tokenHex.prefix(15))...")
     }
 
+    // 2. استلام إشعار المكالمة في الخلفية أو التطبيق مغلق
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
         guard type == .voIP else {
@@ -79,15 +91,18 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // 🔥 دالة الطوارئ: تمنع آبل من إرسال (0xbaadca11 Crash)
-        func reportFakeCallToSatisfyApple() {
+        writeLog("⬇️ استلمت آيفون إشعار VoIP جديد من السيرفر")
+
+        // 🔥 دالة الطوارئ: تمنع آبل من عمل (Crash) في حال كانت البيانات خاطئة
+        func reportFakeCallToSatisfyApple(reason: String) {
+            writeLog("⚠️ تفعيل خطة الطوارئ بسبب: \(reason)")
             let fakeUUID = UUID().uuidString
             let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
+
             if let data = try? flutter_callkit_incoming.Data(args: fakeData),
                let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
                 plugin.showCallkitIncoming(data, fromPushKit: true)
-                // إنهاء المكالمة الوهمية فوراً
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     plugin.endCall(data)
                 }
             }
@@ -95,15 +110,14 @@ extension AppDelegate: PKPushRegistryDelegate {
         }
 
         guard let dict = payload.dictionaryPayload as? [String: Any] else {
-            writeLog("❌ البيانات غير صالحة. جاري تنفيذ خطة الطوارئ لمنع الانهيار.")
-            reportFakeCallToSatisfyApple()
+            reportFakeCallToSatisfyApple(reason: "فشل في قراءة Payload من السيرفر")
             return
         }
 
-        // 1. استخراج نوع الإشعار (مكالمة جديدة أم إلغاء)
+        // هل هذا إشعار مكالمة جديدة أم إلغاء؟
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
-        // 2. معالجة الـ ID
+        // معالجة الـ ID ליصبح UUID نظامي كما تطلب آبل
         let rawId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
         var validUUID = UUID().uuidString
 
@@ -115,14 +129,15 @@ extension AppDelegate: PKPushRegistryDelegate {
             validUUID = "00000000-0000-0000-0000-\(padded)"
         }
 
-        let callerName = dict["name"] as? String ?? dict["driver_name"] as? String ?? "الكابتن"
-        let handle = dict["handle"] as? String ?? dict["driver_phone"] as? String ?? ""
+        let callerName = dict["name"] as? String ?? dict["driver_name"] as? String ?? "مندوب بيتي"
+        let handle = dict["handle"] as? String ?? dict["driver_phone"] as? String ?? "مكالمة واردة"
         let duration = dict["duration"] as? Int ?? 60000
         let extra = dict["extra"] as? [String: Any] ?? dict
 
         var avatar = dict["avatar"] as? String ?? dict["driver_image"] as? String ?? ""
         if avatar.hasPrefix("http://") {
             avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
+            writeLog("تم تعديل رابط الصورة إلى HTTPS")
         }
 
         let callkitData: [String: Any] = [
@@ -136,10 +151,8 @@ extension AppDelegate: PKPushRegistryDelegate {
             "extra": extra
         ]
 
-        // ✅ التعديل السحري: استخدام المتغير الجاهز مباشرة بدون محاولة تغييره
         guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
-            writeLog("❌ مكتبة CallKit غير جاهزة. جاري تنفيذ خطة الطوارئ.")
-            reportFakeCallToSatisfyApple()
+            reportFakeCallToSatisfyApple(reason: "مكتبة CallKit (sharedInstance) غير متوفرة حالياً")
             return
         }
 
@@ -147,24 +160,23 @@ extension AppDelegate: PKPushRegistryDelegate {
             let data = try flutter_callkit_incoming.Data(args: callkitData)
 
             if isCancel {
-                // آبل تشترط الإبلاغ عن المكالمة حتى لو كانت رسالة إلغاء
                 plugin.showCallkitIncoming(data, fromPushKit: true)
                 plugin.endCall(data)
-                writeLog("🚫 تم تنفيذ الإلغاء بنجاح.")
+                writeLog("🚫 تم معالجة طلب إلغاء المكالمة بنجاح")
             } else {
                 plugin.showCallkitIncoming(data, fromPushKit: true)
-                writeLog("✅ الشاشة رنت بنجاح (UUID: \(validUUID)).")
+                writeLog("🔔 تم عرض شاشة الاتصال بنجاح! (UUID: \(validUUID))")
             }
             completion()
 
-        } catch {
-            writeLog("❌ فشل بناء البيانات. جاري تنفيذ خطة الطوارئ.")
-            reportFakeCallToSatisfyApple()
+        } catch let error {
+            reportFakeCallToSatisfyApple(reason: "فشل بناء بيانات CallKit: \(error.localizedDescription)")
         }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         guard type == .voIP else { return }
         UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
+        writeLog("⚠️ تم إبطال التوكن من قبل نظام آبل")
     }
 }
