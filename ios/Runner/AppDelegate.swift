@@ -32,7 +32,7 @@ import flutter_callkit_incoming
 
         if let controller = window?.rootViewController as? FlutterViewController {
             let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
-            debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+            debugChannel.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
                 if call.method == "getLogs" {
                     let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
                     let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "لا يوجد توكن"
@@ -50,7 +50,7 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // السماح لإشعارات فايربيس العادية بالمرور
+    // السماح لإشعارات فايربيس العادية (FCM) بالمرور بسلاسة
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -67,7 +67,6 @@ extension AppDelegate: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
-
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(tokenHex, forKey: "flutter.voip_token")
         writeLog("✅ تم حفظ التوكن: \(tokenHex.prefix(15))...")
@@ -88,56 +87,63 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        let callType = dict["type"] as? Int ?? 0
+        // 1. استخراج المتغيرات بمرونة تامة
+        let callerName = dict["name"] as? String ?? dict["driver_name"] as? String ?? "الكابتن"
+        let callId = dict["id"] as? String ?? dict["order_id"] as? String ?? UUID().uuidString
+        let handle = dict["handle"] as? String ?? dict["driver_phone"] as? String ?? ""
+        let duration = dict["duration"] as? Int ?? 60000
+        let extra = dict["extra"] as? [String: Any] ?? dict
 
-        if callType == 0 {
-            writeLog("📞 جاري تجهيز شاشة الرنين...")
+        var avatar = dict["avatar"] as? String ?? dict["driver_image"] as? String ?? ""
+        if avatar.hasPrefix("http://") {
+            avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
+        }
 
-            let callerName = dict["name"] as? String ?? "الكابتن"
+        // 2. تحليل نوع الإشعار (مكالمة أم إلغاء)
+        var isCancel = false
+        if let typeStr = dict["type"] as? String, typeStr == "cancel_call" {
+            isCancel = true
+        }
 
-            // 🔥 الإصلاح الأول: توليد UUID حقيقي يرضي شروط آبل لمنع الرفض الصامت
-            let validUUID = UUID().uuidString
+        let callkitData: [String: Any] = [
+            "id": callId,
+            "nameCaller": callerName,
+            "appName": "منصة بيتي",
+            "handle": handle,
+            "avatar": avatar,
+            "type": 0,
+            "duration": duration,
+            "extra": extra
+        ]
 
-            let handle = dict["handle"] as? String ?? ""
-            let duration = dict["duration"] as? Int ?? 60000
+        // 🔥 الإصلاح السحري 1: إيقاظ المكتبة بالقوة إذا كان التطبيق مغلقاً
+        let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin()
+        if SwiftFlutterCallkitIncomingPlugin.sharedInstance == nil {
+            SwiftFlutterCallkitIncomingPlugin.sharedInstance = plugin
+        }
 
-            // بيانات السيرفر الحقيقية (بما فيها رقم الطلب) تمر عبر extra ليفهمها الفلاتر
-            let extra = dict["extra"] as? [String: Any] ?? dict
+        do {
+            let data = try flutter_callkit_incoming.Data(args: callkitData)
 
-            var avatar = dict["avatar"] as? String ?? ""
-            if avatar.hasPrefix("http://") {
-                avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
-            }
-
-            let callkitData: [String: Any] = [
-                "id": validUUID, // استخدمنا الـ UUID الحقيقي هنا
-                "nameCaller": callerName,
-                "appName": "منصة بيتي",
-                "handle": handle,
-                "avatar": avatar,
-                "type": 0,
-                "duration": duration,
-                "extra": extra
-            ]
-
-            do {
-                let data = try flutter_callkit_incoming.Data(args: callkitData)
-                if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                    plugin.showCallkitIncoming(data, fromPushKit: true)
-                    writeLog("✅ الشاشة رنت بنجاح.")
+            if isCancel {
+                // 🔥 الإصلاح السحري 2: الخداع المشروع لآبل
+                // آبل تعاقبنا إذا استلمنا VoIP ولم نرن. لذلك سنرن وهمياً ونلغي المكالمة فوراً!
+                plugin.showCallkitIncoming(data, fromPushKit: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    plugin.endCall(data)
+                    writeLog("🚫 تم تنفيذ الإلغاء الآمن للمكالمة.")
                 }
-            } catch {
-                writeLog("❌ خطأ فادح في البيانات: \(error.localizedDescription)")
+            } else {
+                // مكالمة طبيعية
+                plugin.showCallkitIncoming(data, fromPushKit: true)
+                writeLog("✅ الشاشة رنت بنجاح.")
             }
-        }
-        else {
-            writeLog("🚫 أمر إنهاء المكالمة.")
-            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.endAllCalls()
-            }
+
+        } catch {
+            writeLog("❌ خطأ فادح في قراءة البيانات: \(error.localizedDescription)")
         }
 
-        // 🔥 الإصلاح الثاني: تأخير الرد لآبل قليلاً لإعطاء فرصة لشاشة الرنين بالظهور لمنع الـ Crash
+        // 🔥 الإصلاح السحري 3: تأخير الرد لآبل بثانية واحدة فقط ليتمكن CallKit من رسم الشاشة
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             completion()
         }
