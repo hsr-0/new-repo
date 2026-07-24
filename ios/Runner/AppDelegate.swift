@@ -113,11 +113,14 @@ extension AppDelegate: PKPushRegistryDelegate {
         if messageType == "voip_call" {
             writeLog("📞 مكالمة جديدة واردة!")
 
-            // 🔥 استخراج البيانات بطريقة آمنة (تتعامل مع String و Int لمنع الكراش)
-            let callerName = (dict["name"] as? String) ?? (dict["driver_name"] as? String) ?? "الكابتن"
-            let callId = (dict["id"] as? String) ?? UUID().uuidString
-            let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? ""
-            let avatar = (dict["avatar"] as? String) ?? ""
+            // 🔥 التصحيح الجذري: مطابقة المفاتيح مع ما يرسله سيرفر PHP بالضبط
+            // السيرفر يرسل: driver_name, driver_image, order_id
+            let callerName = (dict["driver_name"] as? String) ?? (dict["name"] as? String) ?? "الكابتن"
+            let avatar = (dict["driver_image"] as? String) ?? (dict["avatar"] as? String) ?? ""
+
+            // استخدام order_id كمعرف فريد للمكالمة (CallKit يتطلب String فريد وثابت)
+            let callId = (dict["order_id"] as? String) ?? (dict["id"] as? String) ?? UUID().uuidString
+            let handle = (dict["order_id"] as? String) ?? (dict["driver_phone"] as? String) ?? "مكالمة واردة"
 
             // معالجة آمنة للمدة (Duration)
             var duration = 60000
@@ -131,7 +134,7 @@ extension AppDelegate: PKPushRegistryDelegate {
 
             writeLog("📋 البيانات المستلمة: name=\(callerName), id=\(callId), duration=\(duration)")
 
-            // تجهيز قاموس بيانات CallKit
+            // تجهيز قاموس بيانات CallKit بالمفاتيح الصحيحة التي تتوقعها المكتبة
             let callkitData: [String: Any] = [
                 "id": callId,
                 "nameCaller": callerName,
@@ -140,7 +143,7 @@ extension AppDelegate: PKPushRegistryDelegate {
                 "avatar": avatar,
                 "type": 0, // 0 للمكالمات الصوتية
                 "duration": duration,
-                "extra": extra
+                "extra": extra // يحتوي على room_name, livekit_url, token
             ]
 
             // 🔥 استخدام do-catch لمنع انهيار التطبيق في حال وجود خطأ في بناء البيانات
@@ -155,6 +158,7 @@ extension AppDelegate: PKPushRegistryDelegate {
                 }
             } catch {
                 writeLog("❌ خطأ فادح في بناء بيانات CallKit: \(error.localizedDescription)")
+                writeLog("البيانات التي تسببت في الخطأ: \(callkitData)")
             }
         }
 

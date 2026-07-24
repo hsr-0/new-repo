@@ -685,34 +685,43 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
     try {
       _room = Room();
-      _listener = _room!.createListener(); // 🆕 إنشاء المستمع
+      _listener = _room!.createListener();
 
-      // 🆕 الاستماع للأحداث بالطريقة الحديثة
+      // 1. مستمع دخول الطرف الآخر
       _listener!.on<ParticipantConnectedEvent>((event) {
-        if (mounted && !_isEngineReleased) {
+        if (mounted && !_isEngineReleased && !_isDriverConnected) {
           _timeoutTimer?.cancel();
-          setState(() {
-            _isDriverConnected = true;
-          });
+          setState(() => _isDriverConnected = true);
           _startTimer();
-          print("✅ السائق دخل الغرفة");
+          print("✅ الزبون: السائق دخل الغرفة");
+        }
+      });
+
+      // 2. 🔥 مستمع استقبال الصوت (الأهم لمنع التعليق)
+      _listener!.on<TrackSubscribedEvent>((event) {
+        if (mounted && !_isEngineReleased && !_isDriverConnected) {
+          _timeoutTimer?.cancel();
+          setState(() => _isDriverConnected = true);
+          _startTimer();
+          print("✅ الزبون: تم استقبال مسار الصوت من السائق");
         }
       });
 
       _listener!.on<ParticipantDisconnectedEvent>((event) {
         if (mounted && _localUserJoined && !_isEngineReleased) {
-          print("📞 الطرف الآخر أنهى المكالمة.");
+          print("📞 الزبون: السائق أنهى المكالمة.");
           _endCall();
         }
       });
 
       _listener!.on<RoomDisconnectedEvent>((event) {
         if (mounted && !_isEngineReleased) {
+          print("⚠️ الزبون: انقطع الاتصال بالغرفة.");
           _endCall();
         }
       });
 
-      // الاتصال بالغرفة باستخدام الـ Token الجاهز
+      // الاتصال بالغرفة
       await _room!.connect(
         widget.livekitUrl,
         widget.token,
@@ -723,9 +732,21 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         ),
       );
 
-      setState(() => _localUserJoined = true);
-      await _room!.localParticipant?.setMicrophoneEnabled(true);
-      await Hardware.instance.setSpeakerphoneOn(_isSpeaker); // 🆕 الطريقة الحديثة لتشغيل السبيكر
+      if (mounted) {
+        setState(() => _localUserJoined = true);
+
+        // 3. 🔥 الفحص الفوري (الحل السحري لمشكلة السباق الزمني)
+        // إذا كان السائق قد دخل الغرفة قبل أن نجهز المستمعين، نكتشفه فوراً هنا
+        if (_room!.remoteParticipants.isNotEmpty) {
+          setState(() => _isDriverConnected = true);
+          _timeoutTimer?.cancel();
+          _startTimer();
+          print("✅ الزبون: السائق موجود مسبقاً في الغرفة (فحص فوري)");
+        }
+
+        await _room!.localParticipant?.setMicrophoneEnabled(true);
+        await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+      }
 
     } catch (e) {
       if (mounted) {
@@ -736,7 +757,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       }
     }
   }
-
   void _startTimer() {
     _durationTimer?.cancel();
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
