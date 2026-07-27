@@ -89,21 +89,21 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلمت آيفون إشعار VoIP جديد من السيرفر")
 
-        // 🔥 الحصول على Messenger بأي ثمن لمنع الانهيار
-        var currentMessenger: FlutterBinaryMessenger
-        if let controller = self.window?.rootViewController as? FlutterViewController {
-            currentMessenger = controller.binaryMessenger
-        } else {
-            // التطبيق مغلق تماماً (Killed State) -> ننشئ محرك خلفية سريع لإيقاظ CallKit
+        // 🔥 التأكد من تشغيل محرك فلاتر في الخلفية إذا كان التطبيق مغلقاً (Killed State)
+        if self.window?.rootViewController as? FlutterViewController == nil {
             writeLog("⚙️ التطبيق مغلق، جاري تشغيل محرك الخلفية")
             let engine = FlutterEngine(name: "VoIPBackgroundEngine")
             engine.run(withEntrypoint: nil)
             GeneratedPluginRegistrant.register(with: engine)
             self.backgroundEngine = engine // حفظه في الذاكرة لمنع تدميره
-            currentMessenger = engine.binaryMessenger
         }
 
-        let callkitPlugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin(messenger: currentMessenger)
+        // جلب مثيل الإضافة بأمان
+        guard let callkitPlugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
+            writeLog("❌ خطأ: لم يتم العثور على إضافة CallKit")
+            completion()
+            return
+        }
 
         // دالة الطوارئ المضمونة 100% لإرضاء آبل
         func reportFakeCallToSatisfyApple(reason: String) {
@@ -111,7 +111,8 @@ extension AppDelegate: PKPushRegistryDelegate {
             let fakeUUID = UUID().uuidString
             let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
 
-            if let data = try? flutter_callkit_incoming.Data(args: fakeData, messenger: currentMessenger) {
+            // ✅ تم إزالة messenger من هنا لتجنب خطأ الكومبايلر
+            if let data = try? flutter_callkit_incoming.Data(args: fakeData) {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     callkitPlugin.endCall(data)
@@ -128,7 +129,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
         // ===========================================================
-        // 🔥 التعديل الجذري لمنع הـ Crash (0xbaadca11) عندما يكون التطبيق مفتوحاً
+        // 🔥 التعديل الجذري لمنع الـ Crash (0xbaadca11)
         // ===========================================================
 
         // 1. توليد UUID عشوائي وجديد 100% دائماً لكي تقبله آبل دون مشاكل
@@ -163,7 +164,8 @@ extension AppDelegate: PKPushRegistryDelegate {
         ]
 
         do {
-            let data = try flutter_callkit_incoming.Data(args: callkitData, messenger: currentMessenger)
+            // ✅ تم إزالة messenger من هنا لتجنب خطأ الكومبايلر
+            let data = try flutter_callkit_incoming.Data(args: callkitData)
 
             if isCancel {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
