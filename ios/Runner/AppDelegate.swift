@@ -94,16 +94,24 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلمت آيفون إشعار VoIP جديد من السيرفر")
 
-        // 🔥 التعديل السحري: نستخدم النسخة الموجودة، وإذا كانت غير جاهزة ننشئ نسخة فورية لإنقاذ الموقف
         let callkitPlugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin()
 
-        // 🔥 دالة الطوارئ المضمونة 100%: تمنع آبل من عمل (Crash) في حال كانت البيانات خاطئة
+        // 🔥 استخراج הـ Messenger لتمريره لبيانات المكالمة كما تطلب المكتبة الجديدة
+        guard let controller = self.window?.rootViewController as? FlutterViewController else {
+            writeLog("❌ فشل الحصول على FlutterViewController")
+            completion()
+            return
+        }
+        let messenger = controller.binaryMessenger
+
+        // 🔥 دالة الطوارئ المضمونة
         func reportFakeCallToSatisfyApple(reason: String) {
             writeLog("⚠️ تفعيل خطة الطوارئ بسبب: \(reason)")
             let fakeUUID = UUID().uuidString
             let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
 
-            if let data = try? flutter_callkit_incoming.Data(args: fakeData) {
+            // ✅ إضافة messenger هنا
+            if let data = try? flutter_callkit_incoming.Data(args: fakeData, messenger: messenger) {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     callkitPlugin.endCall(data)
@@ -120,7 +128,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         // هل هذا إشعار مكالمة جديدة أم إلغاء؟
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
-        // معالجة الـ ID ليصبح UUID نظامي كما تطلب آبل
+        // معالجة الـ ID
         let rawId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
         var validUUID = UUID().uuidString
 
@@ -155,7 +163,8 @@ extension AppDelegate: PKPushRegistryDelegate {
         ]
 
         do {
-            let data = try flutter_callkit_incoming.Data(args: callkitData)
+            // ✅ إضافة messenger هنا أيضاً
+            let data = try flutter_callkit_incoming.Data(args: callkitData, messenger: messenger)
 
             if isCancel {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
