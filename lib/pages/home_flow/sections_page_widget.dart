@@ -48,10 +48,7 @@ class PromoManager {
 
 // 📍 خدمة إدارة الموقع
 // =======================================================================
-// 📍 خدمة إدارة الموقع المحفوظ (موحدة - متاحة لجميع الشاشات)
-// =======================================================================
 class LocationService {
-  // ✅ مفاتيح موحدة للمشاركة بين التطبيقات (تبدأ بـ shared_)
   static const String LAT_KEY = 'shared_user_latitude';
   static const String LNG_KEY = 'shared_user_longitude';
   static const String LOCATION_SOURCE_KEY = 'shared_location_source';
@@ -60,7 +57,6 @@ class LocationService {
   static const String AREA_NAME_KEY = 'shared_area_name';
   static const int LOCATION_MAX_AGE_HOURS = 24;
 
-  /// حفظ الموقع مع مصدره ووقت الحفظ وبيانات المنطقة
   static Future<bool> saveLocation(double lat, double lng, {
     String source = 'auto',
     int? areaId,
@@ -81,7 +77,6 @@ class LocationService {
     }
   }
 
-  /// جلب الموقع المحفوظ مع التحقق من صلاحيته
   static Future<({double lat, double lng, String source, bool isExpired})?> getSavedLocation() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -105,20 +100,17 @@ class LocationService {
     }
   }
 
-  /// دالة مبسطة: ترجع الإحداثيات فقط
   static Future<({double lat, double lng})?> getSavedLocationSimple() async {
     final saved = await getSavedLocation();
     if (saved != null) return (lat: saved.lat, lng: saved.lng);
     return null;
   }
 
-  /// التحقق من وجود موقع محفوظ
   static Future<bool> hasSavedLocation() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.containsKey(LAT_KEY) && prefs.containsKey(LNG_KEY);
   }
 
-  /// حذف الموقع المحفوظ
   static Future<void> clearSavedLocation() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(LAT_KEY);
@@ -129,7 +121,6 @@ class LocationService {
     await prefs.remove(AREA_NAME_KEY);
   }
 
-  /// محاولة التحديد التلقائي للموقع (صامت - بدون طلب إذن إذا كان مسموحاً مسبقاً)
   static Future<geolocator.Position?> tryAutoDetectSilent({Duration timeout = const Duration(seconds: 5)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -151,7 +142,6 @@ class LocationService {
     }
   }
 
-  /// محاولة التحديد التلقائي مع طلب الإذن (عند الحاجة)
   static Future<geolocator.Position?> tryAutoDetectWithPermission({Duration timeout = const Duration(seconds: 20)}) async {
     try {
       bool serviceEnabled = await geolocator.Geolocator.isLocationServiceEnabled();
@@ -177,7 +167,6 @@ class LocationService {
     }
   }
 
-  /// حساب المسافة بين نقطتين
   static double calculateDistance(double lat1, double lng1, double lat2, double lng2) {
     return geolocator.Geolocator.distanceBetween(lat1, lng1, lat2, lng2);
   }
@@ -665,6 +654,17 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     });
   }
 
+  // ⚙️ استدعاء الصلاحيات (الدالة التي كانت مفقودة)
+  Future<void> _requestAllPermissions() async {
+    if (Platform.isIOS) {
+      await FirebaseMessaging.instance.requestPermission();
+    }
+    final locationStatus = await Permission.location.status;
+    if (locationStatus.isDenied) {
+      await Permission.location.request();
+    }
+  }
+
   Future<void> _openSmartSupportChat() async {
     String tName = '', tPhone = '', oName = '', oPhone = '', oId = '';
     try {
@@ -786,17 +786,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         ),
       ),
     );
-  }
-
-  // ⚙️ استدعاء الصلاحيات
-  Future<void> _requestAllPermissions() async {
-    if (Platform.isIOS) {
-      await FirebaseMessaging.instance.requestPermission();
-    }
-    final locationStatus = await Permission.location.status;
-    if (locationStatus.isDenied) {
-      await Permission.location.request();
-    }
   }
 
   // ⚙️ التحقق من التحديثات
@@ -988,18 +977,80 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                     child: SelectableText(voipToken, style: const TextStyle(fontSize: 11)),
                   ),
                   const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: voipToken));
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ توكن الـ VoIP!')));
-                    },
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('نسخ التوكن لاختباره في السيرفر', style: TextStyle(fontSize: 12)),
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 36)
-                    ),
+
+                  // 🔥 وضع زر النسخ وزر الاختبار جنباً إلى جنب
+                  Row(
+                    children: [
+                      // زر النسخ
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: voipToken));
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ توكن الـ VoIP!')));
+                          },
+                          icon: const Icon(Icons.copy, size: 16),
+                          label: const Text('نسخ التوكن', style: TextStyle(fontSize: 11)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // زر إرسال المكالمة
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () async {
+                            if (voipToken.contains("لا يوجد") || voipToken.contains("خطأ") || voipToken == "جاري الجلب...") {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('❌ لا يوجد توكن صالح لإرسال المكالمة!')),
+                              );
+                              return;
+                            }
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('⏳ جاري طلب مكالمة تجريبية...')),
+                            );
+
+                            try {
+                              // 🔥 الاتصال بالرابط الجديد الذي وضعناه في السيرفر
+                              var response = await http.post(
+                                Uri.parse('https://re.beytei.com/wp-json/restaurant-app/v1/test-direct-call'),
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                },
+                                body: jsonEncode({
+                                  'token': voipToken,
+                                }),
+                              );
+
+                              var data = jsonDecode(response.body);
+                              if (response.statusCode == 200 && data['success'] == true) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('✅ تم إرسال الطلب لآبل! الهاتف سيرن الآن...'), backgroundColor: Colors.green),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('❌ خطأ: ${data['message']}'), backgroundColor: Colors.red),
+                                );
+                              }
+                            } catch (e) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('❌ فشل الاتصال بالسيرفر: $e'), backgroundColor: Colors.red),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.ring_volume, size: 16),
+                          label: const Text('اختبار الرنين', style: TextStyle(fontSize: 11)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
 
                   const Divider(height: 30),

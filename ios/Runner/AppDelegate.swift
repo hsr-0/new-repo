@@ -8,6 +8,8 @@ import flutter_callkit_incoming
 @objc class AppDelegate: FlutterAppDelegate {
 
     var voipRegistry: PKPushRegistry?
+    // 🔥 الاحتفاظ بمحرك الخلفية لمنعه من التدمير من الذاكرة
+    var backgroundEngine: FlutterEngine?
 
     // =======================================================================
     // 🛠️ نظام التشخيص وتسجيل الأحداث (Logger)
@@ -20,7 +22,6 @@ import flutter_callkit_incoming
 
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
-        // الاحتفاظ بآخر 50 حدث فقط
         if logs.count > 50 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
         print(logMessage)
@@ -34,9 +35,6 @@ import flutter_callkit_incoming
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        // =======================================================================
-        // 📡 قناة فلاتر (MethodChannel) لإرسال التوكن والسجلات للتطبيق
-        // =======================================================================
         if let controller = window?.rootViewController as? FlutterViewController {
             let debugChannel = FlutterMethodChannel(name: "beytei_deep_debugger", binaryMessenger: controller.binaryMessenger)
             debugChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
@@ -61,7 +59,6 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // السماح لإشعارات Firebase العادية بالمرور
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -76,7 +73,6 @@ import flutter_callkit_incoming
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
-    // 1. تسجيل توكن الآيفون (VoIP Token)
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
         let tokenHex = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
@@ -84,7 +80,6 @@ extension AppDelegate: PKPushRegistryDelegate {
         writeLog("🔑 تم استلام توكن آبل بنجاح: \(tokenHex.prefix(15))...")
     }
 
-    // 2. استلام إشعار المكالمة في الخلفية أو التطبيق مغلق
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
         guard type == .voIP else {
@@ -94,25 +89,29 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلمت آيفون إشعار VoIP جديد من السيرفر")
 
-        // 🔥 استخراج الـ Messenger لتمريره لتهيئة مكتبة CallKit
-        guard let controller = self.window?.rootViewController as? FlutterViewController else {
-            writeLog("❌ فشل الحصول على FlutterViewController")
-            completion()
-            return
+        // 🔥 الحصول على Messenger بأي ثمن لمنع الانهيار
+        var currentMessenger: FlutterBinaryMessenger
+        if let controller = self.window?.rootViewController as? FlutterViewController {
+            currentMessenger = controller.binaryMessenger
+        } else {
+            // التطبيق مغلق تماماً (Killed State) -> ننشئ محرك خلفية سريع لإيقاظ CallKit
+            writeLog("⚙️ التطبيق مغلق، جاري تشغيل محرك الخلفية")
+            let engine = FlutterEngine(name: "VoIPBackgroundEngine")
+            engine.run(withEntrypoint: nil)
+            GeneratedPluginRegistrant.register(with: engine)
+            self.backgroundEngine = engine // حفظه في الذاكرة لمنع تدميره
+            currentMessenger = engine.binaryMessenger
         }
-        let messenger = controller.binaryMessenger
 
-        // ✅ التمرير الصحيح للـ messenger لنسخة Plugin وليس لبيانات المكالمة (Data)
-        let callkitPlugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin(messenger: messenger)
+        let callkitPlugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin(messenger: currentMessenger)
 
-        // 🔥 دالة الطوارئ المضمونة
+        // دالة الطوارئ المضمونة 100% لإرضاء آبل
         func reportFakeCallToSatisfyApple(reason: String) {
             writeLog("⚠️ تفعيل خطة الطوارئ بسبب: \(reason)")
             let fakeUUID = UUID().uuidString
             let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
 
-            // ✅ تم إزالة messenger من هنا، لأن Data تقبل args فقط
-            if let data = try? flutter_callkit_incoming.Data(args: fakeData) {
+            if let data = try? flutter_callkit_incoming.Data(args: fakeData, messenger: currentMessenger) {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     callkitPlugin.endCall(data)
@@ -126,25 +125,25 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // هل هذا إشعار مكالمة جديدة أم إلغاء؟
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
-        // معالجة الـ ID
-        let rawId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
-        var validUUID = UUID().uuidString
+        // ===========================================================
+        // 🔥 التعديل الجذري لمنع הـ Crash (0xbaadca11) عندما يكون التطبيق مفتوحاً
+        // ===========================================================
 
-        if let existingUUID = UUID(uuidString: rawId) {
-            validUUID = existingUUID.uuidString
-        } else if !rawId.isEmpty {
-            let cleanString = String(rawId.prefix(12))
-            let padded = String(repeating: "0", count: max(0, 12 - cleanString.count)) + cleanString
-            validUUID = "00000000-0000-0000-0000-\(padded)"
-        }
+        // 1. توليد UUID عشوائي وجديد 100% دائماً لكي تقبله آبل دون مشاكل
+        let validUUID = UUID().uuidString
+
+        // 2. الاحتفاظ برقم الطلب الحقيقي القادم من السيرفر
+        let realServerId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
 
         let callerName = dict["name"] as? String ?? dict["driver_name"] as? String ?? "مندوب بيتي"
         let handle = dict["handle"] as? String ?? dict["driver_phone"] as? String ?? "مكالمة واردة"
         let duration = dict["duration"] as? Int ?? 60000
-        let extra = dict["extra"] as? [String: Any] ?? dict
+
+        // 3. تمرير رقم الطلب الحقيقي داخل الـ extra لكي نقرأه من دارت
+        var extra = dict["extra"] as? [String: Any] ?? dict
+        extra["real_order_id"] = realServerId
 
         var avatar = dict["avatar"] as? String ?? dict["driver_image"] as? String ?? ""
         if avatar.hasPrefix("http://") {
@@ -153,19 +152,18 @@ extension AppDelegate: PKPushRegistryDelegate {
         }
 
         let callkitData: [String: Any] = [
-            "id": validUUID,
+            "id": validUUID, // إرسال المعرف العشوائي فقط لـ CallKit
             "nameCaller": callerName,
             "appName": "منصة بيتي",
             "handle": handle,
             "avatar": avatar,
             "type": 0,
             "duration": duration,
-            "extra": extra
+            "extra": extra // الـ extra يحتوي الآن على رقم الطلب الحقيقي
         ]
 
         do {
-            // ✅ تم إزالة messenger من هنا أيضاً
-            let data = try flutter_callkit_incoming.Data(args: callkitData)
+            let data = try flutter_callkit_incoming.Data(args: callkitData, messenger: currentMessenger)
 
             if isCancel {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
@@ -175,7 +173,7 @@ extension AppDelegate: PKPushRegistryDelegate {
                 callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
                 writeLog("🔔 تم عرض شاشة الاتصال بنجاح! (UUID: \(validUUID))")
             }
-            completion()
+            completion() // يجب استدعاؤها في النهاية لترضي النظام
 
         } catch let error {
             reportFakeCallToSatisfyApple(reason: "فشل بناء بيانات CallKit: \(error.localizedDescription)")
