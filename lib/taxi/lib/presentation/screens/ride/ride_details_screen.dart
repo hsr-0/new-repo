@@ -28,34 +28,50 @@ class RideDetailsScreen extends StatefulWidget {
 class _RideDetailsScreenState extends State<RideDetailsScreen> {
   DraggableScrollableController draggableScrollableController = DraggableScrollableController();
 
+  // 🔥 1. حفظ مرجع للـ MapController للتحكم في التتبع
+  late RideMapController _mapController;
+
   @override
   void initState() {
     Get.put(RideRepo(apiClient: Get.find()));
-    Get.put(RideMapController());
+
+    // 🔥 2. حفظ المرجع هنا
+    _mapController = Get.put(RideMapController());
+
     Get.put(MessageRepo(apiClient: Get.find()));
     Get.put(RideMessageController(repo: Get.find()));
-    final controller = Get.put(RideDetailsController(repo: Get.find(), mapController: Get.find()));
-    Get.put(PusherRideController(apiClient: Get.find(), rideMessageController: Get.find(), rideDetailsController: Get.find(), rideID: widget.rideId));
+    final controller = Get.put(RideDetailsController(repo: Get.find(), mapController: _mapController));
+    Get.put(PusherRideController(apiClient: Get.find(), rideMessageController: Get.find(), rideDetailsController: controller, rideID: widget.rideId));
+
     super.initState();
+
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
+      // استدعاء البيانات الأولية
       controller.initialData(widget.rideId);
+
+      // 🔥 بدء التتبع مباشرة (بدون .then لأن initialData ترجع void)
+      Future.delayed(const Duration(milliseconds: 500), () {
+        final status = controller.ride.status;
+        if (status == 'active' || status == 'running' || status == 'accepted' || status == 'pick_up') {
+          _mapController.startLiveTracking(widget.rideId);
+        }
+      });
+
       Get.find<PusherRideController>().ensureConnection();
     });
   }
 
   @override
   void dispose() {
+    // 🔥 4. إيقاف التتبع وتنظيف الذاكرة عند الخروج من الشاشة
+    _mapController.stopLiveTracking(widget.rideId);
     super.dispose();
-    Get.find<PusherRideController>().dispose();
   }
 
   Future _zoomBasedOnExtent(double extent) async {
-    var controller = Get.find<RideMapController>();
-    // ✅ التصحيح هنا: نتحقق من وجود النقاط، لكن لا نمررها للدالة لأنها تعرفها مسبقاً
-    if (controller.polylineCoordinates.isEmpty) return;
-
-    // ✅ تم إزالة (polylinePoints) من داخل القوسين لحل الخطأ
-    controller.fitPolylineBounds();
+    // نتحقق من وجود النقاط، لكن لا نمررها للدالة لأنها تعرفها مسبقاً
+    if (_mapController.polylineCoordinates.isEmpty) return;
+    _mapController.fitPolylineBounds();
   }
 
   @override
@@ -80,7 +96,7 @@ class _RideDetailsScreenState extends State<RideDetailsScreen> {
               extendBody: true,
               body: Stack(
                 children: [
-                  //Map
+                  // Map
                   controller.isLoading
                       ? SizedBox(
                     height: context.height,
@@ -91,7 +107,12 @@ class _RideDetailsScreenState extends State<RideDetailsScreen> {
                   )
                       : SizedBox(
                     height: context.isTablet ? context.height : context.height / 1.3,
-                    child: const PolyLineMapScreen(),
+                    // 🔥 5. تغليف الخريطة بـ GetBuilder لضمان تحديث موقع السيارة
+                    child: GetBuilder<RideMapController>(
+                      builder: (mapCtrl) {
+                        return const PolyLineMapScreen();
+                      },
+                    ),
                   ),
                   Positioned(
                     top: 0,
@@ -127,15 +148,14 @@ class _RideDetailsScreenState extends State<RideDetailsScreen> {
                   snap: true,
                   shouldCloseOnMinExtent: true,
                   expand: false,
-                  initialChildSize: 0.4, // initial height (percentage of screen height)
-                  minChildSize: 0.4, // minimum height when fully collapsed
-                  maxChildSize: 0.8, // maximum height when fully expanded
-                  snapSizes: [0.4, 0.5, 0.7, 0.8],
-                  snapAnimationDuration: Duration(milliseconds: 500),
+                  initialChildSize: 0.4,
+                  minChildSize: 0.4,
+                  maxChildSize: 0.8,
+                  snapSizes: const [0.4, 0.5, 0.7, 0.8],
+                  snapAnimationDuration: const Duration(milliseconds: 500),
                   builder: (context, scrollController) {
                     return NotificationListener<DraggableScrollableNotification>(
                       onNotification: (notification) {
-                        // printX("Notification: ${notification.extent}");
                         _zoomBasedOnExtent(notification.extent);
                         return true;
                       },

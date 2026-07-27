@@ -134,7 +134,7 @@ class MyStrings {
   static const String inbox = "Inbox";
 
   static const String message = "Message";
-  static const String anyPickUpNotes = "Any pickup notes?";
+  static const String anyPickUpNotes = "التحدث مع السائق?";
 
   static const String writeYourMessage = "Write your message";
 

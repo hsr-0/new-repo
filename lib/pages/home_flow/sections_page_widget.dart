@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // تم الإضافة لنسخ التوكن
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
@@ -224,7 +225,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   bool showBanners = false;
 
   // 📍 متغيرات حالة الموقع
-  bool _isCheckingLocation = false; // 🔥 تغيير الافتراضي إلى false لكي لا نعطل الواجهة
+  bool _isCheckingLocation = false;
   bool _locationDialogShown = false;
   ({double lat, double lng, String source, bool isExpired})? _savedLocation;
   Timer? _backgroundLocationTimer;
@@ -310,7 +311,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 
-  /// 📍 المنطق الرئيسي للتحقق من الموقع (الآن يعمل في الخلفية دون تعطيل الواجهة)
+  /// 📍 المنطق الرئيسي للتحقق من الموقع
   Future<void> _checkAndHandleLocation() async {
     if (!mounted) return;
 
@@ -321,7 +322,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
       return;
     }
 
-    // 2. إذا لم يكن هناك موقع محفوظ، نعرض المؤشر الصغير في الواجهة (بدون إخفاء التطبيق)
+    // 2. إذا لم يكن هناك موقع محفوظ، نعرض المؤشر الصغير في الواجهة
     setState(() => _isCheckingLocation = true);
 
     // 3. جلب الموقع في الخلفية
@@ -329,24 +330,17 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   /// 📍 جلب الموقع في الخلفية وإظهار نافذة التحديد اليدوي في حال الفشل
-  /// 📍 جلب الموقع في الخلفية مع معالجة تأخر نظام التشغيل بعد السماح بالصلاحية
   Future<void> _fetchLocationInBackgroundAndHandle() async {
     try {
-      // 1. معرفة حالة الصلاحية قبل بدء أي إجراء (لمعرفة هل هي المرة الأولى أم لا)
       LocationPermission initialPermission = await Geolocator.checkPermission();
-
-      // 2. طلب الصلاحية إذا لم تكن موجودة
       bool hasPermission = await _ensureLocationPermission();
 
       if (hasPermission) {
-
-        // 🔥 الحل الجذري للمشكلة: إذا تم منح الصلاحية للتو، ننتظر ثانية واحدة لكي يستوعب النظام تفعيل الـ GPS
         if (initialPermission == LocationPermission.denied) {
           print("⏳ تم منح الصلاحية للتو، ننتظر تهيئة مستشعر الـ GPS...");
           await Future.delayed(const Duration(seconds: 1));
         }
 
-        // 3. محاولة جلب آخر موقع معروف (سريع جداً في حال الدخول الثاني)
         final lastKnown = await Geolocator.getLastKnownPosition();
         if (lastKnown != null && mounted) {
           await LocationService.saveLocation(lastKnown.latitude, lastKnown.longitude, source: 'auto_fast');
@@ -358,7 +352,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
           return;
         }
 
-        // 4. محاولة التقاط الموقع مع إعادة المحاولة (Retry Logic) تحسباً لبطء المستشعر
         for (int attempt = 1; attempt <= 2; attempt++) {
           try {
             final position = await Geolocator.getCurrentPosition(
@@ -373,19 +366,17 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
                 _isCheckingLocation = false;
               });
               _startSilentBackgroundLocationUpdates();
-              return; // ✅ نجحنا في التقاط الموقع، نخرج من الدالة
+              return;
             }
           } catch (e) {
             print('⚠️ المحاولة $attempt فشلت في التقاط الموقع: $e');
             if (attempt == 1) {
-              // إذا فشلت المحاولة الأولى (المستشعر لم يستجب)، ننتظر ثانية ونحاول مرة أخيرة
               await Future.delayed(const Duration(seconds: 1));
             }
           }
         }
       }
 
-      // 5. إذا لم يتم منح الصلاحية، أو فشلت جميع محاولات التقاط الموقع
       if (mounted) {
         setState(() => _isCheckingLocation = false);
         if (!_locationDialogShown) {
@@ -405,7 +396,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
-  /// 🔄 محاولة تحديث الموقع في الخلفية (بدون إزعاج المستخدم)
+  /// 🔄 محاولة تحديث الموقع في الخلفية
   Future<void> _tryUpdateLocationInBackground() async {
     if (_savedLocation == null) return;
     final newPosition = await LocationService.tryAutoDetectSilent();
@@ -648,6 +639,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
+  // ⚙️ تشغيل المهام الخلفية
   void _startBackgroundTasks() async {
     _requestAllPermissions();
     _loadBannersWithCache();
@@ -796,6 +788,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 
+  // ⚙️ استدعاء الصلاحيات
   Future<void> _requestAllPermissions() async {
     if (Platform.isIOS) {
       await FirebaseMessaging.instance.requestPermission();
@@ -806,6 +799,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
+  // ⚙️ التحقق من التحديثات
   Future<void> _checkForUpdate() async {
     try {
       final remoteConfig = FirebaseRemoteConfig.instance;
@@ -827,6 +821,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     }
   }
 
+  // ⚙️ رسالة التحديث
   void _showUpdateDialog(String updateUrl) {
     showDialog(
       context: context,
@@ -850,6 +845,7 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     );
   }
 
+  // ⚙️ جلب البانرات من الكاش أو السيرفر
   Future<void> _loadBannersWithCache() async {
     final prefs = await SharedPreferences.getInstance();
     final cachedData = prefs.getString(CacheConstants.CACHE_KEY_BANNERS);
@@ -944,16 +940,27 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
     return null;
   }
 
-  // 🔍 دالة فحص وتشخيص الموقع (تمت إضافتها)
-  Future<void> _showLocationDebugInfo() async {
-    // 1. فحص حالة الـ GPS في الهاتف
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  // 📞 🍏 دالة الفحص الخاصة بالآيفون والمكالمات
+  Future<void> _showCallDebugger() async {
+    String voipToken = "جاري الجلب...";
+    String iosLogs = "جاري الجلب...";
 
-    // 2. فحص صلاحيات التطبيق
-    LocationPermission permission = await Geolocator.checkPermission();
+    // 1. جلب التوكن والسجلات من الآيفون فقط
+    if (Platform.isIOS) {
+      try {
+        const platform = MethodChannel('beytei_deep_debugger');
+        final result = await platform.invokeMethod('getLogs');
 
-    // 3. جلب الموقع المحفوظ حالياً
-    var saved = await LocationService.getSavedLocation();
+        voipToken = result['token'] ?? 'لا يوجد توكن VoIP مسجل';
+        iosLogs = result['logs'] ?? 'لا توجد سجلات من Swift';
+      } catch (e) {
+        voipToken = "خطأ في الاتصال بقناة Swift: $e";
+        iosLogs = "لم يتم تحديث ملف AppDelegate.swift بنجاح، أو هناك خطأ في الكود.";
+      }
+    } else {
+      voipToken = "هذا الفحص مخصص لأجهزة الآيفون فقط (iOS).";
+      iosLogs = "يعمل نظام CallKit الحقيقي على نظام الآيفون، وليس الأندرويد.";
+    }
 
     if (!mounted) return;
 
@@ -964,102 +971,72 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             title: const Row(
               children: [
-                Icon(Icons.bug_report_rounded, color: Colors.deepPurple),
+                Icon(Icons.phone_callback_rounded, color: Colors.green),
                 SizedBox(width: 8),
-                Text('🔍 تقرير تشخيص الموقع', style: TextStyle(fontSize: 18)),
+                Text('🍏 فحص مكالمات الآيفون', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
             content: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // حالة الـ GPS
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      serviceEnabled ? Icons.gps_fixed : Icons.gps_off,
-                      color: serviceEnabled ? Colors.green : Colors.red,
-                    ),
-                    title: const Text('خدمة الـ GPS (الموقع)'),
-                    subtitle: Text(
-                      serviceEnabled ? '✅ مفعلة وتعمل' : '❌ مغلقة في إعدادات الهاتف',
-                      style: TextStyle(color: serviceEnabled ? Colors.green : Colors.red, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-
-                  // حالة الصلاحيات
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      permission == LocationPermission.whileInUse || permission == LocationPermission.always
-                          ? Icons.check_circle
-                          : Icons.error,
-                      color: permission == LocationPermission.whileInUse || permission == LocationPermission.always
-                          ? Colors.green
-                          : Colors.orange,
-                    ),
-                    title: const Text('صلاحية الوصول للتطبيق'),
-                    subtitle: Text(
-                      permission.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-
-                  const Divider(),
-
-                  // البيانات المحفوظة في الكاش
-                  const Text('💾 البيانات المخزنة محلياً:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                  const SizedBox(height: 8),
-                  if (saved != null) ...[
-                    Text('📍 خط العرض (Lat): ${saved.lat}'),
-                    Text('📍 خط الطول (Lng): ${saved.lng}'),
-                    Text('⚙️ طريقة التحديد: ${saved.source == 'manual' ? "يدوي (من الخريطة)" : "تلقائي (GPS)"}'),
-                    Text('⏳ منتهي الصلاحية: ${saved.isExpired ? "نعم (يحتاج تحديث)" : "لا (صالح)"}',
-                        style: TextStyle(color: saved.isExpired ? Colors.red : Colors.green)),
-                  ] else ...[
-                    const Text('❌ لا توجد أي إحداثيات محفوظة حالياً.', style: TextStyle(color: Colors.red)),
-                  ],
-
-                  const Divider(),
-
-                  // تحليل المشكلة
-                  const Text('💡 التشخيص والحلول:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                  const Text('🔑 توكن المكالمات (VoIP Token):', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
                   const SizedBox(height: 5),
-                  if (!serviceEnabled)
-                    const Text('- الهاتف لا يرسل موقع لأن الـ GPS مغلق. اسحب الشاشة للأسفل وقم بتشغيل "الموقع".')
-                  else if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever)
-                    const Text('- التطبيق ممنوع من معرفة موقعك. اضغط على "فتح الإعدادات" وامنح الصلاحية.')
-                  else if (saved == null)
-                      const Text('- كل شيء سليم، لكن التطبيق لم يتمكن من التقاط إشارة القمر الصناعي بعد. جرب التحديد اليدوي.')
-                    else
-                      const Text('- إعداداتك سليمة. إذا كانت هناك مشكلة في الأسعار، فقد يكون موقعك خارج نطاق التغطية أو إحداثيات المطعم غير صحيحة في السيرفر.'),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(5)),
+                    child: SelectableText(voipToken, style: const TextStyle(fontSize: 11)),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: voipToken));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ توكن الـ VoIP!')));
+                    },
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('نسخ التوكن لاختباره في السيرفر', style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 36)
+                    ),
+                  ),
+
+                  const Divider(height: 30),
+
+                  const Text('📜 سجلات النظام بالخلفية (Swift Logs):', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                  const SizedBox(height: 5),
+                  Container(
+                    height: 150,
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(5)),
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                          iosLogs,
+                          style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'),
+                          textDirection: TextDirection.ltr
+                      ),
+                    ),
+                  ),
+
+                  const Divider(height: 30),
+
+                  const Text('💡 لماذا لا يصل الاتصال للآيفون؟', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                  const SizedBox(height: 5),
+                  const Text(
+                    '1. التوكن بالأعلى فارغ: أغلق التطبيق من الخلفية وافتحه ليتصل بسيرفر آبل مجدداً.\n\n'
+                        '2. السيرفر يقول 200 ولكن الهاتف لم يرن والسجل أعلاه فارغ: السيرفر يرسل الإشعار إلى نسخة محذوفة أو Bundle ID مختلف (توكن قديم). سجل خروجك من حسابك وسجل دخول لتحديث التوكن بالسيرفر.\n\n'
+                        '3. السجل يظهر "تنفيذ خطة الطوارئ": كود فلاتر به خطأ ويمنع شاشة CallKit من الظهور بشكل طبيعي.',
+                    style: TextStyle(fontSize: 12, height: 1.5),
+                  ),
                 ],
               ),
             ),
             actions: [
               TextButton(
-                onPressed: () async {
-                  await LocationService.clearSavedLocation();
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('تم مسح الموقع المحفوظ! سيقوم التطبيق بالبحث من جديد.'))
-                  );
-                  setState(() { _savedLocation = null; });
-                  _checkAndHandleLocation();
-                },
-                child: const Text('🗑️ مسح الكاش', style: TextStyle(color: Colors.red)),
-              ),
-              TextButton(
-                onPressed: () async {
-                  Navigator.pop(ctx);
-                  await Geolocator.openAppSettings();
-                },
-                child: const Text('⚙️ فتح الإعدادات', style: TextStyle(color: Colors.blue)),
-              ),
-              ElevatedButton(
                 onPressed: () => Navigator.pop(ctx),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple),
-                child: const Text('إغلاق', style: TextStyle(color: Colors.white)),
+                child: const Text('إغلاق', style: TextStyle(color: Colors.red)),
               ),
             ],
           );
@@ -1069,7 +1046,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
 
   @override
   Widget build(BuildContext context) {
-    // 🔥 تم حذف شاشة التحميل الكاملة التي كانت توقف التطبيق
     return Scaffold(
       appBar: AppBar(
         title: const Text('منصة بيتي', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -1109,13 +1085,13 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         ],
       ),
 
-      // 🔥 إضافة الزر العائم للتشخيص هنا
+      // 🔥 الزر العائم الخاص بالفحص (مخصص للآيفون والمكالمات فقط كما طلبت)
       floatingActionButton: FloatingActionButton(
-        onPressed: _showLocationDebugInfo,
-        backgroundColor: Colors.deepPurple.withOpacity(0.9),
+        onPressed: _showCallDebugger,
+        backgroundColor: Colors.black.withOpacity(0.9),
         elevation: 4,
-        tooltip: 'تشخيص مشاكل الموقع',
-        child: const Icon(Icons.location_searching_rounded, color: Colors.white),
+        tooltip: 'فحص مكالمات الآيفون',
+        child: const Icon(Icons.phone_iphone_rounded, color: Colors.greenAccent),
       ),
 
       body: RefreshIndicator(

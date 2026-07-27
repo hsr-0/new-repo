@@ -1,4 +1,5 @@
 import 'dart:io';
+
 // تأكد من مسارات الاستيراد الخاصة بك، إذا كان هناك خطأ في الاستيراد احذف السطر وأعد استيراده
 import 'package:cosmetic_store/taxi/lib/core/helper/string_format_helper.dart';
 import 'package:cosmetic_store/taxi/lib/core/theme/light/light.dart';
@@ -22,11 +23,12 @@ import 'package:timezone/data/latest.dart' as tz;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:uuid/uuid.dart';
-import 'package:permission_handler/permission_handler.dart';
+
+import 'eco.dart';
+
 
 // =========================================================
 // 🔥 1. دالة الخلفية (لإيقاظ الهاتف المقفل والرنين)
@@ -99,6 +101,9 @@ class _TaxiAppEntryState extends State<TaxiAppEntry> {
 
   Future<void> _initTaxiServices() async {
     try {
+      // 🔥 تهيئة اتصال Laravel Echo (Reverb) هنا لضمان جاهزيته مبكراً جداً
+      initEchoService();
+
       if (!Get.isRegistered<ApiClient>()) {
         await ApiClient.init();
       }

@@ -21,7 +21,7 @@ import flutter_callkit_incoming
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
         // الاحتفاظ بآخر 50 حدث فقط
-        if logs.count > 50 { logs.removeFirst() }
+        if logs.count > 150 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
         print(logMessage)
     }
@@ -61,6 +61,7 @@ import flutter_callkit_incoming
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
+    // السماح لإشعارات Firebase العادية بالمرور
     override func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable : Any],
@@ -93,17 +94,19 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلمت آيفون إشعار VoIP جديد من السيرفر")
 
-        // 🔥 دالة الطوارئ: تمنع آبل من عمل (Crash) في حال كانت البيانات خاطئة
+        // 🔥 التعديل السحري: نستخدم النسخة الموجودة، وإذا كانت غير جاهزة ننشئ نسخة فورية لإنقاذ الموقف
+        let callkitPlugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance ?? SwiftFlutterCallkitIncomingPlugin()
+
+        // 🔥 دالة الطوارئ المضمونة 100%: تمنع آبل من عمل (Crash) في حال كانت البيانات خاطئة
         func reportFakeCallToSatisfyApple(reason: String) {
             writeLog("⚠️ تفعيل خطة الطوارئ بسبب: \(reason)")
             let fakeUUID = UUID().uuidString
             let fakeData: [String: Any] = ["id": fakeUUID, "nameCaller": "مكالمة واردة", "appName": "منصة بيتي", "type": 0]
 
-            if let data = try? flutter_callkit_incoming.Data(args: fakeData),
-               let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
+            if let data = try? flutter_callkit_incoming.Data(args: fakeData) {
+                callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    plugin.endCall(data)
+                    callkitPlugin.endCall(data)
                 }
             }
             completion()
@@ -117,7 +120,7 @@ extension AppDelegate: PKPushRegistryDelegate {
         // هل هذا إشعار مكالمة جديدة أم إلغاء؟
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
-        // معالجة الـ ID ליصبح UUID نظامي كما تطلب آبل
+        // معالجة الـ ID ليصبح UUID نظامي كما تطلب آبل
         let rawId = dict["id"] as? String ?? dict["order_id"] as? String ?? ""
         var validUUID = UUID().uuidString
 
@@ -151,20 +154,15 @@ extension AppDelegate: PKPushRegistryDelegate {
             "extra": extra
         ]
 
-        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
-            reportFakeCallToSatisfyApple(reason: "مكتبة CallKit (sharedInstance) غير متوفرة حالياً")
-            return
-        }
-
         do {
             let data = try flutter_callkit_incoming.Data(args: callkitData)
 
             if isCancel {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
-                plugin.endCall(data)
+                callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
+                callkitPlugin.endCall(data)
                 writeLog("🚫 تم معالجة طلب إلغاء المكالمة بنجاح")
             } else {
-                plugin.showCallkitIncoming(data, fromPushKit: true)
+                callkitPlugin.showCallkitIncoming(data, fromPushKit: true)
                 writeLog("🔔 تم عرض شاشة الاتصال بنجاح! (UUID: \(validUUID))")
             }
             completion()

@@ -116,6 +116,8 @@ dependencies:
   flutter_callkit_incoming: ^2.0.2 # لشاشة الرنين والاهتزاز
 
 
+  pusher_client: ^2.0.0  # مطلوب لـ laravel_echo
+
 
 
 
@@ -193,6 +195,7 @@ dependencies:
   flutter_local_notifications: ^17.0.0
   crypto: ^3.0.7
   flutter_facebook_auth: ^7.1.5
+  laravel_echo: ^1.0.0-beta.1
 
 dev_dependencies:
   flutter_test:

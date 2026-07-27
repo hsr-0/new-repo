@@ -2,26 +2,29 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // ✅ للتعامل مع مسارات الصور
-import 'dart:ui' as ui; // ✅ لتحويل الصور
-
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import 'package:geocoding/geocoding.dart';
-
 import 'package:latlong2/latlong.dart';
 
-// --- مكتبات الخرائط المجانية ---
+// مكتبات الخرائط
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
+
+// مكتبة Pusher (التي تحتوي على Channel)
+import 'package:pusher_client/pusher_client.dart';
+
+// 🔥 استيراد ملف eco.dart الذي يحتوي على متغير echo العام
+// ⚠️ تأكد من صحة هذا المسار تماماً حسب مكان ملف eco.dart في مشروعك
+import 'package:cosmetic_store/taxi/lib/eco.dart';
 
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_images.dart';
 import 'package:cosmetic_store/taxi/lib/core/utils/my_color.dart';
-
-// 🚀 أداة الرسم الاحترافية
 import 'package:cosmetic_store/taxi/lib/presentation/packages/polyline_animation/polyline_animation_v1.dart';
 import '../../model/location/prediction.dart';
 
@@ -30,8 +33,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   bool isMapReady = false;
   bool isLoading = false;
   bool isSearching = false;
-
-  // ✅ 1 = سيارة ، 2 = تكتك (يتم تمريرها من شاشة قبول الرحلة)
   int activeServiceId = 1;
 
   LatLng pickupLatLng = const LatLng(0, 0);
@@ -41,7 +42,12 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   double driverRotation = 0.0;
   String driverAddress = 'جاري التحميل...';
 
-  ml.MapLibreMapController? mapLibreController; // ✅ تعديل حرف L كابيتال
+  String? _currentRideId;
+
+  // 🔥 استخدام نوع Channel من مكتبة pusher_client
+  Channel? _rideChannel;
+
+  ml.MapLibreMapController? mapLibreController;
   ml.Symbol? pickupSymbol;
   ml.Symbol? destSymbol;
   ml.Symbol? driverSymbol;
@@ -54,8 +60,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   List<Prediction> predictionList = [];
 
   late final AnimationController _animationController;
-
-  // 🚀 تفعيل المسار
   final PolylineAnimator animator = PolylineAnimator();
 
   @override
@@ -66,14 +70,77 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
 
   @override
   void onClose() {
+    if (_currentRideId != null) {
+      stopLiveTracking(_currentRideId!);
+    }
     _animationController.dispose();
     animator.clearPolylines(mapLibreController);
     super.onClose();
   }
 
   // =========================================================================
-  // 🔥 دوال تحميل صور المركبات (السيارة والتكتك) إلى ذاكرة الخريطة
+  // 🔥 دوال تتبع السائق اللحظي (مصححة ومضادة للأخطاء 100%)
   // =========================================================================
+  void startLiveTracking(String rideId) {
+    _currentRideId = rideId;
+
+    // تنظيف أي استماع سابق
+    if (_rideChannel != null) {
+      echo?.unsubscribe('ride.$rideId');
+    }
+
+    print("🎧 [TRACKING] بدء الاستماع لموقع السائق للرحلة: $rideId");
+
+    // 1. الاشتراك في القناة
+    _rideChannel = echo?.subscribe('ride.$rideId');
+
+    // 2. الاستماع للحدث بأمان تام
+    _rideChannel?.bind('driver.location.updated', (dynamic event) {
+      try {
+        // استخراج البيانات بأقصى درجات الأمان (لأن event قد يكون Map أو String)
+        String eventData = '';
+        if (event is Map) {
+          eventData = event['data']?.toString() ?? '';
+        } else {
+          eventData = event?.toString() ?? '';
+        }
+
+        if (eventData.isEmpty) {
+          print("⚠️ [WARNING] بيانات الحدث فارغة أو غير صالحة");
+          return;
+        }
+
+        // فك تشفير البيانات بأمان
+        final data = jsonDecode(eventData);
+
+        double newLat = (data['latitude'] is num) ? (data['latitude'] as num).toDouble() : 0.0;
+        double newLng = (data['longitude'] is num) ? (data['longitude'] as num).toDouble() : 0.0;
+
+        if (newLat != 0.0 && newLng != 0.0) {
+          print("🚗 [LIVE UPDATE] موقع جديد: $newLat, $newLng");
+
+          updateDriverLocation(
+            latLng: LatLng(newLat, newLng),
+            isRunning: true,
+          );
+        }
+      } catch (e) {
+        print("❌ [ERROR] فشل في تحليل بيانات الموقع: $e");
+        print("البيانات الخام المستلمة: $event");
+      }
+    });
+  }
+
+  void stopLiveTracking(String rideId) {
+    if (_currentRideId != null) {
+      echo?.unsubscribe('ride.$rideId');
+      _rideChannel = null;
+      _currentRideId = null;
+      print("🛑 [TRACKING] تم إيقاف الاستماع للرحلة: $rideId");
+    }
+  }
+  // =========================================================================
+
   Future<Uint8List> getBytesFromAsset(String path, int width) async {
     ByteData data = await rootBundle.load(path);
     ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: width);
@@ -84,28 +151,21 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   Future<void> loadVehicleImagesToMap() async {
     if (mapLibreController == null) return;
     try {
-      // تحميل أيقونة السيارة (حجم 100 بكسل، يمكنك تغييره)
       final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
       await mapLibreController!.addImage("car_icon", carData);
 
-      // تحميل أيقونة التكتك
       final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
       await mapLibreController!.addImage("tuktuk_icon", tuktukData);
-
       print("✅ تم تحميل صور السيارات والتكتك بنجاح في ذاكرة الخريطة!");
     } catch(e) {
       print('❌ خطأ في تحميل صور المركبات: $e');
     }
   }
-  // =========================================================================
 
   void setMapLibreController(ml.MapLibreMapController controller) {
     mapLibreController = controller;
     isMapReady = true;
-
-    // 🚀 استدعاء تحميل الصور فور جاهزية الخريطة
     loadVehicleImagesToMap();
-
     _checkInitialData();
   }
 
@@ -188,11 +248,8 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     update();
   }
 
-  // 🎨 الرسم الاحترافي الموحد
   Future<void> _drawPolylineUnified() async {
     if (polylineCoordinates.isEmpty) return;
-
-    // مسح الخطوط القديمة قبل رسم الجديدة
     animator.clearPolylines(mapLibreController);
 
     if (Platform.isIOS && appleController != null) {
@@ -249,10 +306,7 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     _animationController.forward();
   }
 
-  // ✅ التحديث السحري: تغيير شكل السيارة بناءً على المتغير
   Future<void> _updateDriverMarkerUnified(LatLng position, double rotation) async {
-
-    // 🚗 تحديد اسم ومسار الصورة ديناميكياً بناءً على نوع المركبة
     String iconName = (activeServiceId == 1) ? 'car_icon' : 'tuktuk_icon';
     String assetPath = (activeServiceId == 1) ? 'assets/images/car.png' : 'assets/images/tuktuk.png';
 
@@ -269,7 +323,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
 
     } else if (!Platform.isIOS && mapLibreController != null) {
       if (driverSymbol == null) {
-        // رسم السيارة أو التكتك لأول مرة في الأندرويد
         driverSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
           geometry: ml.LatLng(position.latitude, position.longitude),
           iconImage: iconName,
@@ -277,7 +330,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
           iconRotate: rotation,
         ));
       } else {
-        // تحديث الانزلاق والدوران مع الحفاظ على نفس الأيقونة
         await mapLibreController!.updateSymbol(
             driverSymbol!,
             ml.SymbolOptions(
@@ -290,7 +342,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     update();
   }
 
-  // 🔍 البحث الهجين
   Future<void> searchLocation(String query) async {
     if (query.isEmpty) {
       predictionList.clear();
