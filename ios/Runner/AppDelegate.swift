@@ -87,6 +87,7 @@ extension AppDelegate: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
+        // ⚠️ هام جداً: يجب استدعاء completion دائماً عند الخروج المبكر
         guard type == .voIP else {
             completion()
             return
@@ -107,14 +108,17 @@ extension AppDelegate: PKPushRegistryDelegate {
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
 
         // استخراج البيانات بأمان
-        let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? UUID().uuidString
-        let validUUID = UUID().uuidString // يجب أن يكون UUID صحيحاً لآبل
+        let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? ""
+        // محاولة استخدام الـ UUID القادم من السيرفر، وإذا فشل نولد واحداً جديداً
+        let validUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
+
         let callerName = (dict["name"] as? String) ?? (dict["driver_name"] as? String) ?? "مندوب بيتي"
         let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? "مكالمة واردة"
         let duration = dict["duration"] as? Int ?? 60000
 
-        var extra = dict["extra"] as? [String: Any] ?? dict
-        extra["real_order_id"] = rawId
+        // 🔥 الحل الجذري لخطأ Xcode: تحويل القاموس صراحةً إلى NSDictionary
+        let rawExtra = dict["extra"] as? [String: Any] ?? dict
+        let extraDict = rawExtra as NSDictionary
 
         var avatar = dict["avatar"] as? String ?? dict["driver_image"] as? String ?? ""
         if avatar.hasPrefix("http://") {
@@ -126,22 +130,21 @@ extension AppDelegate: PKPushRegistryDelegate {
         callData.appName = "منصة بيتي"
         callData.avatar = avatar
         callData.duration = duration
-        callData.extra = extra
+        callData.extra = extraDict // الآن النوع متطابق تماماً مع متطلبات المكتبة
 
         if isCancel {
             // ✅ التعديل الحاسم: إلغاء المكالمة دون إظهارها أولاً لمنع الوميض/التعطل
             writeLog("🚫 معالجة طلب إلغاء المكالمة (UUID: \(validUUID))")
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
-            completion()
-            return // إنهاء المعالجة هنا
+            completion() // إنهاء المعالجة فوراً
+            return
         } else {
             // عرض شاشة المكالمة
             writeLog("🔔 جاري إرسال أمر الرنين لمكتبة فلاتر! (UUID: \(validUUID))")
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
 
-            // ✅ التعديل الحاسم: استدعاء completion فوراً أو بتأخير ضئيل جداً (0.1s)
-            // لتجنب تحذيرات آبل من أن التطبيق يستغرق وقتاً طويلاً في معالجة الـ Push
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // ✅ التعديل الحاسم: استدعاء completion على الـ Main Thread لضمان استقرار آبل
+            DispatchQueue.main.async {
                 completion()
             }
         }
