@@ -50,8 +50,7 @@ Future<void> taxiFirebaseMessagingBackgroundHandler(RemoteMessage message) async
       handle: 'مكالمة عبر الإنترنت...',
       type: 0, // 0 تعني مكالمة صوتية
       duration: 30000, // الرنين لمدة 30 ثانية
-      textAccept: 'رد',
-      textDecline: 'رفض',
+
       extra: <String, dynamic>{
         'channelName': channelName,
         'driverName': driverName,
