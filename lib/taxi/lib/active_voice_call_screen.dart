@@ -1,15 +1,16 @@
 import 'dart:async';
-import 'dart:io'; // ✅ ضروري للتحقق من نظام التشغيل
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:livekit_client/livekit_client.dart' hide ConnectionState;
-import 'package:audio_session/audio_session.dart'; // ✅ ضروري جداً للآيفون
+import 'package:audio_session/audio_session.dart';
+
 class ActiveVoiceCallScreen extends StatefulWidget {
   final String roomName;
   final String livekitUrl;
   final String token;
   final String remoteName;
-  final String? orderId; // ✅ أضف هذا السطر
+  final String? orderId;
 
   const ActiveVoiceCallScreen({
     super.key,
@@ -17,7 +18,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
     required this.livekitUrl,
     required this.token,
     required this.remoteName,
-    this.orderId, // ✅ أضف هذا السطر
+    this.orderId,
   });
 
   @override
@@ -46,10 +47,9 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     super.initState();
     _initLiveKit();
 
-    // إغلاق المكالمة تلقائياً بعد 45 ثانية إذا لم يرد السائق
     _timeoutTimer = Timer(const Duration(seconds: 45), () {
       if (!_isRemoteConnected && mounted) {
-        print("⏳ انتهى الوقت ولم يتم الاتصال، جاري إنهاء المكالمة.");
+        print("⏳ انتهى الوقت ولم يتم الاتصال (Order: ${widget.orderId ?? 'N/A'})");
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('السائق لا يرد حالياً'), backgroundColor: Colors.orange),
         );
@@ -64,13 +64,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (!mounted) return;
       setState(() {
         _hasError = true;
-        _errorMessage = "يرجى منح صلاحية المايكروفون في إعدادات الجهاز";
+        _errorMessage = "يرجى منح صلاحية المايكروفون من إعدادات الجهاز";
       });
       return;
     }
 
     try {
-      // ✅ 1. إعداد جلسة الصوت للآيفون (خطوة حاسمة لمنع مشاكل الصوت)
       if (Platform.isIOS) {
         final session = await AudioSession.instance;
         await session.configure(AudioSessionConfiguration(
@@ -85,7 +84,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       _room = Room();
       _listener = _room!.createListener();
 
-      // ✅ 2. الاستماع للأحداث (محدث ليشمل TrackSubscribedEvent لمنع التعليق)
       _listener!.on<ParticipantConnectedEvent>((event) {
         if (mounted && !_isRemoteConnected) {
           _timeoutTimer?.cancel();
@@ -100,7 +98,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           _timeoutTimer?.cancel();
           setState(() => _isRemoteConnected = true);
           _startTimer();
-          print("✅ الزبون: تم استقبال مسار الصوت من السائق");
+          print("✅ الزبون: تم استقبال مسار الصوت");
         }
       });
 
@@ -112,11 +110,10 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
       _listener!.on<RoomDisconnectedEvent>((event) {
         if (mounted) {
-          _showCallEndedDialog("انقطع الاتصال");
+          _showCallEndedDialog("انقطع الاتصال بالغرفة");
         }
       });
 
-      // ✅ 3. الاتصال بالغرفة
       await _room!.connect(
         widget.livekitUrl,
         widget.token,
@@ -130,8 +127,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (mounted) {
         setState(() => _isConnected = true);
 
-        // ✅ 4. فحص فوري: هل السائق موجود بالفعل في الغرفة؟
-        // هذا يمنع مشكلة "التعليق" إذا كان السائق قد دخل قبل أن نجهز المستمع
         if (_room!.remoteParticipants.isNotEmpty) {
           setState(() => _isRemoteConnected = true);
           _timeoutTimer?.cancel();
@@ -139,12 +134,15 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           print("✅ الزبون: السائق موجود مسبقاً في الغرفة!");
         }
 
-        // تفعيل المايكروفون
         await _room!.localParticipant?.setMicrophoneEnabled(true);
 
-        // ✅ 5. تأخير بسيط لضمان استقرار الصوت قبل تفعيل السماعة
+        // ✅ تعديل أمان: تأخير بسيط ومحاولة آمنة لتجنب أخطاء الأجهزة
         await Future.delayed(const Duration(milliseconds: 300));
-        await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+        try {
+          await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+        } catch (e) {
+          print("⚠️ تحذير: فشل في تبديل السماعة تلقائياً: $e");
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -218,7 +216,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   Future<void> _toggleSpeaker() async {
     setState(() => _isSpeaker = !_isSpeaker);
-    await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+    try {
+      await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+    } catch (e) {
+      print("⚠️ فشل تبديل السماعة: $e");
+    }
   }
 
   void _endCall() async {
@@ -234,14 +236,13 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
 
     if (mounted) {
-      // ملاحظة: لا نحتاج لإرسال إشعار للسيرفر هنا، لأن LiveKit سيخبر السائق تلقائياً بانفصالك
       Navigator.pop(context);
     }
   }
 
   @override
   void dispose() {
-    _endCall(); // ضمان تنظيف الموارد عند إغلاق الشاشة
+    _endCall();
     super.dispose();
   }
 
@@ -254,10 +255,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        _endCall();
-        return false;
+    // ✅ استخدام PopScope بدلاً من WillPopScope القديم
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _endCall();
       },
       child: Scaffold(
         backgroundColor: const Color(0xFF0F2027),
