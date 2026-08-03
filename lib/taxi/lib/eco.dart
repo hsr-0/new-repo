@@ -1,19 +1,35 @@
-import 'package:pusher_client/pusher_client.dart';
+import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
 
-/// متغير عام باسم 'echo' ليتوافق مع الكود
-PusherClient? echo;
+/// المتغير العام الجديد باستخدام الحزمة الحديثة
+PusherChannelsFlutter pusher = PusherChannelsFlutter.getInstance();
 
-void initEchoService() {
-  if (echo != null) return;
-
-  echo = PusherClient(
-    'nyxiq8d6adwi1aeupyz6', // مفتاحك الحقيقي
-    PusherOptions(
-      host: 'taxi.beytei.com',
-      encrypted: true,
+Future<void> initEchoService() async {
+  try {
+    // تهيئة الإعدادات
+    await pusher.init(
+      apiKey: 'nyxiq8d6adwi1aeupyz6',
       cluster: 'mt1',
-    ),
-  );
 
-  print("✅ تم تهيئة اتصال Echo (Reverb) بنجاح");
+      // دوال الاستماع لحالة الاتصال والأخطاء
+      onConnectionStateChange: (dynamic currentState, dynamic previousState) {
+        print("🔄 حالة الاتصال: $currentState");
+      },
+      onError: (String message, int? code, dynamic error) {
+        print("❌ خطأ في الاتصال: $message");
+      },
+      onSubscriptionSucceeded: (String channelName, dynamic data) {
+        print("✅ تم الاشتراك في القناة: $channelName");
+      },
+      onEvent: (PusherEvent event) {
+        print("📩 استلام حدث جديد على القناة ${event.channelName}: ${event.data}");
+      },
+    );
+
+    // بدء الاتصال
+    await pusher.connect();
+    print("✅ تم تهيئة اتصال Pusher (Reverb) بنجاح");
+
+  } catch (e) {
+    print("❌ فشل في تهيئة الاتصال: $e");
+  }
 }

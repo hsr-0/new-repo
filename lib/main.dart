@@ -68,14 +68,13 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
 
-  // ✅ استخدام dynamic لتجنب تعارض الأنواع بين النسخ
   dynamic params = <String, dynamic>{
     'id': currentUuid,
     'nameCaller': data['driver_name'] ?? 'مندوب بيتي',
     'appName': 'منصة بيتي',
     'avatar': data['driver_image'] ?? 'https://i.imgur.com/7k12epD.png',
     'handle': data['customer_phone'] ?? 'اتصال وارد',
-    'type': 0,
+    'type': 0, // 0 = مكالمة صوتية فقط
     'duration': 45000,
     'textAccept': 'رد',
     'textDecline': 'رفض',
@@ -86,30 +85,29 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
       'driver_name': data['driver_name'],
       'order_id': data['order_id'],
     },
-    'headers': <String, dynamic>{'apiKey': 'Abc@123!', 'platform': 'flutter'},
     'android': <String, dynamic>{
-      'isCustomNotification': true,
-      'isShowLogo': false,
+      'isCustomNotification': false, // ✅ الإصلاح: استخدام الواجهة الافتراضية لضمان الظهور
+      'isShowLogo': true,
       'ringtonePath': 'system_ringtone_default',
       'backgroundColor': '#0955fa',
       'actionColor': '#4CAF50',
-      'incomingCallNotificationChannelName': "مكالمات المندوب",
+      'incomingCallNotificationChannelId': 'high_importance_channel', // ✅ الإصلاح: استخدام ID وليس Name
     },
     'ios': <String, dynamic>{
-      'iconName': 'CallKitLogo',
-      'handleType': '',
-      'supportsVideo': true,
+      'iconName': 'CallKitLogo', // تأكد من وجود هذه الصورة في Assets.xcassets
+      'handleType': 'generic', // ✅ الإصلاح: يجب أن يكون generic أو phone وليس فارغاً
+      'supportsVideo': false, // ✅ الإصلاح: مكالمة صوتية فقط
       'maximumCallGroups': 2,
       'maximumCallsPerCallGroup': 1,
-      'audioSessionMode': 'default',
+      'audioSessionMode': 'voiceChat', // ✅ الإصلاح: وضع VoIP
       'audioSessionActive': true,
       'audioSessionPreferredSampleRate': 44100.0,
       'audioSessionPreferredIOBufferDuration': 0.005,
-      'supportsDTMF': true,
-      'supportsHolding': true,
+      'supportsDTMF': false,
+      'supportsHolding': false,
       'supportsGrouping': false,
       'supportsUngrouping': false,
-      'ringtonePath': 'system_ringtone_default',
+      // ✅ الإصلاح: حذف ringtonePath للآيفون ليستخدم نغمة النظام الافتراضية بدون Crash
     },
     'missedCallNotification': <String, dynamic>{
       'showNotification': true,
@@ -119,9 +117,10 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
     },
   };
 
-  // ✅ استدعاء الدالة بـ dynamic لتجنب خطأ النوع
   await FlutterCallkitIncoming.showCallkitIncoming(params as dynamic);
 }
+
+
 
 // =======================================================================
 // 🔥 2. معالج الخلفية

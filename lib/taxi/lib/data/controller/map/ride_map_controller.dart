@@ -15,11 +15,10 @@ import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
 
-// مكتبة Pusher (التي تحتوي على Channel)
-import 'package:pusher_client/pusher_client.dart';
+// 🔥 مكتبة Pusher Channels الرسمية (البديل الآمن والمستقر)
+import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
 
-// 🔥 استيراد ملف eco.dart الذي يحتوي على متغير echo العام
-// ⚠️ تأكد من صحة هذا المسار تماماً حسب مكان ملف eco.dart في مشروعك
+// 🔥 استيراد ملف eco.dart الذي يحتوي على نسخة pusher العامة
 import 'package:cosmetic_store/taxi/lib/eco.dart';
 
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
@@ -43,9 +42,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   String driverAddress = 'جاري التحميل...';
 
   String? _currentRideId;
-
-  // 🔥 استخدام نوع Channel من مكتبة pusher_client
-  Channel? _rideChannel;
 
   ml.MapLibreMapController? mapLibreController;
   ml.Symbol? pickupSymbol;
@@ -79,62 +75,55 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
   }
 
   // =========================================================================
-  // 🔥 دوال تتبع السائق اللحظي (مصححة ومضادة للأخطاء 100%)
+  // 🔥 دوال تتبع السائق اللحظي (باستخدام pusher_channels_flutter)
   // =========================================================================
   void startLiveTracking(String rideId) {
     _currentRideId = rideId;
 
-    // تنظيف أي استماع سابق
-    if (_rideChannel != null) {
-      echo?.unsubscribe('ride.$rideId');
+    // تنظيف أي اشتراك سابق
+    if (_currentRideId != null) {
+      pusher.unsubscribe(channelName: 'ride.$rideId');
     }
 
     print("🎧 [TRACKING] بدء الاستماع لموقع السائق للرحلة: $rideId");
 
-    // 1. الاشتراك في القناة
-    _rideChannel = echo?.subscribe('ride.$rideId');
+    // الاشتراك في القناة والاستماع للحدث
+    pusher.subscribe(
+      channelName: 'ride.$rideId',
+      onEvent: (PusherEvent event) {
+        try {
+          final eventData = event.data;
+          if (eventData == null || eventData.isEmpty) {
+            print("⚠️ [WARNING] بيانات الحدث فارغة");
+            return;
+          }
 
-    // 2. الاستماع للحدث بأمان تام
-    _rideChannel?.bind('driver.location.updated', (dynamic event) {
-      try {
-        // استخراج البيانات بأقصى درجات الأمان (لأن event قد يكون Map أو String)
-        String eventData = '';
-        if (event is Map) {
-          eventData = event['data']?.toString() ?? '';
-        } else {
-          eventData = event?.toString() ?? '';
+          // فك تشفير البيانات بأمان
+          final data = jsonDecode(eventData);
+
+          double newLat = (data['latitude'] is num) ? (data['latitude'] as num).toDouble() : 0.0;
+          double newLng = (data['longitude'] is num) ? (data['longitude'] as num).toDouble() : 0.0;
+
+          if (newLat != 0.0 && newLng != 0.0) {
+            print("🚗 [LIVE UPDATE] موقع جديد: $newLat, $newLng");
+
+            // 🚀 هنا السحر: نمرر الإحداثيات للدالة الموجودة لديك والتي تقوم بالأنيميشن تلقائياً
+            updateDriverLocation(
+              latLng: LatLng(newLat, newLng),
+              isRunning: true,
+            );
+          }
+        } catch (e) {
+          print("❌ [ERROR] فشل في تحليل بيانات الموقع: $e");
+          print("البيانات الخام المستلمة: ${event.data}");
         }
-
-        if (eventData.isEmpty) {
-          print("⚠️ [WARNING] بيانات الحدث فارغة أو غير صالحة");
-          return;
-        }
-
-        // فك تشفير البيانات بأمان
-        final data = jsonDecode(eventData);
-
-        double newLat = (data['latitude'] is num) ? (data['latitude'] as num).toDouble() : 0.0;
-        double newLng = (data['longitude'] is num) ? (data['longitude'] as num).toDouble() : 0.0;
-
-        if (newLat != 0.0 && newLng != 0.0) {
-          print("🚗 [LIVE UPDATE] موقع جديد: $newLat, $newLng");
-
-          updateDriverLocation(
-            latLng: LatLng(newLat, newLng),
-            isRunning: true,
-          );
-        }
-      } catch (e) {
-        print("❌ [ERROR] فشل في تحليل بيانات الموقع: $e");
-        print("البيانات الخام المستلمة: $event");
-      }
-    });
+      },
+    );
   }
 
   void stopLiveTracking(String rideId) {
     if (_currentRideId != null) {
-      echo?.unsubscribe('ride.$rideId');
-      _rideChannel = null;
+      pusher.unsubscribe(channelName: 'ride.$rideId');
       _currentRideId = null;
       print("🛑 [TRACKING] تم إيقاف الاستماع للرحلة: $rideId");
     }
@@ -292,6 +281,9 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     _animationController.stop();
     _animationController.reset();
 
+    // 🔥 إصلاح تسرب الذاكرة: مسح المستمعات السابقة قبل إضافة مستمع جديد
+    _animationController.clearListeners();
+
     final latTween = Tween<double>(begin: oldPosition.latitude, end: newPosition.latitude);
     final lngTween = Tween<double>(begin: oldPosition.longitude, end: newPosition.longitude);
     final endRotation = _getRotation(oldPosition.latitude, oldPosition.longitude, newPosition.latitude, newPosition.longitude);
@@ -305,7 +297,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
 
     _animationController.forward();
   }
-
   Future<void> _updateDriverMarkerUnified(LatLng position, double rotation) async {
     String iconName = (activeServiceId == 1) ? 'car_icon' : 'tuktuk_icon';
     String assetPath = (activeServiceId == 1) ? 'assets/images/car.png' : 'assets/images/tuktuk.png';

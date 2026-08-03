@@ -6,7 +6,7 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 
-import '../beytei_re/re.dart'; // تأكد من المسار الصحيح لكلاس CustomerChatPage و AuthProvider و SmartWalletProvider
+import '../beytei_re/re.dart'; // تأكد من صحة هذا المسار
 
 class OrderTrackingScreen extends StatefulWidget {
   final dynamic order;
@@ -28,18 +28,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   @override
   void initState() {
     super.initState();
-    // 1. أخذ الحالة المبدئية المخزنة
     _currentStatus = widget.order.status ?? 'pending';
     _driverName = widget.order.driverName;
 
-    // 2. 🔥 المزامنة الذكية فور فتح الشاشة لتصحيح حالة الطلب
     _syncWithServers();
-
-    // 3. تشغيل المستمع للإشعارات اللحظية
     _listenToTaxiUpdates();
   }
 
-  // 🔥 دالة المزامنة المزدوجة (سيرفر السائق + سيرفر المطعم)
   Future<void> _syncWithServers() async {
     if (!mounted) return;
     setState(() => _isSyncing = true);
@@ -49,16 +44,17 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     if (mounted) setState(() => _isSyncing = false);
   }
 
-  // 1. محاولة جلب الحالة من سيرفر السائق (banner.beytei.com)
+  // 1. جلب الحالة من سيرفر السائق الجديد (de.beytei.com)
   Future<bool> _syncWithTaxiServer() async {
     try {
       final auth = Provider.of<AuthProvider>(context, listen: false);
       final String? taxiToken = auth.taxiToken;
 
-      print("📡 جاري فحص الحالة من سيرفر السائق (banner)...");
+      print("📡 جاري فحص الحالة من سيرفر السائق الجديد (de.beytei.com)...");
 
+      // 🔥 التعديل الأول: استخدام رابط السيرفر الجديد
       final response = await http.get(
-        Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/status-by-source/${widget.order.id}'),
+        Uri.parse('https://de.beytei.com/api/taxi/v2/delivery/status-by-source/${widget.order.id}'),
         headers: {
           'Content-Type': 'application/json',
           if (taxiToken != null) 'Authorization': 'Bearer $taxiToken',
@@ -67,7 +63,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        String taxiStatus = data['order_status'];
+
+        // 🔥 التعديل الثاني: قراءة الحقل بشكل مرن ليتوافق مع رد السيرفر الجديد
+        String taxiStatus = (data['status'] ?? data['order_status'] ?? 'pending').toString();
         String? driver = data['driver_name'];
 
         setState(() {
@@ -76,19 +74,16 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         });
 
         await _updateLocalStorage(widget.order.id, taxiStatus);
-
-        // 🔥🔥🔥 التحقق من اكتمال الطلب ومنح الصندوق 🔥🔥🔥
         await _checkAndClaimBoxOnDelivery(taxiStatus);
 
         return true;
       }
     } catch (e) {
-      print("⚠️ سيرفر التاكسي لم يستجب: $e");
+      print("⚠️ سيرفر التاكسي الجديد لم يستجب: $e");
     }
     return false;
   }
 
-  // 💾 تحديث SharedPreferences لكي تعرف السلة أن الطلب انتهى
   Future<void> _updateLocalStorage(int orderId, String newStatus) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -99,7 +94,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         bool isChanged = false;
 
         for (var i = 0; i < orders.length; i++) {
-          if (orders[i]['id'] == orderId) {
+          // 🔥 التعديل الثالث: مقارنة آمنة للأرقام والنصوص
+          if (orders[i]['id'].toString() == orderId.toString()) {
             orders[i]['status'] = newStatus;
             isChanged = true;
             break;
@@ -116,38 +112,27 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
-  // 🔥🔥🔥 الدالة الجديدة: التحقق من اكتمال الطلب ومنح الصندوق 🔥🔥🔥
   Future<void> _checkAndClaimBoxOnDelivery(String status) async {
-    // 1. هل الحالة هي "تم التوصيل"؟
     if (status.toLowerCase() != 'delivered' && status.toLowerCase() != 'completed') {
       return;
     }
 
-    // 2. هل تم منح الصندوق لهذا الطلب بالفعل في هذه الجلسة؟
-    if (_boxAlreadyClaimedThisSession) {
-      print("ℹ️ تم منح الصندوق لهذا الطلب مسبقاً في هذه الجلسة.");
-      return;
-    }
+    if (_boxAlreadyClaimedThisSession) return;
 
-    // 3. هل تم منح الصندوق لهذا الطلب في جلسات سابقة؟ (حماية من التكرار)
     final hasClaimed = await _hasClaimedBoxForOrder(widget.order.id);
     if (hasClaimed) {
-      print("ℹ️ تم منح الصندوق للطلب #${widget.order.id} مسبقاً.");
       _boxAlreadyClaimedThisSession = true;
       return;
     }
 
-    // 4. جلب منطقة الزبون
     final prefs = await SharedPreferences.getInstance();
     final int areaId = prefs.getInt('selectedAreaId') ?? 0;
 
-    // 5. منطقة الكوت (84) لها نظام كاش باك مختلف، لا نعطيها صندوق
     if (areaId == 84) {
       print("ℹ️ منطقة الكوت (84) - نظام الكاش باك فقط، لا صناديق.");
       return;
     }
 
-    // 6. منح الصندوق الفضي
     try {
       print("🎁 جاري منح صندوق فضي للطلب #${widget.order.id}...");
 
@@ -155,13 +140,11 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
         await wallet.claimBoxOnDelivery(areaId);
 
-        // 7. حفظ معرف الطلب كـ "تم منحه" لمنع التكرار
         await _markOrderAsBoxClaimed(widget.order.id);
         _boxAlreadyClaimedThisSession = true;
 
         print("✅ تم منح الصندوق الفضي بنجاح للطلب #${widget.order.id}");
 
-        // 8. إظهار إشعار لطيف للزبون
         if (mounted) {
           _showBoxRewardSnackbar();
         }
@@ -171,7 +154,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
-  // 🔍 التحقق من SharedPreferences هل تم منح الصندوق لهذا الطلب
   Future<bool> _hasClaimedBoxForOrder(int orderId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -182,7 +164,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
-  // 💾 حفظ معرف الطلب كـ "تم منحه صندوق"
   Future<void> _markOrderAsBoxClaimed(int orderId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -196,7 +177,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
-  // 🎉 إظهار Snackbar لطيف للزبون عند حصوله على صندوق
   void _showBoxRewardSnackbar() {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -216,22 +196,19 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         duration: const Duration(seconds: 4),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        action: SnackBarAction(
-          label: 'فتح الآن',
-          textColor: Colors.white,
-          onPressed: () {
-            // يمكن الانتقال لشاشة الصناديق هنا إذا أردت
-            // Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerWalletScreen()));
-          },
-        ),
       ),
     );
+    // يمكنك إضافة Navigator.push هنا للانتقال لشاشة المحفظة إذا أردت
   }
 
   void _listenToTaxiUpdates() {
     _fcmSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      if (message.data.isNotEmpty && message.data['order_id'] == widget.order.id.toString()) {
-        String? newStatus = message.data['new_status'] ?? message.data['status'];
+      // 🔥 التعديل الرابع: مقارنة آمنة ومعتمدة على الـ String
+      final msgOrderId = message.data['order_id']?.toString();
+      final targetOrderId = widget.order.id.toString();
+
+      if (msgOrderId == targetOrderId) {
+        String? newStatus = (message.data['new_status'] ?? message.data['status'])?.toString();
         String? driver = message.data['driver_name'];
 
         if (mounted) {
@@ -243,8 +220,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
         if (newStatus != null) {
           _updateLocalStorage(widget.order.id, newStatus);
-
-          // 🔥 التحقق من اكتمال الطلب عند استقبال إشعار لحظي
           _checkAndClaimBoxOnDelivery(newStatus);
         }
       }
@@ -294,7 +269,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           child: Column(
             children: [
-              // ---------------- البطاقة الأولى: التتبع ----------------
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.symmetric(vertical: 25, horizontal: 15),
@@ -314,7 +288,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     : _buildCustomTimeline(currentStep),
               ),
 
-              // ---------------- البطاقة الثانية: المندوب (مع زر الدردشة) ----------------
               if (currentStep >= 1 && _driverName != null && !isCancelled)
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -341,7 +314,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                           ],
                         ),
                       ),
-                      // 🔥 زر الدردشة الجديد 🔥
                       IconButton(
                         onPressed: () {
                           Navigator.push(
@@ -350,7 +322,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                               builder: (_) => CustomerChatPage(
                                 orderId: widget.order.id.toString(),
                                 driverName: _driverName ?? 'المندوب',
-                                customerName: widget.order.customerName, // يفترض أن order يحتوي على customerName
+                                customerName: widget.order.customerName ?? 'الزبون',
                               ),
                             ),
                           );
@@ -368,7 +340,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   ),
                 ),
 
-              // ---------------- البطاقة الثالثة: الفاتورة ----------------
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.all(20),
