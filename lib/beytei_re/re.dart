@@ -43,14 +43,14 @@ import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 const String BEYTEI_URL = 'https://re.beytei.com';
 
 
-const String baseUrl = "https://banner.beytei.com/wp-json";
+const String baseUrl = "https://de.beytei.com/api";
 const String CONSUMER_KEY = 'ck_d22c789681c4610838f1d39a05dbedcb73a2c810';
 const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
 const String MISWAK_URL = 'https://beytei.com';    // 🔥 سيرفر المسواك (جديد)
-const String TAXI_URL = 'https://banner.beytei.com'; // 🚕 تكسي )
+const String TAXI_URL = 'https://de.beytei.com/api'; // 🚕 تكسي )
 const int AD_PRODUCT_ID = 9999; // ⚠️ استبدل هذا الرقم بـ ID منتج "خدمة إعلان" من ووكومرس
 const double AD_COST = 3000.0; // تكلفة الإعلان
 
