@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // تم الإضافة لنسخ التوكن
 import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
@@ -930,170 +929,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
   }
 
   // 📞 🍏 دالة الفحص الخاصة بالآيفون والمكالمات
-  Future<void> _showCallDebugger() async {
-    String voipToken = "جاري الجلب...";
-    String iosLogs = "جاري الجلب...";
-
-    // 1. جلب التوكن والسجلات من الآيفون فقط
-    if (Platform.isIOS) {
-      try {
-        const platform = MethodChannel('beytei_deep_debugger');
-        final result = await platform.invokeMethod('getLogs');
-
-        voipToken = result['token'] ?? 'لا يوجد توكن VoIP مسجل';
-        iosLogs = result['logs'] ?? 'لا توجد سجلات من Swift';
-      } catch (e) {
-        voipToken = "خطأ في الاتصال بقناة Swift: $e";
-        iosLogs = "لم يتم تحديث ملف AppDelegate.swift بنجاح، أو هناك خطأ في الكود.";
-      }
-    } else {
-      voipToken = "هذا الفحص مخصص لأجهزة الآيفون فقط (iOS).";
-      iosLogs = "يعمل نظام CallKit الحقيقي على نظام الآيفون، وليس الأندرويد.";
-    }
-
-    if (!mounted) return;
-
-    showDialog(
-        context: context,
-        builder: (ctx) {
-          return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            title: const Row(
-              children: [
-                Icon(Icons.phone_callback_rounded, color: Colors.green),
-                SizedBox(width: 8),
-                Text('🍏 فحص مكالمات الآيفون', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('🔑 توكن المكالمات (VoIP Token):', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                  const SizedBox(height: 5),
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(5)),
-                    child: SelectableText(voipToken, style: const TextStyle(fontSize: 11)),
-                  ),
-                  const SizedBox(height: 8),
-
-                  // 🔥 وضع زر النسخ وزر الاختبار جنباً إلى جنب
-                  Row(
-                    children: [
-                      // زر النسخ
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            Clipboard.setData(ClipboardData(text: voipToken));
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ توكن الـ VoIP!')));
-                          },
-                          icon: const Icon(Icons.copy, size: 16),
-                          label: const Text('نسخ التوكن', style: TextStyle(fontSize: 11)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      // زر إرسال المكالمة
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () async {
-                            if (voipToken.contains("لا يوجد") || voipToken.contains("خطأ") || voipToken == "جاري الجلب...") {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('❌ لا يوجد توكن صالح لإرسال المكالمة!')),
-                              );
-                              return;
-                            }
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('⏳ جاري طلب مكالمة تجريبية...')),
-                            );
-
-                            try {
-                              // 🔥 الاتصال بالرابط الجديد الذي وضعناه في السيرفر
-                              var response = await http.post(
-                                Uri.parse('https://re.beytei.com/wp-json/restaurant-app/v1/test-direct-call'),
-                                headers: {
-                                  'Content-Type': 'application/json',
-                                },
-                                body: jsonEncode({
-                                  'token': voipToken,
-                                }),
-                              );
-
-                              var data = jsonDecode(response.body);
-                              if (response.statusCode == 200 && data['success'] == true) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('✅ تم إرسال الطلب لآبل! الهاتف سيرن الآن...'), backgroundColor: Colors.green),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('❌ خطأ: ${data['message']}'), backgroundColor: Colors.red),
-                                );
-                              }
-                            } catch (e) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('❌ فشل الاتصال بالسيرفر: $e'), backgroundColor: Colors.red),
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.ring_volume, size: 16),
-                          label: const Text('اختبار الرنين', style: TextStyle(fontSize: 11)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const Divider(height: 30),
-
-                  const Text('📜 سجلات النظام بالخلفية (Swift Logs):', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
-                  const SizedBox(height: 5),
-                  Container(
-                    height: 150,
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(5)),
-                    child: SingleChildScrollView(
-                      child: SelectableText(
-                          iosLogs,
-                          style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'),
-                          textDirection: TextDirection.ltr
-                      ),
-                    ),
-                  ),
-
-                  const Divider(height: 30),
-
-                  const Text('💡 لماذا لا يصل الاتصال للآيفون؟', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
-                  const SizedBox(height: 5),
-                  const Text(
-                    '1. التوكن بالأعلى فارغ: أغلق التطبيق من الخلفية وافتحه ليتصل بسيرفر آبل مجدداً.\n\n'
-                        '2. السيرفر يقول 200 ولكن الهاتف لم يرن والسجل أعلاه فارغ: السيرفر يرسل الإشعار إلى نسخة محذوفة أو Bundle ID مختلف (توكن قديم). سجل خروجك من حسابك وسجل دخول لتحديث التوكن بالسيرفر.\n\n'
-                        '3. السجل يظهر "تنفيذ خطة الطوارئ": كود فلاتر به خطأ ويمنع شاشة CallKit من الظهور بشكل طبيعي.',
-                    style: TextStyle(fontSize: 12, height: 1.5),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('إغلاق', style: TextStyle(color: Colors.red)),
-              ),
-            ],
-          );
-        }
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1136,14 +971,6 @@ class _SectionsPageWidgetState extends State<SectionsPageWidget> {
         ],
       ),
 
-      // 🔥 الزر العائم الخاص بالفحص (مخصص للآيفون والمكالمات فقط كما طلبت)
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showCallDebugger,
-        backgroundColor: Colors.black.withOpacity(0.9),
-        elevation: 4,
-        tooltip: 'فحص مكالمات الآيفون',
-        child: const Icon(Icons.phone_iphone_rounded, color: Colors.greenAccent),
-      ),
 
       body: RefreshIndicator(
         onRefresh: () async => _loadBannersWithCache(),
