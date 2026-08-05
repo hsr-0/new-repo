@@ -42,15 +42,14 @@ import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 // =======================================================================
 const String BEYTEI_URL = 'https://re.beytei.com';
 
-
-const String baseUrl = "https://de.beytei.com/api";
+const String baseUrl = "https://banner.beytei.com/wp-json";
 const String CONSUMER_KEY = 'ck_d22c789681c4610838f1d39a05dbedcb73a2c810';
 const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
 const String MISWAK_URL = 'https://beytei.com';    // 🔥 سيرفر المسواك (جديد)
-const String TAXI_URL = 'https://de.beytei.com/api'; // 🚕 تكسي )
+const String TAXI_URL = 'https://banner.beytei.com'; // 🚕 تكسي )
 const int AD_PRODUCT_ID = 9999; // ⚠️ استبدل هذا الرقم بـ ID منتج "خدمة إعلان" من ووكومرس
 const double AD_COST = 3000.0; // تكلفة الإعلان
 
@@ -3065,9 +3064,25 @@ class PremiumCampaignProvider with ChangeNotifier {
   bool _isLoading = false;
   bool _hasShownPopup = false;
 
+  // 🔥 متغيرات جديدة لخصم التوصيل بالمضلعات
+  List<List<double>> _targetPolygon = [];
+  double _discountedDeliveryFee = 0.0;
+  String _outsidePolygonMessage = '';
+
   Map<String, dynamic>? get config => _config;
   Map<String, dynamic>? get cartValidationResult => _cartValidationResult;
   bool get isLoading => _isLoading;
+
+  // 🔥 Getters جديدة لخصم التوصيل
+  List<List<double>> get targetPolygon => _targetPolygon;
+  double get discountedDeliveryFee => _discountedDeliveryFee;
+  String get outsidePolygonMessage => _outsidePolygonMessage;
+
+  bool get hasDeliveryDiscount => _config != null &&
+      _config!['discount_type'] == 'delivery_fee' &&
+      _discountedDeliveryFee > 0 &&
+      _targetPolygon.isNotEmpty;
+
   Future<void> fetchCampaignConfig(int currentAreaId) async {
     try {
       // ✅ التعديل الجوهري: إضافة area_id إلى رابط الـ API ليعرف السيرفر أي حملة يجلب
@@ -3082,14 +3097,123 @@ class PremiumCampaignProvider with ChangeNotifier {
         // التحقق مما إذا كانت الحملة مفعلة لهذه المنطقة تحديداً
         if (isActive) {
           _config = data;
+
+          // 🔥 استخراج بيانات خصم التوصيل من الاستجابة
+          _discountedDeliveryFee = double.tryParse(
+              data['discounted_delivery_fee']?.toString() ?? '0'
+          ) ?? 0.0;
+
+          _outsidePolygonMessage = data['outside_polygon_message']?.toString() ??
+              'لا يهمك! حفظنا لك خصم التوصيل وسيكون على طلبك الجاي 🎁';
+
+          // 🔥 استخراج إحداثيات المضلع
+          _targetPolygon = [];
+          if (data['target_polygon'] != null && data['target_polygon'] is List) {
+            for (var point in data['target_polygon']) {
+              if (point is List && point.length >= 2) {
+                double lat = double.tryParse(point[0].toString()) ?? 0.0;
+                double lng = double.tryParse(point[1].toString()) ?? 0.0;
+                if (lat != 0.0 && lng != 0.0) {
+                  _targetPolygon.add([lat, lng]);
+                }
+              }
+            }
+          }
+
+          print("🚚 [PremiumCampaign] خصم التوصيل: ${_discountedDeliveryFee} د.ع");
+          print("🗺️ [PremiumCampaign] نقاط المضلع: ${_targetPolygon.length}");
         } else {
           _config = null;
+          _targetPolygon = [];
+          _discountedDeliveryFee = 0.0;
         }
         notifyListeners();
       }
     } catch (e) {
       print("⚠️ فشل جلب إعدادات الحملة: $e");
     }
+  }
+
+  // 🔥 دالة فحص هل الزبون داخل المضلع (Ray Casting Algorithm)
+  bool isPointInsidePolygon(double lat, double lng) {
+    if (_targetPolygon.isEmpty) return false;
+
+    bool inside = false;
+    int j = _targetPolygon.length - 1;
+
+    for (int i = 0; i < _targetPolygon.length; i++) {
+      double yi = _targetPolygon[i][0];
+      double xi = _targetPolygon[i][1];
+      double yj = _targetPolygon[j][0];
+      double xj = _targetPolygon[j][1];
+
+      bool intersect = ((yi > lat) != (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+
+      if (intersect) inside = !inside;
+      j = i;
+    }
+
+    return inside;
+  }
+
+  // 🔥 دالة حساب خصم التوصيل (تُستدعى من CheckoutScreen و MenuScreen)
+  Map<String, dynamic> checkDeliveryDiscount({
+    required double userLat,
+    required double userLng,
+    required double originalDeliveryFee,
+  }) {
+    // إذا لا يوجد عرض توصيل نشط
+    if (!hasDeliveryDiscount) {
+      return {
+        'has_discount': false,
+        'display_fee': originalDeliveryFee,
+        'original_fee': originalDeliveryFee,
+        'discount_amount': 0.0,
+        'message': '',
+        'is_outside_polygon': false,
+      };
+    }
+
+    // فحص هل الزبون داخل المضلع
+    bool isInside = isPointInsidePolygon(userLat, userLng);
+
+    if (isInside && _discountedDeliveryFee < originalDeliveryFee) {
+      // ✅ داخل المضلع → خصم حقيقي
+      double discountAmount = originalDeliveryFee - _discountedDeliveryFee;
+      print("🚚 [DeliveryDiscount] داخل المضلع! الخصم: $discountAmount د.ع");
+
+      return {
+        'has_discount': true,
+        'display_fee': _discountedDeliveryFee,      // ما يراه الزبون (500)
+        'original_fee': originalDeliveryFee,        // ما يأخذه السائق (2000)
+        'discount_amount': discountAmount,          // الفرق (1500)
+        'message': '🚚 توصيل مخفض: ${_discountedDeliveryFee.toInt()} د.ع فقط!',
+        'is_outside_polygon': false,
+      };
+    } else if (!isInside) {
+      // ❌ خارج المضلع → رسالة وهمية
+      print("🚚 [DeliveryDiscount] خارج المضلع - رسالة وهمية");
+
+      return {
+        'has_discount': false,
+        'display_fee': originalDeliveryFee,
+        'original_fee': originalDeliveryFee,
+        'discount_amount': 0.0,
+        'message': _outsidePolygonMessage,
+        'is_outside_polygon': true,
+      };
+    }
+
+    // حالة افتراضية
+    return {
+      'has_discount': false,
+      'display_fee': originalDeliveryFee,
+      'original_fee': originalDeliveryFee,
+      'discount_amount': 0.0,
+      'message': '',
+      'is_outside_polygon': false,
+    };
   }
 
   Future<void> validateCart(double cartTotal, int restaurantId, int areaId) async {
@@ -3324,97 +3448,6 @@ class PremiumCampaignProvider with ChangeNotifier {
     }
   }
 }
-
-
-class PremiumPromoDialog extends StatelessWidget {
-  final Map<String, dynamic> config;
-  final BuildContext parentContext; // 🔥 إضافة المتغير الجديد
-
-  const PremiumPromoDialog({super.key, required this.config, required this.parentContext});
-
-  @override
-  Widget build(BuildContext context) {
-    final popup = config['popup'] ?? {};
-
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-      backgroundColor: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(25),
-          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 20)],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // صورة العرض
-            if (popup['image'] != null && popup['image'].toString().isNotEmpty)
-              ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
-                child: CachedNetworkImage(
-                  imageUrl: popup['image'],
-                  width: double.infinity,
-                  height: 180,
-                  fit: BoxFit.cover,
-                  placeholder: (c, u) => Container(height: 180, color: Colors.grey.shade200),
-                ),
-              ),
-
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                children: [
-                  Text(
-                    popup['title'] ?? 'عرض خاص!',
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.red),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    popup['desc'] ?? 'استمتع بأقوى العروض الآن.',
-                    style: TextStyle(fontSize: 15, color: Colors.grey.shade700, height: 1.5),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 25),
-
-                  // الأزرار
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context); // إغلاق النافذة
-
-                        // 🔥 الانتقال لصفحة المطاعم المشمولة باستخدام السياق الآمن للرئيسية
-                        Navigator.push(parentContext, MaterialPageRoute(
-                            builder: (_) => PremiumRestaurantsScreen(
-                              restaurantIds: List<int>.from(config['included_restaurants'] ?? []),
-                            )
-                        ));
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red.shade600,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                      ),
-                      child: const Text("اطلب الآن 🔥", style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("تخطي العرض", style: TextStyle(color: Colors.grey)),
-                  )
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // =======================================================================
 // --- شاشة المطاعم المشمولة بالعرض المميز ---
 // =======================================================================
@@ -5389,9 +5422,7 @@ class ApiService {
 
 
 
-
-
-// 🔥 الدالة المحدثة والمحسّنة لإرسال الطلب مع الخصم
+  // 🔥 الدالة المحدثة والمحسّنة لإرسال الطلب مع الخصم وخصم التوصيل
   Future<Order?> submitOrder({
     required String name,
     required String phone,
@@ -5399,24 +5430,27 @@ class ApiService {
     required List<FoodItem> cartItems,
     String? couponCode,
     geolocator.Position? position,
-    double? deliveryFee,
+    double? deliveryFee,           // 👈 السعر الذي سيدفعه الزبون (بعد الخصم إن وُجد)
+    double? originalDeliveryFee,   // 🔥 [جديد] السعر الحقيقي الذي سيأخذه السائق
+    double? deliveryDiscountAmount,// 🔥 [جديد] قيمة خصم التوصيل (الفرق)
     required int zoneId,
     int? restaurantId,
     int? regionId,
     bool useSmartWallet = false,
     double? platformMarkupTotal,
     required String checkoutSessionId,
-    double? discountAmount,      // 👈 الخصم الكلي (كوبون + عرض مميز)
-    double? finalTotal,          // 👈 المبلغ النهائي بعد الخصم
+    double? discountAmount,        // 👈 الخصم الكلي (كوبون + عرض مميز + خصم توصيل)
+    double? finalTotal,            // 👈 المبلغ النهائي بعد كل الخصومات
     bool usedPremiumCampaign = false,
   }) async {
     // 🛡️ 1. تجهيز خطوط الكوبونات (فقط إذا كان هناك كوبون عادي)
     List<Map<String, dynamic>> couponLines =
     couponCode != null && couponCode.isNotEmpty ? [{"code": couponCode}] : [];
 
-    // 🚚 2. تجهيز خطوط الشحن
-    List<Map<String, dynamic>> shippingLines = deliveryFee != null
-        ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": deliveryFee.toString()}]
+    // 🚚 2. تجهيز خطوط الشحن (🔥 هام جداً: السائق يجب أن يرى السعر الحقيقي)
+    double feeForDriver = originalDeliveryFee ?? deliveryFee ?? 0.0;
+    List<Map<String, dynamic>> shippingLines = feeForDriver > 0
+        ? [{"method_id": "flat_rate", "method_title": "توصيل", "total": feeForDriver.toString()}]
         : [];
 
     // 🔐 3. جلب البيانات المحفوظة
@@ -5506,21 +5540,30 @@ class ApiService {
         // 💰 6. إرسال البيانات المالية للسيرفر
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
         if (voipToken != null && voipToken.isNotEmpty) {"key": "voip_token", "value": voipToken},
-        if (deliveryFee != null) {"key": "calculated_delivery_fee", "value": deliveryFee.toString()},
+
+        // 🔥 إرسال السعر الحقيقي (الذي سيقرأه سيرفر التكسي/السائق)
+        if (feeForDriver > 0) {"key": "calculated_delivery_fee", "value": feeForDriver.toString()},
+
         if (platformMarkupTotal != null && platformMarkupTotal > 0) {"key": "calculated_platform_markup", "value": platformMarkupTotal.toString()},
 
-        // 🔥 7. إرسال الخصم والمبلغ النهائي (الحل الجذري)
-        if (discountAmount != null && discountAmount > 0) {
-          "key": "calculated_discount_amount",
-          "value": discountAmount.toString()
-        },
-        if (finalTotal != null && finalTotal > 0) {
-          "key": "calculated_final_total",
-          "value": finalTotal.toString()
-        },
+        // 🔥 7. إرسال الخصم الكلي والمبلغ النهائي
+        if (discountAmount != null && discountAmount > 0) ...[
+          {"key": "calculated_discount_amount", "value": discountAmount.toString()}
+        ],
+        if (finalTotal != null && finalTotal > 0) ...[
+          {"key": "calculated_final_total", "value": finalTotal.toString()}
+        ],
         if (usedPremiumCampaign) {"key": "_used_premium_campaign", "value": "yes"},
 
-        // 📍 8. بيانات الموقع
+        // 🔥🔥🔥 8. بيانات خصم التوصيل (للمحاسبة في السيرفر) 🔥🔥🔥
+        if (deliveryDiscountAmount != null && deliveryDiscountAmount > 0) ...[
+          {"key": "_delivery_discount_amount", "value": deliveryDiscountAmount.toString()},
+          {"key": "_platform_delivery_subsidy", "value": deliveryDiscountAmount.toString()},
+          {"key": "_discounted_delivery_fee", "value": (deliveryFee ?? 0).toString()},
+          {"key": "_original_delivery_fee", "value": feeForDriver.toString()},
+        ],
+
+        // 📍 9. بيانات الموقع
         if (position != null) {"key": "_shipping_lat", "value": position.latitude.toString()},
         if (position != null) {"key": "_shipping_lng", "value": position.longitude.toString()},
         if (restaurantId != null) {"key": "_restaurant_id", "value": restaurantId.toString()},
@@ -5528,16 +5571,17 @@ class ApiService {
       ],
     };
 
-    // 📝 9. تسجيل البيانات المرسلة للفحص
+    // 📝 10. تسجيل البيانات المرسلة للفحص (Logs)
     print("📤 [SubmitOrder] إرسال الطلب للسيرفر:");
-    print("  - الخصم: $discountAmount د.ع");
+    print("  - سعر التوصيل للسائق: $feeForDriver د.ع");
+    print("  - سعر التوصيل للزبون: ${deliveryFee ?? 0} د.ع");
+    print("  - خصم التوصيل (Subsidy): ${deliveryDiscountAmount ?? 0} د.ع");
+    print("  - الخصم الكلي: $discountAmount د.ع");
     print("  - المبلغ النهائي: $finalTotal د.ع");
-    print("  - كوبون: ${couponCode ?? 'لا يوجد'}");
-    print("  - عرض مميز: $usedPremiumCampaign");
 
     final body = json.encode(bodyPayload);
 
-    // 🚀 10. إرسال الطلب للسيرفر
+    // 🚀 11. إرسال الطلب للسيرفر
     try {
       final response = await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/wc/v3/orders'),
@@ -13632,13 +13676,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
   final _couponController = TextEditingController();
 
   bool _isSubmitting = false;
-  bool _isApplyingCoupon = false; // 🔥 المتغير الجديد الخاص بحالة تحميل الكوبون
+  bool _isApplyingCoupon = false;
   double _deliveryFee = -1.0;
   double _serviceFee = 0.0;
   double _cashbackAmount = 0.0;
   geolocator.Position? _capturedPosition;
   String _locationMessage = "جاري حساب موقعك...";
   late AnimationController _pulseController;
+
+  // 🔥 متغيرات خصم التوصيل الجديدة
+  double _originalDeliveryFee = 0.0;
+  double _deliveryDiscountAmount = 0.0;
+  bool _hasDeliveryDiscount = false;
+  bool _isOutsideDeliveryPolygon = false;
+  String _deliveryDiscountMessage = '';
 
   @override
   void initState() {
@@ -13674,15 +13725,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
         areaId: areaId, areaName: areaName,
       );
 
+      double baseFee = (result['fee'] ?? -1.0) as double;
+      _originalDeliveryFee = baseFee;
+
+      // 🔥 فحص خصم التوصيل من العرض المميز (المضلع)
+      final premium = Provider.of<PremiumCampaignProvider>(context, listen: false);
+      final deliveryDiscountResult = premium.checkDeliveryDiscount(
+        userLat: savedLoc.lat,
+        userLng: savedLoc.lng,
+        originalDeliveryFee: baseFee > 0 ? baseFee : 0.0,
+      );
+
       if (mounted) setState(() {
-        _deliveryFee = result['fee'] ?? -1.0;
-        _serviceFee = result['service_fee'] ?? 0.0;
-        _cashbackAmount = result['cashback_amount'] ?? 0.0;
-        _locationMessage = result['message'] ?? "تم تحديد الموقع بنجاح";
+        _serviceFee = (result['service_fee'] ?? 0.0) as double;
+        _cashbackAmount = (result['cashback_amount'] ?? 0.0) as double;
+        _locationMessage = (result['message'] ?? "تم تحديد الموقع بنجاح") as String;
         _capturedPosition = geolocator.Position(
           latitude: savedLoc.lat, longitude: savedLoc.lng, timestamp: DateTime.now(),
           accuracy: 0, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0, altitudeAccuracy: 0, headingAccuracy: 0,
         );
+
+        // تحديث بيانات خصم التوصيل
+        _hasDeliveryDiscount = deliveryDiscountResult['has_discount'] ?? false;
+        _deliveryDiscountAmount = (deliveryDiscountResult['discount_amount'] ?? 0.0) as double;
+        _isOutsideDeliveryPolygon = deliveryDiscountResult['is_outside_polygon'] ?? false;
+        _deliveryDiscountMessage = (deliveryDiscountResult['message'] ?? '') as String;
+
+        // السعر الذي سيدفعه الزبون فعلياً (المخفض إذا كان داخل المضلع)
+        _deliveryFee = (deliveryDiscountResult['display_fee'] ?? baseFee) as double;
       });
     } else {
       if (mounted) setState(() => _locationMessage = "يرجى تحديد الموقع على الخريطة");
@@ -13760,8 +13830,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     double grandTotal = total - premiumDiscount - boxRewardDiscount + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
     if (grandTotal < 0) grandTotal = 0;
 
-    // 🔥 المجموع الكلي للخصومات لإرساله للسيرفر
-    double totalDiscountSent = couponDiscount + premiumDiscount + boxRewardDiscount;
+    // 🔥 المجموع الكلي للخصومات لإرساله للسيرفر (يشمل خصم التوصيل)
+    double totalDiscountSent = couponDiscount + premiumDiscount + boxRewardDiscount + _deliveryDiscountAmount;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
@@ -13816,6 +13886,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
             ),
             const SizedBox(height: 15),
 
+            // 🔥 الرسالة الوهمية إذا كان الزبون خارج مضلع خصم التوصيل
+            if (_isOutsideDeliveryPolygon && _deliveryDiscountMessage.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 15),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.amber.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.amber.shade800, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _deliveryDiscountMessage,
+                        style: TextStyle(
+                          color: Colors.amber.shade900,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // 🎁 كاش باك
             if (_cashbackAmount > 0 && _deliveryFee != -1.0)
               ScaleTransition(
@@ -13869,11 +13967,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                 Icon(Icons.local_offer_outlined, color: usedPremium ? Colors.grey : Colors.orange),
                 Expanded(child: TextFormField(
                     controller: _couponController,
-                    enabled: !usedPremium && !_isApplyingCoupon, // 🔥 تعطيل الحقل أثناء التحميل
+                    enabled: !usedPremium && !_isApplyingCoupon,
                     decoration: InputDecoration(hintText: usedPremium ? 'عرض المنصة مفعل تلقائياً' : 'ادخل كود الخصم هنا', border: InputBorder.none, contentPadding: const EdgeInsets.symmetric(horizontal: 10))
                 )),
-
-                // 🔥 الحل الاحترافي: استخدام حالة (State) بدلاً من Dialog
                 TextButton(
                   onPressed: (usedPremium || _isApplyingCoupon) ? null : () async {
                     final code = _couponController.text.trim();
@@ -13884,7 +13980,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       return;
                     }
 
-                    // 🔥 بدء التحميل المدمج
                     setState(() {
                       _isApplyingCoupon = true;
                     });
@@ -13902,7 +13997,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
 
                     if (!mounted) return;
 
-                    // 🔥 إيقاف التحميل المدمج
                     setState(() {
                       _isApplyingCoupon = false;
                     });
@@ -13934,7 +14028,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       ? const SizedBox(
                       width: 20,
                       height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange) // 🔥 مؤشر التحميل المدمج
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange)
                   )
                       : const Text("تطبيق", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
                 ),
@@ -13986,7 +14080,25 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                   const Text("هدية العرض:", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
                   const Text("بيبسي مجاني 🎁", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
                 ])),
+
                 _buildSummaryRow("رسوم التوصيل:", _deliveryFee == -1.0 ? 0 : _deliveryFee, isLoading: _deliveryFee == -1.0),
+
+                // 🔥 عرض تفاصيل خصم التوصيل (السعر الأصلي مشطوب + قيمة الخصم)
+                if (_hasDeliveryDiscount && _deliveryDiscountAmount > 0) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("  السعر الأصلي للتوصيل:", style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                        Text("${NumberFormat('#,###').format(_originalDeliveryFee)} د.ع",
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600, decoration: TextDecoration.lineThrough)),
+                      ],
+                    ),
+                  ),
+                  _buildSummaryRow("  🚚 خصم التوصيل:", -_deliveryDiscountAmount, isDiscount: true),
+                ],
+
                 if (_serviceFee > 0) _buildSummaryRow("رسوم الخدمة:", _serviceFee),
                 const Divider(height: 20, thickness: 1),
                 _buildSummaryRow("الإجمالي الكلي:", grandTotal, isTotal: true, isLoading: _deliveryFee == -1.0),
@@ -14014,7 +14126,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       cartItems: widget.cart.items,
                       couponCode: finalCouponCode,
                       position: _capturedPosition,
-                      deliveryFee: _deliveryFee,
+                      deliveryFee: _originalDeliveryFee > 0 ? _originalDeliveryFee : _deliveryFee, // 🔥 السعر الحقيقي (للسائق)
                       zoneId: currentZoneId,
                       restaurantId: firstRestaurantId,
                       regionId: currentZoneId,
@@ -14023,6 +14135,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       discountAmount: totalDiscountSent,
                       finalTotal: grandTotal,
                       usedPremiumCampaign: usedPremium,
+                      deliveryDiscountAmount: _deliveryDiscountAmount > 0 ? _deliveryDiscountAmount : null, // 🔥 إرسال خصم التوصيل كـ Metadata
                     );
 
                     if (!mounted) return;
@@ -14082,6 +14195,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     );
   }
 }
+
 
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
