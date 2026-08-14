@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <!-- تم إضافة إذن المايكروفون للخدمات الأمامية هنا -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:node="remove" />
 
@@ -70,16 +72,18 @@
             android:name="com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver"
             android:exported="true" />
 
+        <!-- تم تعديل foregroundServiceType هنا -->
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitNotificationService"
             android:exported="true"
-            android:foregroundServiceType="phoneCall"
+            android:foregroundServiceType="phoneCall|microphone"
             tools:replace="android:exported,android:foregroundServiceType" />
 
+        <!-- تم تعديل foregroundServiceType هنا أيضاً -->
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitSoundService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall"
+            android:foregroundServiceType="phoneCall|microphone"
             tools:replace="android:foregroundServiceType" />
 
         <activity

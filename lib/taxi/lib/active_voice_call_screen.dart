@@ -11,6 +11,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
   final String token;
   final String remoteName;
   final String? orderId;
+  final VoidCallback? onCallEnded; // ✅ Callback المطابق للـ Knowledge Base
 
   const ActiveVoiceCallScreen({
     super.key,
@@ -19,6 +20,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
     required this.token,
     required this.remoteName,
     this.orderId,
+    this.onCallEnded,
   });
 
   @override
@@ -41,6 +43,10 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   bool _hasError = false;
   String _errorMessage = "";
+
+  // ✅ تُستخدم فقط لتتبع الحالة (الصوت يُشغَّل تلقائياً من محرك LiveKit، لا يحتاج Widget)
+  AudioTrack? _remoteAudioTrack;
+  RemoteParticipant? _remoteParticipant;
 
   @override
   void initState() {
@@ -86,19 +92,33 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
       _listener!.on<ParticipantConnectedEvent>((event) {
         if (mounted && !_isRemoteConnected) {
-          _timeoutTimer?.cancel();
-          setState(() => _isRemoteConnected = true);
-          _startTimer();
+          setState(() {
+            _remoteParticipant = event.participant;
+          });
           print("✅ الزبون: السائق دخل الغرفة");
         }
       });
 
       _listener!.on<TrackSubscribedEvent>((event) {
-        if (mounted && !_isRemoteConnected) {
+        if (mounted) {
           _timeoutTimer?.cancel();
-          setState(() => _isRemoteConnected = true);
+          setState(() {
+            _isRemoteConnected = true;
+            // ✅ حفظ المسار لتتبع الحالة فقط (التشغيل تلقائي من المحرك)
+            if (event.track is AudioTrack) {
+              _remoteAudioTrack = event.track as AudioTrack;
+            }
+          });
           _startTimer();
-          print("✅ الزبون: تم استقبال مسار الصوت");
+          print("✅ الزبون: تم استقبال مسار الصوت (سيُشغَّل تلقائياً)");
+        }
+      });
+
+      _listener!.on<TrackUnsubscribedEvent>((event) {
+        if (mounted && event.track is AudioTrack) {
+          setState(() {
+            _remoteAudioTrack = null;
+          });
         }
       });
 
@@ -127,16 +147,20 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (mounted) {
         setState(() => _isConnected = true);
 
+        // ✅✅✅ الإصلاح #1 (السطر 155): remoteParticipants خريطة Map وليست List
+        // لذلك نستخدم .values.first بدلاً من .first
         if (_room!.remoteParticipants.isNotEmpty) {
-          setState(() => _isRemoteConnected = true);
           _timeoutTimer?.cancel();
+          setState(() {
+            _isRemoteConnected = true;
+            _remoteParticipant = _room!.remoteParticipants.values.first;
+          });
           _startTimer();
           print("✅ الزبون: السائق موجود مسبقاً في الغرفة!");
         }
 
         await _room!.localParticipant?.setMicrophoneEnabled(true);
 
-        // ✅ تعديل أمان: تأخير بسيط ومحاولة آمنة لتجنب أخطاء الأجهزة
         await Future.delayed(const Duration(milliseconds: 300));
         try {
           await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
@@ -235,14 +259,20 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       print("Error releasing LiveKit room: $e");
     }
 
-    if (mounted) {
+    // ✅ استدعاء Callback الخاص بالـ Knowledge Base لإغلاق الشاشة بأمان
+    if (widget.onCallEnded != null) {
+      widget.onCallEnded!();
+    } else if (mounted) {
       Navigator.pop(context);
     }
   }
 
   @override
   void dispose() {
-    _endCall();
+    _durationTimer?.cancel();
+    _timeoutTimer?.cancel();
+    _listener?.dispose();
+    _room?.disconnect();
     super.dispose();
   }
 
@@ -255,7 +285,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ استخدام PopScope بدلاً من WillPopScope القديم
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -264,6 +293,9 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       child: Scaffold(
         backgroundColor: const Color(0xFF0F2027),
         body: SafeArea(
+          // ✅✅✅ الإصلاح #2 (السطر 299): حذفنا ويدجت AudioTrack من الـ Stack نهائياً
+          // لأن AudioTrack هو Mixin وليس Widget في مكتبة livekit_client،
+          // والصوت يُشغَّل تلقائياً من محرك WebRTC بمجرد الاشتراك في المسار.
           child: Column(
             children: [
               Container(

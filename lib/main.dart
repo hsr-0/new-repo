@@ -13,6 +13,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
+import 'package:flutter_callkit_incoming/entities/android_params.dart';
+import 'package:flutter_callkit_incoming/entities/ios_params.dart';
+import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:uuid/uuid.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
@@ -41,12 +45,32 @@ final ValueNotifier<Map<String, dynamic>?> activeChatNotifier = ValueNotifier(nu
 final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifier(null);
 final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifier(null);
 
-// دالة التوجيه الموحدة
+// =======================================================================
+// 🔥 دوال مساعدة للتحقق من نوع الرسالة (تقبل النص والرقم)
+// =======================================================================
+bool isVoipCall(dynamic data) {
+  if (data == null) return false;
+  final type = data['type'];
+  return type == 'voip_call' || type == 0 || type == '0';
+}
+
+bool isCancelCall(dynamic data) {
+  if (data == null) return false;
+  final type = data['type'];
+  return type == 'cancel_call' || type == 1 || type == '1';
+}
+
+// =======================================================================
+// 🔥 دالة التوجيه الموحدة
+// =======================================================================
 void handleNotificationClick(Map<String, dynamic> data) {
-  if (data['type'] == 'voip_call') {
+  print("🔔 [Notification Click] Type: ${data['type']}");
+
+  if (isVoipCall(data)) {
+    print("📞 [Notification Click] VoIP Call - Opening call screen");
     showIncomingCall(data);
   } else if (data['type'] == 'taxi_chat_message' || data['act'] == 'NEW_MESSAGE') {
-    print(" [Routing] توجيه لدردشة التاكسي - الرحلة: ${data['ride_id']}");
+    print("💬 [Routing] توجيه لدردشة التاكسي - الرحلة: ${data['ride_id']}");
     Future.delayed(const Duration(milliseconds: 1500), () {
       activeTaxiChatNotifier.value = data;
     });
@@ -62,66 +86,79 @@ void handleNotificationClick(Map<String, dynamic> data) {
 }
 
 // =======================================================================
-//  1. دوال مساعدة لإظهار المكالمة - تستخدم dynamic لتجنب مشاكل الأنواع
+// 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة باستخدام CallKitParams)
 // =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
 
-  dynamic params = <String, dynamic>{
-    'id': currentUuid,
-    'nameCaller': data['driver_name'] ?? 'مندوب بيتي',
-    'appName': 'منصة بيتي',
-    'avatar': data['driver_image'] ?? 'https://i.imgur.com/7k12epD.png',
-    'handle': data['customer_phone'] ?? 'اتصال وارد',
-    'type': 0, // 0 = مكالمة صوتية فقط
-    'duration': 45000,
-    'textAccept': 'رد',
-    'textDecline': 'رفض',
-    'extra': <String, dynamic>{
-      'room_name': data['room_name'],
-      'livekit_url': data['livekit_url'],
-      'token': data['token'],
-      'driver_name': data['driver_name'],
-      'order_id': data['order_id'],
-    },
-    'android': <String, dynamic>{
-      'isCustomNotification': false, // ✅ الإصلاح: استخدام الواجهة الافتراضية لضمان الظهور
-      'isShowLogo': true,
-      'ringtonePath': 'system_ringtone_default',
-      'backgroundColor': '#0955fa',
-      'actionColor': '#4CAF50',
-      'incomingCallNotificationChannelId': 'high_importance_channel', // ✅ الإصلاح: استخدام ID وليس Name
-    },
-    'ios': <String, dynamic>{
-      'iconName': 'CallKitLogo', // تأكد من وجود هذه الصورة في Assets.xcassets
-      'handleType': 'generic', // ✅ الإصلاح: يجب أن يكون generic أو phone وليس فارغاً
-      'supportsVideo': false, // ✅ الإصلاح: مكالمة صوتية فقط
-      'maximumCallGroups': 2,
-      'maximumCallsPerCallGroup': 1,
-      'audioSessionMode': 'voiceChat', // ✅ الإصلاح: وضع VoIP
-      'audioSessionActive': true,
-      'audioSessionPreferredSampleRate': 44100.0,
-      'audioSessionPreferredIOBufferDuration': 0.005,
-      'supportsDTMF': false,
-      'supportsHolding': false,
-      'supportsGrouping': false,
-      'supportsUngrouping': false,
-      // ✅ الإصلاح: حذف ringtonePath للآيفون ليستخدم نغمة النظام الافتراضية بدون Crash
-    },
-    'missedCallNotification': <String, dynamic>{
-      'showNotification': true,
-      'isShowCallback': true,
-      'subtitle': 'مكالمة فائتة',
-      'callbackText': 'عاود الاتصال',
-    },
-  };
+  // استخراج البيانات مع دعم الحقول المختلفة (للآيفون والأندرويد)
+  final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
+  final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
+  final String driverImage = data['driver_image'] ?? data['avatar'] ?? 'https://i.imgur.com/7k12epD.png';
+  final String roomName = data['room_name'] ?? '';
+  final String livekitUrl = data['livekit_url'] ?? 'wss://call.beytei.com';
+  final String token = data['token'] ?? '';
+  final String orderId = data['order_id']?.toString() ?? '';
 
-  await FlutterCallkitIncoming.showCallkitIncoming(params as dynamic);
+  print("📞 [Show Call] Driver: $driverName, Room: $roomName");
+
+  // ✅ استخدام CallKitParams مع المعاملات الصحيحة
+  final params = CallKitParams(
+    id: currentUuid,
+    nameCaller: driverName,
+    appName: 'منصة بيتي',
+    avatar: driverImage,
+    handle: driverPhone,
+    type: 0,
+    duration: 45000,
+    extra: {
+      'room_name': roomName,
+      'livekit_url': livekitUrl,
+      'token': token,
+      'driver_name': driverName,
+      'driver_phone': driverPhone,
+      'driver_image': driverImage,
+      'order_id': orderId,
+    },
+    android: AndroidParams(
+      isCustomNotification: true,
+      isShowLogo: true,
+      ringtonePath: 'system_ringtone_default',
+      backgroundColor: '#0955fa',
+      actionColor: '#4CAF50',
+      // ✅ استخدام المعامل الصحيح بدلاً من incomingCallNotificationChannelId
+
+      // بدلاً من notificationChannelId
+// أو
+
+
+    ),
+    ios: const IOSParams(
+      iconName: 'CallKitLogo',
+      handleType: 'generic',
+      supportsVideo: false,
+      maximumCallGroups: 2,
+      maximumCallsPerCallGroup: 1,
+      audioSessionMode: 'voiceChat',
+      audioSessionActive: true,
+      audioSessionPreferredSampleRate: 44100.0,
+      audioSessionPreferredIOBufferDuration: 0.005,
+      supportsDTMF: false,
+      supportsHolding: false,
+      supportsGrouping: false,
+      supportsUngrouping: false,
+    ),
+    missedCallNotification: const NotificationParams(
+      showNotification: true,
+      isShowCallback: true,
+      subtitle: 'مكالمة فائتة',
+      callbackText: 'عاود الاتصال',
+    ),
+  );
+
+  await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
-
-
-
 // =======================================================================
 // 🔥 2. معالج الخلفية
 // =======================================================================
@@ -129,13 +166,16 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   print("🔥 [Background] Handling a background message: ${message.messageId}");
+  print("🔥 [Background] Data: ${message.data}");
 
-  if (message.data['type'] == 'cancel_call') {
+  if (isCancelCall(message.data)) {
+    print("❌ [Background] Cancel call received");
     await FlutterCallkitIncoming.endAllCalls();
     return;
   }
 
-  if (message.data['type'] == 'voip_call') {
+  if (isVoipCall(message.data)) {
+    print("📞 [Background] VoIP call received - showing incoming call");
     await showIncomingCall(message.data);
   }
 }
@@ -143,7 +183,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 void _showLocalNotification(RemoteMessage message) {
-  if (message.data['type'] == 'voip_call') return;
+  if (isVoipCall(message.data)) return;
 
   final String title = message.notification?.title ?? message.data['title'] ?? 'تحديث من منصة بيتي';
   final String body = message.notification?.body ?? message.data['body'] ?? 'لديك تحديث جديد بخصوص طلبك.';
@@ -188,7 +228,7 @@ Future<void> _saveAndRegisterToken(String token) async {
       voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
       if (voipToken != null && voipToken.isNotEmpty) {
         await prefs.setString('voip_token', voipToken);
-        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح");
+        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: $voipToken");
       }
     } catch (e) {
       print("⚠️ فشل جلب توكن VoIP: $e");
@@ -307,13 +347,16 @@ void main() async {
 
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
     print("🔔 [FCM] Received message in foreground");
+    print("🔔 [FCM] Data: ${message.data}");
 
-    if (message.data['type'] == 'cancel_call') {
+    if (isCancelCall(message.data)) {
+      print("❌ [Foreground] Cancel call received");
       await FlutterCallkitIncoming.endAllCalls();
       return;
     }
 
-    if (message.data['type'] == 'voip_call') {
+    if (isVoipCall(message.data)) {
+      print("📞 [Foreground] VoIP call received");
       showIncomingCall(message.data);
     } else {
       _showLocalNotification(message);
@@ -321,6 +364,7 @@ void main() async {
   });
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    print("🔔 [Message Opened] Data: ${message.data}");
     handleNotificationClick(message.data);
   });
 
@@ -394,41 +438,39 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _checkTerminatedCall() async {
     try {
-      // ✅ استخدام dynamic لتجنب مشاكل الأنواع
       dynamic calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is List && calls.isNotEmpty) {
         print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فوراً...");
-        // ✅ تحويل العنصر الأول إلى Map بأمان
         var firstCall = calls.first;
         if (firstCall is Map) {
           activeCallNotifier.value = Map<String, dynamic>.from(firstCall);
         }
       }
     } catch (e) {
-      print("⚠️ Error checking active calls: $e");
+      print("️ Error checking active calls: $e");
     }
   }
 
-  // ✅ معالج الأحداث المرن - يعمل مع جميع الإصدارات
+  // ✅ معالج الأحداث المحدث والآمن
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((dynamic event) async {
       if (event == null) return;
+
+      print("📞 [CallKit Event] Received: $event");
 
       String? eventType;
       Map<String, dynamic>? eventData;
 
       try {
-        // محاولة 1: النسخة الجديدة (CallEvent object مع properties)
+        // محاولة 1: النسخة الجديدة (CallEvent object)
         if (event is Object && event.toString().contains('CallEvent')) {
           try {
-            // استخدام dynamic access
             var eventObj = event as dynamic;
             eventType = eventObj.event?.toString();
             eventData = eventObj.body is Map
                 ? Map<String, dynamic>.from(eventObj.body)
                 : null;
           } catch (_) {
-            // محاولة access كـ Map
             try {
               var mapEvent = event as Map;
               eventType = mapEvent['event']?.toString();
@@ -446,11 +488,13 @@ class _MyAppState extends State<MyApp> {
               : null;
         }
       } catch (e) {
-        print("️ Failed to parse event: $e");
+        print("⚠️ Failed to parse event: $e");
         return;
       }
 
       if (eventType == null) return;
+
+      print("📞 [CallKit Event] Type: $eventType, Data: $eventData");
 
       // معالجة الأحداث
       if (eventType.contains('Accept') || eventType == 'actionCallAccept') {
@@ -484,7 +528,8 @@ class _MyAppState extends State<MyApp> {
       'roomName': extraData['room_name']?.toString() ?? rawData['room_name']?.toString() ?? '',
       'livekitUrl': extraData['livekit_url']?.toString() ?? rawData['livekit_url']?.toString() ?? 'wss://call.beytei.com',
       'token': extraData['token']?.toString() ?? rawData['token']?.toString() ?? '',
-      'driverName': extraData['driver_name']?.toString() ?? rawData['driver_name']?.toString() ?? 'كابتن بيتي',
+      'driverName': extraData['driver_name']?.toString() ?? rawData['driver_name']?.toString() ??
+          extraData['nameCaller']?.toString() ?? rawData['nameCaller']?.toString() ?? 'كابتن بيتي',
     };
   }
 
@@ -549,8 +594,11 @@ class _MyAppState extends State<MyApp> {
                   final extractedData = _extractCallData(callData);
 
                   if (extractedData['roomName']!.isEmpty || extractedData['token']!.isEmpty) {
+                    print("⚠️ [Call Screen] Missing roomName or token");
                     return const SizedBox.shrink();
                   }
+
+                  print("📞 [Call Screen] Opening with room: ${extractedData['roomName']}");
 
                   return ActiveVoiceCallScreen(
                     roomName: extractedData['roomName']!,
@@ -769,6 +817,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (mounted) {
         setState(() => _localUserJoined = true);
 
+        // ✅✅✅ الإصلاح: استخدام .values.first بدلاً من .first
         if (_room!.remoteParticipants.isNotEmpty) {
           setState(() => _isDriverConnected = true);
           _timeoutTimer?.cancel();
@@ -864,10 +913,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        _endCall();
-        return false;
+    // ✅ استخدام PopScope الحديث بدلاً من WillPopScope القديم
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _endCall();
       },
       child: Scaffold(
         backgroundColor: const Color(0xFF0F2027),

@@ -46,8 +46,8 @@ android {
         applicationId = "co.median.android.wqwnby"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
-        versionCode = 82
-        versionName = "1.8.2"
+        versionCode = 84
+        versionName = "1.8.4"
     }
 
     // --- هذا هو الجزء المطلوب حله للمشكلة ---

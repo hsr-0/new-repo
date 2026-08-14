@@ -11318,12 +11318,10 @@ class HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // ✅ الحل الجذري: قراءة المنطقة فوراً قبل بناء الواجهة لتجنب ظهور "يرجى تحديد منطقة"
     _loadAreaFromPrefs();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
   }
 
-  // ✅ دالة جديدة: قراءة المنطقة فوراً من الذاكرة المحلية (بأقصى سرعة)
   Future<void> _loadAreaFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
@@ -11341,7 +11339,6 @@ class HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
 
-    // ✅ تعيين القيم فوراً قبل أي await طويل (حماية إضافية)
     final areaId = prefs.getInt('selectedAreaId');
     final areaName = prefs.getString('selectedAreaName');
 
@@ -11359,9 +11356,17 @@ class HomeScreenState extends State<HomeScreen> {
       provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
       provider.fetchOffers(_selectedAreaId!);
 
-      // 🔥 استدعاء بيانات الحملة المميزة (بدون await لتسريع الواجهة)
       final premiumProvider = Provider.of<PremiumCampaignProvider>(context, listen: false);
-      premiumProvider.fetchCampaignConfig(_selectedAreaId!); // 👈 إزالة await
+
+      // 🔥 الحل الجذري للنافذة المنبثقة: انتظار التحميل ثم إظهارها بأمان
+      premiumProvider.fetchCampaignConfig(_selectedAreaId!).then((_) {
+        if (mounted && premiumProvider.shouldShowPopup && premiumProvider.config != null) {
+          final String popupImage = premiumProvider.config!['popup_image']?.toString() ?? '';
+          if (popupImage.isNotEmpty) {
+            _showCampaignPopup(context, premiumProvider);
+          }
+        }
+      });
     }
   }
 
@@ -11370,6 +11375,85 @@ class HomeScreenState extends State<HomeScreen> {
       Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => SearchScreen(searchQuery: query, selectedAreaId: _selectedAreaId!)));
     }
+  }
+
+  // 🔥 دالة النافذة المنبثقة المعدلة (مع زر اطلب الآن)
+  void _showCampaignPopup(BuildContext context, PremiumCampaignProvider premium) {
+    // تأشير أنه تم العرض لكي لا تظهر مرة أخرى في نفس الجلسة
+    premium.markPopupAsShown();
+
+    showDialog(
+        context: context,
+        builder: (ctx) {
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            insetPadding: const EdgeInsets.all(20),
+            child: Stack(
+              alignment: Alignment.topRight,
+              children: [
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // صورة البانر
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: CachedNetworkImage(
+                        imageUrl: premium.config!['popup_image'],
+                        fit: BoxFit.contain,
+                        placeholder: (context, url) => const Center(child: Padding(
+                          padding: EdgeInsets.all(40.0),
+                          child: CircularProgressIndicator(color: Colors.amber),
+                        )),
+                        errorWidget: (context, url, error) => const SizedBox.shrink(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // 🔥 زر "اطلب الآن"
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(ctx); // إغلاق النافذة
+                          // توجيه الزبون إلى قسم المطاعم المميزة المشمولة بالعرض
+                          setState(() {
+                            _activeMainCategory = 'premium';
+                          });
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.amber.shade600,
+                          foregroundColor: Colors.black87,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                          elevation: 4,
+                        ),
+                        child: const Text(
+                            "اطلب الآن 🔥",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                        ),
+                      ),
+                    )
+                  ],
+                ),
+                // زر إغلاق النافذة (X)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(ctx),
+                    child: Container(
+                      margin: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(6),
+                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: const Icon(Icons.close, color: Colors.white, size: 20),
+                    ),
+                  ),
+                )
+              ],
+            ),
+          );
+        }
+    );
   }
 
   @override
@@ -11391,14 +11475,14 @@ class HomeScreenState extends State<HomeScreen> {
                     onRetry: () => provider.fetchHomeData(_selectedAreaId!, isRefresh: true));
               }
 
+              // (تم إزالة استدعاء النافذة المنبثقة من هنا لأننا نقلناه إلى _loadInitialData)
+
               final allStores = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
 
-              // 🔥 فلترة ذكية حسب التصنيف
               List<Restaurant> filteredStores = allStores.where((store) {
                 if (_activeMainCategory == 'all') return true;
                 if (_activeMainCategory == 'offers') return false;
 
-                // 🔥 فلترة قسم المطاعم المميزة بناءً على الـ API
                 if (_activeMainCategory == 'premium') {
                   final includedIds = List<int>.from(premiumProvider.config?['included_restaurants'] ?? []);
                   return includedIds.isEmpty ? true : includedIds.contains(store.id);
@@ -11416,7 +11500,6 @@ class HomeScreenState extends State<HomeScreen> {
                 child: CustomScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   slivers: [
-                    // 1. شريط البحث
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 10, 16, 15),
@@ -11424,7 +11507,6 @@ class HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
 
-                    // 2. الأيقونات الرئيسية (Sticky Header)
                     SliverPersistentHeader(
                       pinned: true,
                       floating: false,
@@ -11433,12 +11515,7 @@ class HomeScreenState extends State<HomeScreen> {
                           padding: const EdgeInsets.only(bottom: 5, top: 5),
                           decoration: const BoxDecoration(
                             color: Color(0xFFF9F9F9),
-                            border: Border(
-                              bottom: BorderSide(
-                                color: Color(0xFF00BCD4),
-                                width: 2.0,
-                              ),
-                            ),
+                            border: Border(bottom: BorderSide(color: Color(0xFF00BCD4), width: 2.0)),
                           ),
                           child: _buildTopCategories(premiumProvider.config != null),
                         ),
@@ -11446,25 +11523,18 @@ class HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
 
-                    // 3. المحتوى المتغير (عروض ومطاعم)
                     SliverToBoxAdapter(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 20),
 
-                          // ==========================================
-                          // 🔥 القسم الأول: العروض الحصرية
-                          // ==========================================
                           if (provider.activeOffers.isNotEmpty && (_activeMainCategory == 'all' || _activeMainCategory == 'offers')) ...[
-                            // 🎯 الحالة 1: في الصفحة الرئيسية (all) - عرض أفقي قابل للتمرير بالكامل
                             if (_activeMainCategory == 'all') ...[
-                              const Center(
-                                child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
-                              ),
+                              const Center(child: Text("عروض حصرية 🔥", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87))),
                               const SizedBox(height: 12),
                               SizedBox(
-                                height: 200, // ارتفاع مناسب للبطاقات
+                                height: 200,
                                 child: ListView.builder(
                                   scrollDirection: Axis.horizontal,
                                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -11472,17 +11542,13 @@ class HomeScreenState extends State<HomeScreen> {
                                   itemBuilder: (ctx, i) => Container(
                                     width: 150,
                                     margin: const EdgeInsets.only(left: 12),
-                                    child: ModernOfferCard(
-                                      offer: provider.activeOffers[i],
-                                      allStores: allStores,
-                                    ),
+                                    child: ModernOfferCard(offer: provider.activeOffers[i], allStores: allStores),
                                   ),
                                 ),
                               ),
                               const SizedBox(height: 25),
                             ],
 
-                            // 🎯 الحالة 2: عند الضغط على أيقونة "عروض" - عرض جميع العروض في Grid
                             if (_activeMainCategory == 'offers') ...[
                               const Padding(
                                 padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
@@ -11496,23 +11562,17 @@ class HomeScreenState extends State<HomeScreen> {
                                   shrinkWrap: true,
                                   padding: const EdgeInsets.symmetric(horizontal: 16),
                                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 2,
-                                    childAspectRatio: 0.70,
-                                    crossAxisSpacing: 10,
-                                    mainAxisSpacing: 10,
+                                    crossAxisCount: 2, childAspectRatio: 0.70, crossAxisSpacing: 10, mainAxisSpacing: 10,
                                   ),
                                   itemCount: provider.activeOffers.length,
-                                  itemBuilder: (ctx, i) => ModernOfferCard(
-                                    offer: provider.activeOffers[i],
-                                    allStores: allStores,
-                                  ),
+                                  itemBuilder: (ctx, i) => ModernOfferCard(offer: provider.activeOffers[i], allStores: allStores),
                                 ),
                               const SizedBox(height: 30),
                             ],
                           ],
 
                           // ==========================================
-                          // 🎁 القسم الثاني: الحملة التسويقية (خصومات حصرية الك)
+                          // 🎁 القسم الثاني: الحملة التسويقية (خصومات حصرية)
                           // ==========================================
                           if (premiumProvider.config != null && _activeMainCategory == 'all') ...[
                             Builder(builder: (context) {
@@ -11521,20 +11581,24 @@ class HomeScreenState extends State<HomeScreen> {
 
                               if (premiumStores.isEmpty) return const SizedBox.shrink();
 
-                              // 🔥 قراءة قيمة الخصم الحقيقية
+                              // 🔥 قراءة القيم من السيرفر
                               double discountValue = double.tryParse(premiumProvider.config!['discount_value'].toString()) ?? 0.0;
                               String discountType = premiumProvider.config!['discount_type'] ?? 'percent';
+                              double discountedDeliveryFee = double.tryParse(premiumProvider.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0;
 
-                              // 🔥 هل الخصم صفر؟ (الهدية المجانية لا تُعتبر صفراً)
-                              bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item');
+                              // 🔥 تصحيح منطق الصندوق والمجاني
+                              bool isBoxReward = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee');
 
                               // 🔥 تجهيز النص حسب الحالة
                               String discountText = "";
-                              if (!isZeroDiscount) {
+                              if (!isBoxReward) {
                                 if (discountType == 'percent') {
                                   discountText = "خصم ${discountValue.toInt()}%";
                                 } else if (discountType == 'fixed') {
                                   discountText = "خصم ${NumberFormat('#,###').format(discountValue)} د.ع";
+                                } else if (discountType == 'delivery_fee') {
+                                  // 🔥 السطر المسؤول عن إظهار "توصيل بـ 500 د.ع"
+                                  discountText = "توصيل بـ ${discountedDeliveryFee.toInt()} د.ع 🚚";
                                 } else {
                                   discountText = "هدية مجانية 🎁";
                                 }
@@ -11558,7 +11622,7 @@ class HomeScreenState extends State<HomeScreen> {
                                           return Container(
                                             width: 150,
                                             margin: const EdgeInsets.only(left: 12),
-                                            child: _buildPremiumStoreCard(store, discountText, context, isZeroDiscount: isZeroDiscount),
+                                            child: _buildPremiumStoreCard(store, discountText, context, isBoxReward: isBoxReward),
                                           );
                                         }
                                     ),
@@ -11577,7 +11641,6 @@ class HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
 
-                          // Shimmer Skeleton عصري
                           if (provider.isLoadingHome && filteredStores.isEmpty)
                             _buildHomeShimmer()
                           else if (filteredStores.isEmpty)
@@ -11588,10 +11651,7 @@ class HomeScreenState extends State<HomeScreen> {
                               shrinkWrap: true,
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2,
-                                childAspectRatio: 0.75,
-                                crossAxisSpacing: 12,
-                                mainAxisSpacing: 12,
+                                crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 12, mainAxisSpacing: 12,
                               ),
                               itemCount: filteredStores.length,
                               itemBuilder: (ctx, i) => RestaurantCard(restaurant: filteredStores[i]),
@@ -11610,16 +11670,14 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🔥 ويدجت بناء بطاقة المطعم للحملة التسويقية (مع دعم خصم 0 = صندوق الهدايا)
-  Widget _buildPremiumStoreCard(Restaurant restaurant, String discountText, BuildContext context, {bool isZeroDiscount = false}) {
+  Widget _buildPremiumStoreCard(Restaurant restaurant, String discountText, BuildContext context, {bool isBoxReward = false}) {
     bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
 
-    // 🔥 تغيير الألوان والأيقونة حسب نوع الرسالة
-    Color badgeBgColor = isZeroDiscount ? Colors.amber.shade50 : Colors.red.shade50;
-    Color badgeBorderColor = isZeroDiscount ? Colors.amber.shade400 : Colors.red.shade400;
-    Color badgeTextColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
-    IconData badgeIcon = isZeroDiscount ? Icons.inventory_2 : Icons.local_fire_department;
-    String displayText = isZeroDiscount ? "اطلب وربح  🎁" : discountText;
+    Color badgeBgColor = isBoxReward ? Colors.amber.shade50 : Colors.red.shade50;
+    Color badgeBorderColor = isBoxReward ? Colors.amber.shade400 : Colors.red.shade400;
+    Color badgeTextColor = isBoxReward ? Colors.amber.shade800 : Colors.red.shade700;
+    IconData badgeIcon = isBoxReward ? Icons.inventory_2 : Icons.local_fire_department;
+    String displayText = isBoxReward ? "اطلب وربح  🎁" : discountText;
 
     return GestureDetector(
       onTap: () {
@@ -11633,7 +11691,7 @@ class HomeScreenState extends State<HomeScreen> {
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         elevation: 4,
-        shadowColor: (isZeroDiscount ? Colors.amber : Colors.red).withOpacity(0.3),
+        shadowColor: (isBoxReward ? Colors.amber : Colors.red).withOpacity(0.3),
         child: Stack(
           children: [
             Column(
@@ -11706,17 +11764,11 @@ class HomeScreenState extends State<HomeScreen> {
         physics: const NeverScrollableScrollPhysics(),
         shrinkWrap: true,
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.75,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
+          crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 12, mainAxisSpacing: 12,
         ),
         itemCount: 6,
         itemBuilder: (_, __) => Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(15),
-          ),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15)),
         ),
       ),
     );
@@ -11795,10 +11847,7 @@ class HomeScreenState extends State<HomeScreen> {
   Widget _buildModernSearchBar() {
     return Container(
       height: 45,
-      decoration: BoxDecoration(
-        color: Colors.grey.shade200,
-        borderRadius: BorderRadius.circular(10),
-      ),
+      decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(10)),
       child: TextField(
         controller: _searchController,
         textInputAction: TextInputAction.search,
@@ -11814,7 +11863,6 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 🔥 استقبال حالة العرض الديناميكية (hasPremiumCampaign)
   Widget _buildTopCategories(bool hasPremiumCampaign) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 5.0),
@@ -11824,13 +11872,11 @@ class HomeScreenState extends State<HomeScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 🔥 إضافة أيقونة المطاعم المميزة ديناميكياً فقط إذا كان العرض مفعل
             if (hasPremiumCampaign)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4.0),
                 child: _buildCategoryImage(
-                  title: "اربح وياطلبك 🌟",
-                  imagePath: 'assets/icon/premium_icon.png',
+                  title: "اربح وياطلبك 🌟", imagePath: 'assets/icon/premium_icon.png',
                   isSelected: _activeMainCategory == 'premium',
                   onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'premium' ? 'all' : 'premium'),
                 ),
@@ -11839,8 +11885,7 @@ class HomeScreenState extends State<HomeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "المطاعم",
-                imagePath: 'assets/icon/restaurant_icon.png',
+                title: "المطاعم", imagePath: 'assets/icon/restaurant_icon.png',
                 isSelected: _activeMainCategory == 'restaurant',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'restaurant' ? 'all' : 'restaurant'),
               ),
@@ -11848,8 +11893,7 @@ class HomeScreenState extends State<HomeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "مسواك",
-                imagePath: 'assets/icon/market_icon.png',
+                title: "مسواك", imagePath: 'assets/icon/market_icon.png',
                 isSelected: _activeMainCategory == 'market',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'market' ? 'all' : 'market'),
               ),
@@ -11857,8 +11901,7 @@ class HomeScreenState extends State<HomeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "عروض",
-                imagePath: 'assets/icon/offer_icon.png',
+                title: "عروض", imagePath: 'assets/icon/offer_icon.png',
                 isSelected: _activeMainCategory == 'offers',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'offers' ? 'all' : 'offers'),
               ),
@@ -11866,8 +11909,7 @@ class HomeScreenState extends State<HomeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "مرطبات وحلويات",
-                imagePath: 'assets/icon/grocery_icon.png',
+                title: "مرطبات وحلويات", imagePath: 'assets/icon/grocery_icon.png',
                 isSelected: _activeMainCategory == 'grocery',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'grocery' ? 'all' : 'grocery'),
               ),
@@ -11875,8 +11917,7 @@ class HomeScreenState extends State<HomeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "دجاج ولحوم",
-                imagePath: 'assets/icon/meat_icon.png',
+                title: "دجاج ولحوم", imagePath: 'assets/icon/meat_icon.png',
                 isSelected: _activeMainCategory == 'meat',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'meat' ? 'all' : 'meat'),
               ),
@@ -11884,8 +11925,7 @@ class HomeScreenState extends State<HomeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "خبز وافران",
-                imagePath: 'assets/icon/pastry_icon.png',
+                title: "خبز وافران", imagePath: 'assets/icon/pastry_icon.png',
                 isSelected: _activeMainCategory == 'pastry',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'pastry' ? 'all' : 'pastry'),
               ),
@@ -11903,8 +11943,7 @@ class HomeScreenState extends State<HomeScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 52,
-            height: 52,
+            width: 52, height: 52,
             decoration: BoxDecoration(
               color: isSelected ? Colors.cyan.shade50 : Colors.transparent,
               borderRadius: BorderRadius.circular(14),
@@ -11912,26 +11951,15 @@ class HomeScreenState extends State<HomeScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.asset(
-                imagePath,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => const Icon(Icons.image_not_supported, color: Colors.grey, size: 24),
-              ),
+              child: Image.asset(imagePath, fit: BoxFit.cover, errorBuilder: (c, e, s) => const Icon(Icons.image_not_supported, color: Colors.grey, size: 24)),
             ),
           ),
           const SizedBox(height: 4),
           SizedBox(
             width: 60,
             child: Text(
-              title,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.visible,
-              style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                  color: Colors.black87
-              ),
+              title, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.visible,
+              style: TextStyle(fontSize: 10, fontWeight: isSelected ? FontWeight.bold : FontWeight.w600, color: Colors.black87),
             ),
           ),
         ],
@@ -11939,6 +11967,8 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+
 
 // =======================================================================
 // --- كلاس مساعد لتثبيت الأقسام في أعلى الشاشة (Sticky Header) ---
@@ -16182,11 +16212,10 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
   bool _isLoading = true;
   Map<String, dynamic>? _prizeData;
 
-  // 🔥 متحركات الأنيميشن والصوت
+  // 🔥 متحركات الأنيميشن (بدون صوت)
   late AnimationController _shakeCtrl;
   late AnimationController _openCtrl;
   late Animation<double> _shakeAnimation;
-  final AudioPlayer _player = AudioPlayer();
 
   @override
   void initState() {
@@ -16216,18 +16245,19 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
       // 🔥 هنا يتم استدعاء دالة فتح الصندوق من الـ Provider أو ApiService الخاص بك
       // مثال: final result = await Provider.of<SmartWalletProvider>(context, listen: false).openBox(widget.boxType, widget.areaId);
 
-      // محاكاة تأخير الشبكة والأنيميشن (استبدل هذا باستدعاء الـ API الفعلي لديك)
+      // محاكاة تأخير الشبكة والأنيميشن
       await Future.delayed(const Duration(seconds: 2));
 
-      setState(() {
-        _isLoading = false;
-        _isOpen = true;
-        // _prizeData = result; // قم بتعيين البيانات الحقيقية هنا
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isOpen = true;
+          // _prizeData = result; // قم بتعيين البيانات الحقيقية هنا
+        });
 
-      // تشغيل أنيميشن الفتح والصوت
-      _openCtrl.forward();
-      await _player.play(AssetSource('sounds/box_open.mp3')); // تأكد من وجود الملف في assets
+        // تشغيل أنيميشن الفتح (تمت إزالة كود تشغيل الصوت من هنا)
+        _openCtrl.forward();
+      }
 
     } catch (e) {
       if (mounted) {
@@ -16245,10 +16275,9 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
     _shakeCtrl.stop();
     _openCtrl.stop();
 
-    // 2. إيقاف الصوت فوراً
-    _player.stop();
+    // (تمت إزالة إيقاف الصوت من هنا)
 
-    // 3. الانتقال للشاشة الجديدة ومسح شاشة الأنيميشن من الذاكرة تماماً
+    // 2. الانتقال للشاشة الجديدة ومسح شاشة الأنيميشن من الذاكرة تماماً
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => destinationScreen),
           (route) => route.isFirst, // يعود للشاشة الرئيسية ثم يفتح الشاشة الجديدة فوقها
@@ -16260,7 +16289,7 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
     // تنظيف الموارد عند إغلاق الشاشة بأي طريقة
     _shakeCtrl.dispose();
     _openCtrl.dispose();
-    _player.dispose();
+    // (تمت إزالة تنظيف الصوت من هنا)
     super.dispose();
   }
 
@@ -16327,7 +16356,7 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
               },
             ),
 
-            // 🔥🔥🔥 هنا التعديل الجذري لحل مشكلة التعليق وإضافة الأزرار الواضحة 🔥🔥🔥
+            // 🔥🔥🔥 الأزرار الواضحة 🔥🔥🔥
             if (_isOpen)
               Positioned(
                 bottom: 80,
@@ -16366,10 +16395,9 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
                       height: 50,
                       child: OutlinedButton.icon(
                         onPressed: () {
-                          // 1. إيقاف الأنيميشن والصوت
+                          // 1. إيقاف الأنيميشن
                           _shakeCtrl.stop();
                           _openCtrl.stop();
-                          _player.stop();
 
                           // 2. العودة للشاشة الرئيسية
                           Navigator.of(context).popUntil((route) => route.isFirst);
@@ -16377,8 +16405,7 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
                           // 3. تحويل التبويب تلقائياً إلى السلة (رقم 3 هو السلة حسب نظامك)
                           Future.delayed(const Duration(milliseconds: 100), () {
                             if (mounted) {
-                              // استبدل NavigationProvider بالمزود الصحيح في تطبيقك
-                              // Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
+                              Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
                             }
                           });
                         },
@@ -16402,7 +16429,6 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
     );
   }
 }
-
 
 class CustomerChatPage extends StatefulWidget {
   final String orderId;
