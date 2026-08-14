@@ -41,8 +41,7 @@ dependencies:
   firebase_performance: ^0.10.0
   firebase_dynamic_links: ^6.0.0
   google_fonts: ^8.0.2
-
-  livekit_client: ^2.9.0
+  livekit_client: ^2.11.0
 
   uuid: ^4.3.3
 
