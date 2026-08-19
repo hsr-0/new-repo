@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
-// --- مكتبات الخرائط ---
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
 
@@ -21,10 +20,9 @@ class PolyLineMapScreen extends StatefulWidget {
 }
 
 class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProviderStateMixin {
-  ml.MaplibreMapController? _freeMapController;
+  ml.MapLibreMapController? _freeMapController;
   bool isFreeMapStyleLoaded = false;
 
-  // ✅ متغيرات لحفظ الماركرز والخطوط لمنع مسح الخريطة بالكامل
   ml.Line? _routeLine;
   ml.Symbol? _pickupMarker;
   ml.Symbol? _destMarker;
@@ -60,10 +58,26 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
     await _freeMapController!.addImage('pickup_icon', pickupBytes.buffer.asUint8List());
     final ByteData destBytes = await rootBundle.load(MyIcons.mapMarkerIcon);
     await _freeMapController!.addImage('dest_icon', destBytes.buffer.asUint8List());
+
+    // 🔥 احتياطي: تحميل أيقونات السائق هنا أيضاً لضمان عدم فشل الرسم
+    try {
+      final ByteData carBytes = await rootBundle.load('assets/images/car.png');
+      await _freeMapController!.addImage('car_icon', carBytes.buffer.asUint8List());
+      final ByteData tuktukBytes = await rootBundle.load('assets/images/tuktuk.png');
+      await _freeMapController!.addImage('tuktuk_icon', tuktukBytes.buffer.asUint8List());
+    } catch (e) {
+      print('⚠️ Error loading driver icons in PolyLineMapScreen: $e');
+    }
   }
 
   Future<void> _updateMapUI(RideMapController controller) async {
     if (!isMapReady) return;
+
+    // 🔥🔥🔥 شرط الحماية الجذري: يمنع إعادة رسم المسار والماركرز الثابتة عند كل تحديث للسائق
+    if (_routeLine != null || _pickupMarker != null || _destMarker != null) {
+      return;
+    }
+
     if (Platform.isIOS) {
       _updateAppleUI(controller);
     } else {
@@ -109,11 +123,6 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
   void _updateMapLibreUI(RideMapController controller) async {
     if (_freeMapController == null || !isFreeMapStyleLoaded) return;
 
-    // ✅ مسح عناصر المسار القديمة فقط (للحفاظ على أيقونات السائقين)
-    if (_routeLine != null) await _freeMapController!.removeLine(_routeLine!);
-    if (_pickupMarker != null) await _freeMapController!.removeSymbol(_pickupMarker!);
-    if (_destMarker != null) await _freeMapController!.removeSymbol(_destMarker!);
-
     if (controller.polylineCoordinates.isNotEmpty) {
       final List<ml.LatLng> line = controller.polylineCoordinates
           .map((e) => ml.LatLng(e.latitude, e.longitude))
@@ -126,9 +135,6 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
         lineColor: hexColor,
         lineWidth: 5.0,
         lineOpacity: 1.0,
-        // ✅ إذا استمر الخطأ في lineJoin، قم بحذف السطرين التاليين:
-        // lineJoin: "round",
-        // lineCap: "round",
       ));
       _fitCameraToBoundsUnified(controller.polylineCoordinates);
     }
@@ -137,8 +143,8 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
       _pickupMarker = await _freeMapController!.addSymbol(ml.SymbolOptions(
         geometry: ml.LatLng(controller.pickupLatLng.latitude, controller.pickupLatLng.longitude),
         iconImage: 'pickup_icon',
-        iconSize: 0.25, // ✅ حجم صغير واحترافي
-        iconAnchor: 'bottom', // مسمار الدبوس في الأسفل
+        iconSize: 0.25,
+        iconAnchor: 'bottom',
       ));
     }
 
@@ -146,7 +152,7 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
       _destMarker = await _freeMapController!.addSymbol(ml.SymbolOptions(
         geometry: ml.LatLng(controller.destinationLatLng.latitude, controller.destinationLatLng.longitude),
         iconImage: 'dest_icon',
-        iconSize: 0.25, // ✅ حجم صغير واحترافي
+        iconSize: 0.25,
         iconAnchor: 'bottom',
       ));
     }
@@ -177,7 +183,6 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
     return Scaffold(
       body: GetBuilder<RideMapController>(
         builder: (controller) {
-          // التخلص من موقع الكوت الافتراضي واستخدام موقع الزبون
           final initialLat = (controller.pickupLatLng.latitude == 0) ? 33.3152 : controller.pickupLatLng.latitude;
           final initialLng = (controller.pickupLatLng.longitude == 0) ? 44.3661 : controller.pickupLatLng.longitude;
 
@@ -190,14 +195,24 @@ class _PolyLineMapScreenState extends State<PolyLineMapScreen> with TickerProvid
               Platform.isIOS
                   ? ap.AppleMap(
                 initialCameraPosition: ap.CameraPosition(target: ap.LatLng(initialLat, initialLng), zoom: 14),
-                onMapCreated: (c) { appleController = c; setState(() => isMapReady = true); },
+                onMapCreated: (c) {
+                  appleController = c;
+                  setState(() => isMapReady = true);
+                  // 🔥 تمرير الـ Controller لـ RideMapController ليتمكن من رسم السائق فقط
+                  controller.setAppleController(c);
+                },
                 annotations: appleAnnotations, polylines: applePolylines,
                 myLocationEnabled: true, myLocationButtonEnabled: false,
               )
                   : ml.MapLibreMap(
                 styleString: 'https://tiles.openfreemap.org/styles/liberty',
                 initialCameraPosition: ml.CameraPosition(target: ml.LatLng(initialLat, initialLng), zoom: 14),
-                onMapCreated: (c) { _freeMapController = c; setState(() => isMapReady = true); },
+                onMapCreated: (c) {
+                  _freeMapController = c;
+                  setState(() => isMapReady = true);
+                  // 🔥 تمرير الـ Controller لـ RideMapController ليتمكن من رسم السائق فقط
+                  controller.setMapLibreController(c);
+                },
                 onStyleLoadedCallback: () async {
                   isFreeMapStyleLoaded = true;
                   await _loadMapLibreIcons();

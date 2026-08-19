@@ -11,14 +11,9 @@ import 'package:http/http.dart' as http;
 import 'package:geocoding/geocoding.dart';
 import 'package:latlong2/latlong.dart';
 
-// مكتبات الخرائط
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
-
-// 🔥 مكتبة Pusher Channels الرسمية (البديل الآمن والمستقر)
 import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
-
-// 🔥 استيراد ملف eco.dart الذي يحتوي على نسخة pusher العامة
 import 'package:cosmetic_store/taxi/lib/eco.dart';
 
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
@@ -74,40 +69,26 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     super.onClose();
   }
 
-  // =========================================================================
-  // 🔥 دوال تتبع السائق اللحظي (باستخدام pusher_channels_flutter)
-  // =========================================================================
   void startLiveTracking(String rideId) {
     _currentRideId = rideId;
-
-    // تنظيف أي اشتراك سابق
     if (_currentRideId != null) {
       pusher.unsubscribe(channelName: 'ride.$rideId');
     }
-
     print("🎧 [TRACKING] بدء الاستماع لموقع السائق للرحلة: $rideId");
 
-    // الاشتراك في القناة والاستماع للحدث
     pusher.subscribe(
       channelName: 'ride.$rideId',
       onEvent: (PusherEvent event) {
         try {
           final eventData = event.data;
-          if (eventData == null || eventData.isEmpty) {
-            print("⚠️ [WARNING] بيانات الحدث فارغة");
-            return;
-          }
+          if (eventData == null || eventData.isEmpty) return;
 
-          // فك تشفير البيانات بأمان
           final data = jsonDecode(eventData);
-
           double newLat = (data['latitude'] is num) ? (data['latitude'] as num).toDouble() : 0.0;
           double newLng = (data['longitude'] is num) ? (data['longitude'] as num).toDouble() : 0.0;
 
           if (newLat != 0.0 && newLng != 0.0) {
             print("🚗 [LIVE UPDATE] موقع جديد: $newLat, $newLng");
-
-            // 🚀 هنا السحر: نمرر الإحداثيات للدالة الموجودة لديك والتي تقوم بالأنيميشن تلقائياً
             updateDriverLocation(
               latLng: LatLng(newLat, newLng),
               isRunning: true,
@@ -115,7 +96,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
           }
         } catch (e) {
           print("❌ [ERROR] فشل في تحليل بيانات الموقع: $e");
-          print("البيانات الخام المستلمة: ${event.data}");
         }
       },
     );
@@ -125,10 +105,8 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     if (_currentRideId != null) {
       pusher.unsubscribe(channelName: 'ride.$rideId');
       _currentRideId = null;
-      print("🛑 [TRACKING] تم إيقاف الاستماع للرحلة: $rideId");
     }
   }
-  // =========================================================================
 
   Future<Uint8List> getBytesFromAsset(String path, int width) async {
     ByteData data = await rootBundle.load(path);
@@ -155,66 +133,32 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     mapLibreController = controller;
     isMapReady = true;
     loadVehicleImagesToMap();
-    _checkInitialData();
+    // ❌ تم إزالة _checkInitialData() لمنع التضارب مع PolyLineMapScreen
   }
 
   void setAppleController(ap.AppleMapController controller) {
     appleController = controller;
     isMapReady = true;
-    _checkInitialData();
+    // ❌ تم إزالة _checkInitialData() لمنع التضارب مع PolyLineMapScreen
   }
 
-  void _checkInitialData() {
-    if (pickupLatLng.latitude != 0 && destinationLatLng.latitude != 0) {
-      loadMap(pickup: pickupLatLng, destination: destinationLatLng);
-    }
-  }
-
-  void loadMap({required LatLng pickup, required LatLng destination, bool? isRunning = false}) async {
+  // =========================================================================
+  // 🔥 البديل الآمن لـ loadMap: تحديث البيانات فقط (الرسم مسؤولية PolyLineMapScreen)
+  // =========================================================================
+  void updateRideLocations({
+    required LatLng pickup,
+    required LatLng destination,
+    bool isRunning = false,
+  }) {
     pickupLatLng = pickup;
     destinationLatLng = destination;
     update();
-
-    if (!isMapReady) return;
-
-    await _drawStaticMarkers();
-    await getRouteFromOSRM();
-    fitPolylineBounds();
+    getRouteFromOSRM();
   }
 
-  Future<void> _drawStaticMarkers() async {
-    if (Platform.isIOS && appleController != null) {
-      appleAnnotations.removeWhere((a) => a.annotationId.value == 'pickup' || a.annotationId.value == 'destination');
-
-      final pickupIcon = await ap.BitmapDescriptor.fromAssetImage(const ImageConfiguration(size: Size(35, 35)), MyIcons.mapMarkerPickUpIcon);
-      final destIcon = await ap.BitmapDescriptor.fromAssetImage(const ImageConfiguration(size: Size(35, 35)), MyIcons.mapMarkerIcon);
-
-      appleAnnotations.add(ap.Annotation(annotationId:  ap.AnnotationId('pickup'), position: ap.LatLng(pickupLatLng.latitude, pickupLatLng.longitude), icon: pickupIcon));
-      appleAnnotations.add(ap.Annotation(annotationId:  ap.AnnotationId('destination'), position: ap.LatLng(destinationLatLng.latitude, destinationLatLng.longitude), icon: destIcon));
-    } else if (!Platform.isIOS && mapLibreController != null) {
-      if (pickupSymbol != null) await mapLibreController!.removeSymbol(pickupSymbol!);
-      if (destSymbol != null) await mapLibreController!.removeSymbol(destSymbol!);
-
-      pickupSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
-        geometry: ml.LatLng(pickupLatLng.latitude, pickupLatLng.longitude),
-        iconImage: 'pickup_icon',
-        iconSize: 0.15,
-      ));
-
-      destSymbol = await mapLibreController!.addSymbol(ml.SymbolOptions(
-        geometry: ml.LatLng(destinationLatLng.latitude, destinationLatLng.longitude),
-        iconImage: 'dest_icon',
-        iconSize: 0.15,
-      ));
-    }
-    update();
-  }
-
+  // 🔥 جلب المسار من OSRM وتخزينه في polylineCoordinates (بدون رسم)
   Future<void> getRouteFromOSRM() async {
-    if (!isMapReady) return;
-    isLoading = true;
-    update();
-
+    if (pickupLatLng.latitude == 0 || destinationLatLng.latitude == 0) return;
     try {
       final String url = 'https://router.project-osrm.org/route/v1/driving/'
           '${pickupLatLng.longitude},${pickupLatLng.latitude};'
@@ -227,40 +171,14 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
         final data = json.decode(response.body);
         if (data['routes'] != null && data['routes'].isNotEmpty) {
           final List coords = data['routes'][0]['geometry']['coordinates'];
-          polylineCoordinates = coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())).toList();
-          _drawPolylineUnified();
+          polylineCoordinates =
+              coords.map((c) => LatLng(c[1].toDouble(), c[0].toDouble())).toList();
+          print("🛣️ [Route] تم جلب المسار: ${polylineCoordinates.length} نقطة");
+          update(); // 🔥 إشعار PolyLineMapScreen لرسم المسار
         }
       }
-    } catch (e) {}
-
-    isLoading = false;
-    update();
-  }
-
-  Future<void> _drawPolylineUnified() async {
-    if (polylineCoordinates.isEmpty) return;
-    animator.clearPolylines(mapLibreController);
-
-    if (Platform.isIOS && appleController != null) {
-      animator.drawSolidPolyline(
-        polylineCoordinates,
-        'ride_route',
-        MyColor.getPrimaryColor(),
-        MyColor.getPrimaryColor().withOpacity(0.4),
-        null,
-        onUpdateApple: (polylines) {
-          applePolylines = polylines;
-          update();
-        },
-      );
-    } else if (!Platform.isIOS && mapLibreController != null) {
-      animator.drawSolidPolyline(
-        polylineCoordinates,
-        'ride_route',
-        MyColor.getPrimaryColor(),
-        MyColor.getPrimaryColor().withOpacity(0.4),
-        mapLibreController,
-      );
+    } catch (e) {
+      print('❌ [Route] خطأ في جلب المسار: $e');
     }
   }
 
@@ -280,8 +198,6 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     final oldPosition = driverLatLng;
     _animationController.stop();
     _animationController.reset();
-
-    // 🔥 إصلاح تسرب الذاكرة: مسح المستمعات السابقة قبل إضافة مستمع جديد
     _animationController.clearListeners();
 
     final latTween = Tween<double>(begin: oldPosition.latitude, end: newPosition.latitude);
@@ -297,6 +213,7 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
 
     _animationController.forward();
   }
+
   Future<void> _updateDriverMarkerUnified(LatLng position, double rotation) async {
     String iconName = (activeServiceId == 1) ? 'car_icon' : 'tuktuk_icon';
     String assetPath = (activeServiceId == 1) ? 'assets/images/car.png' : 'assets/images/tuktuk.png';

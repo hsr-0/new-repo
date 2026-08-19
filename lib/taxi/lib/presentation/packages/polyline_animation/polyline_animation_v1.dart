@@ -196,11 +196,21 @@ class PolylineAnimator {
       List<ml.LatLng> animatedSegment = mlPoints.sublist(currentIndex, end);
 
       if (animatedSegment.length > 1) {
-        // تحديث الخط المتحرك بدلاً من مسحه وإضافته لضمان الأداء العالي
-        await mapController.updateLine(
-          fgLine,
-          ml.LineOptions(geometry: animatedSegment),
-        );
+        // 🔥 التعديل الجذري: حماية التطبيق من التجميد عند عدم دعم المكتبة للتحديث الديناميكي
+        try {
+          await mapController.updateLine(
+            fgLine,
+            ml.LineOptions(geometry: animatedSegment),
+          );
+        } catch (e) {
+          if (e.toString().contains('MissingPluginException') || e.toString().contains('source#setFeature')) {
+            print('⚠️ [PolylineAnimator] تحديث الخطوط غير مدعوم في هذه النسخة. تم إيقاف الأنيميشن لحماية الخريطة.');
+            timer.cancel(); // 🛑 إيقاف الـ Timer فوراً لمنع التكرار والتجميد
+            _animationTimer = null;
+          } else {
+            print('❌ خطأ آخر في رسم المسار: $e');
+          }
+        }
       }
       currentIndex++;
     });

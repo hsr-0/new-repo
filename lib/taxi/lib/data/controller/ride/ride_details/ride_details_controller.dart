@@ -159,7 +159,13 @@ class RideDetailsController extends GetxController {
         driverImagePath = '${UrlContainer.domainUrl}/${model.data?.driverImagePath}';
 
         update();
-        mapController.loadMap(
+        // 🔥 التعديل: تمرير البيانات فقط، و PolyLineMapScreen هو من يرسم
+        mapController.updateRideLocations(
+          pickup: pickupLatLng,
+          destination: destinationLatLng,
+          isRunning: ride.status == "3",
+        );
+        (
           pickup: pickupLatLng,
           destination: destinationLatLng,
           isRunning: ride.status == "3",

@@ -42,14 +42,14 @@ import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 // =======================================================================
 const String BEYTEI_URL = 'https://re.beytei.com';
 
-const String baseUrl = "https://banner.beytei.com/wp-json";
+const String baseUrl = "https://de.beytei.com/api";
 const String CONSUMER_KEY = 'ck_d22c789681c4610838f1d39a05dbedcb73a2c810';
 const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
 const String MISWAK_URL = 'https://beytei.com';    // 🔥 سيرفر المسواك (جديد)
-const String TAXI_URL = 'https://banner.beytei.com'; // 🚕 تكسي )
+const String TAXI_URL = 'https://de.beytei.com/api'; // 🚕 تكسي )
 const int AD_PRODUCT_ID = 9999; // ⚠️ استبدل هذا الرقم بـ ID منتج "خدمة إعلان" من ووكومرس
 const double AD_COST = 3000.0; // تكلفة الإعلان
 
@@ -677,8 +677,10 @@ class AuthProvider with ChangeNotifier {
       if (_miswakToken != null) await prefs.setString('miswak_jwt_token', _miswakToken!);
       if (_taxiToken != null) await prefs.setString('taxi_jwt_token', _taxiToken!); // هذا للـ Banner
 
-      await authService.registerDeviceTokenTriple(_token, _miswakToken, _taxiToken);
-
+// 🔥 الحل الجذري: عدم انتظار تسجيل التوكن لمنع تعليق شاشة الدخول
+      authService.registerDeviceTokenTriple(_token, _miswakToken, _taxiToken).catchError((e) {
+        print("⚠️ [Auth] فشل تسجيل التوكن في الخلفية: $e");
+      });
       // 💡 التعديل هنا: تحديث الرتبة في الذاكرة الحية للمزود (Provider)
       _userRole = role;
 
@@ -3410,8 +3412,16 @@ class PremiumCampaignProvider with ChangeNotifier {
     String type = _config!['discount_type'] ?? 'percent';
     double maxCap = double.tryParse(_config!['max_discount_cap'].toString()) ?? 0;
 
-    String discountText = type == 'percent' ? 'خصم %${discountVal.toInt()}' : (type == 'fixed' ? 'خصم ${NumberFormat('#,###').format(discountVal)} د.ع' : 'هدية مجانية 🎁');
-
+    String discountText = "";
+    if (type == 'percent') {
+      discountText = 'خصم %${discountVal.toInt()}';
+    } else if (type == 'fixed') {
+      discountText = 'خصم ${NumberFormat('#,###').format(discountVal)} د.ع';
+    } else if (type == 'delivery_fee') { // ✅ تمت إضافته
+      discountText = 'خصم على التوصيل 🚚';
+    } else {
+      discountText = 'هدية مجانية 🎁';
+    }
     double eligibleSubtotal = 0.0;
     for (var item in cartItems) {
       if (!item.hasIndividualSale) eligibleSubtotal += (item.finalPrice * item.quantity);
@@ -4898,8 +4908,9 @@ class ApiService {
   }
 
   Future<List<dynamic>> getTeamLeaderAssignedOrders(String token) async {
+    // ✅ تم إزالة wp-json وتصحيح المسار إلى team-orders كما هو مبرمج في السيرفر
     final response = await http.get(
-      Uri.parse('$TAXI_URL/wp-json/taxi/v3/leader/my-team-orders'),
+      Uri.parse('$TAXI_URL/taxi/v3/leader/team-orders'),
       headers: {
         'Authorization': 'Bearer $token',
         'Content-Type': 'application/json',
@@ -4908,12 +4919,12 @@ class ApiService {
 
     if (response.statusCode == 200) {
       final jsonResponse = json.decode(response.body);
-      return jsonResponse['orders'] ?? [];
+      // دعم أكثر من هيكل للاستجابة
+      return jsonResponse['orders'] ?? jsonResponse['data'] ?? [];
     } else {
       throw Exception('فشل تحميل طلبات الفريق: ${response.statusCode}');
     }
   }
-
   Future<List<dynamic>> checkRestaurantsStatusLight(List<int> ids) async {
     if (ids.isEmpty) return [];
 
@@ -5822,84 +5833,66 @@ class AuthService {
   // يعتمد على Endpoint مخصص: /taxi-auth/v1/login
 // 2. 🔥 [تحديث] تسجيل الدخول لسيرفر التاكسي بالرابط الجديد الناجح
 // 2. 🔥 [تحديث] تسجيل الدخول لسيرفر التاكسي (Banner) لتبويب السائقين
+// 2. 🔥 تسجيل الدخول لسيرفر المندوبين الحالي (Laravel)
   Future<String?> loginToTaxiServer(String username, String password) async {
     try {
-      print("🚕 [Taxi Auth] محاولة الدخول لسيرفر التاكسي (Banner)...");
+      print("🚚 [Delivery Auth] محاولة الدخول لسيرفر المندوبين...");
 
       final response = await http.post(
-          Uri.parse('$TAXI_URL/wp-json/taxi-auth/v1/login'), // 👈 رجعناه للـ Banner
+        // ✅ تم إزالة wp-json وتصحيح المسار ليتطابق مع سيرفرك
+          Uri.parse('$TAXI_URL/taxi/v3/leader/login'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
-            'phone_number': username, // 👈 هنا يطلب رقم الهاتف وليس username
+            'phone_number': username,
+            'username': username, // نرسل الاثنين لضمان توافق السيرفر
             'password': password
           })
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['success'] == true && data['token'] != null) {
-          print("✅ [Taxi Auth] نجح دخول التاكسي (Banner)! Token received.");
-          return data['token'];
+        if (data['success'] == true || data['token'] != null) {
+          print("✅ [Delivery Auth] نجح دخول سيرفر المندوبين!");
+          return data['token'] ?? data['data']['token'];
         }
       }
 
-      print("❌ [Taxi Auth] فشل الدخول: ${response.body}");
+      print("❌ [Delivery Auth] فشل الدخول: ${response.body}");
       return null;
     } catch (e) {
-      print("⚠️ [Taxi Auth] خطأ اتصال: $e");
+      print("⚠️ [Delivery Auth] خطأ اتصال: $e");
       return null;
     }
   }
 
-  // 3. 🔥 [تحديث] تسجيل الجهاز في السيرفرات الثلاثة (Triple Registration)
-  // هذه الدالة تضمن وصول الإشعارات من أي جهة (مطعم، مسواك، تكسي)
+  // 3. 🔥 تسجيل الجهاز في السيرفرات الثلاثة
   Future<void> registerDeviceTokenTriple(String? restToken, String? miswakToken, String? taxiToken) async {
     try {
       String? fcmToken = await FirebaseMessaging.instance.getToken();
-      if (fcmToken == null) {
-        print("⚠️ [FCM] لم يتم العثور على توكن الجهاز (FCM Token is null).");
-        return;
-      }
+      if (fcmToken == null) return;
 
-      print("🔔 [FCM] جاري تسجيل الجهاز... (Token: ${fcmToken.substring(0, 15)}...)");
-
-      // الاشتراك في القنوات العامة
       await FirebaseMessaging.instance.subscribeToTopic('all_users');
-
       String platform = Platform.isAndroid ? 'android' : 'ios';
       Map<String, dynamic> standardBody = {'token': fcmToken, 'platform': platform};
 
-      // أ) سيرفر المطاعم (BEYTEI_URL)
+      // أ) سيرفر المطاعم
       if (restToken != null) {
-        await _sendTokenRequest(
-            BEYTEI_URL,
-            '/wp-json/restaurant-app/v1/register-device',
-            restToken,
-            standardBody,
-            "مطاعم"
-        );
+        await _sendTokenRequest(BEYTEI_URL, '/wp-json/restaurant-app/v1/register-device', restToken, standardBody, "مطاعم");
       }
 
-      // ب) سيرفر المسواك (MISWAK_URL)
+      // ب) سيرفر المسواك
       if (miswakToken != null) {
-        await _sendTokenRequest(
-            MISWAK_URL,
-            '/wp-json/restaurant-app/v1/register-device',
-            miswakToken,
-            standardBody,
-            "مسواك"
-        );
+        await _sendTokenRequest(MISWAK_URL, '/wp-json/restaurant-app/v1/register-device', miswakToken, standardBody, "مسواك");
       }
 
-      // ج) 🔥 سيرفر التاكسي (TAXI_URL)
-      // ملاحظة: مسار التاكسي مختلف قليلاً ويطلب مفتاح 'fcm_token'
+      // ج) 🔥 سيرفر المندوبين
       if (taxiToken != null) {
         await _sendTokenRequest(
             TAXI_URL,
-            '/wp-json/taxi-auth/v1/update-fcm-token',
+            '/taxi-auth/v1/update-fcm-token', // ✅ تم إزالة wp-json
             taxiToken,
-            {'fcm_token': fcmToken}, // المفتاح في التاكسي هو fcm_token
-            "تاكسي"
+            {'fcm_token': fcmToken},
+            "سيرفر المندوبين"
         );
       }
 
@@ -5907,6 +5900,9 @@ class AuthService {
       print("⚠️ [FCM] خطأ عام في عملية التسجيل: $e");
     }
   }
+
+  // 3. 🔥 [تحديث] تسجيل الجهاز في السيرفرات الثلاثة (Triple Registration)
+  // هذه الدالة تضمن وصول الإشعارات من أي جهة (مطعم، مسواك، تكسي)
 
   // دالة مساعدة لإرسال الطلب (لتقليل تكرار الكود)
   Future<void> _sendTokenRequest(String baseUrl, String path, String token, Map body, String serverName) async {
@@ -11361,7 +11357,8 @@ class HomeScreenState extends State<HomeScreen> {
       // 🔥 الحل الجذري للنافذة المنبثقة: انتظار التحميل ثم إظهارها بأمان
       premiumProvider.fetchCampaignConfig(_selectedAreaId!).then((_) {
         if (mounted && premiumProvider.shouldShowPopup && premiumProvider.config != null) {
-          final String popupImage = premiumProvider.config!['popup_image']?.toString() ?? '';
+// 🔥 التعديل: قراءة الصورة من الكائن الداخلي 'popup' كما يرسلها السيرفر الآن
+          final String popupImage = premiumProvider.config!['popup']?['image']?.toString() ?? '';
           if (popupImage.isNotEmpty) {
             _showCampaignPopup(context, premiumProvider);
           }
@@ -11399,7 +11396,7 @@ class HomeScreenState extends State<HomeScreen> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(20),
                       child: CachedNetworkImage(
-                        imageUrl: premium.config!['popup_image'],
+                        imageUrl: premium.config!['popup']?['image'] ?? '',
                         fit: BoxFit.contain,
                         placeholder: (context, url) => const Center(child: Padding(
                           padding: EdgeInsets.all(40.0),
@@ -12753,19 +12750,23 @@ class _MenuScreenState extends State<MenuScreen> {
                   if (!includedIds.contains(widget.restaurant.id)) return const SizedBox.shrink();
 
                   // 🔥 1. قراءة قيمة الخصم الحقيقية من السيرفر
+                  // 🔥 1. قراءة قيمة الخصم الحقيقية من السيرفر
                   double discountValue = double.tryParse(premium.config!['discount_value'].toString()) ?? 0.0;
                   String discountType = premium.config!['discount_type'] ?? 'percent';
+                  double discountedDeliveryFee = double.tryParse(premium.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0; // ✅ تمت إضافته
 
-                  // 🔥 2. هل الخصم صفر؟ (نعامل الهدية المجانية كخصم فعلي وليس صفر)
-                  bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item');
+// 🔥 2. هل الخصم صفر؟ (استثناء delivery_fee و free_item من اعتبارهما صندوق هدايا)
+                  bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee'); // ✅ تمت إضافته
 
-                  // 🔥 3. تجهيز النص حسب الحالة
+// 🔥 3. تجهيز النص حسب الحالة
                   String discountText = "";
                   if (!isZeroDiscount) {
                     if (discountType == 'percent') {
                       discountText = "خصم ${discountValue.toInt()}%";
                     } else if (discountType == 'fixed') {
                       discountText = "خصم ${NumberFormat('#,###', 'ar_IQ').format(discountValue)} د.ع";
+                    } else if (discountType == 'delivery_fee') { // ✅ تمت إضافته
+                      discountText = "توصيل بـ ${discountedDeliveryFee.toInt()} د.ع 🚚";
                     } else {
                       discountText = "هدية مجانية 🎁";
                     }
@@ -17325,21 +17326,25 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-    // 🔥 1. محاولة تسجيل الدخول الثلاثي الشامل (مطاعم + مسواك + تكسي)
-    final success = await authProvider.login(
-        _usernameController.text,
-        _passwordController.text,
-        'leader'
-    );
+    try {
+      // 🔥 1. محاولة تسجيل الدخول الثلاثي الشامل (مطاعم + مسواك + تكسي)
+      // 🛡️ إضافة Timeout لمنع تعليق الشاشة للأبد في حال تأخر الفايربيس
+      final success = await authProvider.login(
+          _usernameController.text,
+          _passwordController.text,
+          'leader'
+      ).timeout(const Duration(seconds: 20), onTimeout: () {
+        // إذا تجاوز المدة، نتحقق إذا كان التوكن الرئيسي قد تم الحصول عليه بنجاح
+        return authProvider.token != null;
+      });
 
-    setState(() => _isLoading = false);
+      if (!mounted) return;
+      setState(() => _isLoading = false);
 
-    if (success && mounted) {
-      Navigator.pop(context); // إغلاق شاشة الدخول
-
-      if (authProvider.token != null) {
-        // 🔥 2. الانتقال إلى الداشبورد الأساسي
-        Navigator.of(context).push(
+      if (success && authProvider.token != null) {
+        // 🔥 2. الحل الجذري: استخدام pushReplacement بدلاً من pop ثم push
+        // هذا يمنع انهيار الـ Context ويغلق شاشة الدخول تلقائياً ويفتح الداشبورد
+        Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => RegionDashboardScreen(
               token: authProvider.token!,
@@ -17348,15 +17353,31 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
             ),
           ),
         );
-      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("تم الدخول لجميع الأنظمة بنجاح!"), backgroundColor: Colors.green),
-      );
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("فشل الدخول: تأكد من البيانات."), backgroundColor: Colors.red),
-      );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("تم الدخول لجميع الأنظمة بنجاح!"),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("فشل الدخول: تأكد من البيانات أو الاتصال."),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("حدث خطأ: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -17432,7 +17453,6 @@ class _TeamLeaderLoginScreenState extends State<TeamLeaderLoginScreen> {
     );
   }
 }
-
 
 class RegionDashboardScreen extends StatefulWidget {
   final String token;

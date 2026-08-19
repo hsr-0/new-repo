@@ -380,7 +380,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
     _isFetchingPlaces = true;
     try {
       final response = await http.get(Uri.parse('https://taxi.beytei.com/api/custom-places'));
-      if (response.statusCode == 200) {
+      if (response.statusCode == 20) {
         final data = jsonDecode(response.body);
         _cachedCustomPlaces = data; // ✅ حفظ البيانات في الذاكرة للاستخدام المستقبلي
 
@@ -435,40 +435,59 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
   }
 
   Widget _buildFreeMap(SelectLocationController controller) {
-    return ml.MapLibreMap(
-      styleString: 'https://tiles.openfreemap.org/styles/liberty',
-      initialCameraPosition: ml.CameraPosition(target: ml.LatLng(startLat, startLng), zoom: 17.5),
-      onMapCreated: (c) {
-        mapLibreController = c;
-        controller.setMapLibreController(c);
-        mapLibreController!.onSymbolTapped.add(_onSymbolTapped);
-      },
-      onStyleLoadedCallback: () async {
-        isMapReady = true;
-        if (!mounted) return;
-        try {
-          final Uint8List pickupData = await getBytesFromAsset(MyIcons.mapMarkerPickUpIcon, 120);
-          await mapLibreController!.addImage("pickup_icon", pickupData);
-          final Uint8List destData = await getBytesFromAsset(MyIcons.mapMarkerIcon, 120);
-          await mapLibreController!.addImage("dest_icon", destData);
-          final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
-          await mapLibreController!.addImage("car_icon", carData);
-          final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
-          await mapLibreController!.addImage("tuktuk_icon", tuktukData);
-        } catch(e) {
-          print('❌ Image Load Error: $e');
-        }
-        if (mounted) {
-          _updateStaticMarkers(controller);
-          _loadAndDrawCustomPlaces(mapLibreController!); // ✅ استدعاء الدالة المحسنة هنا
-        }
-      },
-      myLocationEnabled: true,
-      myLocationRenderMode: ml.MyLocationRenderMode.normal,
-      compassEnabled: false,
+    return Stack(
+      children: [
+        ml.MapLibreMap(
+          styleString: 'https://tiles.openfreemap.org/styles/liberty',
+          initialCameraPosition: ml.CameraPosition(target: ml.LatLng(startLat, startLng), zoom: 17.5),
+          onMapCreated: (c) {
+            mapLibreController = c;
+            controller.setMapLibreController(c);
+            mapLibreController!.onSymbolTapped.add(_onSymbolTapped);
+          },
+          // ❌ تم إزالة onCameraMove و onCameraIdle لحماية الأجهزة الضعيفة
+          onStyleLoadedCallback: () async {
+            isMapReady = true;
+            if (!mounted) return;
+            try {
+              final Uint8List pickupData = await getBytesFromAsset(MyIcons.mapMarkerPickUpIcon, 120);
+              await mapLibreController!.addImage("pickup_icon", pickupData);
+              final Uint8List destData = await getBytesFromAsset(MyIcons.mapMarkerIcon, 120);
+              await mapLibreController!.addImage("dest_icon", destData);
+              final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
+              await mapLibreController!.addImage("car_icon", carData);
+              final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
+              await mapLibreController!.addImage("tuktuk_icon", tuktukData);
+            } catch(e) {
+              print('❌ Image Load Error: $e');
+            }
+            if (mounted) {
+              _updateStaticMarkers(controller);
+              _loadAndDrawCustomPlaces(mapLibreController!);
+            }
+          },
+          myLocationEnabled: true,
+          myLocationRenderMode: ml.MyLocationRenderMode.normal,
+          compassEnabled: false,
+        ),
+
+        // ✅ الدبوس الثابت في المنتصف (لا يستهلك موارد لأنه IgnorePointer)
+        IgnorePointer(
+          ignoring: true,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 40),
+              child: CustomSvgPicture(
+                image: MyIcons.mapMarkerIcon,
+                color: MyColor.primaryColor,
+                height: 45,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
-
   Widget _buildAppleMap(SelectLocationController controller) {
     return ap.AppleMap(
       initialCameraPosition: ap.CameraPosition(target: ap.LatLng(startLat, startLng), zoom: 17.5),
@@ -600,39 +619,38 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
 
                 const SizedBox(height: Dimensions.space15),
 
-                if (Platform.isIOS) ...[
-                  InkWell(
-                    onTap: () async {
-                      controller.changeIndex(1);
-                      final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
-                      if (result != null && mounted) {
-                        _refreshMapAfterEdit(1);
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: Dimensions.space12, horizontal: Dimensions.space15),
-                      decoration: BoxDecoration(
-                        color: MyColor.primaryColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
-                        border: Border.all(color: MyColor.primaryColor.withOpacity(0.3)),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: const BoxDecoration(color: MyColor.primaryColor, shape: BoxShape.circle),
-                            child: const Icon(Icons.map_outlined, color: Colors.white, size: 20),
-                          ),
-                          const SizedBox(width: Dimensions.space15),
-                          Expanded(child: Text("تحديد الوجهة عبر الخريطة", style: boldDefault.copyWith(color: MyColor.primaryColor, fontSize: 15))),
-                          const Icon(Icons.arrow_forward_ios, size: 16, color: MyColor.primaryColor),
-                        ],
-                      ),
+                // ✅ تم إزالة شرط Platform.isIOS ليصبح الزر متاحاً لجميع المنصات (أندرويد وآيفون)
+                InkWell(
+                  onTap: () async {
+                    controller.changeIndex(1);
+                    final result = await Get.toNamed(RouteHelper.editLocationPickUpScreen, arguments: 1);
+                    if (result != null && mounted) {
+                      _refreshMapAfterEdit(1);
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: Dimensions.space12, horizontal: Dimensions.space15),
+                    decoration: BoxDecoration(
+                      color: MyColor.primaryColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(Dimensions.mediumRadius),
+                      border: Border.all(color: MyColor.primaryColor.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(color: MyColor.primaryColor, shape: BoxShape.circle),
+                          child: const Icon(Icons.map_outlined, color: Colors.white, size: 20),
+                        ),
+                        const SizedBox(width: Dimensions.space15),
+                        Expanded(child: Text("تحديد الوجهة عبر الخريطة", style: boldDefault.copyWith(color: MyColor.primaryColor, fontSize: 15))),
+                        const Icon(Icons.arrow_forward_ios, size: 16, color: MyColor.primaryColor),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: Dimensions.space15),
-                ],
+                ),
+                const SizedBox(height: Dimensions.space15),
 
                 controller.isSearched && controller.allPredictions.isEmpty
                     ? _buildModernShimmerLoader()
@@ -709,12 +727,38 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> with Ticker
                   bgColor: (controller.destinationLatlong.latitude != 0 && controller.allPredictions.isEmpty)
                       ? MyColor.primaryColor
                       : Colors.grey,
-                  press: () {
+                  press: () async {
                     if (controller.allPredictions.isNotEmpty) {
                       Get.snackbar("تنبيه هام", "يرجى اختيار أقرب نقطة دالة من القائمة المقترحة", backgroundColor: Colors.redAccent.withOpacity(0.9), colorText: Colors.white, snackPosition: SnackPosition.TOP, icon: const Icon(Icons.location_off, color: Colors.white));
                       return;
                     }
-                    if (controller.destinationLatlong.latitude == 0) {
+
+                    // 🔥 الحل الجذري والآمن: قراءة إحداثيات الدبوس لحظة الضغط فقط
+                    if (!Platform.isIOS && mapLibreController != null) {
+                      setState(() { isFetchingCoords = true; });
+                      try {
+                        // قراءة موقع الكاميرا (منتصف الشاشة) بدقة 100%
+                        final cameraPosition = await mapLibreController!.queryCameraPosition();
+                        if (cameraPosition != null) {
+                          final lat = cameraPosition.target.latitude;
+                          final lng = cameraPosition.target.longitude;
+
+                          controller.selectedLatitude = lat;
+                          controller.selectedLongitude = lng;
+
+                          // 🔴 التعديل الحاسم 1: إضافة await للانتظار حتى ينتهي الـ Controller من جلب العنوان وتحديث الـ destinationLatlong
+                          await controller.openMap(lat, lng, isMapDrag: true);
+
+                          // 🔴 التعديل الحاسم 2: إجبار الـ GetX على تحديث البيانات لضمان انتقالها للشاشة السابقة
+                          controller.update();
+                        }
+                      } catch (e) {
+                        print('❌ Error querying camera position: $e');
+                      }
+                      if (mounted) setState(() { isFetchingCoords = false; });
+                    }
+
+                    if (controller.destinationLatlong.latitude == 0 && controller.selectedLocationIndex == 1) {
                       Get.snackbar("تنبيه", "يرجى تحديد وجهة التوصيل أولاً", backgroundColor: Colors.orange.withOpacity(0.9), colorText: Colors.white, snackPosition: SnackPosition.TOP);
                       return;
                     }

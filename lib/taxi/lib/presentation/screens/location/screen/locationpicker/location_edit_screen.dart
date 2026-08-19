@@ -35,8 +35,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   ml.MapLibreMapController? mapLibreController;
   ap.AppleMapController? appleController;
 
-  bool isDragging = false;
-  Timer? _debounce;
+  bool _isConfirming = false; // 🔥 حالة الدوران والحفظ
 
   // إحداثيات مبدئية سيتم تحديثها فوراً
   double _currentLat = 33.3152; // مركز بغداد كافتراضي
@@ -48,21 +47,18 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
   @override
   void initState() {
     super.initState();
-    // ✅ الحل الجذري لمشكلة الأندرويد: نعتمد حصراً على widget.selectedIndex
-    // لأنه ثابت ولا يضيع مع دورة حياة التطبيق بعكس Get.arguments
     currentIndex = widget.selectedIndex;
     _setupInitialPosition();
   }
 
   Future<void> _setupInitialPosition() async {
+    print("📍 [Setup] بدء تهيئة الموقعInitial...");
     final controller = Get.find<SelectLocationController>();
-
     controller.changeIndex(currentIndex);
 
     double? targetLat;
     double? targetLng;
 
-    // 1. الأولوية: جلب الموقع المحفوظ سابقاً من الكنترولر (إذا وجد)
     if (currentIndex == 0 && controller.pickupLatlong.latitude != 0) {
       targetLat = controller.pickupLatlong.latitude;
       targetLng = controller.pickupLatlong.longitude;
@@ -71,7 +67,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       targetLng = controller.destinationLatlong.longitude;
     }
 
-    // 2. إذا لم يوجد موقع سابق، نجلب موقع الجهاز الحالي
     if (targetLat == null || targetLat == 0) {
       try {
         bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
@@ -87,7 +82,6 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       }
     }
 
-    // تحديث الإحداثيات وتحريك الكاميرا
     if (targetLat != null) {
       if (mounted) {
         setState(() {
@@ -98,36 +92,22 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       _moveCameraToCurrent();
     }
 
-    // جلب العنوان النصي من السيرفر للموقع الحالي
+    // جلب العنوان النصي من السيرفر للموقع الحالي (مرة واحدة فقط عند الفتح)
     _updateLocationData();
   }
 
   void _moveCameraToCurrent() {
     if (Platform.isIOS) {
-      appleController?.animateCamera(ap.CameraUpdate.newLatLng(ap.LatLng(_currentLat, _currentLng)));
+      appleController?.animateCamera(ap.CameraUpdate.newLatLngZoom(ap.LatLng(_currentLat, _currentLng), 16.0));
     } else {
-      mapLibreController?.animateCamera(ml.CameraUpdate.newLatLng(ml.LatLng(_currentLat, _currentLng)));
+      mapLibreController?.animateCamera(ml.CameraUpdate.newLatLngZoom(ml.LatLng(_currentLat, _currentLng), 16.0));
     }
-  }
-
-  void _onMapIdle() {
-    if (!mounted) return;
-    setState(() => isDragging = false);
-
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 700), () {
-      if (mounted) {
-        _updateLocationData();
-      }
-    });
   }
 
   void _updateLocationData() {
     final controller = Get.find<SelectLocationController>();
-
     controller.changeIndex(currentIndex);
     controller.changeCurrentLatLongBasedOnCameraMove(_currentLat, _currentLng);
-
     controller.openMap(_currentLat, _currentLng, isMapDrag: true);
   }
 
@@ -143,19 +123,11 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
     try {
       final Uint8List carData = await getBytesFromAsset('assets/images/car.png', 100);
       await mapLibreController!.addImage("car_icon", carData);
-
       final Uint8List tuktukData = await getBytesFromAsset('assets/images/tuktuk.png', 100);
       await mapLibreController!.addImage("tuktuk_icon", tuktukData);
-
     } catch(e) {
       debugPrint('❌ Error loading images in Edit Screen: $e');
     }
-  }
-
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    super.dispose();
   }
 
   @override
@@ -170,23 +142,20 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 child: Platform.isIOS ? _buildAppleMap() : _buildMapLibre(),
               ),
 
+              // ✅ الدبوس الثابت في المنتصف
               Center(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 40),
-                  child: AnimatedScale(
-                    scale: isDragging ? 1.3 : 1.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: Image.asset(
-                      currentIndex == 0
-                          ? "assets/images/map/pickup_marker.png"
-                          : "assets/images/map/destination_marker.png",
-                      width: 50,
-                      height: 50,
-                      errorBuilder: (c, e, s) => Icon(
-                        Icons.location_on,
-                        size: 50,
-                        color: currentIndex == 0 ? MyColor.primaryColor : Colors.redAccent,
-                      ),
+                  child: Image.asset(
+                    currentIndex == 0
+                        ? "assets/images/map/pickup_marker.png"
+                        : "assets/images/map/destination_marker.png",
+                    width: 50,
+                    height: 50,
+                    errorBuilder: (c, e, s) => Icon(
+                      Icons.location_on,
+                      size: 50,
+                      color: currentIndex == 0 ? MyColor.primaryColor : Colors.redAccent,
                     ),
                   ),
                 ),
@@ -199,8 +168,37 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
                 child: _buildBottomPanel(controller),
               ),
 
-              if (controller.isLoading)
-                const Center(child: CircularProgressIndicator(color: MyColor.primaryColor)),
+              // 🔥🔥🔥 شاشة الانتظار والدوران (Overlay) 🔥🔥🔥
+              if (_isConfirming)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withOpacity(0.4),
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(25),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 15)],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(
+                              height: 45, width: 45,
+                              child: CircularProgressIndicator(color: MyColor.primaryColor, strokeWidth: 3),
+                            ),
+                            const SizedBox(height: 15),
+                            Text(
+                              "جاري حفظ الموقع بدقة...",
+                              style: boldDefault.copyWith(color: MyColor.colorBlack, fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
@@ -217,12 +215,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
         Get.find<SelectLocationController>().setMapLibreController(c);
       },
       onStyleLoadedCallback: _loadMapStylesAndDrivers,
-      onCameraMove: (pos) {
-        if (!isDragging) setState(() => isDragging = true);
-        _currentLat = pos.target.latitude;
-        _currentLng = pos.target.longitude;
-      },
-      onCameraIdle: _onMapIdle,
+      // ❌ تمت إزالة onCameraMove و onCameraIdle تماماً لحماية الأداء والاعتماد على التأكيد فقط
       myLocationEnabled: true,
       compassEnabled: false,
     );
@@ -235,12 +228,7 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
         appleController = c;
         Get.find<SelectLocationController>().setAppleController(c);
       },
-      onCameraMove: (pos) {
-        if (!isDragging) setState(() => isDragging = true);
-        _currentLat = pos.target.latitude;
-        _currentLng = pos.target.longitude;
-      },
-      onCameraIdle: _onMapIdle,
+      // ❌ تمت إزالة onCameraMove و onCameraIdle
       myLocationEnabled: true,
     );
   }
@@ -329,32 +317,86 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
           const SizedBox(height: 25),
           RoundedButton(
             text: MyStrings.confirm.tr,
-            press: () => _handleFinalConfirmation(controller),
+            press: () async => await _handleFinalConfirmation(controller),
           ),
         ],
       ),
     );
   }
 
-  void _handleFinalConfirmation(SelectLocationController controller) {
+  // 🔥🔥🔥 الدالة المعدلة والجذرية (نفس طريقة تطبيق المطعم + طباعات التشخيص) 🔥🔥🔥
+  Future<void> _handleFinalConfirmation(SelectLocationController controller) async {
+    if (_isConfirming) return;
+    setState(() => _isConfirming = true);
+
+    print("📍 [EditLocationPicker] 1. بدء عملية التأكيد...");
+    print("📍 [EditLocationPicker] 2. الإحداثيات قبل القراءة: Lat=$_currentLat, Lng=$_currentLng");
+
+    double finalLat = _currentLat;
+    double finalLng = _currentLng;
+
+    // 🔥 الحل الجذري: قراءة إحداثيات منتصف الشاشة (الدبوس) بدقة 100% لحظة الضغط
+    if (!Platform.isIOS && mapLibreController != null) {
+      try {
+        print("📍 [EditLocationPicker] 3. جاري قراءة موقع الكاميرا (queryCameraPosition)...");
+        final cameraPosition = await mapLibreController!.queryCameraPosition();
+        if (cameraPosition != null) {
+          finalLat = cameraPosition.target.latitude;
+          finalLng = cameraPosition.target.longitude;
+          print("✅ [EditLocationPicker] 4. تم قراءة موقع الكاميرا بنجاح: Lat=$finalLat, Lng=$finalLng");
+        } else {
+          print("⚠️ [EditLocationPicker] 4. cameraPosition كان null!");
+        }
+      } catch (e) {
+        print("❌ [EditLocationPicker] خطأ في queryCameraPosition: $e");
+      }
+    } else if (Platform.isIOS) {
+      print("🍎 [EditLocationPicker] استخدام إحداثيات Apple Maps: Lat=$finalLat, Lng=$finalLng");
+    }
+
+    // 🛑 حماية: إذا كانت الإحداثيات لا تزال صفراً أو غير صالحة، نمنع الحفظ
+    if (finalLat == 0.0 && finalLng == 0.0) {
+      print("❌ [EditLocationPicker] الإحداثيات صفرية! لا يمكن الحفظ.");
+      if (mounted) setState(() => _isConfirming = false);
+      return;
+    }
+
+    print("📍 [EditLocationPicker] 5. تحديث المتغيرات المحلية: Lat=$finalLat, Lng=$finalLng");
+    _currentLat = finalLat;
+    _currentLng = finalLng;
+
+    print("📍 [EditLocationPicker] 6. استدعاء controller.changeIndex($currentIndex)");
     controller.changeIndex(currentIndex);
+
+    print("📍 [EditLocationPicker] 7. استدعاء controller.changeCurrentLatLongBasedOnCameraMove...");
+    controller.changeCurrentLatLongBasedOnCameraMove(_currentLat, _currentLng);
+
+    print("📍 [EditLocationPicker] 8. استدعاء controller.openMap لجلب العنوان...");
+    // 🛑 انتظار جلب العنوان من السيرفر لضمان حفظ العنوان الصحيح وليس القديم
+    await controller.openMap(_currentLat, _currentLng, isMapDrag: true);
+
+    print("📍 [EditLocationPicker] 9. العنوان المجلوب: ${controller.currentAddress.value}");
 
     String finalAddress = controller.currentAddress.value.isNotEmpty
         ? controller.currentAddress.value
         : "موقع تم تحديده";
 
+    print("📍 [EditLocationPicker] 10. حفظ الإحداثيات في Controller...");
     if (currentIndex == 0) {
       controller.pickupLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.pickUpController.text = finalAddress;
       controller.selectedLatitude = _currentLat;
       controller.selectedLongitude = _currentLng;
+      print("✅ [EditLocationPicker] تم حفظ نقطة الانطلاق: Lat=$_currentLat, Lng=$_currentLng");
     } else {
       controller.destinationLatlong = ll.LatLng(_currentLat, _currentLng);
       controller.destinationController.text = finalAddress;
       controller.selectedLatitude = _currentLat;
       controller.selectedLongitude = _currentLng;
+      print("✅ [EditLocationPicker] تم حفظ وجهة التوصيل: Lat=$_currentLat, Lng=$_currentLng");
     }
 
+    print("📍 [EditLocationPicker] 11. حفظ في homeController.addLocationAtIndex...");
     controller.homeController.addLocationAtIndex(
       SelectedLocationInfo(
         address: finalAddress,
@@ -365,7 +407,13 @@ class _EditLocationPickerScreenState extends State<EditLocationPickerScreen> {
       currentIndex,
     );
 
+    print("📍 [EditLocationPicker] 12. استدعاء controller.update()...");
     controller.update();
-    Get.back(result: true);
+
+    print("📍 [EditLocationPicker] 13. العودة للشاشة السابقة Get.back(result: true)...");
+    if (mounted) {
+      setState(() => _isConfirming = false);
+      Get.back(result: true);
+    }
   }
 }
