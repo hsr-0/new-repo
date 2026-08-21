@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart'; // ✅ تأكد من وجود هذه المكتبة
 
 import '../beytei_re/re.dart'; // تأكد من صحة هذا المسار
 
@@ -52,7 +53,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
       print("📡 جاري فحص الحالة من سيرفر السائق الجديد (de.beytei.com)...");
 
-      // 🔥 التعديل الأول: استخدام رابط السيرفر الجديد
       final response = await http.get(
         Uri.parse('https://de.beytei.com/api/taxi/v2/delivery/status-by-source/${widget.order.id}'),
         headers: {
@@ -64,7 +64,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        // 🔥 التعديل الثاني: قراءة الحقل بشكل مرن ليتوافق مع رد السيرفر الجديد
         String taxiStatus = (data['status'] ?? data['order_status'] ?? 'pending').toString();
         String? driver = data['driver_name'];
 
@@ -94,7 +93,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         bool isChanged = false;
 
         for (var i = 0; i < orders.length; i++) {
-          // 🔥 التعديل الثالث: مقارنة آمنة للأرقام والنصوص
           if (orders[i]['id'].toString() == orderId.toString()) {
             orders[i]['status'] = newStatus;
             isChanged = true;
@@ -198,12 +196,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
-    // يمكنك إضافة Navigator.push هنا للانتقال لشاشة المحفظة إذا أردت
   }
 
   void _listenToTaxiUpdates() {
     _fcmSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      // 🔥 التعديل الرابع: مقارنة آمنة ومعتمدة على الـ String
       final msgOrderId = message.data['order_id']?.toString();
       final targetOrderId = widget.order.id.toString();
 
@@ -354,12 +350,62 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     const Text("ملخص الطلب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const Divider(height: 30),
                     _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
-                    const SizedBox(height: 10),
-                    _buildPriceRow(
-                        "الإجمالي المطلوب",
-                        "${(double.tryParse(widget.order.total.toString()) ?? 0).toStringAsFixed(0)} د.ع",
-                        isBold: true,
-                        color: Colors.green
+                    const SizedBox(height: 15),
+
+                    // 🔥🔥🔥 عرض السعر المشطوب والإجمالي بعد الخصم (نفس تصميم المنيو وسجل الطلبات) 🔥🔥🔥
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("الإجمالي المطلوب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Builder(
+                          builder: (context) {
+                            // استخراج القيم بأمان (بما أن order قد يكون dynamic)
+                            final double finalTotal = double.tryParse(widget.order.total.toString()) ?? 0.0;
+                            final double discountAmount = widget.order.discountAmount != null
+                                ? double.tryParse(widget.order.discountAmount.toString()) ?? 0.0
+                                : 0.0;
+                            final double originalTotal = widget.order.originalTotal != null
+                                ? double.tryParse(widget.order.originalTotal.toString()) ?? 0.0
+                                : (finalTotal + discountAmount);
+
+                            if (discountAmount > 0) {
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // السعر النهائي بعد الخصم
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.shade50,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      "${NumberFormat('#,###', 'ar_IQ').format(finalTotal)} د.ع",
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.red),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  // السعر الأصلي مشطوب
+                                  Text(
+                                    "${NumberFormat('#,###', 'ar_IQ').format(originalTotal)} د.ع",
+                                    style: TextStyle(
+                                      decoration: TextDecoration.lineThrough,
+                                      color: Colors.grey.shade500,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            } else {
+                              return Text(
+                                "${NumberFormat('#,###', 'ar_IQ').format(finalTotal)} د.ع",
+                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                              );
+                            }
+                          },
+                        ),
+                      ],
                     ),
                   ],
                 ),

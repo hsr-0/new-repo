@@ -2979,7 +2979,9 @@ class FoodItem {
   }
 
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId, 'selectedWeight': selectedWeight};
-}class Order {
+}
+
+class Order {
   final int id;
   final String status;
   final DateTime dateCreated;
@@ -2991,10 +2993,13 @@ class FoodItem {
   final String? destinationLat;
   final String? destinationLng;
   final String shippingTotal;
-
   // 🔥 الحقول الجديدة للسائق
   final String? driverName;
   final String? driverPhone;
+
+  // 🔥 الحقول الجديدة للخصم والإجمالي الأصلي
+  final double discountAmount;
+  final double originalTotal;
 
   Order({
     required this.id,
@@ -3008,9 +3013,10 @@ class FoodItem {
     this.destinationLat,
     this.destinationLng,
     required this.shippingTotal,
-    // 🔥
     this.driverName,
     this.driverPhone,
+    this.discountAmount = 0.0,
+    this.originalTotal = 0.0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -3022,16 +3028,43 @@ class FoodItem {
     'address': address,
     'phone': phone,
     'line_items': lineItems.map((item) => item.toJson()).toList(),
+    'discountAmount': discountAmount, // 🔥 حفظ الخصم محلياً
+    'originalTotal': originalTotal,   // 🔥 حفظ الإجمالي الأصلي محلياً
   };
 
   factory Order.fromJson(Map<String, dynamic> json) {
     final billing = json['billing'] as Map<String, dynamic>?;
     final shipping = json['shipping'] as Map<String, dynamic>?;
+
+    double discountAmount = 0.0;
+    double finalTotalFromMeta = 0.0;
+
+    // 🔥 استخراج بيانات الخصم والإجمالي النهائي من الميتا (المرسلة عند إنشاء الطلب)
+    if (json['meta_data'] != null && json['meta_data'] is List) {
+      for (var meta in json['meta_data']) {
+        if (meta is Map && meta['key'] == 'calculated_discount_amount') {
+          discountAmount = double.tryParse(meta['value'].toString()) ?? 0.0;
+        }
+        if (meta is Map && meta['key'] == 'calculated_final_total') {
+          finalTotalFromMeta = double.tryParse(meta['value'].toString()) ?? 0.0;
+        }
+      }
+    }
+
+    String totalStr = json['total'].toString();
+    double totalDouble = double.tryParse(totalStr) ?? 0.0;
+
+    // استخدام الإجمالي النهائي من الميتا إذا كان موجوداً، وإلا نستخدم الإجمالي العادي
+    double actualTotal = finalTotalFromMeta > 0 ? finalTotalFromMeta : totalDouble;
+    double originalTotalCalc = actualTotal + discountAmount;
+
     return Order(
       id: json['id'],
       status: json['status'],
       dateCreated: DateTime.parse(json['date_created']),
-      total: json['total'].toString(),
+      total: actualTotal.toString(),
+      discountAmount: discountAmount,
+      originalTotal: originalTotalCalc,
       customerName: json['customerName'] ?? '${billing?['first_name'] ?? ''} ${billing?['last_name'] ?? ''}'.trim(),
       address: json['address'] ?? shipping?['address_1'] ?? billing?['address_1'] ?? 'N/A',
       phone: json['phone'] ?? billing?['phone'] ?? 'N/A',
@@ -3039,15 +3072,12 @@ class FoodItem {
       destinationLat: json['destination_lat'],
       destinationLng: json['destination_lng'],
       shippingTotal: json['shipping_total'] ?? '0',
-
-      // 🔥 قراءة بيانات السائق من السيرفر
       driverName: json['driver_name'],
       driverPhone: json['driver_phone'],
     );
   }
 
   Map<String, dynamic> get statusDisplay {
-    // (نفس الكود القديم هنا...)
     switch (status) {
       case 'processing': return {'text': 'جاري تحضير الطلب', 'icon': Icons.soup_kitchen_outlined, 'color': Colors.blue};
       case 'out-for-delivery': return {'text': 'المندوب قادم إليك 🛵', 'icon': Icons.delivery_dining, 'color': Colors.orange.shade700};
@@ -3057,7 +3087,6 @@ class FoodItem {
     }
   }
 }
-
 class PremiumCampaignProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
 
@@ -7288,13 +7317,45 @@ class OrderHistoryCard extends StatelessWidget {
             ),
 
             const Divider(height: 24),
+
+            // 🔥🔥🔥 عرض السعر المشطوب والإجمالي بعد الخصم (نفس تصميم المنيو) 🔥🔥🔥
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('الإجمالي', style: TextStyle(color: Colors.grey.shade600, fontSize: 15)),
-                Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+
+                if (order.discountAmount > 0)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // السعر النهائي بعد الخصم
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(4)),
+                        child: Text(
+                          '$totalFormatted د.ع',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.red),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // السعر الأصلي مشطوب
+                      Text(
+                        '${NumberFormat('#,###', 'ar_IQ').format(order.originalTotal)} د.ع',
+                        style: TextStyle(
+                            decoration: TextDecoration.lineThrough,
+                            color: Colors.grey.shade500,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                // في حال لم يكن هناك خصم
+                  Text('$totalFormatted د.ع', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               ],
             ),
+
             const SizedBox(height: 16),
 
             // 🔥🔥🔥 الزر الاحترافي للتتبع بدلاً من النص للطلبات النشطة 🔥🔥🔥
@@ -7353,8 +7414,7 @@ class OrderHistoryCard extends StatelessWidget {
       ),
     );
   }
-}
-class TeamLeaderOrderCard extends StatefulWidget {
+}class TeamLeaderOrderCard extends StatefulWidget {
   final UnifiedDeliveryOrder order;
   final String token;
   final VoidCallback onActionComplete;
