@@ -2410,28 +2410,49 @@ class DeliveryConfigProvider with ChangeNotifier {
       // ========================================================
       // 4. تطبيق شرائح الأسعار المطابقة للسيرفر 100%
       // ========================================================
+      // ========================================================
+      // 4. تطبيق شرائح الأسعار المطابقة للسيرفر 100%
+      // ========================================================
       if (isKut) {
-        print("🔢 [Calc Logic] تطبيق تسعيرة الكوت الذكية...");
-        if (distanceKm <= 2.5) {
+        print("🔢 [Calc Logic] تطبيق تسعيرة الكوت الهجينة المخصصة...");
+
+        if (distanceKm <= 1.0) {
+          // 1. المسافة قريبة جداً (1 كم أو أقل)
+          finalPrice = 1000.0;
+        } else if (distanceKm <= 2.5) {
+          // 2. المحافظة على التسعيرة المعتادة حتى 2.5 كم
           finalPrice = 1500.0;
-        } else if (distanceKm <= 4.0) {
-          finalPrice = 2500.0;
-        } else if (distanceKm <= 5.5) {
-          finalPrice = 3000.0;
+        } else if (distanceKm <= 6.0) {
+          // 3. المسافات المتوسطة (زيادة 250 دينار لكل كم)
+          double rawPrice = 1000.0 + (distanceKm * 250.0);
+          finalPrice = (rawPrice / 250.0).round() * 250.0;
         } else if (distanceKm <= 7.0) {
+          // 4. تثبيت السعر المخصص لـ 7 كم
+          finalPrice = 2500.0;
+        } else if (distanceKm <= 8.0) {
+          // 5. تثبيت السعر المخصص لـ 8 كم
+          finalPrice = 2750.0;
+        } else if (distanceKm <= 9.0) {
+          // 6. تثبيت السعر المخصص لـ 9 كم
           finalPrice = 3500.0;
-        } else if (distanceKm <= 8.5) {
-          finalPrice = 4000.0;
-        } else if (distanceKm <= 15.0) {
-          finalPrice = 5000.0;
+        } else if (distanceKm <= 10.0) {
+          // 7. تثبيت السعر المخصص لـ 10 كم
+          finalPrice = 4500.0;
         } else {
-          finalPrice = 7000.0;
+          // 8. مسافات أطول من 10 كم (زيادة 500 لكل كم إضافي)
+          double extraDistance = distanceKm - 10.0;
+          double rawPrice = 4500.0 + (extraDistance * 500.0);
+          finalPrice = (rawPrice / 250.0).round() * 250.0;
+
+          // حماية: وضع حد أقصى للسعر
+          if (finalPrice > 7000.0) finalPrice = 7000.0;
         }
+
         print("✅ [Calc Success] السعر النهائي للكوت: $finalPrice د.ع");
         print("==================================================");
         return {
           'fee': finalPrice,
-          'message': '📏 تسعيرة الكوت الذكية (مسافة: ${distanceKm.toStringAsFixed(2)} كم)',
+          'message': '📏 تسعيرة الكوت المخصصة (مسافة: ${distanceKm.toStringAsFixed(2)} كم)',
           'service_fee': serviceFee,
           'cashback_amount': cashbackAmount
         };
