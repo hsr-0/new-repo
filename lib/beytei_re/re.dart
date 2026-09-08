@@ -12372,8 +12372,6 @@ class MenuScreen extends StatefulWidget {
   State<MenuScreen> createState() => _MenuScreenState();
 }
 
-
-
 class _MenuScreenState extends State<MenuScreen> {
   int _selectedCategoryId = 0;
   List<dynamic> _subcategories = [];
@@ -12389,7 +12387,8 @@ class _MenuScreenState extends State<MenuScreen> {
   final Map<int, GlobalKey> _categoryKeys = {};
   bool _isAutoScrolling = false;
 
-  bool get _isMarketSystem => widget.restaurant.storeType != 'restaurant';
+  
+  bool get _isMarketSystem => widget.restaurant.storeType == 'market' || widget.restaurant.storeType == 'meat';
 
   @override
   void initState() {
@@ -12822,7 +12821,6 @@ class _MenuScreenState extends State<MenuScreen> {
               ),
             ),
             // 🔥 شريط التنبيه الذكي للمنيو
-            // 🔥 شريط التنبيه الذكي للمنيو (يدعم الخصم 0 = رسالة الصناديق)
             SliverToBoxAdapter(
               child: Consumer<PremiumCampaignProvider>(
                 builder: (context, premium, child) {
@@ -12830,30 +12828,25 @@ class _MenuScreenState extends State<MenuScreen> {
                   final includedIds = List<int>.from(premium.config!['included_restaurants'] ?? []);
                   if (!includedIds.contains(widget.restaurant.id)) return const SizedBox.shrink();
 
-                  // 🔥 1. قراءة قيمة الخصم الحقيقية من السيرفر
-                  // 🔥 1. قراءة قيمة الخصم الحقيقية من السيرفر
                   double discountValue = double.tryParse(premium.config!['discount_value'].toString()) ?? 0.0;
                   String discountType = premium.config!['discount_type'] ?? 'percent';
-                  double discountedDeliveryFee = double.tryParse(premium.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0; // ✅ تمت إضافته
+                  double discountedDeliveryFee = double.tryParse(premium.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0;
 
-// 🔥 2. هل الخصم صفر؟ (استثناء delivery_fee و free_item من اعتبارهما صندوق هدايا)
-                  bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee'); // ✅ تمت إضافته
+                  bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee');
 
-// 🔥 3. تجهيز النص حسب الحالة
                   String discountText = "";
                   if (!isZeroDiscount) {
                     if (discountType == 'percent') {
                       discountText = "خصم ${discountValue.toInt()}%";
                     } else if (discountType == 'fixed') {
                       discountText = "خصم ${NumberFormat('#,###', 'ar_IQ').format(discountValue)} د.ع";
-                    } else if (discountType == 'delivery_fee') { // ✅ تمت إضافته
+                    } else if (discountType == 'delivery_fee') {
                       discountText = "توصيل بـ ${discountedDeliveryFee.toInt()} د.ع 🚚";
                     } else {
                       discountText = "هدية مجانية 🎁";
                     }
                   }
 
-                  // 🔥 4. تغيير الألوان والأيقونة حسب نوع الرسالة
                   IconData boxIcon = isZeroDiscount ? Icons.inventory_2_outlined : Icons.local_fire_department;
                   Color mainColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
                   Color subColor  = isZeroDiscount ? Colors.amber.shade700 : Colors.red.shade600;
@@ -12876,7 +12869,6 @@ class _MenuScreenState extends State<MenuScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // 🔥 العنوان الرئيسي (يتغير حسب الحالة)
                               Text(
                                 isZeroDiscount
                                     ? "هذا المطعم مشمول بالعروض الصندوك 🎁"
@@ -12888,7 +12880,6 @@ class _MenuScreenState extends State<MenuScreen> {
                                 ),
                               ),
                               const SizedBox(height: 2),
-                              // 🔥 النص الثانوي (يتغير حسب الحالة)
                               Text(
                                 isZeroDiscount
                                     ? "على طلبك القادم اطلب هسه واربح صندوق الهدايا!"
@@ -12975,7 +12966,6 @@ class _MenuScreenState extends State<MenuScreen> {
           builder: (context, cart, premium, child) {
             if (cart.cartCount == 0) return const SizedBox.shrink();
 
-            // 🔥 تم الإصلاح هنا: نمرر cart.items بدلاً من المجموع، واسم الدالة الصحيح getSmartUpsellData
             final upsellData = premium.getSmartUpsellData(cart.items, widget.restaurant.id);
             final bool showUpsell = upsellData['show'] ?? false;
             final bool isValid = upsellData['is_valid'] ?? false;
@@ -13088,7 +13078,6 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 }
-
 class _StickyCategoryDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
   _StickyCategoryDelegate({required this.child});
@@ -16324,21 +16313,33 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
 
   Future<void> _simulateBoxOpening() async {
     try {
-      // 🔥 هنا يتم استدعاء دالة فتح الصندوق من الـ Provider أو ApiService الخاص بك
-      // مثال: final result = await Provider.of<SmartWalletProvider>(context, listen: false).openBox(widget.boxType, widget.areaId);
+      // 🔥 1. تفعيل الاتصال الحقيقي بالسيرفر (تم إزالة التعليق)
+      final result = await Provider.of<SmartWalletProvider>(context, listen: false)
+          .openBox(widget.boxType, widget.areaId);
 
-      // محاكاة تأخير الشبكة والأنيميشن
-      await Future.delayed(const Duration(seconds: 2));
+      // محاكاة تأخير بسيط للأنيميشن (لكي لا يفتح فجأة إذا كان النت سريعاً)
+      await Future.delayed(const Duration(milliseconds: 800));
 
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _isOpen = true;
-          // _prizeData = result; // قم بتعيين البيانات الحقيقية هنا
-        });
+        // 🔥 2. التحقق مما إذا كان السيرفر أرجع جائزة بالفعل
+        if (result != null) {
+          setState(() {
+            _isLoading = false;
+            _isOpen = true;
+            _prizeData = result; // ✅ تعيين الجائزة الحقيقية
+          });
 
-        // تشغيل أنيميشن الفتح (تمت إزالة كود تشغيل الصوت من هنا)
-        _openCtrl.forward();
+          // تشغيل أنيميشن الفتح
+          _openCtrl.forward();
+        } else {
+          // في حال كان الرصيد صفراً أو حدث خطأ بالسيرفر
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('عذراً، فشل فتح الصندوق أو لا تملك صناديق كافية.'),
+                backgroundColor: Colors.red),
+          );
+          Navigator.pop(context); // إغلاق الشاشة والعودة
+        }
       }
 
     } catch (e) {
@@ -16350,7 +16351,6 @@ class _BoxOpeningAnimationState extends State<BoxOpeningAnimation>
       }
     }
   }
-
   // 🔥🔥🔥 دالة التنظيف الجذرية لمنع التعليق والانهيار 🔥🔥🔥
   void _cleanupAndNavigate(Widget destinationScreen) {
     // 1. إيقاف جميع الأنيميشن فوراً
