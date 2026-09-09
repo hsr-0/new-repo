@@ -46,7 +46,7 @@ final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifie
 final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifier(null);
 
 // =======================================================================
-// 🔥 دوال مساعدة للتحقق من نوع الرسالة (تقبل النص والرقم)
+// 🔥 دوال مساعدة للتحقق من نوع الرسالة
 // =======================================================================
 bool isVoipCall(dynamic data) {
   if (data == null) return false;
@@ -71,28 +71,27 @@ void handleNotificationClick(Map<String, dynamic> data) {
     showIncomingCall(data);
   } else if (data['type'] == 'taxi_chat_message' || data['act'] == 'NEW_MESSAGE') {
     print("💬 [Routing] توجيه لدردشة التاكسي - الرحلة: ${data['ride_id']}");
-    Future.delayed(const Duration(milliseconds: 1500), () {
+    Future.delayed(const Duration(milliseconds: 100), () {
       activeTaxiChatNotifier.value = data;
     });
   } else if (data['type'] == 'chat_message') {
-    Future.delayed(const Duration(milliseconds: 1500), () {
+    Future.delayed(const Duration(milliseconds: 100), () {
       activeChatNotifier.value = data;
     });
   } else if (data['type'] == 'status_update') {
-    Future.delayed(const Duration(milliseconds: 1500), () {
+    Future.delayed(const Duration(milliseconds: 100), () {
       activeTrackingNotifier.value = data;
     });
   }
 }
 
 // =======================================================================
-// 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة باستخدام CallKitParams)
+// 🔥 1. إظهار المكالمة (تم إصلاح قناة الأندرويد لضمان الرنين)
 // =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
 
-  // استخراج البيانات مع دعم الحقول المختلفة (للآيفون والأندرويد)
   final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
   final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
   final String driverImage = data['driver_image'] ?? data['avatar'] ?? 'https://i.imgur.com/7k12epD.png';
@@ -103,7 +102,6 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 
   print("📞 [Show Call] Driver: $driverName, Room: $roomName");
 
-  // ✅ استخدام CallKitParams مع المعاملات الصحيحة
   final params = CallKitParams(
     id: currentUuid,
     nameCaller: driverName,
@@ -127,12 +125,8 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
       ringtonePath: 'system_ringtone_default',
       backgroundColor: '#0955fa',
       actionColor: '#4CAF50',
-      // ✅ استخدام المعامل الصحيح بدلاً من incomingCallNotificationChannelId
-
-      // بدلاً من notificationChannelId
-// أو
-
-
+      // ✅ تمت إضافة هذا السطر لحل مشكلة عدم رنين المكالمة في الأندرويد
+      incomingCallNotificationChannelName: 'Incoming Call',
     ),
     ios: const IOSParams(
       iconName: 'CallKitLogo',
@@ -159,6 +153,7 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 
   await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
+
 // =======================================================================
 // 🔥 2. معالج الخلفية
 // =======================================================================
@@ -166,16 +161,13 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   print("🔥 [Background] Handling a background message: ${message.messageId}");
-  print("🔥 [Background] Data: ${message.data}");
 
   if (isCancelCall(message.data)) {
-    print("❌ [Background] Cancel call received");
     await FlutterCallkitIncoming.endAllCalls();
     return;
   }
 
   if (isVoipCall(message.data)) {
-    print("📞 [Background] VoIP call received - showing incoming call");
     await showIncomingCall(message.data);
   }
 }
@@ -212,7 +204,6 @@ void _showLocalNotification(RemoteMessage message) {
 
 Future<void> _handleTokenRefresh() async {
   FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-    print("🔄 [FCM] Token refreshed");
     await _saveAndRegisterToken(newToken);
   });
 }
@@ -221,14 +212,12 @@ Future<void> _saveAndRegisterToken(String token) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString('fcm_token', token);
 
-  String? voipToken = '';
-
   if (Platform.isIOS) {
     try {
-      voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
+      String? voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
       if (voipToken != null && voipToken.isNotEmpty) {
         await prefs.setString('voip_token', voipToken);
-        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: $voipToken");
+        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح");
       }
     } catch (e) {
       print("⚠️ فشل جلب توكن VoIP: $e");
@@ -237,9 +226,18 @@ Future<void> _saveAndRegisterToken(String token) async {
 }
 
 // =======================================================================
-// 🔥 3. استراتيجية الأذونات
+// 🔥 3. استراتيجية الأذونات (✅ تم حل مشكلة التجميد هنا)
 // =======================================================================
 Future<void> requestLocationPermissionOnly() async {
+  print("🔐 التحقق من حالة الـ GPS...");
+
+  // ✅ الحارس الاستباقي: نمنع جلب الموقع تماماً إذا كان הGPS مغلقاً من إعدادات الهاتف
+  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    print("⚠️ خدمة الموقع (GPS) مغلقة. سيتم التجاوز لمنع توقف التطبيق.");
+    return;
+  }
+
   print("🔐 التحقق من إذن الموقع...");
   final status = await Permission.location.status;
 
@@ -247,31 +245,30 @@ Future<void> requestLocationPermissionOnly() async {
     print("🔍 جاري طلب إذن الموقع...");
     await Permission.location.request();
   }
-  _fetchLocationInBackground();
+
+  if (await Permission.location.isGranted) {
+    _fetchLocationInBackground();
+  }
 }
 
 void _fetchLocationInBackground() async {
   try {
-    print(" [الخلفية] جاري تحديد الموقع بصمت...");
-    Position position = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
-      timeLimit: const Duration(seconds: 10),
-    );
+    print("📍 [الخلفية] جاري تحديد الموقع بصمت...");
+
+    // ✅ نطلب الموقع الأخير أولاً لسرعته الفائقة وعدم استهلاكه للموارد
+    Position? position = await Geolocator.getLastKnownPosition();
+
+    // ✅ إذا لم يكن هناك موقع محفوظ، نطلب الموقع الحالي مع تقليل وقت الانتظار (Timeout)
+    if (position == null) {
+      position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.low,
+        timeLimit: const Duration(seconds: 5), // خفضنا الانتظار إلى 5 ثوانٍ فقط
+      );
+    }
+
     print("✅ [الخلفية] تم التقاط الموقع: ${position.latitude}, ${position.longitude}");
   } catch (e) {
     print("⚠️ [الخلفية] فشل التقاط الموقع: $e");
-  }
-}
-
-Future<void> requestSecondaryPermissions() async {
-  final notifStatus = await Permission.notification.status;
-  if (!notifStatus.isGranted && !notifStatus.isPermanentlyDenied) {
-    await Permission.notification.request();
-  }
-
-  final micStatus = await Permission.microphone.status;
-  if (!micStatus.isGranted && !micStatus.isPermanentlyDenied) {
-    await Permission.microphone.request();
   }
 }
 
@@ -288,7 +285,6 @@ void main() async {
   try {
     if (FirebaseAuth.instance.currentUser == null) {
       await FirebaseAuth.instance.signInAnonymously();
-      print("✅ تم تسجيل دخول الزبون مجهول الهوية في فايربيس بنجاح");
     }
   } catch (e) {
     print("⚠️ خطأ في مصادقة فايربيس: $e");
@@ -320,9 +316,7 @@ void main() async {
       if (response.payload != null) {
         try {
           handleNotificationClick(jsonDecode(response.payload!));
-        } catch (e) {
-          print("Error parsing local notification payload: $e");
-        }
+        } catch (e) {}
       }
     },
   );
@@ -346,17 +340,12 @@ void main() async {
   );
 
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    print("🔔 [FCM] Received message in foreground");
-    print("🔔 [FCM] Data: ${message.data}");
-
     if (isCancelCall(message.data)) {
-      print("❌ [Foreground] Cancel call received");
       await FlutterCallkitIncoming.endAllCalls();
       return;
     }
 
     if (isVoipCall(message.data)) {
-      print("📞 [Foreground] VoIP call received");
       showIncomingCall(message.data);
     } else {
       _showLocalNotification(message);
@@ -364,15 +353,10 @@ void main() async {
   });
 
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    print("🔔 [Message Opened] Data: ${message.data}");
     handleNotificationClick(message.data);
   });
 
-  final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
-  if (initialMessage != null) {
-    print("🚀 تم فتح التطبيق من إشعار وهو مغلق تماماً!");
-    handleNotificationClick(initialMessage.data);
-  }
+  // ✅ تم حذف كود "getInitialMessage" من هنا لأنه كان مكرراً ويسبب مشكلة فتح الإشعار مرتين
 
   await actions.connected();
   await actions.notificationInit();
@@ -419,13 +403,15 @@ class _MyAppState extends State<MyApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTerminatedCall();
 
+      // ✅ معالجة فتح الإشعار والتطبيق مغلق تتم هنا فقط لضمان بناء الواجهة أولاً
       FirebaseMessaging.instance.getInitialMessage().then((message) {
         if (message != null) {
-          print(" [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
+          print("🚀 [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
           handleNotificationClick(message.data);
         }
       });
 
+      // ✅ استدعاء الموقع بشكل آمن
       requestLocationPermissionOnly();
     });
 
@@ -440,65 +426,46 @@ class _MyAppState extends State<MyApp> {
     try {
       dynamic calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is List && calls.isNotEmpty) {
-        print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فوراً...");
         var firstCall = calls.first;
         if (firstCall is Map) {
           activeCallNotifier.value = Map<String, dynamic>.from(firstCall);
         }
       }
     } catch (e) {
-      print("️ Error checking active calls: $e");
+      print("⚠️ Error checking active calls: $e");
     }
   }
 
-  // ✅ معالج الأحداث المحدث والآمن
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((dynamic event) async {
       if (event == null) return;
-
-      print("📞 [CallKit Event] Received: $event");
-
       String? eventType;
       Map<String, dynamic>? eventData;
 
       try {
-        // محاولة 1: النسخة الجديدة (CallEvent object)
         if (event is Object && event.toString().contains('CallEvent')) {
           try {
             var eventObj = event as dynamic;
             eventType = eventObj.event?.toString();
-            eventData = eventObj.body is Map
-                ? Map<String, dynamic>.from(eventObj.body)
-                : null;
+            eventData = eventObj.body is Map ? Map<String, dynamic>.from(eventObj.body) : null;
           } catch (_) {
             try {
               var mapEvent = event as Map;
               eventType = mapEvent['event']?.toString();
-              eventData = mapEvent['body'] is Map
-                  ? Map<String, dynamic>.from(mapEvent['body'])
-                  : null;
+              eventData = mapEvent['body'] is Map ? Map<String, dynamic>.from(mapEvent['body']) : null;
             } catch (_) {}
           }
-        }
-        // محاولة 2: النسخة القديمة (Map مباشرة)
-        else if (event is Map) {
+        } else if (event is Map) {
           eventType = event['event']?.toString();
-          eventData = event['body'] is Map
-              ? Map<String, dynamic>.from(event['body'])
-              : null;
+          eventData = event['body'] is Map ? Map<String, dynamic>.from(event['body']) : null;
         }
       } catch (e) {
-        print("⚠️ Failed to parse event: $e");
         return;
       }
 
       if (eventType == null) return;
 
-      print("📞 [CallKit Event] Type: $eventType, Data: $eventData");
-
-      // معالجة الأحداث
       if (eventType.contains('Accept') || eventType == 'actionCallAccept') {
-        print("✅ [CallKit] تم الضغط على رد...");
         activeCallNotifier.value = eventData ?? {};
       }
       else if (eventType.contains('Decline') ||
@@ -507,14 +474,12 @@ class _MyAppState extends State<MyApp> {
           eventType == 'actionCallDecline' ||
           eventType == 'actionCallEnded' ||
           eventType == 'actionCallTimeout') {
-        print("❌ [CallKit] المكالمة انتهت أو رُفضت.");
         await FlutterCallkitIncoming.endAllCalls();
         activeCallNotifier.value = null;
       }
     });
   }
 
-  // 🔥 استخراج بيانات المكالمة المحدثة لـ LiveKit
   Map<String, String> _extractCallData(Map<String, dynamic> rawData) {
     Map<String, dynamic> extraData = {};
     if (rawData['extra'] != null) {
@@ -541,19 +506,6 @@ class _MyAppState extends State<MyApp> {
   void setThemeMode(ThemeMode mode) => safeSetState(() {
     _themeMode = mode;
   });
-
-  String getRoute([RouteMatch? routeMatch]) {
-    final RouteMatch lastMatch = routeMatch ?? _router.routerDelegate.currentConfiguration.last;
-    final RouteMatchList matchList = lastMatch is ImperativeRouteMatch
-        ? lastMatch.matches
-        : _router.routerDelegate.currentConfiguration;
-    return matchList.uri.toString();
-  }
-
-  List<String> getRouteStack() =>
-      _router.routerDelegate.currentConfiguration.matches
-          .map((e) => getRoute(e as dynamic))
-          .toList();
 
   @override
   Widget build(BuildContext context) {
@@ -585,7 +537,7 @@ class _MyAppState extends State<MyApp> {
             children: [
               if (child != null) child,
 
-              // 1. المكالمة الصوتية (محدثة لـ LiveKit)
+              // 1. المكالمة الصوتية
               ValueListenableBuilder<Map<String, dynamic>?>(
                 valueListenable: activeCallNotifier,
                 builder: (context, callData, _) {
@@ -594,11 +546,8 @@ class _MyAppState extends State<MyApp> {
                   final extractedData = _extractCallData(callData);
 
                   if (extractedData['roomName']!.isEmpty || extractedData['token']!.isEmpty) {
-                    print("⚠️ [Call Screen] Missing roomName or token");
                     return const SizedBox.shrink();
                   }
-
-                  print("📞 [Call Screen] Opening with room: ${extractedData['roomName']}");
 
                   return ActiveVoiceCallScreen(
                     roomName: extractedData['roomName']!,
@@ -777,7 +726,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           _timeoutTimer?.cancel();
           setState(() => _isDriverConnected = true);
           _startTimer();
-          print("✅ الزبون: السائق دخل الغرفة");
         }
       });
 
@@ -786,20 +734,17 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           _timeoutTimer?.cancel();
           setState(() => _isDriverConnected = true);
           _startTimer();
-          print("✅ الزبون: تم استقبال مسار الصوت من السائق");
         }
       });
 
       _listener!.on<ParticipantDisconnectedEvent>((event) {
         if (mounted && _localUserJoined && !_isEngineReleased) {
-          print("📞 الزبون: السائق أنهى المكالمة.");
           _endCall();
         }
       });
 
       _listener!.on<RoomDisconnectedEvent>((event) {
         if (mounted && !_isEngineReleased) {
-          print("⚠️ الزبون: انقطع الاتصال بالغرفة.");
           _endCall();
         }
       });
@@ -817,12 +762,10 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (mounted) {
         setState(() => _localUserJoined = true);
 
-        // ✅✅✅ الإصلاح: استخدام .values.first بدلاً من .first
         if (_room!.remoteParticipants.isNotEmpty) {
           setState(() => _isDriverConnected = true);
           _timeoutTimer?.cancel();
           _startTimer();
-          print("✅ الزبون: السائق موجود مسبقاً في الغرفة (فحص فوري)");
         }
 
         await _room!.localParticipant?.setMicrophoneEnabled(true);
@@ -875,9 +818,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       await _listener?.dispose();
       await _room?.disconnect();
       _room = null;
-    } catch (e) {
-      print("Error releasing LiveKit room: $e");
-    }
+    } catch (e) {}
 
     await FlutterCallkitIncoming.endAllCalls();
     if (mounted) {
@@ -895,9 +836,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       try {
         _listener?.dispose();
         _room?.disconnect();
-      } catch (e) {
-        print("Error in dispose: $e");
-      }
+      } catch (e) {}
     }
 
     FlutterCallkitIncoming.endAllCalls();
@@ -913,7 +852,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ استخدام PopScope الحديث بدلاً من WillPopScope القديم
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
