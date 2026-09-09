@@ -46,8 +46,7 @@ dependencies:
   uuid: ^4.3.3
 
 
-  mobile_scanner: ^3.5.0  # لمسح الباركود
-
+  mobile_scanner: ^6.0.2  # تم التحديث لإصلاح تعطل iOS عند أول تشغيل
 
 
 
