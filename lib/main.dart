@@ -46,6 +46,11 @@ final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifie
 final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifier(null);
 
 // =======================================================================
+// 🔥 متغير عالمي لحفظ بيانات آخر مكالمة واردة (لمنع فقدان البيانات عند الرد)
+// =======================================================================
+Map<String, dynamic>? _lastIncomingCallData;
+
+// =======================================================================
 // 🔥 دوال مساعدة للتحقق من نوع الرسالة (تقبل النص والرقم)
 // =======================================================================
 bool isVoipCall(dynamic data) {
@@ -89,10 +94,12 @@ void handleNotificationClick(Map<String, dynamic> data) {
 // 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة باستخدام CallKitParams)
 // =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
+  // ✅ حفظ البيانات في الذاكرة المؤقتة فوراً لضمان عدم فقدانها عند الضغط على "رد"
+  _lastIncomingCallData = data;
+
   var uuid = const Uuid();
   String currentUuid = uuid.v4();
 
-  // استخراج البيانات مع دعم الحقول المختلفة (للآيفون والأندرويد)
   final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
   final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
   final String driverImage = data['driver_image'] ?? data['avatar'] ?? 'https://i.imgur.com/7k12epD.png';
@@ -103,7 +110,6 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 
   print("📞 [Show Call] Driver: $driverName, Room: $roomName");
 
-  // ✅ استخدام CallKitParams مع المعاملات الصحيحة
   final params = CallKitParams(
     id: currentUuid,
     nameCaller: driverName,
@@ -127,9 +133,11 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
       ringtonePath: 'system_ringtone_default',
       backgroundColor: '#0955fa',
       actionColor: '#4CAF50',
-      // ✅ تمت إضافة القناة لحل مشكلة رنين الصوت في الأندرويد
       incomingCallNotificationChannelName: 'Incoming Call',
       isShowCallID: false,
+      // ✅ إضافات حاسمة لإجبار أندرويد على إظهار الشاشة الكاملة وإيقاظ الجهاز
+      isShowFullLockedScreen: true,
+      isImportant: true,
     ),
     ios: const IOSParams(
       iconName: 'CallKitLogo',
@@ -156,6 +164,7 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
 
   await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
+
 // =======================================================================
 // 🔥 2. معالج الخلفية
 // =======================================================================
@@ -260,7 +269,6 @@ Future<void> requestLocationPermissionOnly() async {
 void _fetchLocationInBackground() async {
   try {
     print("📍 [الخلفية] جاري تحديد الموقع بصمت...");
-    // ✅ استخدام getLastKnownPosition أولاً لمنع الانتظار الطويل
     Position? position = await Geolocator.getLastKnownPosition();
     if (position == null) {
       position = await Geolocator.getCurrentPosition(
@@ -356,13 +364,26 @@ void main() async {
     sound: true,
   );
 
+  // =======================================================================
+  // ✅ معالجة رسائل FCM في الواجهة الأمامية (مع حماية المكالمة المقبولة)
+  // =======================================================================
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
     print("🔔 [FCM] Received message in foreground");
     print("🔔 [FCM] Data: ${message.data}");
 
     if (isCancelCall(message.data)) {
       print("❌ [Foreground] Cancel call received");
+
+      // 🛡️ الحماية الجذرية: تجاهل الإلغاء إذا كانت المكالمة مقبولة بالفعل
+      if (activeCallNotifier.value != null) {
+        print("🛡️ [PROTECTED] تم تجاهل cancel_call لأن المكالمة مقبولة بالفعل ويحاول الزبون الاتصال!");
+        return; // اخرج من الدالة ولا تنفذ endAllCalls
+      }
+
+      // إذا لم تكن مقبولة بعد، ألغِ المكالمة بشكل طبيعي
       await FlutterCallkitIncoming.endAllCalls();
+      activeCallNotifier.value = null;
+      _lastIncomingCallData = null;
       return;
     }
 
@@ -378,8 +399,6 @@ void main() async {
     print("🔔 [Message Opened] Data: ${message.data}");
     handleNotificationClick(message.data);
   });
-
-  // ✅ تم حذف getInitialMessage من هنا لمنع تشغيله مرتين وتسببه بمشاكل وتوقف
 
   await actions.connected();
   await actions.notificationInit();
@@ -428,12 +447,13 @@ class _MyAppState extends State<MyApp> {
 
       FirebaseMessaging.instance.getInitialMessage().then((message) {
         if (message != null) {
-          print(" [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
+          print("🚀 [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
           handleNotificationClick(message.data);
         }
       });
 
       requestLocationPermissionOnly();
+      requestSecondaryPermissions();
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -443,22 +463,44 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
+  // =======================================================================
+  // ✅ التحقق من المكالمات النشطة عند فتح التطبيق (آمن 100%)
+  // =======================================================================
   Future<void> _checkTerminatedCall() async {
     try {
       dynamic calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is List && calls.isNotEmpty) {
         print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فوراً...");
         var firstCall = calls.first;
+
         if (firstCall is Map) {
           activeCallNotifier.value = Map<String, dynamic>.from(firstCall);
+        } else {
+          try {
+            var callObj = firstCall as dynamic;
+            if (callObj.extra != null) {
+              activeCallNotifier.value = Map<String, dynamic>.from(callObj.extra);
+            }
+          } catch (_) {}
         }
       }
     } catch (e) {
-      print("️ Error checking active calls: $e");
+      print("⚠️ Error checking active calls: $e");
     }
   }
 
-  // ✅ معالج الأحداث المحدث والآمن
+  // =======================================================================
+  // ✅ معالج الأحداث (آمن، ديناميكي، ويحتوي على شبكة أمان لاسترداد البيانات)
+  // =======================================================================
+  // =======================================================================
+  // ✅ معالج الأحداث (محدث لاستخراج البيانات من CallKitParams بشكل مضمون)
+  // =======================================================================
+  // =======================================================================
+  // ✅ معالج الأحداث (مصحح ليتوافق مع الهيكل الجديد لـ CallEvent)
+  // =======================================================================
+// =======================================================================
+  // ✅ معالج الأحداث (مصحح ليتوافق مع الإصدارات الحديثة من CallKit)
+  // =======================================================================
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((dynamic event) async {
       if (event == null) return;
@@ -469,54 +511,73 @@ class _MyAppState extends State<MyApp> {
       Map<String, dynamic>? eventData;
 
       try {
-        // محاولة 1: النسخة الجديدة (CallEvent object)
-        if (event is Object && event.toString().contains('CallEvent')) {
-          try {
-            var eventObj = event as dynamic;
-            eventType = eventObj.event?.toString();
-            eventData = eventObj.body is Map
-                ? Map<String, dynamic>.from(eventObj.body)
-                : null;
-          } catch (_) {
-            try {
-              var mapEvent = event as Map;
-              eventType = mapEvent['event']?.toString();
-              eventData = mapEvent['body'] is Map
-                  ? Map<String, dynamic>.from(mapEvent['body'])
-                  : null;
-            } catch (_) {}
-          }
-        }
-        // محاولة 2: النسخة القديمة (Map مباشرة)
-        else if (event is Map) {
+        // 1. تحديد نوع الحدث عن طريق تحويل الكائن إلى نص والبحث عن اسم الكلاس
+        String eventStr = event.toString();
+
+        if (eventStr.contains('CallEventActionCallAccept')) {
+          eventType = 'Accept';
+        } else if (eventStr.contains('CallEventActionCallDecline')) {
+          eventType = 'Decline';
+        } else if (eventStr.contains('CallEventActionCallEnded')) {
+          eventType = 'Ended';
+        } else if (eventStr.contains('CallEventActionCallTimeout')) {
+          eventType = 'Timeout';
+        } else if (event is Map) {
+          // دعم احتياطي للإصدارات القديمة جداً
           eventType = event['event']?.toString();
-          eventData = event['body'] is Map
-              ? Map<String, dynamic>.from(event['body'])
-              : null;
+        }
+
+        // 2. استخراج البيانات (extra) بأمان تام
+        try {
+          var params = (event as dynamic).callKitParams;
+          if (params != null && params.extra != null) {
+            if (params.extra is Map) {
+              eventData = Map<String, dynamic>.from(params.extra);
+            } else if (params.extra is String) {
+              eventData = Map<String, dynamic>.from(jsonDecode(params.extra));
+            }
+          }
+        } catch (e) {
+          print("⚠️ تعذر استخراج callKitParams، سيتم الاعتماد على البيانات الاحتياطية.");
         }
       } catch (e) {
         print("⚠️ Failed to parse event: $e");
+      }
+
+      if (eventType == null) {
+        print("⚠️ لم يتم التعرف على نوع الحدث.");
         return;
       }
 
-      if (eventType == null) return;
+      print("📞 [CallKit Event] Parsed Type: $eventType");
 
-      print("📞 [CallKit Event] Type: $eventType, Data: $eventData");
-
-      // معالجة الأحداث
-      if (eventType.contains('Accept') || eventType == 'actionCallAccept') {
-        print("✅ [CallKit] تم الضغط على رد...");
-        activeCallNotifier.value = eventData ?? {};
+      // 🚀 شبكة الأمان القصوى: إذا فشل استخراج البيانات، نستخدم المحفوظة سابقاً
+      if (eventData == null || eventData.isEmpty || eventData['room_name'] == null) {
+        print("♻️ [FALLBACK] يتم الاعتماد الكلي على _lastIncomingCallData");
+        eventData = _lastIncomingCallData;
       }
-      else if (eventType.contains('Decline') ||
-          eventType.contains('Ended') ||
-          eventType.contains('Timeout') ||
-          eventType == 'actionCallDecline' ||
-          eventType == 'actionCallEnded' ||
-          eventType == 'actionCallTimeout') {
+
+      // 1️⃣ معالجة زر الرد (قبول المكالمة)
+      if (eventType == 'Accept' || eventType.contains('actionCallAccept')) {
+        print("✅ [CallKit] تم الضغط على رد... جاري فتح الشاشة");
+
+        final mergedData = {
+          ...?_lastIncomingCallData, // الأولوية المطلقة للبيانات المحفوظة مسبقاً
+          ...?(eventData ?? {}),
+        };
+
+        print("🔍 [DEBUG] Room: ${mergedData['room_name']}, Token exists: ${mergedData['token'] != null}");
+
+        // إشعار الواجهة لفتح شاشة المكالمة
+        activeCallNotifier.value = mergedData;
+      }
+      // 2️⃣ معالجة الرفض أو الإنهاء أو انتهاء الوقت
+      else if (eventType == 'Decline' || eventType == 'Ended' || eventType == 'Timeout' ||
+          eventType.contains('actionCallDecline') || eventType.contains('actionCallEnded') || eventType.contains('actionCallTimeout')) {
         print("❌ [CallKit] المكالمة انتهت أو رُفضت.");
         await FlutterCallkitIncoming.endAllCalls();
         activeCallNotifier.value = null;
+        _lastIncomingCallData = null;
       }
     });
   }
@@ -596,6 +657,9 @@ class _MyAppState extends State<MyApp> {
               ValueListenableBuilder<Map<String, dynamic>?>(
                 valueListenable: activeCallNotifier,
                 builder: (context, callData, _) {
+                  // ✅ طباعة تشخيصية للتأكد من عدم إلغاء البيانات فجأة
+                  print("🔍 [UI Builder] حالة callData: ${callData == null ? 'فارغة (null)' : 'موجودة وتحتوي على بيانات'}");
+
                   if (callData == null) return const SizedBox.shrink();
 
                   final extractedData = _extractCallData(callData);
@@ -605,7 +669,7 @@ class _MyAppState extends State<MyApp> {
                     return const SizedBox.shrink();
                   }
 
-                  print("📞 [Call Screen] Opening with room: ${extractedData['roomName']}");
+                  print("📞 [Call Screen] ✅ SHOWING SCREEN with room: ${extractedData['roomName']}");
 
                   return ActiveVoiceCallScreen(
                     roomName: extractedData['roomName']!,
@@ -613,6 +677,7 @@ class _MyAppState extends State<MyApp> {
                     token: extractedData['token']!,
                     remoteName: extractedData['driverName']!,
                     onCallEnded: () {
+                      print("📞 [Call Screen] Call ended callback triggered");
                       activeCallNotifier.value = null;
                     },
                   );
@@ -699,14 +764,15 @@ class _MyAppState extends State<MyApp> {
 }
 
 // =======================================================================
-// 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit)
+// 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit - النسخة المحسنة والآمنة)
 // =======================================================================
 class ActiveVoiceCallScreen extends StatefulWidget {
   final String roomName;
   final String livekitUrl;
   final String token;
   final String remoteName;
-  final VoidCallback onCallEnded;
+  final String? orderId;
+  final VoidCallback? onCallEnded;
 
   const ActiveVoiceCallScreen({
     super.key,
@@ -714,7 +780,8 @@ class ActiveVoiceCallScreen extends StatefulWidget {
     required this.livekitUrl,
     required this.token,
     required this.remoteName,
-    required this.onCallEnded,
+    this.orderId,
+    this.onCallEnded,
   });
 
   @override
@@ -725,8 +792,8 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   Room? _room;
   EventsListener<RoomEvent>? _listener;
 
-  bool _localUserJoined = false;
-  bool _isDriverConnected = false;
+  bool _isConnected = false;
+  bool _isRemoteConnected = false;
 
   bool _isMuted = false;
   bool _isSpeaker = true;
@@ -739,66 +806,87 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   String _errorMessage = "";
   bool _isEngineReleased = false;
 
+  AudioTrack? _remoteAudioTrack;
+  RemoteParticipant? _remoteParticipant;
+
   @override
   void initState() {
     super.initState();
     _initLiveKit();
 
     _timeoutTimer = Timer(const Duration(seconds: 45), () {
-      if (!_isDriverConnected && !_isEngineReleased) {
-        print("⏳ انتهى الوقت ولم يتم الاتصال بالسائق، جاري إنهاء المكالمة.");
+      if (!_isRemoteConnected && mounted && !_isEngineReleased) {
+        print("⏳ انتهى الوقت ولم يتم الاتصال (Order: ${widget.orderId ?? 'N/A'})");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('السائق لا يرد حالياً'), backgroundColor: Colors.orange),
+        );
         _endCall();
       }
     });
   }
 
   Future<void> _initLiveKit() async {
+    // 🚀 تأخير بسيط لضمان ظهور الشاشة قبل طلب المايكروفون (أندرويد 14+)
+    await Future.delayed(const Duration(milliseconds: 1200));
+
     final status = await Permission.microphone.request();
     if (status.isDenied || status.isPermanentlyDenied) {
-      if (mounted) {
-        setState(() {
-          _hasError = true;
-          _errorMessage = "يرجى منح صلاحية المايكروفون في إعدادات الجهاز";
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _hasError = true;
+        _errorMessage = "يرجى منح صلاحية المايكروفون من إعدادات الجهاز";
+      });
       return;
     }
 
-    if (Platform.isIOS) {
-      final session = await AudioSession.instance;
-      await session.configure(AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
-        AVAudioSessionCategoryOptions.defaultToSpeaker,
-        avAudioSessionMode: AVAudioSessionMode.voiceChat,
-        avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
-      ));
-    }
-
     try {
+      if (Platform.isIOS) {
+        final session = await AudioSession.instance;
+        await session.configure(AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
+          AVAudioSessionCategoryOptions.defaultToSpeaker,
+          avAudioSessionMode: AVAudioSessionMode.voiceChat,
+          avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        ));
+      }
+
       _room = Room();
       _listener = _room!.createListener();
 
       _listener!.on<ParticipantConnectedEvent>((event) {
-        if (mounted && !_isEngineReleased && !_isDriverConnected) {
-          _timeoutTimer?.cancel();
-          setState(() => _isDriverConnected = true);
-          _startTimer();
+        if (mounted && !_isEngineReleased && !_isRemoteConnected) {
+          setState(() {
+            _remoteParticipant = event.participant;
+          });
           print("✅ الزبون: السائق دخل الغرفة");
         }
       });
 
       _listener!.on<TrackSubscribedEvent>((event) {
-        if (mounted && !_isEngineReleased && !_isDriverConnected) {
+        if (mounted && !_isEngineReleased) {
           _timeoutTimer?.cancel();
-          setState(() => _isDriverConnected = true);
+          setState(() {
+            _isRemoteConnected = true;
+            if (event.track is AudioTrack) {
+              _remoteAudioTrack = event.track as AudioTrack;
+            }
+          });
           _startTimer();
-          print("✅ الزبون: تم استقبال مسار الصوت من السائق");
+          print("✅ الزبون: تم استقبال مسار الصوت (سيُشغَّل تلقائياً)");
+        }
+      });
+
+      _listener!.on<TrackUnsubscribedEvent>((event) {
+        if (mounted && event.track is AudioTrack) {
+          setState(() {
+            _remoteAudioTrack = null;
+          });
         }
       });
 
       _listener!.on<ParticipantDisconnectedEvent>((event) {
-        if (mounted && _localUserJoined && !_isEngineReleased) {
+        if (mounted && _isConnected && !_isEngineReleased) {
           print("📞 الزبون: السائق أنهى المكالمة.");
           _endCall();
         }
@@ -822,20 +910,28 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       );
 
       if (mounted) {
-        setState(() => _localUserJoined = true);
+        setState(() => _isConnected = true);
 
-        // ✅✅✅ الإصلاح: استخدام .values.first بدلاً من .first
+        // ✅✅✅ الإصلاح الحاسم: استخدام .values.first لأن remoteParticipants هي Map
         if (_room!.remoteParticipants.isNotEmpty) {
-          setState(() => _isDriverConnected = true);
           _timeoutTimer?.cancel();
+          setState(() {
+            _isRemoteConnected = true;
+            _remoteParticipant = _room!.remoteParticipants.values.first;
+          });
           _startTimer();
-          print("✅ الزبون: السائق موجود مسبقاً في الغرفة (فحص فوري)");
+          print("✅ الزبون: السائق موجود مسبقاً في الغرفة (فحص فوري)!");
         }
 
         await _room!.localParticipant?.setMicrophoneEnabled(true);
-        await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
-      }
 
+        await Future.delayed(const Duration(milliseconds: 300));
+        try {
+          await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+        } catch (e) {
+          print("⚠️ تحذير: فشل في تبديل السماعة تلقائياً: $e");
+        }
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -849,7 +945,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   void _startTimer() {
     _durationTimer?.cancel();
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted && _isDriverConnected) {
+      if (mounted && _isRemoteConnected) {
         setState(() => _callDuration++);
       }
     });
@@ -868,7 +964,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   Future<void> _toggleSpeaker() async {
     setState(() => _isSpeaker = !_isSpeaker);
-    await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+    try {
+      await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
+    } catch (e) {
+      print("⚠️ فشل تبديل السماعة: $e");
+    }
   }
 
   void _endCall() async {
@@ -887,8 +987,13 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
 
     await FlutterCallkitIncoming.endAllCalls();
+
     if (mounted) {
-      widget.onCallEnded();
+      if (widget.onCallEnded != null) {
+        widget.onCallEnded!();
+      } else {
+        Navigator.pop(context);
+      }
     }
   }
 
@@ -913,14 +1018,13 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   String _getCallStatus() {
     if (_hasError) return _errorMessage;
-    if (_isDriverConnected) return "متصل الآن 🟢";
-    if (_localUserJoined) return "جاري الاتصال بالكابتن... ⏳";
-    return "تهيئة الاتصال...";
+    if (_isRemoteConnected) return "متصل الآن 🟢";
+    if (_isConnected) return "يرن عند السائق... ⏳";
+    return "جاري الاتصال بالسيرفر...";
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ استخدام PopScope الحديث بدلاً من WillPopScope القديم
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -971,10 +1075,10 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white.withOpacity(0.5), width: 2),
                     ),
-                    child: CircleAvatar(
+                    child: const CircleAvatar(
                       radius: 70,
-                      backgroundColor: Colors.grey.shade800,
-                      child: const Icon(Icons.local_taxi, size: 70, color: Colors.white70),
+                      backgroundColor: Colors.grey,
+                      child: Icon(Icons.person, size: 70, color: Colors.white70),
                     ),
                   ),
                   const SizedBox(height: 25),
@@ -996,12 +1100,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                     decoration: BoxDecoration(
                       color: _hasError
                           ? Colors.red.withOpacity(0.2)
-                          : (_isDriverConnected ? Colors.green.withOpacity(0.2) : Colors.blue.withOpacity(0.2)),
+                          : (_isRemoteConnected ? Colors.green.withOpacity(0.2) : Colors.blue.withOpacity(0.2)),
                       borderRadius: BorderRadius.circular(25),
                       border: Border.all(
                         color: _hasError
                             ? Colors.red
-                            : (_isDriverConnected ? Colors.green : Colors.blue),
+                            : (_isRemoteConnected ? Colors.green : Colors.blue),
                         width: 1.5,
                       ),
                     ),
@@ -1011,16 +1115,18 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                         Icon(
                           _hasError
                               ? Icons.error
-                              : (_isDriverConnected ? Icons.check_circle : Icons.access_time),
-                          color: _hasError ? Colors.red : (_isDriverConnected ? Colors.green : Colors.blue),
+                              : (_isRemoteConnected ? Icons.check_circle : Icons.access_time),
+                          color: _hasError ? Colors.red : (_isRemoteConnected ? Colors.green : Colors.blue),
                           size: 20,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          _getCallStatus(),
-                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
-                          maxLines: 2,
-                          textAlign: TextAlign.center,
+                        Flexible(
+                          child: Text(
+                            _getCallStatus(),
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+                            maxLines: 2,
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                       ],
                     ),
@@ -1039,80 +1145,68 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
                     BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 15, spreadRadius: 5),
                   ],
                 ),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    return Row(
+                child: Column(
+                  children: [
+                    Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              GestureDetector(
-                                onTap: _toggleMute,
-                                child: Container(
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: BoxDecoration(
-                                    color: _isMuted ? Colors.red.withOpacity(0.2) : Colors.white10,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: _isMuted ? Colors.red : Colors.white70, width: 1.5),
-                                  ),
-                                  child: Icon(_isMuted ? Icons.mic_off : Icons.mic, color: _isMuted ? Colors.red : Colors.white, size: 28),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: _toggleMute,
+                              child: Container(
+                                padding: const EdgeInsets.all(22),
+                                decoration: BoxDecoration(
+                                  color: _isMuted ? Colors.red.withOpacity(0.2) : Colors.white10,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: _isMuted ? Colors.red : Colors.white70, width: 1.5),
                                 ),
+                                child: Icon(_isMuted ? Icons.mic_off : Icons.mic, color: _isMuted ? Colors.red : Colors.white, size: 30),
                               ),
-                              const SizedBox(height: 8),
-                              Text(_isMuted ? "إلغاء الكتم" : "كتم",
-                                style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: _endCall,
-                            child: Container(
-                              padding: const EdgeInsets.all(26),
-                              decoration: BoxDecoration(
-                                color: Colors.redAccent.shade400,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 20, spreadRadius: 5),
-                                ],
-                              ),
-                              child: const Icon(Icons.call_end, color: Colors.white, size: 36),
                             ),
+                            const SizedBox(height: 10),
+                            Text(_isMuted ? "إلغاء الكتم" : "كتم", style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+                          ],
+                        ),
+
+                        GestureDetector(
+                          onTap: _endCall,
+                          child: Container(
+                            padding: const EdgeInsets.all(28),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent.shade400,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 20, spreadRadius: 5),
+                              ],
+                            ),
+                            child: const Icon(Icons.call_end, color: Colors.white, size: 38),
                           ),
                         ),
 
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              GestureDetector(
-                                onTap: _toggleSpeaker,
-                                child: Container(
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: BoxDecoration(
-                                    color: _isSpeaker ? Colors.green.withOpacity(0.2) : Colors.white10,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: _isSpeaker ? Colors.green : Colors.white70, width: 1.5),
-                                  ),
-                                  child: Icon(_isSpeaker ? Icons.volume_up : Icons.volume_down, color: _isSpeaker ? Colors.green : Colors.white, size: 28),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: _toggleSpeaker,
+                              child: Container(
+                                padding: const EdgeInsets.all(22),
+                                decoration: BoxDecoration(
+                                  color: _isSpeaker ? Colors.green.withOpacity(0.2) : Colors.white10,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: _isSpeaker ? Colors.green : Colors.white70, width: 1.5),
                                 ),
+                                child: Icon(_isSpeaker ? Icons.volume_up : Icons.volume_down, color: _isSpeaker ? Colors.green : Colors.white, size: 30),
                               ),
-                              const SizedBox(height: 8),
-                              Text(_isSpeaker ? "إيقاف السماعة" : "تفعيل السماعة",
-                                style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(_isSpeaker ? "إيقاف السماعة" : "تفعيل السماعة", style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+                          ],
                         ),
                       ],
-                    );
-                  },
+                    ),
+                  ],
                 ),
               ),
             ],

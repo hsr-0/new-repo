@@ -44,10 +44,10 @@ android {
 
     defaultConfig {
         applicationId = "co.median.android.wqwnby"
-        minSdk = flutter.minSdkVersion
+        minSdk = 24
         targetSdk = 36
-        versionCode = 88
-        versionName = "1.8.8"
+        versionCode = 89
+        versionName = "1.8.9"
     }
 
     // --- هذا هو الجزء المطلوب حله للمشكلة ---
