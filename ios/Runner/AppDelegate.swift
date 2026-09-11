@@ -8,7 +8,7 @@ import flutter_callkit_incoming
 @objc class AppDelegate: FlutterAppDelegate {
 
     var voipRegistry: PKPushRegistry?
-    var backgroundEngine: FlutterEngine?
+    // 🗑️ تم إزالة محرك فلاتر الخلفي (backgroundEngine) لأنه كان يسبب بطء وانهيار التطبيق
 
     // =======================================================================
     // 🛠️ نظام التشخيص وتسجيل الأحداث (Logger)
@@ -70,7 +70,7 @@ import flutter_callkit_incoming
 }
 
 // =======================================================================
-// VoIP Push Registry Delegate - نظام الاتصال واستلام الإشعارات
+// VoIP Push Registry Delegate - نظام الاتصال واستلام الإشعارات (النسخة السريعة والمحسنة)
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -95,14 +95,7 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلمت آيفون إشعار VoIP جديد من السيرفر")
 
-        // تشغيل محرك الخلفية إذا كان التطبيق مغلقاً تماماً (Cold Start)
-        if self.window?.rootViewController as? FlutterViewController == nil {
-            writeLog("⚙️ التطبيق مغلق، جاري تشغيل محرك الخلفية")
-            let engine = FlutterEngine(name: "VoIPBackgroundEngine")
-            engine.run(withEntrypoint: nil)
-            GeneratedPluginRegistrant.register(with: engine)
-            self.backgroundEngine = engine
-        }
+        // 🗑️ تم إزالة كود تشغيل محرك فلاتر في الخلفية من هنا لتجنب الانهيار (Crash) والسماح بعرض المكالمة فوراً
 
         let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
         let isCancel = (dict["type"] as? String == "cancel_call") || (dict["type"] as? Int == 1)
@@ -111,6 +104,15 @@ extension AppDelegate: PKPushRegistryDelegate {
         let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? ""
         // محاولة استخدام الـ UUID القادم من السيرفر، وإذا فشل نولد واحداً جديداً
         let validUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
+
+        if isCancel {
+            // محاولة إنهاء المكالمة إذا أخطأ السيرفر وأرسلها كـ VoIP
+            writeLog("🚫 معالجة طلب إلغاء المكالمة (UUID: \(validUUID))")
+            let callData = flutter_callkit_incoming.Data(id: validUUID, nameCaller: "", handle: "", type: 0)
+            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
+            completion()
+            return
+        }
 
         let callerName = (dict["name"] as? String) ?? (dict["driver_name"] as? String) ?? "مندوب بيتي"
         let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? "مكالمة واردة"
@@ -132,22 +134,12 @@ extension AppDelegate: PKPushRegistryDelegate {
         callData.duration = duration
         callData.extra = extraDict // الآن النوع متطابق تماماً مع متطلبات المكتبة
 
-        if isCancel {
-            // ✅ التعديل الحاسم: إلغاء المكالمة دون إظهارها أولاً لمنع الوميض/التعطل
-            writeLog("🚫 معالجة طلب إلغاء المكالمة (UUID: \(validUUID))")
-            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
-            completion() // إنهاء المعالجة فوراً
-            return
-        } else {
-            // عرض شاشة المكالمة
-            writeLog("🔔 جاري إرسال أمر الرنين لمكتبة فلاتر! (UUID: \(validUUID))")
-            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
+        // ✅ عرض المكالمة فوراً عبر واجهة النظام (Native) دون تأخير
+        writeLog("🔔 جاري إرسال أمر الرنين لمكتبة فلاتر! (UUID: \(validUUID))")
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
 
-            // ✅ التعديل الحاسم: استدعاء completion على الـ Main Thread لضمان استقرار آبل
-            DispatchQueue.main.async {
-                completion()
-            }
-        }
+        // ✅ إبلاغ آبل بانتهاء المعالجة فوراً لتجنب الانهيار
+        completion()
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
