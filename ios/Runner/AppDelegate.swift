@@ -58,7 +58,6 @@ import Network
                     self.writeLog("📋 تم طلب السجلات من Flutter")
 
                 case "runFullDiagnostics":
-                    // 🔬 تشغيل التشخيص الشامل وإرساله للسيرفر
                     let serverUrl = call.arguments as? String ?? ""
                     self.writeLog("🔬 بدء التشخيص الشامل...")
                     let report = self.collectFullDiagnosticReport()
@@ -72,18 +71,15 @@ import Network
                     }
 
                 case "testLocalCallKit":
-                    // 🧪 اختبار محلي لـ CallKit بدون سيرفر
                     self.writeLog("🧪 بدء اختبار CallKit محلياً...")
                     self.testLocalCallKit(result: result)
 
                 case "checkPermissions":
-                    //  فحص الأذونات
                     let status = self.checkAllPermissions()
                     result(status)
-                    self.writeLog("🔐 تم فحص الأذونات: \(status)")
+                    self.writeLog("🔐 تم فحص الأذونات")
 
                 case "getPushKitStatus":
-                    //  حالة PushKit
                     let status: [String: Any] = [
                         "receivedCount": self.pushKitReceivedCount,
                         "callKitShownCount": self.callKitShownCount,
@@ -123,17 +119,22 @@ import Network
     func collectFullDiagnosticReport() -> [String: Any] {
         var report: [String: Any] = [:]
 
-        // 1. معلومات الجهاز
+        // ✅ الإصلاح 1: الطريقة الصحيحة في Swift للتحقق من المحاكي
+        #if targetEnvironment(simulator)
+        let isPhysicalDeviceText = "لا (محاكي)"
+        #else
+        let isPhysicalDeviceText = "نعم (جهاز حقيقي)"
+        #endif
+
         report["deviceInfo"] = [
             "model": UIDevice.current.model,
             "systemName": UIDevice.current.systemName,
             "systemVersion": UIDevice.current.systemVersion,
             "name": UIDevice.current.name,
-            "identifierForVendor": UIDevice.current.identifierForVendor?.uuidString ?? " مفقود",
-            "isPhysicalDevice": TARGET_OS_SIMULATOR == 0 ? "نعم (جهاز حقيقي)" : "لا (محاكي)"
+            "identifierForVendor": UIDevice.current.identifierForVendor?.uuidString ?? "مفقود",
+            "isPhysicalDevice": isPhysicalDeviceText
         ]
 
-        // 2. حالة التوكنات
         let voipToken = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? ""
         report["tokens"] = [
             "voipToken": voipToken,
@@ -142,7 +143,6 @@ import Network
             "fcmToken": UserDefaults.standard.string(forKey: "flutter.fcm_token") ?? "❌ مفقود"
         ]
 
-        // 3. حالة PushKit
         report["pushKit"] = [
             "isRegistered": voipRegistry != nil,
             "receivedCount": pushKitReceivedCount,
@@ -150,13 +150,9 @@ import Network
             "lastError": lastError ?? "لا يوجد"
         ]
 
-        // 4. الأذونات
         report["permissions"] = checkAllPermissions()
-
-        // 5. حالة الشبكة
         report["network"] = checkNetworkStatus()
 
-        // 6. إعدادات Background Modes
         let bgModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String] ?? []
         report["backgroundModes"] = [
             "configured": bgModes,
@@ -165,10 +161,8 @@ import Network
             "hasAudio": bgModes.contains("audio")
         ]
 
-        // 7. السجلات الأخيرة
         report["recentLogs"] = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
 
-        // 8. معلومات التطبيق
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "غير معروف"
         let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] ?? "غير معروف"
         report["appInfo"] = [
@@ -177,12 +171,10 @@ import Network
             "bundleId": Bundle.main.bundleIdentifier ?? "❌ مفقود"
         ]
 
-        // 9. حالة CallKit Plugin
         report["callKitPlugin"] = [
             "isAvailable": SwiftFlutterCallkitIncomingPlugin.sharedInstance != nil
         ]
 
-        // 10. الوقت
         report["timestamp"] = ISO8601DateFormatter().string(from: Date())
 
         return report
@@ -194,7 +186,6 @@ import Network
     func checkAllPermissions() -> [String: Any] {
         let center = UNUserNotificationCenter.current()
         var result: [String: Any] = [:]
-
         let semaphore = DispatchSemaphore(value: 0)
 
         center.getNotificationSettings { settings in
@@ -224,16 +215,17 @@ import Network
     }
 
     // =======================================================================
-    //  فحص الشبكة
+    //  فحص الشبكة (مع إصلاح خطأ waitUntilFinished)
     // =======================================================================
     func checkNetworkStatus() -> [String: Any] {
         var result: [String: Any] = [:]
 
-        // فحص الاتصال بالإنترنت
         guard let url = URL(string: "https://api.push.apple.com") else {
             result["internet"] = "❌ URL غير صالح"
             return result
         }
+
+        let semaphore = DispatchSemaphore(value: 0)
 
         let task = URLSession.shared.dataTask(with: url) { _, response, error in
             if let error = error {
@@ -243,9 +235,16 @@ import Network
             } else {
                 result["internet"] = "️ استجابة غير معروفة"
             }
+            semaphore.signal()
         }
         task.resume()
-        task.waitUntilFinished()
+
+        // ✅ الإصلاح 2: استخدام DispatchSemaphore للانتظار بشكل آمن بدلاً من الدالة غير الموجودة
+        _ = semaphore.wait(timeout: .now() + 5.0)
+
+        if result["internet"] == nil {
+            result["internet"] = "⏱️ انتهت مهلة الاتصال (5 ثواني)"
+        }
 
         result["applePushServer"] = "تم الفحص"
         return result
@@ -295,7 +294,7 @@ import Network
     // 🧪 اختبار CallKit محلياً
     // =======================================================================
     func testLocalCallKit(result: @escaping FlutterResult) {
-        writeLog(" بدء اختبار CallKit محلياً...")
+        writeLog("🧪 بدء اختبار CallKit محلياً...")
 
         do {
             let testUUID = UUID().uuidString
@@ -321,7 +320,7 @@ import Network
 
             result([
                 "success": true,
-                "message": "تم إرسال أمر CallKit بنجاح. إذا ظهرت الشاشة، فالمكتبة تعمل. إذا لم تظهر، فالمشكلة في إعدادات Background Modes أو الأذونات.",
+                "message": "تم إرسال أمر CallKit بنجاح.",
                 "uuid": testUUID
             ])
 
