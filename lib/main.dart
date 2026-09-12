@@ -791,6 +791,9 @@ class _MyAppState extends State<MyApp> {
 // =======================================================================
 // 🔬 نظام التشخيص الذاتي (Diagnostic System)
 // =======================================================================
+// =======================================================================
+// 🔬 نظام التشخيص الذاتي (Diagnostic System) - النسخة المحسنة
+// =======================================================================
 class DiagnosticScreen extends StatefulWidget {
   @override
   State<DiagnosticScreen> createState() => _DiagnosticScreenState();
@@ -810,9 +813,7 @@ class _DiagnosticScreenState extends State<DiagnosticScreen> {
     });
 
     try {
-      // عنوان السيرفر لاستقبال التقرير
       const serverUrl = 'https://re.beytei.com/?save_ios_diagnostic=1';
-
       final result = await platform.invokeMethod('runFullDiagnostics', serverUrl);
 
       setState(() {
@@ -825,7 +826,6 @@ class _DiagnosticScreenState extends State<DiagnosticScreen> {
 ━━━━━━━━━━━━━━━━━━━━
  الجهاز: ${_lastReport?['deviceInfo']?['name'] ?? 'غير معروف'}
  النظام: ${_lastReport?['deviceInfo']?['systemName'] ?? ''} ${_lastReport?['deviceInfo']?['systemVersion'] ?? ''}
- التطبيق: v${_lastReport?['appInfo']?['version'] ?? '?'} (Build ${_lastReport?['appInfo']?['build'] ?? '?'})
  Bundle ID: ${_lastReport?['appInfo']?['bundleId'] ?? '❌ مفقود'}
 
 🔑 التوكنات:
@@ -836,31 +836,31 @@ class _DiagnosticScreenState extends State<DiagnosticScreen> {
   • مسجل: ${_lastReport?['pushKit']?['isRegistered'] == true ? '✅ نعم' : '❌ لا'}
   • إشعارات مستلمة: ${_lastReport?['pushKit']?['receivedCount'] ?? 0}
   • CallKit معروض: ${_lastReport?['pushKit']?['callKitShownCount'] ?? 0}
-  • آخر خطأ: ${_lastReport?['pushKit']?['lastError'] ?? 'لا يوجد'}
-
- الأذونات:
-  • الإشعارات: ${_getPermissionText(_lastReport?['permissions']?['notifications'])}
-
- الشبكة:
-  • الإنترنت: ${_lastReport?['network']?['internet'] ?? 'غير مفحوص'}
-
-🔄 Background Modes:
-  • VoIP: ${_lastReport?['backgroundModes']?['hasVoIP'] == true ? '✅ مفعّل' : '❌ غير مفعّل'}
-  • Remote Notification: ${_lastReport?['backgroundModes']?['hasRemoteNotification'] == true ? '✅ مفعّل' : '❌ غير مفعّل'}
-  • Audio: ${_lastReport?['backgroundModes']?['hasAudio'] == true ? '✅ مفعّل' : '❌ غير مفعّل'}
 
 📋 الاستجابة من السيرفر:
 ${result['serverResponse'] ?? 'لا توجد استجابة'}
 ━━━━━━━━━━━━━━━━━━━━
-
- افتح هذا الرابط في المتصفح لرؤية التقرير الكامل:
-https://re.beytei.com/?view_ios_diagnostics=1
 ''';
       });
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _diagnosticResult = '❌ فشل التشخيص: $e';
+        // 🔥 فحص نوع الخطأ لإعطاء المستخدم السبب الدقيق
+        if (e.toString().contains('MissingPluginException')) {
+          _diagnosticResult = '''
+⚠️ تنبيه: لم يتم العثور على القناة التشخيصية في النظام!
+
+الأسباب المحتملة:
+1. أنت تستخدم جهاز أندرويد: هذه الأداة مصممة للـ iOS فقط حالياً.
+2. لم تقم بعمل Clean Build: يرجى إغلاق التطبيق وتشغيل الأوامر التالية:
+   flutter clean
+   flutter pub get
+   cd ios && pod install && cd ..
+   flutter run --release
+''';
+        } else {
+          _diagnosticResult = '❌ فشل التشخيص بسبب خطأ غير متوقع:\n$e';
+        }
       });
     }
   }
@@ -876,63 +876,28 @@ https://re.beytei.com/?view_ios_diagnostics=1
       setState(() {
         _isLoading = false;
         _diagnosticResult = '''
-${result['success'] == true ? '✅' : ''} ${result['message'] ?? 'نتيجة غير معروفة'}
-
-UUID: ${result['uuid'] ?? 'غير متوفر'}
+${result['success'] == true ? '✅' : '❌'} ${result['message'] ?? 'نتيجة غير معروفة'}
 
 💡 إذا ظهرت شاشة المكالمة الآن، فالمكتبة تعمل بشكل صحيح.
-   إذا لم تظهر، فالمشكلة في:
-   1. إعدادات Background Modes في Xcode
-   2. أذونات الإشعارات
-   3. توكن VoIP غير صالح
 ''';
       });
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _diagnosticResult = '❌ فشل الاختبار: $e';
+        if (e.toString().contains('MissingPluginException')) {
+          _diagnosticResult = '⚠️ هذه الميزة تعمل على iOS فقط بعد عمل Clean Build.';
+        } else {
+          _diagnosticResult = '❌ فشل الاختبار: $e';
+        }
       });
     }
-  }
-
-  Future<void> _checkPermissions() async {
-    try {
-      final result = await platform.invokeMethod('checkPermissions');
-      final notif = result['notifications'] as Map?;
-
-      setState(() {
-        _diagnosticResult = '''
-🔐 حالة الأذونات:
-━━━━━━━━━━━━━━━━━━━━
-الإشعارات: ${_getPermissionText(notif)}
-  • الصوت: ${notif?['soundSetting'] ?? '?'}
-  • الشارة: ${notif?['badgeSetting'] ?? '?'}
-  • التنبيه: ${notif?['alertSetting'] ?? '?'}
-━━━━━━━━━━━━━━━━━━━━
-
-💡 إذا كانت الإشعارات "مرفوضة"، اذهب إلى:
-   الإعدادات > منصة بيتي > الإشعارات > فعّلها
-''';
-      });
-    } catch (e) {
-      setState(() {
-        _diagnosticResult = '❌ فشل فحص الأذونات: $e';
-      });
-    }
-  }
-
-  String _getPermissionText(Map? notif) {
-    if (notif == null) return 'غير مفحوص';
-    final status = notif['authorizationStatus'] as int? ?? 0;
-    final text = notif['statusText'] as String? ?? 'غير معروف';
-    return '$text (كود: $status)';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(' تشخيص المكالمات'),
+        title: const Text('تشخيص المكالمات'),
         backgroundColor: const Color(0xFF0955fa),
       ),
       body: SingleChildScrollView(
@@ -940,55 +905,30 @@ UUID: ${result['uuid'] ?? 'غير متوفر'}
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // زر التشخيص الشامل
             ElevatedButton.icon(
               onPressed: _isLoading ? null : _runFullDiagnostics,
               icon: _isLoading
-                  ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.science),
-              label: Text(_isLoading ? 'جاري الفحص...' : '🔬 تشغيل التشخيص الشامل وإرساله للسيرفر'),
+              label: Text(_isLoading ? 'جاري الفحص...' : '🔬 تشغيل التشخيص الشامل'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF0955fa),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
             const SizedBox(height: 12),
-
-            // زر اختبار CallKit محلياً
             ElevatedButton.icon(
               onPressed: _isLoading ? null : _testLocalCallKit,
               icon: const Icon(Icons.phone_android),
-              label: const Text(' اختبار CallKit محلياً (بدون سيرفر)'),
+              label: const Text('📞 اختبار CallKit محلياً'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // زر فحص الأذونات
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _checkPermissions,
-              icon: const Icon(Icons.lock),
-              label: const Text('🔐 فحص الأذونات'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
             const SizedBox(height: 20),
-
-            // عرض النتيجة
             if (_diagnosticResult.isNotEmpty)
               Container(
                 padding: const EdgeInsets.all(16),
@@ -999,11 +939,7 @@ UUID: ${result['uuid'] ?? 'غير متوفر'}
                 ),
                 child: SelectableText(
                   _diagnosticResult,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                    height: 1.5,
-                  ),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.5),
                 ),
               ),
           ],
@@ -1012,6 +948,8 @@ UUID: ${result['uuid'] ?? 'غير متوفر'}
     );
   }
 }
+
+
 // =======================================================================
 // 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit - النسخة المحسنة والآمنة)
 // =======================================================================
