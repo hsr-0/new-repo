@@ -12387,7 +12387,6 @@ class _MenuScreenState extends State<MenuScreen> {
   final Map<int, GlobalKey> _categoryKeys = {};
   bool _isAutoScrolling = false;
 
-  
   bool get _isMarketSystem => widget.restaurant.storeType == 'market' || widget.restaurant.storeType == 'meat';
 
   @override
@@ -12454,8 +12453,11 @@ class _MenuScreenState extends State<MenuScreen> {
       final areaName = prefs.getString('shared_area_name') ?? prefs.getString('selectedAreaName') ?? 'المنطقة';
 
       final result = configProvider.calculateFeeDetails(
-        userLat: savedLocation.lat, userLng: savedLocation.lng,
-        restaurantId: widget.restaurant.id, areaId: areaId, areaName: areaName,
+        userLat: savedLocation.lat,
+        userLng: savedLocation.lng,
+        restaurantId: widget.restaurant.id,
+        areaId: areaId,
+        areaName: areaName,
       );
 
       if (mounted) {
@@ -12488,7 +12490,11 @@ class _MenuScreenState extends State<MenuScreen> {
           child: Container(
             padding: const EdgeInsets.all(2),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [Colors.orange, Colors.deepOrange], begin: Alignment.topLeft, end: Alignment.bottomRight),
+              gradient: const LinearGradient(
+                colors: [Colors.orange, Colors.deepOrange],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
               borderRadius: BorderRadius.circular(25),
             ),
             child: Container(
@@ -12498,14 +12504,28 @@ class _MenuScreenState extends State<MenuScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(vertical: 20),
-                    decoration: const BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.only(topLeft: Radius.circular(23), topRight: Radius.circular(23))),
-                    child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.location_on_rounded, color: Colors.white, size: 28), SizedBox(width: 10), Text('تحديد موقع التوصيل', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))]),
+                    decoration: const BoxDecoration(
+                      color: Colors.orange,
+                      borderRadius: BorderRadius.only(topLeft: Radius.circular(23), topRight: Radius.circular(23)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.location_on_rounded, color: Colors.white, size: 28),
+                        SizedBox(width: 10),
+                        Text('تحديد موقع التوصيل', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
                   ),
                   Padding(
                     padding: const EdgeInsets.all(25),
                     child: Column(
                       children: [
-                        const Text('لحساب تكلفة التوصيل من هذا المطعم بدقة، يرجى تحديد موقعك على الخريطة أو تفعيل الـ GPS.', style: TextStyle(fontSize: 15, height: 1.6, color: Colors.grey), textAlign: TextAlign.center),
+                        const Text(
+                          'لحساب تكلفة التوصيل من هذا المطعم بدقة، يرجى تحديد موقعك على الخريطة أو تفعيل الـ GPS.',
+                          style: TextStyle(fontSize: 15, height: 1.6, color: Colors.grey),
+                          textAlign: TextAlign.center,
+                        ),
                         const SizedBox(height: 25),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -12522,7 +12542,12 @@ class _MenuScreenState extends State<MenuScreen> {
                               },
                               icon: const Icon(Icons.map_outlined),
                               label: const Text('تحديد الموقع من الخريطة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                              style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Theme.of(context).primaryColor,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
                             ),
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
@@ -12532,12 +12557,23 @@ class _MenuScreenState extends State<MenuScreen> {
                               },
                               icon: const Icon(Icons.gps_fixed),
                               label: const Text('أعد المحاولة بالـ GPS'),
-                              style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey.shade300, width: 2), foregroundColor: Colors.grey.shade700, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: Colors.grey.shade300, width: 2),
+                                foregroundColor: Colors.grey.shade700,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 15),
-                        TextButton(onPressed: () { Navigator.pop(ctx); Navigator.pop(context); }, child: const Text('العودة للمطاعم', style: TextStyle(color: Colors.grey, fontSize: 14))),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            Navigator.pop(context);
+                          },
+                          child: const Text('العودة للمطاعم', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                        ),
                       ],
                     ),
                   ),
@@ -12555,23 +12591,41 @@ class _MenuScreenState extends State<MenuScreen> {
       final prefs = await SharedPreferences.getInstance();
       final savedLoc = await LocationService.getSavedLocationSimple();
       final areaId = prefs.getInt('selectedAreaId');
-      final result = await Navigator.push(context, MaterialPageRoute(builder: (_) => MapLocationPicker(mapStyleUrl: 'https://tiles.openfreemap.org/styles/liberty', initialLat: savedLoc?.lat, initialLng: savedLoc?.lng)));
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MapLocationPicker(
+            mapStyleUrl: 'https://tiles.openfreemap.org/styles/liberty',
+            initialLat: savedLoc?.lat,
+            initialLng: savedLoc?.lng,
+          ),
+        ),
+      );
       if (result != null && result is Map) {
         double? lat = double.tryParse(result['lat'].toString());
         double? lng = double.tryParse(result['lng'].toString());
         if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
           await LocationService.saveLocation(lat, lng, source: result['source'] ?? 'manual_map', areaId: areaId);
-          if (mounted) setState(() { _isLoadingDeliveryFee = true; _deliveryMessage = 'جاري تحديث الموقع وحساب التسعيرة...'; });
+          if (mounted) {
+            setState(() {
+              _isLoadingDeliveryFee = true;
+              _deliveryMessage = 'جاري تحديث الموقع وحساب التسعيرة...';
+            });
+          }
           await Future.delayed(const Duration(milliseconds: 300));
           await _calculateDeliveryFee();
           return true;
         }
       }
       return false;
-    } catch (e) { return false; }
+    } catch (e) {
+      return false;
+    }
   }
 
-  void _retryCalculation() { _performFullLocationAndFeeCheck(); }
+  void _retryCalculation() {
+    _performFullLocationAndFeeCheck();
+  }
 
   Future<void> _initData() async {
     final provider = Provider.of<CustomerProvider>(context, listen: false);
@@ -12587,7 +12641,9 @@ class _MenuScreenState extends State<MenuScreen> {
         _subcategories = json.decode(cachedCats);
         _isLoadingCats = false;
         _categoryKeys[0] = GlobalKey();
-        for (var cat in _subcategories) _categoryKeys[cat['id']] = GlobalKey();
+        for (var cat in _subcategories) {
+          _categoryKeys[cat['id']] = GlobalKey();
+        }
       });
     }
 
@@ -12600,7 +12656,9 @@ class _MenuScreenState extends State<MenuScreen> {
           _isLoadingCats = false;
           _categoryKeys.clear();
           _categoryKeys[0] = GlobalKey();
-          for (var cat in _subcategories) _categoryKeys[cat['id']] = GlobalKey();
+          for (var cat in _subcategories) {
+            _categoryKeys[cat['id']] = GlobalKey();
+          }
         });
       }
     } catch (e) {
@@ -12610,19 +12668,28 @@ class _MenuScreenState extends State<MenuScreen> {
 
   void _onScroll() {
     if (_isAutoScrolling || _categoryKeys.isEmpty) return;
+
+    if (_scrollController.offset <= 100 && _selectedCategoryId != 0) {
+      setState(() => _selectedCategoryId = 0);
+      _scrollCategoryBarToActive(0);
+      return;
+    }
+
     int newActiveId = _selectedCategoryId;
-    for (var cat in _subcategories.reversed) {
+    for (var cat in _subcategories) {
       final key = _categoryKeys[cat['id']];
-      if (key != null && key.currentContext != null) {
-        final renderBox = key.currentContext?.findRenderObject() as RenderBox?;
+      if (key?.currentContext != null) {
+        final renderBox = key!.currentContext?.findRenderObject() as RenderBox?;
         if (renderBox != null) {
           final position = renderBox.localToGlobal(Offset.zero).dy;
-          if (position > 0 && position <= 300) { newActiveId = cat['id']; break; }
-          if (position <= 0) { newActiveId = cat['id']; break; }
+          if (position >= 0 && position <= 250) {
+            newActiveId = cat['id'];
+            break;
+          }
         }
       }
     }
-    if (_scrollController.offset <= 50 && _categoryKeys.containsKey(0)) newActiveId = 0;
+
     if (_selectedCategoryId != newActiveId) {
       setState(() => _selectedCategoryId = newActiveId);
       _scrollCategoryBarToActive(newActiveId);
@@ -12630,26 +12697,42 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   void _scrollToCategory(int id) async {
-    setState(() { _selectedCategoryId = id; _isAutoScrolling = true; });
+    setState(() {
+      _selectedCategoryId = id;
+      _isAutoScrolling = true;
+    });
     _scrollCategoryBarToActive(id);
-    final key = _categoryKeys[id];
-    if (key != null && key.currentContext != null) {
-      final renderBox = key.currentContext?.findRenderObject() as RenderBox;
-      double targetOffset = _scrollController.offset + renderBox.localToGlobal(Offset.zero).dy - 140.0;
-      if (targetOffset < 0) targetOffset = 0;
-      if (_scrollController.hasClients && targetOffset > _scrollController.position.maxScrollExtent) {
-        targetOffset = _scrollController.position.maxScrollExtent;
+
+    if (id == 0) {
+      _scrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    } else {
+      final key = _categoryKeys[id];
+      if (key?.currentContext != null) {
+        Scrollable.ensureVisible(
+          key!.currentContext!,
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.fastOutSlowIn,
+          alignment: 0.12,
+        );
       }
-      _scrollController.animateTo(targetOffset, duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
     }
-    await Future.delayed(const Duration(milliseconds: 600));
+
+    await Future.delayed(const Duration(milliseconds: 500));
     _isAutoScrolling = false;
   }
 
   void _scrollCategoryBarToActive(int id) {
     if (!_categoryScrollController.hasClients) return;
     int index = id != 0 ? _subcategories.indexWhere((c) => c['id'] == id) + 1 : 0;
-    _categoryScrollController.animateTo(index * 80.0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+    _categoryScrollController.animateTo(
+      index * 85.0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   Future<bool> _onWillPop() async {
@@ -12663,12 +12746,23 @@ class _MenuScreenState extends State<MenuScreen> {
           title: const Text("تفريغ السلة", textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold)),
           content: const Text("سيتم تفريغ محتويات السلة، هل أنت متأكد؟", textAlign: TextAlign.center),
           actions: [
-            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(ctx, true), child: const Text("نعم")),
-            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade200), onPressed: () => Navigator.pop(ctx, false), child: const Text("لا")),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("نعم"),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade200),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("لا"),
+            ),
           ],
         ),
       );
-      if (exit == true) { cart.clearCart(); return true; }
+      if (exit == true) {
+        cart.clearCart();
+        return true;
+      }
       return false;
     }
     return true;
@@ -12684,11 +12778,20 @@ class _MenuScreenState extends State<MenuScreen> {
           provider.updateSingleRestaurantStatus(widget.restaurant.id, false, status['auto_open'], status['auto_close']);
           if (mounted) {
             showDialog(
-              context: context, barrierDismissible: false,
+              context: context,
+              barrierDismissible: false,
               builder: (ctx) => AlertDialog(
                 title: const Text("تنبيه 🛑", style: TextStyle(fontWeight: FontWeight.bold)),
                 content: const Text("عذراً، هذا المطعم أغلق للتو ولا يمكن استقبال طلبات جديدة حالياً."),
-                actions: [TextButton(onPressed: () { Navigator.pop(ctx); Navigator.pop(context); }, child: const Text("حسناً"))],
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      Navigator.pop(context);
+                    },
+                    child: const Text("حسناً"),
+                  )
+                ],
               ),
             );
           }
@@ -12786,17 +12889,34 @@ class _MenuScreenState extends State<MenuScreen> {
               expandedHeight: 220.0,
               pinned: true,
               leading: IconButton(
-                icon: Container(padding: const EdgeInsets.all(6), decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle), child: const Icon(Icons.arrow_back, color: Colors.white, size: 20)),
-                onPressed: () async { if (await _onWillPop() && mounted) Navigator.pop(context); },
+                icon: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                  child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                ),
+                onPressed: () async {
+                  if (await _onWillPop() && mounted) Navigator.pop(context);
+                },
               ),
               flexibleSpace: FlexibleSpaceBar(
                 background: Stack(
                   fit: StackFit.expand,
                   children: [
                     CachedNetworkImage(imageUrl: widget.restaurant.imageUrl, fit: BoxFit.cover),
-                    Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.4), Colors.transparent, Colors.black.withOpacity(0.9)], stops: const [0.0, 0.4, 1.0]))),
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.black.withOpacity(0.4), Colors.transparent, Colors.black.withOpacity(0.9)],
+                          stops: const [0.0, 0.4, 1.0],
+                        ),
+                      ),
+                    ),
                     Positioned(
-                      bottom: 15, left: 15, right: 15,
+                      bottom: 15,
+                      left: 15,
+                      right: 15,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -12807,7 +12927,16 @@ class _MenuScreenState extends State<MenuScreen> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(8)),
-                                child: Row(children: [const Icon(Icons.star, color: Colors.amber, size: 16), const SizedBox(width: 4), Text("${widget.restaurant.averageRating} (${widget.restaurant.ratingCount}+)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13))]),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.star, color: Colors.amber, size: 16),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      "${widget.restaurant.averageRating} (${widget.restaurant.ratingCount}+)",
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                    ),
+                                  ],
+                                ),
                               ),
                               const SizedBox(width: 10),
                               _buildDeliveryFeeWidget(),
@@ -12820,7 +12949,6 @@ class _MenuScreenState extends State<MenuScreen> {
                 ),
               ),
             ),
-            // 🔥 شريط التنبيه الذكي للمنيو
             SliverToBoxAdapter(
               child: Consumer<PremiumCampaignProvider>(
                 builder: (context, premium, child) {
@@ -12849,8 +12977,8 @@ class _MenuScreenState extends State<MenuScreen> {
 
                   IconData boxIcon = isZeroDiscount ? Icons.inventory_2_outlined : Icons.local_fire_department;
                   Color mainColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
-                  Color subColor  = isZeroDiscount ? Colors.amber.shade700 : Colors.red.shade600;
-                  Color bgColor   = isZeroDiscount ? Colors.amber.shade50  : Colors.red.shade50;
+                  Color subColor = isZeroDiscount ? Colors.amber.shade700 : Colors.red.shade600;
+                  Color bgColor = isZeroDiscount ? Colors.amber.shade50 : Colors.red.shade50;
                   Color borderColor = isZeroDiscount ? Colors.amber.shade300 : Colors.red.shade300;
 
                   return Container(
@@ -12870,20 +12998,12 @@ class _MenuScreenState extends State<MenuScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                isZeroDiscount
-                                    ? "هذا المطعم مشمول بالعروض الصندوك 🎁"
-                                    : "هذا المطعم مشمول بـخصم $discountText!",
-                                style: TextStyle(
-                                  color: mainColor,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
+                                isZeroDiscount ? "هذا المطعم مشمول بالعروض الصندوك 🎁" : "هذا المطعم مشمول بـخصم $discountText!",
+                                style: TextStyle(color: mainColor, fontWeight: FontWeight.bold, fontSize: 14),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                isZeroDiscount
-                                    ? "على طلبك القادم اطلب هسه واربح صندوق الهدايا!"
-                                    : "اطلب الآن والخصم يطبق تلقائياً في السلة.",
+                                isZeroDiscount ? "على طلبك القادم اطلب هسه واربح صندوق الهدايا!" : "اطلب الآن والخصم يطبق تلقائياً في السلة.",
                                 style: TextStyle(color: subColor, fontSize: 11),
                               ),
                             ],
@@ -12900,21 +13020,32 @@ class _MenuScreenState extends State<MenuScreen> {
               delegate: _StickyCategoryDelegate(
                 child: Container(
                   decoration: const BoxDecoration(
-                      color: Colors.white,
-                      border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1))
+                    color: Colors.white,
+                    border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
                   ),
                   child: _isLoadingCats && _subcategories.isEmpty
                       ? ListView.builder(
                     scrollDirection: Axis.horizontal,
                     itemCount: 5,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    itemBuilder: (ctx, i) => Shimmer.fromColors(baseColor: Colors.grey.shade300, highlightColor: Colors.grey.shade100, child: Container(width: 80, margin: const EdgeInsets.symmetric(horizontal: 4), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)))),
+                    itemBuilder: (ctx, i) => Shimmer.fromColors(
+                      baseColor: Colors.grey.shade300,
+                      highlightColor: Colors.grey.shade100,
+                      child: Container(
+                        width: 80,
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                      ),
+                    ),
                   )
                       : ListView(
                     controller: _categoryScrollController,
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    children: [_buildCategoryChip(0, "الكل"), ..._subcategories.map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String))],
+                    children: [
+                      _buildCategoryChip(0, "الكل"),
+                      ..._subcategories.map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String)),
+                    ],
                   ),
                 ),
               ),
@@ -12924,44 +13055,132 @@ class _MenuScreenState extends State<MenuScreen> {
                 final menu = provider.menuItems[widget.restaurant.id] ?? [];
 
                 if (provider.isLoadingMenu && menu.isEmpty) {
-                  return SliverToBoxAdapter(child: Column(children: List.generate(5, (index) => _buildMenuShimmer())));
+                  return SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                          (context, index) => _buildMenuShimmer(),
+                      childCount: 5,
+                    ),
+                  );
                 }
 
                 if (menu.isEmpty) {
-                  Restaurant currentRest = provider.allRestaurants.firstWhere((r) => r.id == widget.restaurant.id, orElse: () => widget.restaurant);
+                  Restaurant currentRest = provider.allRestaurants.firstWhere(
+                        (r) => r.id == widget.restaurant.id,
+                    orElse: () => widget.restaurant,
+                  );
                   if (!currentRest.isOpen) {
-                    return SliverFillRemaining(child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.door_sliding_outlined, size: 80, color: Colors.grey.shade400), const SizedBox(height: 16), const Text("المطعم مغلق حالياً", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), const SizedBox(height: 8), Text("يفتح تلقائياً في: ${currentRest.autoOpenTime}", style: TextStyle(fontSize: 16, color: Colors.grey.shade700))])));
+                    return SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.door_sliding_outlined, size: 80, color: Colors.grey.shade400),
+                            const SizedBox(height: 16),
+                            const Text("المطعم مغلق حالياً", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 8),
+                            Text("يفتح تلقائياً في: ${currentRest.autoOpenTime}", style: TextStyle(fontSize: 16, color: Colors.grey.shade700)),
+                          ],
+                        ),
+                      ),
+                    );
                   }
-                  return const SliverFillRemaining(child: Center(child: Text("المطعم لا يحتوي على وجبات حالياً")));
+                  return const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(child: Text("المطعم لا يحتوي على وجبات حالياً")),
+                  );
                 }
 
-                List<Widget> columnChildren = [];
+                List<Widget> sliverSections = [];
+
                 if (_subcategories.isEmpty) {
-                  columnChildren.add(Container(key: _categoryKeys[0]));
-                  for (var item in menu) { columnChildren.add(FoodCard(food: item, isMarket: _isMarketSystem)); }
+                  sliverSections.add(
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                            (context, index) => FoodCard(
+                          key: ValueKey(menu[index].id),
+                          food: menu[index],
+                          isMarket: _isMarketSystem,
+                        ),
+                        childCount: menu.length,
+                        addRepaintBoundaries: true,
+                        addAutomaticKeepAlives: false,
+                      ),
+                    ),
+                  );
                 } else {
-                  columnChildren.add(Container(key: _categoryKeys[0]));
                   for (var cat in _subcategories) {
                     final catItems = menu.where((item) => item.allCategoryIds.contains(cat['id'])).toList();
                     if (catItems.isEmpty) continue;
-                    columnChildren.add(Container(key: _categoryKeys[cat['id']], width: double.infinity, color: Colors.grey.shade50, padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12), child: Text(cat['name'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))));
-                    for (var item in catItems) { columnChildren.add(FoodCard(food: item, isMarket: _isMarketSystem)); }
+
+                    sliverSections.add(
+                      SliverToBoxAdapter(
+                        key: _categoryKeys[cat['id']],
+                        child: Container(
+                          width: double.infinity,
+                          color: Colors.grey.shade50,
+                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                          child: Text(
+                            cat['name'],
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                    );
+
+                    sliverSections.add(
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                              (context, index) => FoodCard(
+                            key: ValueKey(catItems[index].id),
+                            food: catItems[index],
+                            isMarket: _isMarketSystem,
+                          ),
+                          childCount: catItems.length,
+                          addRepaintBoundaries: true,
+                          addAutomaticKeepAlives: false,
+                        ),
+                      ),
+                    );
                   }
+
                   final subcatIds = _subcategories.map((c) => c['id']).toList();
                   final uncategorized = menu.where((item) => !item.allCategoryIds.any((id) => subcatIds.contains(id))).toList();
                   if (uncategorized.isNotEmpty) {
-                    columnChildren.add(Container(width: double.infinity, color: Colors.grey.shade50, padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12), child: const Text("أخرى", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))));
-                    for (var item in uncategorized) { columnChildren.add(FoodCard(food: item, isMarket: _isMarketSystem)); }
+                    sliverSections.add(
+                      SliverToBoxAdapter(
+                        child: Container(
+                          width: double.infinity,
+                          color: Colors.grey.shade50,
+                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                          child: const Text("أخرى", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    );
+
+                    sliverSections.add(
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                              (context, index) => FoodCard(
+                            key: ValueKey(uncategorized[index].id),
+                            food: uncategorized[index],
+                            isMarket: _isMarketSystem,
+                          ),
+                          childCount: uncategorized.length,
+                          addRepaintBoundaries: true,
+                          addAutomaticKeepAlives: false,
+                        ),
+                      ),
+                    );
                   }
                 }
-                columnChildren.add(const SizedBox(height: 90));
-                return SliverToBoxAdapter(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: columnChildren));
+
+                sliverSections.add(const SliverToBoxAdapter(child: SizedBox(height: 90)));
+                return SliverMainAxisGroup(slivers: sliverSections);
               },
             ),
           ],
         ),
-
-        // 🔥🔥🔥 شريط السلة الذكي (Progress Bar) المحاكي للفيديو 🔥🔥🔥
         bottomNavigationBar: Consumer2<CartProvider, PremiumCampaignProvider>(
           builder: (context, cart, premium, child) {
             if (cart.cartCount == 0) return const SizedBox.shrink();
@@ -12991,8 +13210,11 @@ class _MenuScreenState extends State<MenuScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Icon(isValid ? Icons.lock_open_rounded : Icons.lock_outline_rounded,
-                                    color: isValid ? Colors.green : Colors.grey, size: 20),
+                                Icon(
+                                  isValid ? Icons.lock_open_rounded : Icons.lock_outline_rounded,
+                                  color: isValid ? Colors.green : Colors.grey,
+                                  size: 20,
+                                ),
                                 Expanded(
                                   child: Text(
                                     message,
@@ -13021,7 +13243,6 @@ class _MenuScreenState extends State<MenuScreen> {
                           ],
                         ),
                       ),
-
                     Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: ElevatedButton(
@@ -13073,7 +13294,14 @@ class _MenuScreenState extends State<MenuScreen> {
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: isSelected ? Theme.of(context).primaryColor : Colors.transparent),
         ),
-        child: Text(name, style: TextStyle(color: isSelected ? Colors.white : Colors.black87, fontWeight: isSelected ? FontWeight.bold : FontWeight.w600, fontSize: 14)),
+        child: Text(
+          name,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.black87,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+            fontSize: 14,
+          ),
+        ),
       ),
     );
   }
