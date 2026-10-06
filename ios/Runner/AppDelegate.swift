@@ -320,7 +320,7 @@ import Network
 }
 
 // =======================================================================
-// 📞 VoIP Push Registry Delegate (مصحح لمنع الـ Crash نهائياً)
+// 📞 VoIP Push Registry Delegate (النسخة النهائية مع بصمة الإثبات)
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -334,6 +334,9 @@ extension AppDelegate: PKPushRegistryDelegate {
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
+
+        // 🔥🔥🔥 بصمة الإثبات القاطع: إذا ظهر هذا السطر في السجلات، فالكود الجديد يعمل 100% 🔥🔥🔥
+        writeLog("🔥🔥🔥 إثبات قاطع: الكود الجديد يعمل الآن وتم استلام الإشعار! 🔥🔥🔥")
 
         // 1. رفض أي شيء ليس VoIP فوراً مع استدعاء completion
         guard type == .voIP else {
