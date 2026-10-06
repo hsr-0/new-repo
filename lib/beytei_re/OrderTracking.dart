@@ -5,9 +5,9 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart'; // ✅ تأكد من وجود هذه المكتبة
+import 'package:intl/intl.dart';
 
-import '../beytei_re/re.dart'; // تأكد من صحة هذا المسار
+import '../beytei_re/re.dart'; //
 
 class OrderTrackingScreen extends StatefulWidget {
   final dynamic order;
@@ -23,7 +23,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   bool _isSyncing = false;
   StreamSubscription<RemoteMessage>? _fcmSubscription;
 
-  // 🔥 متغير لمنع منح الصندوق مرتين لنفس الطلب في الجلسة الواحدة
+  // متغير لمنع منح الصندوق مرتين لنفس الطلب في الجلسة الواحدة
   bool _boxAlreadyClaimedThisSession = false;
 
   @override
@@ -178,8 +178,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   void _showBoxRewardSnackbar() {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Row(
-          children: const [
+        content: const Row(
+          children: [
             Icon(Icons.inventory_2, color: Colors.white),
             SizedBox(width: 10),
             Expanded(
@@ -243,10 +243,24 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
+  // فتح نافذة تقييم السائق السفلية
+  void _openRatingBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, // لتجنب مشكلة الكيبورد
+      backgroundColor: Colors.transparent,
+      builder: (context) => DriverRatingBottomSheet(
+        orderId: widget.order.id,
+        driverName: _driverName ?? "المندوب",
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     int currentStep = _getStepIndex(_currentStatus);
     bool isCancelled = _currentStatus == 'cancelled' || _currentStatus == 'failed';
+    bool isDelivered = currentStep == 4;
 
     return Scaffold(
       backgroundColor: Colors.grey[100],
@@ -255,7 +269,16 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         centerTitle: true,
         actions: [
           _isSyncing
-              ? const Center(child: Padding(padding: EdgeInsets.symmetric(horizontal: 15), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))))
+              ? const Center(
+              child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 15),
+                  child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)
+                  )
+              )
+          )
               : IconButton(icon: const Icon(Icons.refresh), onPressed: _syncWithServers)
         ],
       ),
@@ -265,6 +288,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           child: Column(
             children: [
+              // قسم التايم لاين
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.symmetric(vertical: 25, horizontal: 15),
@@ -284,9 +308,33 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     : _buildCustomTimeline(currentStep),
               ),
 
+              // زر تقييم المندوب يظهر فقط عند التوصيل
+              if (isDelivered && !isCancelled)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _openRatingBottomSheet,
+                      icon: const Icon(Icons.star_rate_rounded, color: Colors.white, size: 28),
+                      label: const Text(
+                        "قيّم المندوب الآن",
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber.shade600,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                        elevation: 4,
+                      ),
+                    ),
+                  ),
+                ),
+
+              // معلومات المندوب
               if (currentStep >= 1 && _driverName != null && !isCancelled)
                 Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: Colors.blue.shade800,
@@ -336,6 +384,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   ),
                 ),
 
+              // ملخص الطلب والأسعار
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.all(20),
@@ -352,14 +401,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
                     const SizedBox(height: 15),
 
-                    // 🔥🔥🔥 عرض السعر المشطوب والإجمالي بعد الخصم (نفس تصميم المنيو وسجل الطلبات) 🔥🔥🔥
+                    // عرض السعر المشطوب والإجمالي بعد الخصم
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text("الإجمالي المطلوب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         Builder(
                           builder: (context) {
-                            // استخراج القيم بأمان (بما أن order قد يكون dynamic)
                             final double finalTotal = double.tryParse(widget.order.total.toString()) ?? 0.0;
                             final double discountAmount = widget.order.discountAmount != null
                                 ? double.tryParse(widget.order.discountAmount.toString()) ?? 0.0
@@ -372,7 +420,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                               return Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  // السعر النهائي بعد الخصم
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                     decoration: BoxDecoration(
@@ -385,7 +432,6 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  // السعر الأصلي مشطوب
                                   Text(
                                     "${NumberFormat('#,###', 'ar_IQ').format(originalTotal)} د.ع",
                                     style: TextStyle(
@@ -410,6 +456,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   ],
                 ),
               ),
+              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -465,6 +512,236 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             )
         ),
       ],
+    );
+  }
+}
+
+// ==========================================
+// شاشة التقييم السفلية الذكية (Smart Bottom Sheet)
+// ==========================================
+class DriverRatingBottomSheet extends StatefulWidget {
+  final int orderId;
+  final String driverName;
+
+  const DriverRatingBottomSheet({
+    Key? key,
+    required this.orderId,
+    required this.driverName,
+  }) : super(key: key);
+
+  @override
+  State<DriverRatingBottomSheet> createState() => _DriverRatingBottomSheetState();
+}
+
+class _DriverRatingBottomSheetState extends State<DriverRatingBottomSheet> {
+  int _rating = 0;
+  final List<String> _selectedTags = [];
+  final TextEditingController _commentController = TextEditingController();
+  bool _isSubmitting = false;
+
+  // الخيارات الإيجابية تظهر عند التقييم (4 أو 5 نجوم)
+  final List<String> _positiveTags = [
+    'معاملة جيدة',
+    'احترام الموعد',
+    'يرتدي زي المنصة ',
+    'سياقة آمنة',
+    'يحترم الخصوصية'
+  ];
+
+  // الخيارات السلبية تظهر عند التقييم (1 إلى 3 نجوم)
+  final List<String> _negativeTags = [
+    'معاملة سيئة',
+    'طلب الدفع نقداً',
+    'أخذ مبلغ إضافي',
+    'القيادة بتهور',
+    'عدم تشغيل مكيف الهواء',
+    'مشكلة بالانطلاق/الوصول'
+  ];
+
+  void _toggleTag(String tag) {
+    setState(() {
+      if (_selectedTags.contains(tag)) {
+        _selectedTags.remove(tag);
+      } else {
+        _selectedTags.add(tag);
+      }
+    });
+  }
+
+  Future<void> _submitRating() async {
+    if (_rating == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يرجى تحديد عدد النجوم أولاً للتقييم')),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+
+      // إرسال البيانات إلى السيرفر ليتم التعامل معها من قبل نظام الإدارة (Laravel)
+      final response = await http.post(
+        Uri.parse('https://de.beytei.com/api/taxi/v2/rate-driver'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${auth.token}',
+        },
+        body: json.encode({
+          'order_id': widget.orderId,
+          'rating': _rating,
+          'tags': _selectedTags,
+          'comment': _commentController.text.trim(),
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        if (!mounted) return;
+        Navigator.pop(context); // إغلاق النافذة
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('تم إرسال تقييمك بنجاح، شكراً لمساهمتك!'),
+                backgroundColor: Colors.green
+            )
+        );
+      } else {
+        throw Exception('فشل الإرسال');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('حدث خطأ بالاتصال، يرجى المحاولة لاحقاً')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // تحديد قائمة الأزرار (Tags) بناءً على النجوم
+    List<String> currentTags = _rating >= 4 ? _positiveTags : (_rating > 0 ? _negativeTags : []);
+
+    return Container(
+      // تحديد هامش سفلي استجابة لظهور الكيبورد
+      padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+          left: 16,
+          right: 16,
+          top: 15
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // شريط السحب العلوي (مؤشر بصري)
+            Container(
+                width: 50,
+                height: 5,
+                decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(10)
+                )
+            ),
+            const SizedBox(height: 20),
+
+            Text("تقييم السائق", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey.shade800)),
+            const SizedBox(height: 5),
+            Text(widget.driverName, style: TextStyle(fontSize: 16, color: Colors.blue.shade700, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+
+            // صف النجوم الديناميكي
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(5, (index) {
+                return IconButton(
+                  icon: Icon(
+                    index < _rating ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: index < _rating ? Colors.amber : Colors.grey.shade400,
+                    size: 45,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _rating = index + 1;
+                      _selectedTags.clear(); // تفريغ الاختيارات السابقة عند تغيير التقييم
+                    });
+                  },
+                );
+              }),
+            ),
+
+            // ظهور الخيارات (Tags) فقط بعد اختيار النجوم
+            if (_rating > 0) ...[
+              const SizedBox(height: 15),
+              Text(
+                  _rating >= 4 ? "المميزات" : "المساوئ",
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)
+              ),
+              const SizedBox(height: 12),
+
+              Wrap(
+                spacing: 8.0,
+                runSpacing: 8.0,
+                alignment: WrapAlignment.center,
+                children: currentTags.map((tag) {
+                  bool isSelected = _selectedTags.contains(tag);
+                  bool isNegative = _rating < 4; // تحديد ما إذا كان التقييم سلبياً
+                  return ChoiceChip(
+                    label: Text(tag, style: TextStyle(color: isSelected ? Colors.white : Colors.black87)),
+                    selected: isSelected,
+                    selectedColor: isNegative ? Colors.red.shade500 : Colors.blue.shade600,
+                    backgroundColor: Colors.grey.shade100,
+                    onSelected: (bool selected) => _toggleTag(tag),
+                  );
+                }).toList(),
+              ),
+
+              const SizedBox(height: 20),
+
+              // حقل النص للملاحظات الإضافية
+              TextField(
+                controller: _commentController,
+                decoration: InputDecoration(
+                  hintText: "أخبرنا برأيك بخصوص الرحلة (اختياري)...",
+                  prefixIcon: const Icon(Icons.comment_outlined, color: Colors.grey),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: Colors.grey.shade100,
+                ),
+                maxLines: 2,
+              ),
+            ],
+
+            const SizedBox(height: 25),
+
+            // زر إرسال التقييم
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _isSubmitting ? null : _submitRating,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade700,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 2,
+                ),
+                child: _isSubmitting
+                    ? const SizedBox(height: 25, width: 25, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Text("إرسال التقييم", style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
     );
   }
 }
