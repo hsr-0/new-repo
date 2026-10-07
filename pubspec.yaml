@@ -253,6 +253,7 @@ flutter:
     - assets/icon/
     - assets/icon/files/
     - assets/animation/
+    - assets/default_avatar.png
 
   fonts:
     - family: Satoshi

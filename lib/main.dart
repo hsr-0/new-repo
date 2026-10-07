@@ -92,10 +92,7 @@ void handleNotificationClick(Map<String, dynamic> data) {
 }
 
 // =======================================================================
-// 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة باستخدام CallKitParams)
-// =======================================================================
-// =======================================================================
-// 🔥 دالة إظهار المكالمة (مصححة لتعمل في الـ Foreground والخلفية)
+// 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة لتعمل في الـ Foreground والخلفية)
 // =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   print("📞 [Show Call] جاري تجهيز بيانات المكالمة...");
@@ -110,8 +107,10 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
   final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
   final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
 
-  // إصلاح رابط الصورة لضمان HTTPS
-  String driverImage = data['driver_image'] ?? data['avatar'] ?? 'https://banner.beytei.com/default_avatar.png';
+  // إصلاح رابط الصورة: نستخدم الصورة المحلية كخيار افتراضي وأمن
+  String driverImage = data['driver_image'] ?? data['avatar'] ?? 'assets/default_avatar.png';
+
+  // الحفاظ على الأمان: إذا أرسل السيرفر رابطاً، نتأكد أنه HTTPS وليس HTTP
   if (driverImage.startsWith('http://')) {
     driverImage = driverImage.replaceFirst('http://', 'https://');
   }
@@ -182,6 +181,7 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
     print("❌ [Show Call] فشل عرض المكالمة: $e");
   }
 }
+
 // =======================================================================
 // 🔥 2. معالج الخلفية
 // =======================================================================
@@ -267,7 +267,7 @@ Future<void> requestLocationPermissionOnly() async {
   bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
   if (!serviceEnabled) {
     print("⚠️ خدمة الموقع (GPS) مغلقة. سيتم تجاوز الطلب لمنع توقف التطبيق.");
-    return; // ✅ يمنع تجميد التطبيق عندما يكون الموقع مغلقاً
+    return;
   }
 
   print("🔐 التحقق من إذن الموقع...");
@@ -290,7 +290,7 @@ void _fetchLocationInBackground() async {
     if (position == null) {
       position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.low,
-        timeLimit: const Duration(seconds: 5), // ✅ تقليل وقت الانتظار لمنع الـ Crash
+        timeLimit: const Duration(seconds: 5),
       );
     }
     print("✅ [الخلفية] تم التقاط الموقع: ${position.latitude}, ${position.longitude}");
@@ -391,13 +391,11 @@ void main() async {
     if (isCancelCall(message.data)) {
       print("❌ [Foreground] Cancel call received");
 
-      // 🛡️ الحماية الجذرية: تجاهل الإلغاء إذا كانت المكالمة مقبولة بالفعل
       if (activeCallNotifier.value != null) {
-        print("🛡️ [PROTECTED] تم تجاهل cancel_call لأن المكالمة مقبولة بالفعل ويحاول الزبون الاتصال!");
-        return; // اخرج من الدالة ولا تنفذ endAllCalls
+        print("🛡️ [PROTECTED] تم تجاهل cancel_call لأن المكالمة مقبولة بالفعل!");
+        return;
       }
 
-      // إذا لم تكن مقبولة بعد، ألغِ المكالمة بشكل طبيعي
       await FlutterCallkitIncoming.endAllCalls();
       activeCallNotifier.value = null;
       _lastIncomingCallData = null;
@@ -406,6 +404,7 @@ void main() async {
 
     if (isVoipCall(message.data)) {
       print("📞 [Foreground] VoIP call received");
+      // 🔥 هذا هو السطر الحاسم لعرض المكالمة عندما يكون التطبيق مفتوحاً
       showIncomingCall(message.data);
     } else {
       _showLocalNotification(message);
@@ -428,7 +427,7 @@ void main() async {
 
   runApp(ChangeNotifierProvider(
     create: (context) => appState,
-    child: MyApp(),
+    child: const MyApp(),
   ));
 }
 
@@ -436,6 +435,8 @@ void main() async {
 // 🔥 5. التطبيق الرئيسي (MyApp)
 // =======================================================================
 class MyApp extends StatefulWidget {
+  const MyApp({super.key});
+
   @override
   State<MyApp> createState() => _MyAppState();
 
@@ -480,9 +481,6 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  // =======================================================================
-  // ✅ التحقق من المكالمات النشطة عند فتح التطبيق (آمن 100%)
-  // =======================================================================
   Future<void> _checkTerminatedCall() async {
     try {
       dynamic calls = await FlutterCallkitIncoming.activeCalls();
@@ -506,9 +504,6 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  // =======================================================================
-  // ✅ معالج الأحداث (آمن، ديناميكي، ويحتوي على شبكة أمان لاسترداد البيانات)
-  // =======================================================================
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((dynamic event) async {
       if (event == null) return;
@@ -519,7 +514,6 @@ class _MyAppState extends State<MyApp> {
       Map<String, dynamic>? eventData;
 
       try {
-        // 1. تحديد نوع الحدث عن طريق تحويل الكائن إلى نص والبحث عن اسم الكلاس
         String eventStr = event.toString();
 
         if (eventStr.contains('CallEventActionCallAccept')) {
@@ -531,11 +525,9 @@ class _MyAppState extends State<MyApp> {
         } else if (eventStr.contains('CallEventActionCallTimeout')) {
           eventType = 'Timeout';
         } else if (event is Map) {
-          // دعم احتياطي للإصدارات القديمة جداً
           eventType = event['event']?.toString();
         }
 
-        // 2. استخراج البيانات (extra) بأمان تام
         try {
           var params = (event as dynamic).callKitParams;
           if (params != null && params.extra != null) {
@@ -559,28 +551,22 @@ class _MyAppState extends State<MyApp> {
 
       print("📞 [CallKit Event] Parsed Type: $eventType");
 
-      // 🚀 شبكة الأمان القصوى: إذا فشل استخراج البيانات، نستخدم المحفوظة سابقاً
       if (eventData == null || eventData.isEmpty || eventData['room_name'] == null) {
         print("♻️ [FALLBACK] يتم الاعتماد الكلي على _lastIncomingCallData");
         eventData = _lastIncomingCallData;
       }
 
-      // 1️⃣ معالجة زر الرد (قبول المكالمة)
       if (eventType == 'Accept' || eventType.contains('actionCallAccept')) {
         print("✅ [CallKit] تم الضغط على رد... جاري فتح الشاشة");
 
         final mergedData = {
-          ...?_lastIncomingCallData, // الأولوية المطلقة للبيانات المحفوظة مسبقاً
+          ...?_lastIncomingCallData,
           ...?(eventData ?? {}),
         };
 
         print("🔍 [DEBUG] Room: ${mergedData['room_name']}, Token exists: ${mergedData['token'] != null}");
-
-        // إشعار الواجهة لفتح شاشة المكالمة
         activeCallNotifier.value = mergedData;
-      }
-      // 2️⃣ معالجة الرفض أو الإنهاء أو انتهاء الوقت
-      else if (eventType == 'Decline' || eventType == 'Ended' || eventType == 'Timeout' ||
+      } else if (eventType == 'Decline' || eventType == 'Ended' || eventType == 'Timeout' ||
           eventType.contains('actionCallDecline') || eventType.contains('actionCallEnded') || eventType.contains('actionCallTimeout')) {
         print("❌ [CallKit] المكالمة انتهت أو رُفضت.");
         await FlutterCallkitIncoming.endAllCalls();
@@ -590,7 +576,6 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  // 🔥 استخراج بيانات المكالمة المحدثة لـ LiveKit
   Map<String, String> _extractCallData(Map<String, dynamic> rawData) {
     Map<String, dynamic> extraData = {};
     if (rawData['extra'] != null) {
@@ -763,7 +748,7 @@ class _MyAppState extends State<MyApp> {
                 },
               ),
 
-              // ✅✅✅ التعديل هنا: استخدام navigatorKey بدلاً من context لضمان عمل الزر ✅✅✅
+              // زر التشخيص العائم
               Positioned(
                 bottom: 20,
                 left: 20,
@@ -777,7 +762,7 @@ class _MyAppState extends State<MyApp> {
                   child: const Icon(Icons.bug_report, color: Colors.white, size: 20),
                 ),
               ),
-            ], // نهاية الـ Stack
+            ],
           ),
         );
       },
@@ -820,14 +805,12 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. جلب السجلات والتوكن
       final logsResult = await _channel.invokeMethod('getLogs');
       if (logsResult is Map) {
         _logs = logsResult['logs']?.toString() ?? 'لا توجد سجلات';
         _voipToken = logsResult['token']?.toString() ?? '❌ مفقود';
       }
 
-      // 2. جلب حالة PushKit
       final pushKitResult = await _channel.invokeMethod('getPushKitStatus');
       if (pushKitResult is Map) {
         _pushKitStatus = 'استلام VoIP: ${pushKitResult['receivedCount'] ?? 0}\n'
@@ -836,7 +819,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
             'آخر Payload: ${pushKitResult['lastPayload'] ?? 'لا يوجد'}';
       }
 
-      // 3. فحص الأذونات
       final permResult = await _channel.invokeMethod('checkPermissions');
       if (permResult is Map) {
         final notif = permResult['notifications'] as Map?;
@@ -845,7 +827,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
             'الشارة: ${notif?['badgeSetting'] ?? '?'}';
       }
 
-      // 4. التقرير الشامل
       final fullReport = await _channel.invokeMethod('runFullDiagnostics', 'https://re.beytei.com/wp-json/beytei-diagnostics/v1/receive-ios-report');
       if (fullReport is Map) {
         final report = fullReport['report'] as Map?;
