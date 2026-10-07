@@ -107,7 +107,7 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
   final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
   final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
 
-  // إصلاح رابط الصورة: نستخدم الصورة المحلية كخيار افتراضي وأمن
+  // 🔥 إصلاح رابط الصورة: نستخدم الصورة المحلية كخيار افتراضي وأمن 100%
   String driverImage = data['driver_image'] ?? data['avatar'] ?? 'assets/default_avatar.png';
 
   // الحفاظ على الأمان: إذا أرسل السيرفر رابطاً، نتأكد أنه HTTPS وليس HTTP
@@ -792,6 +792,11 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
   String _bgModes = 'جاري التحميل...';
   String _appInfo = 'جاري التحميل...';
   String _testResult = '';
+
+  // 🔥 متغيرات زر طلب المكالمة من السيرفر
+  String _serverCallResult = '';
+  bool _isRequestingCall = false;
+
   bool _isLoading = false;
   bool _isSending = false;
 
@@ -884,6 +889,53 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     }
   }
 
+  // 🔥 دالة طلب مكالمة تشخيصية من السيرفر
+  Future<void> _requestCallFromServer() async {
+    setState(() {
+      _isRequestingCall = true;
+      _serverCallResult = '⏳ جاري طلب مكالمة من السيرفر...\nيرجى الانتظار 5-10 ثوانٍ...';
+    });
+
+    try {
+      String deviceType = Platform.isIOS ? 'ios' : (Platform.isAndroid ? 'android' : 'unknown');
+
+      // تنظيف نص التوكن من أي نصوص إضافية
+      String cleanVoipToken = _voipToken.contains('❌') ? '' : _voipToken.split('\n')[0].trim();
+      String cleanFcmToken = _fcmToken.contains('❌') ? '' : _fcmToken.split('\n')[0].trim();
+
+      final response = await http.post(
+        Uri.parse('https://re.beytei.com/wp-json/beytei/v1/request-diagnostic-call'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'voip_token': cleanVoipToken,
+          'fcm_token': cleanFcmToken,
+          'device_type': deviceType,
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      setState(() {
+        _serverCallResult = data['log'] ?? 'لا يوجد سجل';
+        if (data['http_code'] != null) {
+          _serverCallResult += '\n\n📊 كود HTTP: ${data['http_code']}';
+        }
+        if (data['apple_response'] != null && data['apple_response'].toString().isNotEmpty) {
+          _serverCallResult += '\n🍏 رد Apple: ${data['apple_response']}';
+        }
+        if (data['uuid'] != null) {
+          _serverCallResult += '\n\n🆔 UUID المكالمة: ${data['uuid']}';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _serverCallResult = '❌ خطأ في الاتصال بالسيرفر: $e\n\nتأكد من إضافة كود PHP في functions.php';
+      });
+    }
+
+    setState(() => _isRequestingCall = false);
+  }
+
   Future<void> _sendReportToServer() async {
     setState(() => _isSending = true);
     try {
@@ -928,6 +980,47 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     );
   }
 
+  // 🔥 دالة نسخ كل البيانات
+  Future<void> _copyAllToClipboard() async {
+    final buffer = StringBuffer();
+    buffer.writeln('═══════════════════════════════════════');
+    buffer.writeln(' تقرير تشخيص iOS كامل');
+    buffer.writeln('═══════════════════════════════════════');
+    buffer.writeln('📅 التاريخ: ${DateTime.now()}');
+    buffer.writeln('');
+    buffer.writeln('📱 معلومات التطبيق:\n$_appInfo');
+    buffer.writeln('');
+    buffer.writeln('🖥️ معلومات الجهاز:\n$_deviceInfo');
+    buffer.writeln('');
+    buffer.writeln('🔑 توكن VoIP:\n$_voipToken');
+    buffer.writeln('');
+    buffer.writeln('🔑 توكن FCM:\n$_fcmToken');
+    buffer.writeln('');
+    buffer.writeln('📡 حالة PushKit:\n$_pushKitStatus');
+    buffer.writeln('');
+    buffer.writeln('🔐 الأذونات:\n$_permissions');
+    buffer.writeln('');
+    buffer.writeln('⚙️ أوضاع الخلفية:\n$_bgModes');
+    if (_testResult.isNotEmpty) {
+      buffer.writeln('');
+      buffer.writeln('🧪 نتيجة اختبار CallKit:\n$_testResult');
+    }
+    if (_serverCallResult.isNotEmpty) {
+      buffer.writeln('');
+      buffer.writeln('📞 نتيجة طلب المكالمة من السيرفر:\n$_serverCallResult');
+    }
+    buffer.writeln('');
+    buffer.writeln('📜 سجلات التطبيق:\n$_logs');
+    buffer.writeln('═══════════════════════════════════════');
+
+    await Clipboard.setData(ClipboardData(text: buffer.toString()));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ تم نسخ كل المعلومات! الصقها في المحادثة'), backgroundColor: Colors.green),
+      );
+    }
+  }
+
   Widget _buildSection(String title, String content, {Color borderColor = Colors.blue}) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -961,6 +1054,11 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
         backgroundColor: const Color(0xFF16213e),
         actions: [
           IconButton(
+            icon: const Icon(Icons.copy_all),
+            onPressed: _copyAllToClipboard,
+            tooltip: 'نسخ كل شيء',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadAllData,
             tooltip: 'تحديث',
@@ -974,6 +1072,7 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // الأزرار الرئيسية
             Row(
               children: [
                 Expanded(
@@ -989,6 +1088,23 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isRequestingCall ? null : _requestCallFromServer,
+                    icon: const Icon(Icons.call, size: 18),
+                    label: const Text('طلب مكالمة من السيرفر', style: TextStyle(fontSize: 10)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: _isSending ? null : _sendReportToServer,
@@ -1021,6 +1137,10 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
             if (_testResult.isNotEmpty)
               _buildSection('🧪 نتيجة اختبار CallKit', _testResult,
                   borderColor: _testResult.startsWith('✅') ? Colors.green : Colors.red),
+
+            if (_serverCallResult.isNotEmpty)
+              _buildSection('📞 نتيجة طلب المكالمة من السيرفر', _serverCallResult,
+                  borderColor: _serverCallResult.contains('✅') || _serverCallResult.contains('نجاح') ? Colors.green : Colors.orange),
 
             _buildSection('📱 معلومات التطبيق', _appInfo, borderColor: Colors.purple),
             _buildSection('🖥️ معلومات الجهاز', _deviceInfo, borderColor: Colors.teal),
