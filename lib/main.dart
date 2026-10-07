@@ -493,15 +493,6 @@ class _MyAppState extends State<MyApp> {
   // =======================================================================
   // ✅ معالج الأحداث (آمن، ديناميكي، ويحتوي على شبكة أمان لاسترداد البيانات)
   // =======================================================================
-  // =======================================================================
-  // ✅ معالج الأحداث (محدث لاستخراج البيانات من CallKitParams بشكل مضمون)
-  // =======================================================================
-  // =======================================================================
-  // ✅ معالج الأحداث (مصحح ليتوافق مع الهيكل الجديد لـ CallEvent)
-  // =======================================================================
-// =======================================================================
-  // ✅ معالج الأحداث (مصحح ليتوافق مع الإصدارات الحديثة من CallKit)
-  // =======================================================================
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((dynamic event) async {
       if (event == null) return;
@@ -658,7 +649,6 @@ class _MyAppState extends State<MyApp> {
               ValueListenableBuilder<Map<String, dynamic>?>(
                 valueListenable: activeCallNotifier,
                 builder: (context, callData, _) {
-                  // ✅ طباعة تشخيصية للتأكد من عدم إلغاء البيانات فجأة
                   print("🔍 [UI Builder] حالة callData: ${callData == null ? 'فارغة (null)' : 'موجودة وتحتوي على بيانات'}");
 
                   if (callData == null) return const SizedBox.shrink();
@@ -757,14 +747,13 @@ class _MyAppState extends State<MyApp> {
                 },
               ),
 
-// داخل الـ Stack في builder، أضف هذا قبل آخر عنصر:
+              // ✅✅✅ التعديل هنا: استخدام navigatorKey بدلاً من context لضمان عمل الزر ✅✅✅
               Positioned(
                 bottom: 20,
                 left: 20,
                 child: FloatingActionButton.small(
                   onPressed: () {
-                    Navigator.push(
-                      context,
+                    _router.routerDelegate.navigatorKey.currentState?.push(
                       MaterialPageRoute(builder: (_) => const IOSDiagnosticConsole()),
                     );
                   },
@@ -773,19 +762,15 @@ class _MyAppState extends State<MyApp> {
                 ),
               ),
             ], // نهاية الـ Stack
-
           ),
         );
       },
     );
   }
 }
-// =======================================================================
-// 🔬 نظام التشخيص الذاتي (Diagnostic System)
 
 // =======================================================================
-// 🔬 شاشة التشخيص الشاملة للآيفون (iOS Diagnostic Console)
-// تعمل بدون ماك - مباشرة على جهاز الآيفون
+// 🔬 نظام التشخيص الذاتي (Diagnostic System)
 // =======================================================================
 class IOSDiagnosticConsole extends StatefulWidget {
   const IOSDiagnosticConsole({super.key});
@@ -992,7 +977,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // أزرار التحكم
             Row(
               children: [
                 Expanded(
@@ -1037,18 +1021,13 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
             ),
             const SizedBox(height: 12),
 
-            // نتيجة الاختبار
             if (_testResult.isNotEmpty)
               _buildSection('🧪 نتيجة اختبار CallKit', _testResult,
                   borderColor: _testResult.startsWith('✅') ? Colors.green : Colors.red),
 
-            // معلومات التطبيق
             _buildSection('📱 معلومات التطبيق', _appInfo, borderColor: Colors.purple),
-
-            // معلومات الجهاز
             _buildSection('🖥️ معلومات الجهاز', _deviceInfo, borderColor: Colors.teal),
 
-            // التوكنات
             _buildSection(
               '🔑 توكن VoIP (الآيفون)',
               _voipToken.length > 20 ? '${_voipToken.substring(0, 20)}...\n(الطول: ${_voipToken.length})' : _voipToken,
@@ -1060,17 +1039,11 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
               borderColor: _fcmToken.contains('❌') ? Colors.red : Colors.green,
             ),
 
-            // حالة PushKit
             _buildSection('📡 حالة PushKit', _pushKitStatus, borderColor: Colors.orange),
-
-            // الأذونات
             _buildSection('🔐 الأذونات', _permissions, borderColor: Colors.indigo),
-
-            // أوضاع الخلفية
             _buildSection('⚙️ أوضاع الخلفية (Info.plist)', _bgModes,
                 borderColor: _bgModes.contains('true') ? Colors.green : Colors.red),
 
-            // السجلات
             Container(
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(12),
@@ -1108,7 +1081,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
               ),
             ),
 
-            // دليل التشخيص السريع
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -1141,8 +1113,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
   }
 }
 
-
-// =======================================================================
 // =======================================================================
 // 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit - النسخة المحسنة والآمنة)
 // =======================================================================
@@ -1206,7 +1176,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   }
 
   Future<void> _initLiveKit() async {
-    // 🚀 تأخير بسيط لضمان ظهور الشاشة قبل طلب المايكروفون (أندرويد 14+)
     await Future.delayed(const Duration(milliseconds: 1200));
 
     final status = await Permission.microphone.request();
@@ -1292,7 +1261,6 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (mounted) {
         setState(() => _isConnected = true);
 
-        // ✅✅✅ الإصلاح الحاسم: استخدام .values.first لأن remoteParticipants هي Map
         if (_room!.remoteParticipants.isNotEmpty) {
           _timeoutTimer?.cancel();
           setState(() {
