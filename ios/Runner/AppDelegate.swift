@@ -320,7 +320,7 @@ import Network
 }
 
 // =======================================================================
-// 📞 VoIP Push Registry Delegate (النسخة النهائية مع بصمة الإثبات)
+// 📞 VoIP Push Registry Delegate (النسخة النهائية المُصححة لمنع الـ Crash)
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -335,12 +335,17 @@ extension AppDelegate: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
-        // 🔥🔥🔥 بصمة الإثبات القاطع: إذا ظهر هذا السطر في السجلات، فالكود الجديد يعمل 100% 🔥🔥🔥
-        writeLog("🔥🔥🔥 إثبات قاطع: الكود الجديد يعمل الآن وتم استلام الإشعار! 🔥🔥🔥")
-
-        // 1. رفض أي شيء ليس VoIP فوراً مع استدعاء completion
-        guard type == .voIP else {
+        // 🔥🔥🔥 الإصلاح الجذري المطلق: استخدام defer لضمان استدعاء completion() في جميع الحالات
+        // هذا يمنع نظام iOS من قتل التطبيق بسبب "عدم المعالجة" مهما حدث داخل الدالة
+        defer {
             completion()
+            writeLog("✅ تم استدعاء completion() بنجاح (ضمان عدم الانهيار)")
+        }
+
+        writeLog("🔥🔥🔥 إثبات قاطع: تم استلام الإشعار! 🔥🔥🔥")
+
+        guard type == .voIP else {
+            writeLog("⚠️ تم تجاهل إشعار غير VoIP")
             return
         }
 
@@ -350,11 +355,11 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلام إشعار VoIP (#\(pushKitReceivedCount)) Payload: \(dict)")
 
-        // 2. استخراج الـ UUID بأمان
+        // 1. استخراج الـ UUID بأمان
         let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? ""
         let validUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
 
-        // 3. فحص حالة الإلغاء فوراً
+        // 2. فحص حالة الإلغاء فوراً
         let typeValue = dict["type"]
         let isCancel = (typeValue as? String == "cancel_call") || (typeValue as? Int == 1) || (typeValue as? String == "1")
 
@@ -362,11 +367,10 @@ extension AppDelegate: PKPushRegistryDelegate {
             writeLog("🚫 إلغاء المكالمة (UUID: \(validUUID))")
             let callData = flutter_callkit_incoming.Data(id: validUUID, nameCaller: "", handle: "", type: 1)
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
-            completion() // ⚠️ حاسم: إنهاء المعالجة فوراً
             return
         }
 
-        // 4. استخراج البيانات (مطابق تماماً لما يرسله الـ Backend)
+        // 3. استخراج البيانات (مطابق تماماً لما يرسله الـ Backend)
         let callerName = (dict["nameCaller"] as? String) ?? (dict["driver_name"] as? String) ?? (dict["name"] as? String) ?? "مندوب بيتي"
         let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? "مكالمة واردة"
         let duration = (dict["duration"] as? Int) ?? 60000
@@ -379,10 +383,10 @@ extension AppDelegate: PKPushRegistryDelegate {
         let extraDict = (dict["extra"] as? [String: Any]) ?? dict
 
         let callData = flutter_callkit_incoming.Data(
-            id: validUUID, // ⚠️ يجب أن يطابق الـ UUID المستلم
+            id: validUUID,
             nameCaller: callerName,
             handle: handle,
-            type: 0 // 0 = مكالمة واردة
+            type: 0
         )
         callData.appName = "منصة بيتي"
         callData.avatar = avatar
@@ -391,20 +395,20 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("🔔 جاري عرض CallKit (UUID: \(validUUID), Caller: \(callerName))")
 
-        // 5. 🔥 الإصلاح الجذري للـ Crash: التنفيذ على الخيط الرئيسي وضمان استدعاء completion
+        // 4. محاولة عرض المكالمة بأمان
         DispatchQueue.main.async {
             do {
-                SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
-                self.callKitShownCount += 1
-                self.writeLog("✅ تم إرسال أمر CallKit بنجاح")
+                if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                    plugin.showCallkitIncoming(callData, fromPushKit: true)
+                    self.callKitShownCount += 1
+                    self.writeLog("✅ تم إرسال أمر CallKit بنجاح عبر Plugin")
+                } else {
+                    self.writeLog("⚠️ مكتبة Flutter غير جاهزة (nil). لن يتم عرض الشاشة، لكن التطبيق لن ينهار بفضل defer.")
+                }
             } catch {
                 self.lastError = "فشل عرض CallKit: \(error.localizedDescription)"
                 self.writeLog("❌ \(self.lastError ?? "")")
             }
-
-            // ⚠️ حاسم جداً: إخبار نظام iOS أننا انتهينا من معالجة الإشعار فوراً
-            // عدم استدعاء هذا السطر هو السبب المباشر لرسالة _terminateAppIfThereAreUnhandledVoIPPushes
-            completion()
         }
     }
 
