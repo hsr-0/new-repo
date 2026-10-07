@@ -94,25 +94,37 @@ void handleNotificationClick(Map<String, dynamic> data) {
 // =======================================================================
 // 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة باستخدام CallKitParams)
 // =======================================================================
+// =======================================================================
+// 🔥 دالة إظهار المكالمة (مصححة لتعمل في الـ Foreground والخلفية)
+// =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
-  // ✅ حفظ البيانات في الذاكرة المؤقتة فوراً لضمان عدم فقدانها عند الضغط على "رد"
+  print("📞 [Show Call] جاري تجهيز بيانات المكالمة...");
+
+  // ✅ حفظ البيانات في الذاكرة المؤقتة فوراً
   _lastIncomingCallData = data;
 
-  var uuid = const Uuid();
-  String currentUuid = uuid.v4();
+  // 🔥 الإصلاح الحاسم: استخدام الـ ID المرسل من السيرفر، وإذا لم يوجد نولد واحداً
+  String currentUuid = (data['id'] as String?) ?? (data['order_id'] as String?) ?? const Uuid().v4();
+  print("🔑 [Show Call] باستخدام UUID: $currentUuid");
 
   final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
   final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
-  final String driverImage = data['driver_image'] ?? data['avatar'] ?? 'https://i.imgur.com/7k12epD.png';
+
+  // إصلاح رابط الصورة لضمان HTTPS
+  String driverImage = data['driver_image'] ?? data['avatar'] ?? 'https://banner.beytei.com/default_avatar.png';
+  if (driverImage.startsWith('http://')) {
+    driverImage = driverImage.replaceFirst('http://', 'https://');
+  }
+
   final String roomName = data['room_name'] ?? '';
   final String livekitUrl = data['livekit_url'] ?? 'wss://call.beytei.com';
   final String token = data['token'] ?? '';
   final String orderId = data['order_id']?.toString() ?? '';
 
-  print("📞 [Show Call] Driver: $driverName, Room: $roomName");
+  print("📞 [Show Call] Driver: $driverName, Room: $roomName, Token: ${token.isEmpty ? 'فارغ' : 'موجود'}");
 
   final params = CallKitParams(
-    id: currentUuid,
+    id: currentUuid, // استخدام الـ UUID الصحيح من السيرفر
     nameCaller: driverName,
     appName: 'منصة بيتي',
     avatar: driverImage,
@@ -136,7 +148,6 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
       actionColor: '#4CAF50',
       incomingCallNotificationChannelName: 'Incoming Call',
       isShowCallID: false,
-      // ✅ إضافات حاسمة لإجبار أندرويد على إظهار الشاشة الكاملة وإيقاظ الجهاز
       isShowFullLockedScreen: true,
       isImportant: true,
     ),
@@ -163,9 +174,14 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
     ),
   );
 
-  await FlutterCallkitIncoming.showCallkitIncoming(params);
+  try {
+    print("🚀 [Show Call] جاري استدعاء FlutterCallkitIncoming...");
+    await FlutterCallkitIncoming.showCallkitIncoming(params);
+    print("✅ [Show Call] تم إرسال أمر العرض بنجاح!");
+  } catch (e) {
+    print("❌ [Show Call] فشل عرض المكالمة: $e");
+  }
 }
-
 // =======================================================================
 // 🔥 2. معالج الخلفية
 // =======================================================================
