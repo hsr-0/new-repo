@@ -757,12 +757,21 @@ class _MyAppState extends State<MyApp> {
                 },
               ),
 
-
-
-              // ... (كل الـ ValueListenableBuilders الموجودة سابقاً) ...
-
-              // 🔥🔥🔥 [إضافة جديدة] زر الفحص التشخيصي المؤقت 🔥🔥🔥
-
+// داخل الـ Stack في builder، أضف هذا قبل آخر عنصر:
+              Positioned(
+                bottom: 20,
+                left: 20,
+                child: FloatingActionButton.small(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const IOSDiagnosticConsole()),
+                    );
+                  },
+                  backgroundColor: Colors.red,
+                  child: const Icon(Icons.bug_report, color: Colors.white, size: 20),
+                ),
+              ),
             ], // نهاية الـ Stack
 
           ),
@@ -773,6 +782,366 @@ class _MyAppState extends State<MyApp> {
 }
 // =======================================================================
 // 🔬 نظام التشخيص الذاتي (Diagnostic System)
+
+// =======================================================================
+// 🔬 شاشة التشخيص الشاملة للآيفون (iOS Diagnostic Console)
+// تعمل بدون ماك - مباشرة على جهاز الآيفون
+// =======================================================================
+class IOSDiagnosticConsole extends StatefulWidget {
+  const IOSDiagnosticConsole({super.key});
+
+  @override
+  State<IOSDiagnosticConsole> createState() => _IOSDiagnosticConsoleState();
+}
+
+class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
+  static const _channel = MethodChannel('beytei_deep_debugger');
+
+  String _logs = 'جاري التحميل...';
+  String _voipToken = 'جاري التحميل...';
+  String _fcmToken = 'جاري التحميل...';
+  String _deviceInfo = 'جاري التحميل...';
+  String _pushKitStatus = 'جاري التحميل...';
+  String _permissions = 'جاري التحميل...';
+  String _bgModes = 'جاري التحميل...';
+  String _appInfo = 'جاري التحميل...';
+  String _testResult = '';
+  bool _isLoading = false;
+  bool _isSending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAllData();
+  }
+
+  Future<void> _loadAllData() async {
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. جلب السجلات والتوكن
+      final logsResult = await _channel.invokeMethod('getLogs');
+      if (logsResult is Map) {
+        _logs = logsResult['logs']?.toString() ?? 'لا توجد سجلات';
+        _voipToken = logsResult['token']?.toString() ?? '❌ مفقود';
+      }
+
+      // 2. جلب حالة PushKit
+      final pushKitResult = await _channel.invokeMethod('getPushKitStatus');
+      if (pushKitResult is Map) {
+        _pushKitStatus = 'استلام VoIP: ${pushKitResult['receivedCount'] ?? 0}\n'
+            'عرض CallKit: ${pushKitResult['callKitShownCount'] ?? 0}\n'
+            'آخر خطأ: ${pushKitResult['lastError'] ?? 'لا يوجد'}\n'
+            'آخر Payload: ${pushKitResult['lastPayload'] ?? 'لا يوجد'}';
+      }
+
+      // 3. فحص الأذونات
+      final permResult = await _channel.invokeMethod('checkPermissions');
+      if (permResult is Map) {
+        final notif = permResult['notifications'] as Map?;
+        _permissions = 'الإشعارات: ${notif?['statusText'] ?? 'غير معروف'}\n'
+            'الصوت: ${notif?['soundSetting'] ?? '?'}\n'
+            'الشارة: ${notif?['badgeSetting'] ?? '?'}';
+      }
+
+      // 4. التقرير الشامل
+      final fullReport = await _channel.invokeMethod('runFullDiagnostics', 'https://re.beytei.com/wp-json/beytei-diagnostics/v1/receive-ios-report');
+      if (fullReport is Map) {
+        final report = fullReport['report'] as Map?;
+        if (report != null) {
+          final device = report['deviceInfo'] as Map?;
+          _deviceInfo = 'الموديل: ${device?['model'] ?? '?'}\n'
+              'النظام: ${device?['systemName'] ?? '?'} ${device?['systemVersion'] ?? '?'}\n'
+              'جهاز حقيقي: ${device?['isPhysicalDevice'] ?? '?'}\n'
+              'المعرف: ${device?['identifierForVendor'] ?? '?'}';
+
+          final tokens = report['tokens'] as Map?;
+          _fcmToken = tokens?['fcmToken']?.toString() ?? '❌ مفقود';
+          if (_voipToken == '❌ لا يوجد' || _voipToken == 'جاري التحميل...') {
+            _voipToken = tokens?['voipToken']?.toString() ?? '❌ مفقود';
+          }
+
+          final bg = report['backgroundModes'] as Map?;
+          _bgModes = 'voip: ${bg?['hasVoIP'] ?? false}\n'
+              'audio: ${bg?['hasAudio'] ?? false}\n'
+              'remote-notification: ${bg?['hasRemoteNotification'] ?? false}\n'
+              'الكل: ${bg?['configured'] ?? []}';
+
+          final app = report['appInfo'] as Map?;
+          _appInfo = 'الإصدار: ${app?['version'] ?? '?'}\n'
+              'البناء: ${app?['build'] ?? '?'}\n'
+              'Bundle ID: ${app?['bundleId'] ?? '?'}';
+        }
+      }
+    } catch (e) {
+      _logs = '❌ خطأ في جلب البيانات: $e';
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _testCallKitLocally() async {
+    setState(() {
+      _testResult = '⏳ جاري اختبار CallKit محلياً...';
+    });
+    try {
+      final result = await _channel.invokeMethod('testLocalCallKit');
+      if (result is Map && result['success'] == true) {
+        setState(() {
+          _testResult = '✅ ${result['message']}\nUUID: ${result['uuid']}';
+        });
+      } else {
+        setState(() {
+          _testResult = '❌ فشل: ${result?['message'] ?? 'خطأ غير معروف'}';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _testResult = '❌ خطأ: $e';
+      });
+    }
+  }
+
+  Future<void> _sendReportToServer() async {
+    setState(() => _isSending = true);
+    try {
+      final result = await _channel.invokeMethod(
+        'runFullDiagnostics',
+        'https://re.beytei.com/wp-json/beytei-diagnostics/v1/receive-ios-report',
+      );
+      if (result is Map && result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ تم إرسال التقرير للسيرفر بنجاح'), backgroundColor: Colors.green),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ فشل: ${result?['serverResponse'] ?? 'خطأ'}'), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('❌ خطأ: $e'), backgroundColor: Colors.red),
+      );
+    }
+    setState(() => _isSending = false);
+  }
+
+  Future<void> _clearCacheAndReset() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('voip_token');
+    await prefs.remove('fcm_token');
+    await prefs.remove('ios_debug_logs');
+
+    setState(() {
+      _logs = '🗑️ تم مسح السجلات';
+      _voipToken = '🗑️ تم مسح التوكن (أعد تشغيل التطبيق)';
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('✅ تم مسح الكاش. أعد تشغيل التطبيق لتوليد توكن جديد.'),
+        backgroundColor: Colors.orange,
+        duration: Duration(seconds: 5),
+      ),
+    );
+  }
+
+  Widget _buildSection(String title, String content, {Color borderColor = Colors.blue}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border(right: BorderSide(color: borderColor, width: 4)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
+          const SizedBox(height: 6),
+          SelectableText(
+            content,
+            style: const TextStyle(fontSize: 12, color: Colors.black54, fontFamily: 'monospace'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF1a1a2e),
+      appBar: AppBar(
+        title: const Text('🔬 iOS Diagnostic Console'),
+        backgroundColor: const Color(0xFF16213e),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadAllData,
+            tooltip: 'تحديث',
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Colors.white))
+          : SingleChildScrollView(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // أزرار التحكم
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _testCallKitLocally,
+                    icon: const Icon(Icons.phone, size: 18),
+                    label: const Text('اختبار CallKit', style: TextStyle(fontSize: 11)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isSending ? null : _sendReportToServer,
+                    icon: const Icon(Icons.cloud_upload, size: 18),
+                    label: const Text('إرسال للسيرفر', style: TextStyle(fontSize: 11)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _clearCacheAndReset,
+                    icon: const Icon(Icons.delete_sweep, size: 18),
+                    label: const Text('مسح الكاش', style: TextStyle(fontSize: 11)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // نتيجة الاختبار
+            if (_testResult.isNotEmpty)
+              _buildSection('🧪 نتيجة اختبار CallKit', _testResult,
+                  borderColor: _testResult.startsWith('✅') ? Colors.green : Colors.red),
+
+            // معلومات التطبيق
+            _buildSection('📱 معلومات التطبيق', _appInfo, borderColor: Colors.purple),
+
+            // معلومات الجهاز
+            _buildSection('🖥️ معلومات الجهاز', _deviceInfo, borderColor: Colors.teal),
+
+            // التوكنات
+            _buildSection(
+              '🔑 توكن VoIP (الآيفون)',
+              _voipToken.length > 20 ? '${_voipToken.substring(0, 20)}...\n(الطول: ${_voipToken.length})' : _voipToken,
+              borderColor: _voipToken.contains('❌') ? Colors.red : Colors.green,
+            ),
+            _buildSection(
+              '🔑 توكن FCM',
+              _fcmToken.length > 20 ? '${_fcmToken.substring(0, 20)}...\n(الطول: ${_fcmToken.length})' : _fcmToken,
+              borderColor: _fcmToken.contains('❌') ? Colors.red : Colors.green,
+            ),
+
+            // حالة PushKit
+            _buildSection('📡 حالة PushKit', _pushKitStatus, borderColor: Colors.orange),
+
+            // الأذونات
+            _buildSection('🔐 الأذونات', _permissions, borderColor: Colors.indigo),
+
+            // أوضاع الخلفية
+            _buildSection('⚙️ أوضاع الخلفية (Info.plist)', _bgModes,
+                borderColor: _bgModes.contains('true') ? Colors.green : Colors.red),
+
+            // السجلات
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0d1117),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.withOpacity(0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('📜 سجلات التطبيق (آخر 100 سطر)',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.green)),
+                  const SizedBox(height: 8),
+                  Container(
+                    height: 300,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                        _logs,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Colors.greenAccent,
+                          fontFamily: 'monospace',
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // دليل التشخيص السريع
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.yellow.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.yellow.withOpacity(0.5)),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('💡 دليل التشخيص السريع', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.yellow)),
+                  SizedBox(height: 8),
+                  Text('1. إذا كان توكن VoIP مفقوداً: التطبيق لم يسجل PushKit. تأكد من Info.plist و Xcode Capabilities.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  SizedBox(height: 4),
+                  Text('2. إذا كان "استلام VoIP: 0": الإشعار لم يصل من السيرفر. افحص التوكن في قاعدة البيانات.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  SizedBox(height: 4),
+                  Text('3. إذا كان "استلام > 0" لكن "عرض CallKit: 0": مكتبة flutter_callkit_incoming تفشل. جرب اختبار CallKit محلياً.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  SizedBox(height: 4),
+                  Text('4. إذا نجح الاختبار المحلي لكن المكالمة الحقيقية تفشل: المشكلة في الـ Backend (البيانات المرسلة).', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  SizedBox(height: 4),
+                  Text('5. إذا انهار التطبيق عند المكالمة: اضغط "مسح الكاش" ثم أعد تشغيل التطبيق.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
 // =======================================================================
 // =======================================================================
 // 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit - النسخة المحسنة والآمنة)
