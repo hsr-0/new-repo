@@ -67,6 +67,99 @@ bool isCancelCall(dynamic data) {
 }
 
 // =======================================================================
+// 🔥 مساعد: هل القيمة فارغة؟
+// =======================================================================
+bool _payloadValueIsBlank(dynamic value) {
+  return value == null || value.toString().trim().isEmpty;
+}
+
+// =======================================================================
+// 🔥 مساعد: توحيد بيانات المكالمة القادمة من iOS Native CallKit
+// =======================================================================
+Map<String, dynamic> normalizeNativeCallPayload(Map<String, dynamic> payload) {
+  final Map<String, dynamic> result = Map<String, dynamic>.from(payload);
+
+  Map<String, dynamic> extraMap = <String, dynamic>{};
+
+  final dynamic rawExtra = result['extra'];
+
+  if (rawExtra is Map) {
+    extraMap = Map<String, dynamic>.from(rawExtra);
+  } else if (rawExtra is String) {
+    try {
+      final dynamic decoded = jsonDecode(rawExtra);
+      if (decoded is Map) {
+        extraMap = Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+  }
+
+  void copyIfMissing(String key) {
+    if (_payloadValueIsBlank(result[key]) &&
+        !_payloadValueIsBlank(extraMap[key])) {
+      result[key] = extraMap[key];
+    }
+  }
+
+  const List<String> keysToCopy = [
+    'id',
+    'room_name',
+    'channel_name',
+    'livekit_url',
+    'token',
+    'livekit_token',
+    'order_id',
+    'driver_name',
+    'driver_phone',
+    'driver_image',
+    'nameCaller',
+    'handle',
+    'avatar',
+    'type',
+  ];
+
+  for (final String key in keysToCopy) {
+    copyIfMissing(key);
+  }
+
+  if (extraMap.isNotEmpty) {
+    result['extra'] = extraMap;
+  }
+
+  // توافق مع السيرفر القديم الذي قد يرسل channel_name بدل room_name
+  if (_payloadValueIsBlank(result['room_name']) &&
+      !_payloadValueIsBlank(result['channel_name'])) {
+    result['room_name'] = result['channel_name'];
+  }
+
+  // توافق مع تسمية driver_name بدل nameCaller
+  if (_payloadValueIsBlank(result['nameCaller']) &&
+      !_payloadValueIsBlank(result['driver_name'])) {
+    result['nameCaller'] = result['driver_name'];
+  }
+
+  // توافق مع تسمية driver_phone بدل handle
+  if (_payloadValueIsBlank(result['handle']) &&
+      !_payloadValueIsBlank(result['driver_phone'])) {
+    result['handle'] = result['driver_phone'];
+  }
+
+  // توافق مع تسمية driver_image بدل avatar
+  if (_payloadValueIsBlank(result['avatar']) &&
+      !_payloadValueIsBlank(result['driver_image'])) {
+    result['avatar'] = result['driver_image'];
+  }
+
+  // توافق مع possible livekit_token
+  if (_payloadValueIsBlank(result['token']) &&
+      !_payloadValueIsBlank(result['livekit_token'])) {
+    result['token'] = result['livekit_token'];
+  }
+
+  return result;
+}
+
+// =======================================================================
 // 🔥 دالة التوجيه الموحدة
 // =======================================================================
 void handleNotificationClick(Map<String, dynamic> data) {
@@ -97,10 +190,10 @@ void handleNotificationClick(Map<String, dynamic> data) {
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
   print("📞 [Show Call] جاري تجهيز بيانات المكالمة...");
 
-  // ✅ حفظ البيانات في الذاكرة المؤقتة فوراً
+  // ✅ حفظ البيانات في الذاكرة المؤقتة فورا
   _lastIncomingCallData = data;
 
-  // 🔥 الإصلاح الحاسم: استخدام الـ ID المرسل من السيرفر، وإذا لم يوجد نولد واحداً
+  // 🔥 الإصلاح الحاسم: استخدام الـ ID المرسل من السيرفر، وإذا لم يوجد نولد واحدا
   String currentUuid = (data['id'] as String?) ?? (data['order_id'] as String?) ?? const Uuid().v4();
   print("🔑 [Show Call] باستخدام UUID: $currentUuid");
 
@@ -110,7 +203,7 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
   // 🔥 إصلاح رابط الصورة: نستخدم الصورة المحلية كخيار افتراضي وأمن 100%
   String driverImage = data['driver_image'] ?? data['avatar'] ?? 'assets/default_avatar.png';
 
-  // الحفاظ على الأمان: إذا أرسل السيرفر رابطاً، نتأكد أنه HTTPS وليس HTTP
+  // الحفاظ على الأمان: إذا أرسل السيرفر رابطا، نتأكد أنه HTTPS وليس HTTP
   if (driverImage.startsWith('http://')) {
     driverImage = driverImage.replaceFirst('http://', 'https://');
   }
@@ -404,7 +497,7 @@ void main() async {
 
     if (isVoipCall(message.data)) {
       print("📞 [Foreground] VoIP call received");
-      // 🔥 هذا هو السطر الحاسم لعرض المكالمة عندما يكون التطبيق مفتوحاً
+      // 🔥 هذا هو السطر الحاسم لعرض المكالمة عندما يكون التطبيق مفتوحا
       showIncomingCall(message.data);
     } else {
       _showLocalNotification(message);
@@ -452,6 +545,15 @@ class _MyAppState extends State<MyApp> {
   late AppStateNotifier _appStateNotifier;
   late GoRouter _router;
 
+  // =======================================================================
+  // 🔥 iOS Native CallKit Channel
+  // هذه القناة تُستخدم فقط على iOS عندما يعرض AppDelegate المكالمة عبر CXProvider مباشرة
+  // =======================================================================
+  static final MethodChannel nativeCallChannel = MethodChannel('beytei_native_call');
+
+  // لمنع تكرار فتح نفس المكالمة إذا وصل事件 أكثر من مرة
+  final Set<String> _handledNativeCallIds = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -459,6 +561,12 @@ class _MyAppState extends State<MyApp> {
     _router = createRouter(_appStateNotifier);
 
     _setupCallKitListener();
+
+    // 🔥 مهم جدًا: تشغيل مستمع iOS Native CallKit فقط على iOS
+    // حتى لا يتأثر Android إطلاقًا
+    if (Platform.isIOS) {
+      _setupNativeCallListener();
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTerminatedCall();
@@ -485,7 +593,7 @@ class _MyAppState extends State<MyApp> {
     try {
       dynamic calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is List && calls.isNotEmpty) {
-        print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فوراً...");
+        print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فورا...");
         var firstCall = calls.first;
 
         if (firstCall is Map) {
@@ -502,6 +610,188 @@ class _MyAppState extends State<MyApp> {
     } catch (e) {
       print("⚠️ Error checking active calls: $e");
     }
+  }
+
+  // =======================================================================
+  // 🔥 مستمع أحداث iOS Native CallKit
+  // =======================================================================
+  void _setupNativeCallListener() {
+    nativeCallChannel.setMethodCallHandler((call) async {
+      if (!mounted) return;
+
+      if (call.method == 'onCallEvent') {
+        final dynamic arguments = call.arguments;
+
+        String event = '';
+        Map<String, dynamic> payload = <String, dynamic>{};
+
+        if (arguments is Map) {
+          event = arguments['event']?.toString() ?? '';
+
+          final dynamic rawPayload = arguments['payload'];
+
+          if (rawPayload is Map) {
+            payload = Map<String, dynamic>.from(rawPayload);
+          } else if (rawPayload is String) {
+            try {
+              final dynamic decoded = jsonDecode(rawPayload);
+              if (decoded is Map) {
+                payload = Map<String, dynamic>.from(decoded);
+              }
+            } catch (_) {}
+          }
+        } else if (arguments is String) {
+          event = arguments;
+        }
+
+        print("🍏 [Native iOS Call] event=$event");
+        print("🍏 [Native iOS Call] payload=$payload");
+
+        if (event == 'accept') {
+          final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
+
+          final String callId = normalized['id']?.toString() ?? '';
+
+          if (callId.isNotEmpty && _handledNativeCallIds.contains(callId)) {
+            print("♻️ [Native iOS Call] تم تجاهل حدث accept مكرر لنفس المكالمة");
+            await _clearPendingNativeCall();
+            return;
+          }
+
+          if (callId.isNotEmpty) {
+            _handledNativeCallIds.add(callId);
+          }
+
+          final bool hasRoom = !_payloadValueIsBlank(normalized['room_name']);
+          final bool hasToken = !_payloadValueIsBlank(normalized['token']);
+
+          if (hasRoom && hasToken) {
+            _lastIncomingCallData = normalized;
+            activeCallNotifier.value = normalized;
+            print("✅ [Native iOS Call] تم فتح شاشة المكالمة من iOS Native CallKit");
+          } else if (_lastIncomingCallData != null) {
+            activeCallNotifier.value = _lastIncomingCallData;
+            print("♻️ [Native iOS Call] تم فتح شاشة المكالمة من البيانات المحفوظة مسبقًا");
+          } else {
+            print("⚠️ [Native iOS Call] بيانات المكالمة غير كافية لفتح شاشة LiveKit");
+          }
+
+          await _clearPendingNativeCall();
+        } else if (event == 'end' || event == 'decline' || event == 'timeout') {
+          final String callId = payload['id']?.toString() ?? '';
+
+          if (callId.isNotEmpty) {
+            _handledNativeCallIds.remove(callId);
+          }
+
+          activeCallNotifier.value = null;
+          _lastIncomingCallData = null;
+
+          print("❌ [Native iOS Call] تم إنهاء/رفض المكالمة الأصلية");
+
+          await _clearPendingNativeCall();
+        }
+      }
+    });
+
+    // 🔥 عند بدء التطبيق، افحص هل هناك مكالمة أصلية محفوظة مسبقًا
+    _checkPendingNativeCall();
+  }
+
+  // =======================================================================
+  // 🔥 فحص المكالمة الأصلية المعلقة في SharedPreferences
+  // =======================================================================
+  Future<void> _checkPendingNativeCall() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+      final String? payloadString = prefs.getString('pending_native_call_payload');
+      final String? event = prefs.getString('pending_native_call_event');
+
+      if (payloadString == null || payloadString.isEmpty) {
+        return;
+      }
+
+      // إذا كانت هناك مكالمة مفتوحة بالفعل، لا نكرر فتحها
+      if (activeCallNotifier.value != null) {
+        await prefs.remove('pending_native_call_payload');
+        await prefs.remove('pending_native_call_event');
+        return;
+      }
+
+      Map<String, dynamic> payload = <String, dynamic>{};
+
+      try {
+        final dynamic decoded = jsonDecode(payloadString);
+        if (decoded is Map) {
+          payload = Map<String, dynamic>.from(decoded);
+        }
+      } catch (e) {
+        print("❌ [Pending Native Call] فشل فك JSON: $e");
+        await prefs.remove('pending_native_call_payload');
+        await prefs.remove('pending_native_call_event');
+        return;
+      }
+
+      print("🍏 [Pending Native Call] event=$event");
+      print("🍏 [Pending Native Call] payload=$payload");
+
+      if (event == 'accept') {
+        final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
+
+        final String callId = normalized['id']?.toString() ?? '';
+
+        if (callId.isNotEmpty && _handledNativeCallIds.contains(callId)) {
+          await prefs.remove('pending_native_call_payload');
+          await prefs.remove('pending_native_call_event');
+          return;
+        }
+
+        if (callId.isNotEmpty) {
+          _handledNativeCallIds.add(callId);
+        }
+
+        final bool hasRoom = !_payloadValueIsBlank(normalized['room_name']);
+        final bool hasToken = !_payloadValueIsBlank(normalized['token']);
+
+        if (hasRoom && hasToken) {
+          _lastIncomingCallData = normalized;
+          activeCallNotifier.value = normalized;
+          print("✅ [Pending Native Call] تم فتح شاشة المكالمة من البيانات المعلقة");
+        } else if (_lastIncomingCallData != null) {
+          activeCallNotifier.value = _lastIncomingCallData;
+          print("♻️ [Pending Native Call] تم فتح شاشة المكالمة من البيانات المحفوظة");
+        }
+
+        await prefs.remove('pending_native_call_payload');
+        await prefs.remove('pending_native_call_event');
+      } else if (event == 'end' || event == 'decline' || event == 'timeout') {
+        final String callId = payload['id']?.toString() ?? '';
+
+        if (callId.isNotEmpty) {
+          _handledNativeCallIds.remove(callId);
+        }
+
+        activeCallNotifier.value = null;
+        _lastIncomingCallData = null;
+
+        await prefs.remove('pending_native_call_payload');
+        await prefs.remove('pending_native_call_event');
+      }
+    } catch (e) {
+      print("❌ Error checking pending native call: $e");
+    }
+  }
+
+  // =======================================================================
+  // 🔥 تنظيف المكالمة المعلقة
+  // =======================================================================
+  Future<void> _clearPendingNativeCall() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.remove('pending_native_call_payload');
+      await prefs.remove('pending_native_call_event');
+    } catch (_) {}
   }
 
   void _setupCallKitListener() {
@@ -718,7 +1008,7 @@ class _MyAppState extends State<MyApp> {
                           activeTrackingNotifier.value = null;
                         });
                       } catch (e) {
-                        print("لم يتم العثور على الطلب محلياً: $e");
+                        print("لم يتم العثور على الطلب محليا: $e");
                         activeTrackingNotifier.value = null;
                       }
                     });
@@ -869,7 +1159,7 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
 
   Future<void> _testCallKitLocally() async {
     setState(() {
-      _testResult = '⏳ جاري اختبار CallKit محلياً...';
+      _testResult = '⏳ جاري اختبار CallKit محليا...';
     });
     try {
       final result = await _channel.invokeMethod('testLocalCallKit');
@@ -965,6 +1255,10 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     await prefs.remove('voip_token');
     await prefs.remove('fcm_token');
     await prefs.remove('ios_debug_logs');
+
+    // 🔥 تنظيف بيانات iOS Native CallKit المعلقة أيضًا
+    await prefs.remove('pending_native_call_payload');
+    await prefs.remove('pending_native_call_event');
 
     setState(() {
       _logs = '🗑️ تم مسح السجلات';
@@ -1210,11 +1504,11 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
                 children: [
                   Text('💡 دليل التشخيص السريع', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.yellow)),
                   SizedBox(height: 8),
-                  Text('1. إذا كان توكن VoIP مفقوداً: التطبيق لم يسجل PushKit. تأكد من Info.plist و Xcode Capabilities.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('1. إذا كان توكن VoIP مفقودا: التطبيق لم يسجل PushKit. تأكد من Info.plist و Xcode Capabilities.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
                   Text('2. إذا كان "استلام VoIP: 0": الإشعار لم يصل من السيرفر. افحص التوكن في قاعدة البيانات.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
-                  Text('3. إذا كان "استلام > 0" لكن "عرض CallKit: 0": مكتبة flutter_callkit_incoming تفشل. جرب اختبار CallKit محلياً.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('3. إذا كان "استلام > 0" لكن "عرض CallKit: 0": مكتبة flutter_callkit_incoming تفشل. جرب اختبار CallKit محليا.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
                   Text('4. إذا نجح الاختبار المحلي لكن المكالمة الحقيقية تفشل: المشكلة في الـ Backend (البيانات المرسلة).', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
@@ -1285,7 +1579,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       if (!_isRemoteConnected && mounted && !_isEngineReleased) {
         print("⏳ انتهى الوقت ولم يتم الاتصال (Order: ${widget.orderId ?? 'N/A'})");
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('السائق لا يرد حالياً'), backgroundColor: Colors.orange),
+          const SnackBar(content: Text('السائق لا يرد حاليا'), backgroundColor: Colors.orange),
         );
         _endCall();
       }
@@ -1339,7 +1633,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
             }
           });
           _startTimer();
-          print("✅ الزبون: تم استقبال مسار الصوت (سيُشغَّل تلقائياً)");
+          print("✅ الزبون: تم استقبال مسار الصوت (سيُشغَّل تلقائيا)");
         }
       });
 
@@ -1385,7 +1679,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
             _remoteParticipant = _room!.remoteParticipants.values.first;
           });
           _startTimer();
-          print("✅ الزبون: السائق موجود مسبقاً في الغرفة (فحص فوري)!");
+          print("✅ الزبون: السائق موجود مسبقا في الغرفة (فحص فوري)!");
         }
 
         await _room!.localParticipant?.setMicrophoneEnabled(true);
@@ -1394,7 +1688,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         try {
           await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
         } catch (e) {
-          print("⚠️ تحذير: فشل في تبديل السماعة تلقائياً: $e");
+          print("⚠️ تحذير: فشل في تبديل السماعة تلقائيا: $e");
         }
       }
     } catch (e) {
