@@ -335,17 +335,12 @@ extension AppDelegate: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
-        // 🔥🔥🔥 الإصلاح الجذري المطلق: استخدام defer لضمان استدعاء completion() في جميع الحالات
-        // هذا يمنع نظام iOS من قتل التطبيق بسبب "عدم المعالجة" مهما حدث داخل الدالة
-        defer {
-            completion()
-            writeLog("✅ تم استدعاء completion() بنجاح (ضمان عدم الانهيار)")
-        }
-
         writeLog("🔥🔥🔥 إثبات قاطع: تم استلام الإشعار! 🔥🔥🔥")
 
+        // 1. تجاهل أي إشعار ليس VoIP فوراً مع استدعاء completion
         guard type == .voIP else {
             writeLog("⚠️ تم تجاهل إشعار غير VoIP")
+            completion() // ✅ ضروري لمنع الـ Crash
             return
         }
 
@@ -355,11 +350,11 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("⬇️ استلام إشعار VoIP (#\(pushKitReceivedCount)) Payload: \(dict)")
 
-        // 1. استخراج الـ UUID بأمان
+        // 2. استخراج الـ UUID بأمان
         let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? ""
         let validUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
 
-        // 2. فحص حالة الإلغاء فوراً
+        // 3. فحص حالة الإلغاء فوراً
         let typeValue = dict["type"]
         let isCancel = (typeValue as? String == "cancel_call") || (typeValue as? Int == 1) || (typeValue as? String == "1")
 
@@ -367,10 +362,12 @@ extension AppDelegate: PKPushRegistryDelegate {
             writeLog("🚫 إلغاء المكالمة (UUID: \(validUUID))")
             let callData = flutter_callkit_incoming.Data(id: validUUID, nameCaller: "", handle: "", type: 1)
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
+
+            completion() // ✅ ضروري لمنع الـ Crash بعد المعالجة
             return
         }
 
-        // 3. استخراج البيانات (مطابق تماماً لما يرسله الـ Backend)
+        // 4. استخراج البيانات (مطابق تماماً لما يرسله الـ Backend)
         let callerName = (dict["nameCaller"] as? String) ?? (dict["driver_name"] as? String) ?? (dict["name"] as? String) ?? "مندوب بيتي"
         let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? "مكالمة واردة"
         let duration = (dict["duration"] as? Int) ?? 60000
@@ -395,7 +392,7 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("🔔 جاري عرض CallKit (UUID: \(validUUID), Caller: \(callerName))")
 
-        // 4. محاولة عرض المكالمة بأمان
+        // 5. ✅ الإصلاح الجذري: عرض المكالمة أولاً، ثم استدعاء completion
         DispatchQueue.main.async {
             do {
                 if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
@@ -403,12 +400,17 @@ extension AppDelegate: PKPushRegistryDelegate {
                     self.callKitShownCount += 1
                     self.writeLog("✅ تم إرسال أمر CallKit بنجاح عبر Plugin")
                 } else {
-                    self.writeLog("⚠️ مكتبة Flutter غير جاهزة (nil). لن يتم عرض الشاشة، لكن التطبيق لن ينهار بفضل defer.")
+                    self.writeLog("⚠️ مكتبة Flutter غير جاهزة (nil).")
                 }
             } catch {
                 self.lastError = "فشل عرض CallKit: \(error.localizedDescription)"
                 self.writeLog("❌ \(self.lastError ?? "")")
             }
+
+            // ✅ استدعاء completion هنا، بعد محاولة عرض المكالمة (سواء نجحت أو فشلت)
+            // هذا هو الشرط الأساسي لـ Apple لمنع الـ Crash
+            completion()
+            self.writeLog("✅ تم استدعاء completion() بنجاح بعد معالجة VoIP")
         }
     }
 
