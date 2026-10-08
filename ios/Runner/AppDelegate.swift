@@ -320,7 +320,7 @@ import Network
 }
 
 // =======================================================================
-// 📞 VoIP Push Registry Delegate (النسخة النهائية المُصححة لمنع الـ Crash)
+// 📞 VoIP Push Registry Delegate (الحل المتزامن الجذري لمنع الـ Crash)
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -337,17 +337,16 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("🔥🔥🔥 إثبات قاطع: تم استلام الإشعار! 🔥🔥🔥")
 
-        // 1. تجاهل أي إشعار ليس VoIP فوراً مع استدعاء completion
+        // 1. تجاهل أي إشعار ليس VoIP فوراً مع استدعاء completion متزامن
         guard type == .voIP else {
             writeLog("⚠️ تم تجاهل إشعار غير VoIP")
-            completion() // ✅ ضروري لمنع الـ Crash
+            completion()
             return
         }
 
         pushKitReceivedCount += 1
         let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
         lastPushKitPayload = dict
-
         writeLog("⬇️ استلام إشعار VoIP (#\(pushKitReceivedCount)) Payload: \(dict)")
 
         // 2. استخراج الـ UUID بأمان
@@ -363,7 +362,7 @@ extension AppDelegate: PKPushRegistryDelegate {
             let callData = flutter_callkit_incoming.Data(id: validUUID, nameCaller: "", handle: "", type: 1)
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
 
-            completion() // ✅ ضروري لمنع الـ Crash بعد المعالجة
+            completion() // متزامن
             return
         }
 
@@ -392,26 +391,19 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         writeLog("🔔 جاري عرض CallKit (UUID: \(validUUID), Caller: \(callerName))")
 
-        // 5. ✅ الإصلاح الجذري: عرض المكالمة أولاً، ثم استدعاء completion
-        DispatchQueue.main.async {
-            do {
-                if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                    plugin.showCallkitIncoming(callData, fromPushKit: true)
-                    self.callKitShownCount += 1
-                    self.writeLog("✅ تم إرسال أمر CallKit بنجاح عبر Plugin")
-                } else {
-                    self.writeLog("⚠️ مكتبة Flutter غير جاهزة (nil).")
-                }
-            } catch {
-                self.lastError = "فشل عرض CallKit: \(error.localizedDescription)"
-                self.writeLog("❌ \(self.lastError ?? "")")
-            }
-
-            // ✅ استدعاء completion هنا، بعد محاولة عرض المكالمة (سواء نجحت أو فشلت)
-            // هذا هو الشرط الأساسي لـ Apple لمنع الـ Crash
-            completion()
-            self.writeLog("✅ تم استدعاء completion() بنجاح بعد معالجة VoIP")
+        // 5. ✅ الحل الجذري: الاستدعاء المتزامن المباشر (بدون DispatchQueue)
+        // هذا يضمن أن التطبيق مفتوح أو مغلق، سيتم تنفيذ الأمر فوراً دون تأخير يسبب الـ Crash
+        if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+            plugin.showCallkitIncoming(callData, fromPushKit: true)
+            self.callKitShownCount += 1
+            self.writeLog("✅ تم إرسال أمر CallKit بنجاح عبر Plugin بشكل متزامن")
+        } else {
+            self.writeLog("⚠️ تحذير: مكتبة Flutter غير جاهزة (nil)، لكن سنستدعي completion لمنع الانهيار")
         }
+
+        // 6. ✅ استدعاء completion فوراً ومتزامناً (هذا هو ما يمنع iOS من قتل التطبيق)
+        completion()
+        self.writeLog("✅ تم استدعاء completion() بشكل متزامن لمنع Crash")
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
