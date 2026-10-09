@@ -16,7 +16,7 @@ import CallKit
 
     private lazy var callKitProvider: CXProvider = {
         let config = CXProviderConfiguration()
-        config.localizedName = "منصة بيتي"
+        // ملاحظة: localizedName أصبح للقراءة فقط في iOS 14+، والنظام يستخدم اسم التطبيق تلقائياً من Info.plist
         config.supportsVideo = false
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
@@ -69,7 +69,6 @@ import CallKit
 
         setupDiagnosticChannelIfNeeded()
 
-        // استعادة توكن VoIP إلى مكتبة flutter_callkit_incoming إن وُجد
         if let storedToken = UserDefaults.standard.string(forKey: "flutter.voip_token"),
            !storedToken.isEmpty {
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(storedToken)
@@ -78,11 +77,9 @@ import CallKit
             writeLog("⚠️ لا يوجد توكن VoIP محفوظ عند بدء التطبيق")
         }
 
-        // تجهيز Native CallKit Provider
         _ = callKitProvider
         writeLog("🧠 تم تجهيز Native CXProvider")
 
-        // تجهيز PushKit
         let registry = PKPushRegistry(queue: .main)
         registry.delegate = self
         registry.desiredPushTypes = [.voIP]
@@ -344,7 +341,7 @@ import CallKit
 
         do {
             let safeReport = sanitizedStringDictionary(report)
-            let jsonData = try JSONSerialization.data(withJSONObject: safeReport, options: .prettyPrinted)
+            let jsonData = try Foundation.JSONSerialization.data(withJSONObject: safeReport, options: .prettyPrinted)
             request.httpBody = jsonData
 
             let task = URLSession.shared.dataTask(with: request) { data, response, error in
@@ -404,7 +401,8 @@ import CallKit
             return array.map { sanitizedValue($0) }
         }
 
-        if let data = value as? Data {
+        // ✅ تم التصحيح: استخدام Foundation.Data لحل غموض النوع
+        if let data = value as? Foundation.Data {
             return data.base64EncodedString()
         }
 
@@ -465,7 +463,6 @@ import CallKit
             finishOnce()
         }
 
-        // شبكة أمان: لا تترك completion معلقًا للأبد
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             finishOnce()
         }
@@ -489,7 +486,6 @@ import CallKit
 
             writeLog("✅ تم إرسال حدث \(event) إلى Flutter مباشرة")
         } else {
-            // إذا لم يكن Flutter جاهزًا، احفظه ليقرأه التطبيق عند الإقلاع
             if let data = try? JSONSerialization.data(withJSONObject: safePayload, options: []),
                let jsonString = String(data: data, encoding: .utf8) {
                 UserDefaults.standard.set(jsonString, forKey: "pending_native_call_payload")
@@ -510,7 +506,8 @@ import CallKit
             let wasAnswered = answeredCallUUIDs.contains(callUUID)
             let payload = pendingPayloadByUUID[callUUID] ?? [:]
 
-            callKitProvider.endCall(with: callUUID)
+            // ✅ تم التصحيح: استخدام reportCall بدلاً من endCall (غير موجود في CXProvider)
+            callKitProvider.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
 
             activeCallUUIDs.remove(callUUID)
             answeredCallUUIDs.remove(callUUID)
@@ -584,8 +581,6 @@ extension AppDelegate: PKPushRegistryDelegate {
         let actionValue = dict["action"] as? String
         let isCancelFlag = (dict["is_cancel"] as? Bool) == true
 
-        // تنبيه: تطبيقك حاليًا صوتي فقط، لذلك نعتبر type == 1 إلغاء.
-        // إذا أضفت مكالمات فيديو مستقبلًا، يجب إزالة هذا الشرط أو استخدام action/is_cancel فقط.
         let isCancelNumeric =
             (typeValue as? Int == 1) ||
             (typeValue as? String == "1")
@@ -604,7 +599,8 @@ extension AppDelegate: PKPushRegistryDelegate {
             let wasActive = activeCallUUIDs.contains(callUUID)
 
             if wasActive {
-                callKitProvider.endCall(with: callUUID)
+                // ✅ تم التصحيح: استخدام reportCall بدلاً من endCall
+                callKitProvider.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
 
                 activeCallUUIDs.remove(callUUID)
                 answeredCallUUIDs.remove(callUUID)
@@ -620,7 +616,6 @@ extension AppDelegate: PKPushRegistryDelegate {
                 writeLog("⚠️ وصل cancel بدون مكالمة نشطة في Native CallKit")
             }
 
-            // محاولة إنهاء المكالمة عبر مكتبة flutter_callkit_incoming إن كانت جاهزة
             if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
                 let callData = flutter_callkit_incoming.Data(
                     id: validUUID,
@@ -647,9 +642,6 @@ extension AppDelegate: PKPushRegistryDelegate {
             (dict["driver_phone"] as? String) ??
             "مكالمة واردة"
 
-        // الحل الأقوى للآيفون:
-        // لا تعتمد على plugin.sharedInstance لعرض المكالمة الواردة من PushKit.
-        // استخدم Native CallKit مباشرة لضمان أن iOS يرى مكالمة واردة.
         reportNativeIncomingCall(
             uuidString: validUUID,
             callerName: callerName,
@@ -675,9 +667,10 @@ extension AppDelegate: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         writeLog("✅ المستخدم رد على المكالمة Native")
 
-        answeredCallUUIDs.insert(action.call.uuid)
+        // ✅ تم التصحيح: استخدام action.callUUID بدلاً من action.call.uuid
+        answeredCallUUIDs.insert(action.callUUID)
 
-        let payload = pendingPayloadByUUID[action.call.uuid] ?? [:]
+        let payload = pendingPayloadByUUID[action.callUUID] ?? [:]
 
         action.fulfill()
 
@@ -685,7 +678,8 @@ extension AppDelegate: CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        let uuid = action.call.uuid
+        // ✅ تم التصحيح: استخدام action.callUUID بدلاً من action.call.uuid
+        let uuid = action.callUUID
         let wasAnswered = answeredCallUUIDs.contains(uuid)
         let payload = pendingPayloadByUUID[uuid] ?? [:]
 
