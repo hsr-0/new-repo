@@ -647,6 +647,44 @@ class _MyAppState extends State<MyApp> {
         print("🍏 [Native iOS Call] event=$event");
         print("🍏 [Native iOS Call] payload=$payload");
 
+        // =======================================================================
+        // 🔥 جديد: حدث "incoming" من AppDelegate
+        // يُرسل بعد أن ينجح iOS في الإبلاغ عن المكالمة عبر CallKit
+        // هنا نحفظ البيانات فقط، ولا نفتح شاشة LiveKit
+        // شاشة LiveKit ستُفتح فقط عندما يضغط المستخدم "رد" (حدث accept)
+        // =======================================================================
+        if (event == 'incoming') {
+          final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
+
+          final String callId = normalized['id']?.toString() ?? '';
+
+          final bool hasRoom = !_payloadValueIsBlank(normalized['room_name']);
+          final bool hasToken = !_payloadValueIsBlank(normalized['token']);
+
+          if (hasRoom && hasToken) {
+            // 🔥 نحفظ البيانات فقط، لا نفتح شاشة المكالمة
+            _lastIncomingCallData = normalized;
+            print("📞 [Native iOS Call] مكالمة واردة (ID: $callId) - بانتظار رد المستخدم");
+            print("📞 [Native iOS Call] Room: ${normalized['room_name']}");
+          } else {
+            print("⚠️ [Native iOS Call] حدث incoming لكن بيانات المكالمة ناقصة");
+            print("⚠️ hasRoom=$hasRoom, hasToken=$hasToken");
+
+            // في حال كانت البيانات ناقصة، نجرب استخراجها من الحقول البديلة
+            if (_lastIncomingCallData != null) {
+              print("♻️ [Native iOS Call] استخدام البيانات المحفوظة مسبقًا كاحتياطي");
+            }
+          }
+
+          // ⚠️ مهم: لا نستدعي _clearPendingNativeCall هنا
+          // لأننا قد نحتاج البيانات عند وصول حدث accept لاحقاً
+          return;
+        }
+
+        // =======================================================================
+        // ✅ حدث "accept" - المستخدم ضغط "رد" على CallKit
+        // هنا نفتح شاشة LiveKit
+        // =======================================================================
         if (event == 'accept') {
           final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
 
@@ -670,14 +708,19 @@ class _MyAppState extends State<MyApp> {
             activeCallNotifier.value = normalized;
             print("✅ [Native iOS Call] تم فتح شاشة المكالمة من iOS Native CallKit");
           } else if (_lastIncomingCallData != null) {
+            // 🔥 Fallback: نستخدم البيانات المحفوظة من حدث incoming
             activeCallNotifier.value = _lastIncomingCallData;
-            print("♻️ [Native iOS Call] تم فتح شاشة المكالمة من البيانات المحفوظة مسبقًا");
+            print("♻️ [Native iOS Call] تم فتح شاشة المكالمة من البيانات المحفوظة مسبقًا (incoming)");
           } else {
             print("⚠️ [Native iOS Call] بيانات المكالمة غير كافية لفتح شاشة LiveKit");
           }
 
           await _clearPendingNativeCall();
-        } else if (event == 'end' || event == 'decline' || event == 'timeout') {
+        }
+        // =======================================================================
+        // ❌ حدث "end" أو "decline" أو "timeout" - انتهاء/رفض المكالمة
+        // =======================================================================
+        else if (event == 'end' || event == 'decline' || event == 'timeout') {
           final String callId = payload['id']?.toString() ?? '';
 
           if (callId.isNotEmpty) {
@@ -697,7 +740,6 @@ class _MyAppState extends State<MyApp> {
     // 🔥 عند بدء التطبيق، افحص هل هناك مكالمة أصلية محفوظة مسبقًا
     _checkPendingNativeCall();
   }
-
   // =======================================================================
   // 🔥 فحص المكالمة الأصلية المعلقة في SharedPreferences
   // =======================================================================
