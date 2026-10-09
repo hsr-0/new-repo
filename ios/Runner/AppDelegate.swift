@@ -4,41 +4,22 @@ import Firebase
 import FirebaseMessaging
 import PushKit
 import flutter_callkit_incoming
-import CallKit
+import SystemConfiguration
+import Network
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
-    // MARK: - Properties
-
-    private var voipRegistry: PKPushRegistry?
-    private var diagnosticChannelConfigured = false
-
-    private lazy var callKitProvider: CXProvider = {
-        let config = CXProviderConfiguration()
-        // ملاحظة: localizedName أصبح للقراءة فقط في iOS 14+، والنظام يستخدم اسم التطبيق تلقائياً من Info.plist
-        config.supportsVideo = false
-        config.maximumCallGroups = 1
-        config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.generic]
-
-        let provider = CXProvider(configuration: config)
-        provider.setDelegate(self, queue: .main)
-        return provider
-    }()
-
-    private var pendingPayloadByUUID: [UUID: [String: Any]] = [:]
-    private var activeCallUUIDs: Set<UUID> = []
-    private var answeredCallUUIDs: Set<UUID> = []
-
+    var voipRegistry: PKPushRegistry?
     private var pushKitReceivedCount = 0
-    private var callKitShownCount = 0
     private var lastPushKitPayload: [String: Any]?
+    private var callKitShownCount = 0
     private var lastError: String?
 
-    // MARK: - Logger
-
-    private func writeLog(_ message: String) {
+    // =======================================================================
+    // 📝 نظام التشخيص وتسجيل الأحداث (Logger)
+    // =======================================================================
+    func writeLog(_ message: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
         let timeString = formatter.string(from: Date())
@@ -46,16 +27,10 @@ import CallKit
 
         var logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
         logs.append(logMessage)
-
-        if logs.count > 100 {
-            logs.removeFirst()
-        }
-
+        if logs.count > 100 { logs.removeFirst() }
         UserDefaults.standard.set(logs, forKey: "ios_debug_logs")
         print(logMessage)
     }
-
-    // MARK: - App Lifecycle
 
     override func application(
         _ application: UIApplication,
@@ -65,34 +40,68 @@ import CallKit
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        let launched = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+        // قناة التشخيص الشاملة
+        if let controller = window?.rootViewController as? FlutterViewController {
+            let diagnosticChannel = FlutterMethodChannel(
+                name: "beytei_deep_debugger",
+                binaryMessenger: controller.binaryMessenger
+            )
 
-        setupDiagnosticChannelIfNeeded()
+            diagnosticChannel.setMethodCallHandler({ [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+                guard let self = self else { return }
 
-        if let storedToken = UserDefaults.standard.string(forKey: "flutter.voip_token"),
-           !storedToken.isEmpty {
-            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(storedToken)
-            writeLog("🔁 تم استعادة توكن VoIP إلى flutter_callkit_incoming")
-        } else {
-            writeLog("⚠️ لا يوجد توكن VoIP محفوظ عند بدء التطبيق")
+                switch call.method {
+                case "getLogs":
+                    let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
+                    let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ لا يوجد"
+                    result(["logs": logs.joined(separator: "\n\n"), "token": token])
+                    self.writeLog("📋 تم طلب السجلات من Flutter")
+
+                case "runFullDiagnostics":
+                    let serverUrl = call.arguments as? String ?? ""
+                    self.writeLog("🔬 بدء التشخيص الشامل...")
+                    let report = self.collectFullDiagnosticReport()
+                    self.sendDiagnosticToServer(report: report, serverUrl: serverUrl) { success, response in
+                        if success {
+                            self.writeLog("✅ تم إرسال التقرير للسيرفر بنجاح")
+                        } else {
+                            self.writeLog("❌ فشل إرسال التقرير: \(response ?? "unknown")")
+                        }
+                        result(["success": success, "report": report, "serverResponse": response ?? ""])
+                    }
+
+                case "testLocalCallKit":
+                    self.writeLog("🧪 بدء اختبار CallKit محلياً...")
+                    self.testLocalCallKit(result: result)
+
+                case "checkPermissions":
+                    let status = self.checkAllPermissions()
+                    result(status)
+                    self.writeLog("🔐 تم فحص الأذونات")
+
+                case "getPushKitStatus":
+                    let status: [String: Any] = [
+                        "receivedCount": self.pushKitReceivedCount,
+                        "callKitShownCount": self.callKitShownCount,
+                        "lastPayload": self.lastPushKitPayload ?? [:],
+                        "lastError": self.lastError ?? "لا يوجد خطأ",
+                        "voipToken": UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ مفقود"
+                    ]
+                    result(status)
+
+                default:
+                    result(FlutterMethodNotImplemented)
+                }
+            })
         }
 
-        _ = callKitProvider
-        writeLog("🧠 تم تجهيز Native CXProvider")
+        // تفعيل VoIP (على الخيط الرئيسي لضمان الاستجابة الفورية)
+        self.voipRegistry = PKPushRegistry(queue: .main)
+        self.voipRegistry?.delegate = self
+        self.voipRegistry?.desiredPushTypes = [.voIP]
 
-        let registry = PKPushRegistry(queue: .main)
-        registry.delegate = self
-        registry.desiredPushTypes = [.voIP]
-        self.voipRegistry = registry
-
-        writeLog("🚀 تم تشغيل PushKit + Native CallKit fallback + Diagnostic Channel")
-
-        return launched
-    }
-
-    override func applicationDidBecomeActive(_ application: UIApplication) {
-        super.applicationDidBecomeActive(application)
-        setupDiagnosticChannelIfNeeded()
+        writeLog("🚀 التطبيق بدأ وتم تهيئة PushKit + نظام التشخيص")
+        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
     override func application(
@@ -104,165 +113,10 @@ import CallKit
         completionHandler(.newData)
     }
 
-    // MARK: - Diagnostic Channel
-
-    private func setupDiagnosticChannelIfNeeded() {
-        guard !diagnosticChannelConfigured else { return }
-
-        guard let controller = window?.rootViewController as? FlutterViewController else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.setupDiagnosticChannelIfNeeded()
-            }
-            return
-        }
-
-        let channel = FlutterMethodChannel(
-            name: "beytei_deep_debugger",
-            binaryMessenger: controller.binaryMessenger
-        )
-
-        channel.setMethodCallHandler { [weak self] call, result in
-            guard let self = self else { return }
-
-            switch call.method {
-            case "getLogs":
-                let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
-                let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ لا يوجد"
-
-                result([
-                    "logs": logs.joined(separator: "\n\n"),
-                    "token": token
-                ])
-
-                self.writeLog("📋 تم طلب السجلات من Flutter")
-
-            case "getPushKitStatus":
-                result([
-                    "receivedCount": self.pushKitReceivedCount,
-                    "callKitShownCount": self.callKitShownCount,
-                    "lastPayload": self.lastPushKitPayload ?? [:],
-                    "lastError": self.lastError ?? "لا يوجد خطأ",
-                    "voipToken": UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ مفقود"
-                ])
-
-            case "testLocalCallKit":
-                self.testLocalCallKit(result: result)
-
-            case "checkPermissions":
-                self.checkPermissions(result: result)
-
-            case "runFullDiagnostics":
-                let serverUrl = call.arguments as? String ?? ""
-                self.writeLog("🔬 بدء التشخيص الشامل...")
-
-                let report = self.collectFullDiagnosticReport()
-
-                self.sendDiagnosticToServer(report: report, serverUrl: serverUrl) { success, response in
-                    DispatchQueue.main.async {
-                        if success {
-                            self.writeLog("✅ تم إرسال التقرير للسيرفر بنجاح")
-                        } else {
-                            self.writeLog("❌ فشل إرسال التقرير: \(response ?? "unknown")")
-                        }
-
-                        result([
-                            "success": success,
-                            "report": report,
-                            "serverResponse": response ?? ""
-                        ])
-                    }
-                }
-
-            default:
-                result(FlutterMethodNotImplemented)
-            }
-        }
-
-        diagnosticChannelConfigured = true
-        writeLog("🧰 تم تجهيز قناة التشخيص beytei_deep_debugger")
-    }
-
-    private func testLocalCallKit(result: @escaping FlutterResult) {
-        writeLog("🧪 بدء اختبار CallKit محليًا...")
-
-        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
-            lastError = "مكتبة flutter_callkit_incoming غير جاهزة"
-            writeLog("❌ \(lastError ?? "")")
-            result([
-                "success": false,
-                "message": lastError ?? "مكتبة flutter_callkit_incoming غير جاهزة"
-            ])
-            return
-        }
-
-        let testUUID = UUID().uuidString
-
-        let callData = flutter_callkit_incoming.Data(
-            id: testUUID,
-            nameCaller: "اختبار تشخيصي",
-            handle: "07700000000",
-            type: 0
-        )
-
-        callData.appName = "منصة بيتي - تشخيص"
-        callData.duration = 30000
-        callData.extra = [
-            "test": true,
-            "timestamp": Date().timeIntervalSince1970,
-            "room_name": "test_diagnostic_\(Int(Date().timeIntervalSince1970))",
-            "livekit_url": "wss://call.beytei.com",
-            "token": "test_token_\(testUUID)"
-        ] as NSDictionary
-
-        plugin.showCallkitIncoming(callData, fromPushKit: false)
-        callKitShownCount += 1
-
-        writeLog("🔔 تم إرسال اختبار CallKit محليًا UUID: \(testUUID)")
-
-        result([
-            "success": true,
-            "message": "تم إرسال أمر CallKit بنجاح.",
-            "uuid": testUUID
-        ])
-    }
-
-    private func checkPermissions(result: @escaping FlutterResult) {
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
-            let statusText: String
-
-            switch settings.authorizationStatus {
-            case .notDetermined:
-                statusText = "لم تُحدد بعد"
-            case .denied:
-                statusText = "مرفوضة"
-            case .authorized:
-                statusText = "مسموحة ✅"
-            case .provisional:
-                statusText = "مؤقتة"
-            case .ephemeral:
-                statusText = "مؤقتة (App Clip)"
-            @unknown default:
-                statusText = "غير معروف"
-            }
-
-            let payload: [String: Any] = [
-                "notifications": [
-                    "authorizationStatus": settings.authorizationStatus.rawValue,
-                    "statusText": statusText,
-                    "soundSetting": settings.soundSetting.rawValue,
-                    "badgeSetting": settings.badgeSetting.rawValue,
-                    "alertSetting": settings.alertSetting.rawValue
-                ]
-            ]
-
-            DispatchQueue.main.async {
-                result(payload)
-                self.writeLog("🔐 تم فحص الأذونات")
-            }
-        }
-    }
-
-    private func collectFullDiagnosticReport() -> [String: Any] {
+    // =======================================================================
+    // 🔬 جمع التقرير التشخيصي الشامل
+    // =======================================================================
+    func collectFullDiagnosticReport() -> [String: Any] {
         var report: [String: Any] = [:]
 
         #if targetEnvironment(simulator)
@@ -281,7 +135,6 @@ import CallKit
         ]
 
         let voipToken = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? ""
-
         report["tokens"] = [
             "voipToken": voipToken,
             "voipTokenLength": voipToken.count,
@@ -296,8 +149,10 @@ import CallKit
             "lastError": lastError ?? "لا يوجد"
         ]
 
-        let bgModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String] ?? []
+        report["permissions"] = checkAllPermissions()
+        report["network"] = checkNetworkStatus()
 
+        let bgModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String] ?? []
         report["backgroundModes"] = [
             "configured": bgModes,
             "hasVoIP": bgModes.contains("voip"),
@@ -309,7 +164,6 @@ import CallKit
 
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "غير معروف"
         let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] ?? "غير معروف"
-
         report["appInfo"] = [
             "version": appVersion,
             "build": buildNumber,
@@ -325,13 +179,77 @@ import CallKit
         return report
     }
 
-    private func sendDiagnosticToServer(
-        report: [String: Any],
-        serverUrl: String,
-        completion: @escaping (Bool, String?) -> Void
-    ) {
-        guard !serverUrl.isEmpty, let url = URL(string: serverUrl) else {
-            completion(false, "serverUrl غير صالح أو فارغ")
+    // =======================================================================
+    // 🔐 فحص الأذونات
+    // =======================================================================
+    func checkAllPermissions() -> [String: Any] {
+        let center = UNUserNotificationCenter.current()
+        var result: [String: Any] = [:]
+        let semaphore = DispatchSemaphore(value: 0)
+
+        center.getNotificationSettings { settings in
+            result["notifications"] = [
+                "authorizationStatus": settings.authorizationStatus.rawValue,
+                "statusText": self.getNotificationStatusText(settings.authorizationStatus),
+                "soundSetting": settings.soundSetting.rawValue,
+                "badgeSetting": settings.badgeSetting.rawValue,
+                "alertSetting": settings.alertSetting.rawValue
+            ]
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        return result
+    }
+
+    func getNotificationStatusText(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "لم تُحدد بعد"
+        case .denied: return "مرفوضة "
+        case .authorized: return "مسموحة ✅"
+        case .provisional: return "مؤقتة"
+        case .ephemeral: return "مؤقتة (App Clip)"
+        @unknown default: return "غير معروف"
+        }
+    }
+
+    // =======================================================================
+    // 🌐 فحص الشبكة
+    // =======================================================================
+    func checkNetworkStatus() -> [String: Any] {
+        var result: [String: Any] = [:]
+        guard let url = URL(string: "https://api.push.apple.com") else {
+            result["internet"] = "❌ URL غير صالح"
+            return result
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let task = URLSession.shared.dataTask(with: url) { _, response, error in
+            if let error = error {
+                result["internet"] = "❌ فشل: \(error.localizedDescription)"
+            } else if let httpResponse = response as? HTTPURLResponse {
+                result["internet"] = "✅ متصل - Status: \(httpResponse.statusCode)"
+            } else {
+                result["internet"] = "⚠️ استجابة غير معروفة"
+            }
+            semaphore.signal()
+        }
+        task.resume()
+        _ = semaphore.wait(timeout: .now() + 5.0)
+
+        if result["internet"] == nil {
+            result["internet"] = "⏱️ انتهت مهلة الاتصال (5 ثواني)"
+        }
+        result["applePushServer"] = "تم الفحص"
+        return result
+    }
+
+    // =======================================================================
+    // 📤 إرسال التقرير للسيرفر
+    // =======================================================================
+    func sendDiagnosticToServer(report: [String: Any], serverUrl: String, completion: @escaping (Bool, String?) -> Void) {
+        guard let url = URL(string: serverUrl) else {
+            completion(false, "URL غير صالح")
             return
         }
 
@@ -340,8 +258,7 @@ import CallKit
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         do {
-            let safeReport = sanitizedStringDictionary(report)
-            let jsonData = try Foundation.JSONSerialization.data(withJSONObject: safeReport, options: .prettyPrinted)
+            let jsonData = try JSONSerialization.data(withJSONObject: report, options: .prettyPrinted)
             request.httpBody = jsonData
 
             let task = URLSession.shared.dataTask(with: request) { data, response, error in
@@ -349,10 +266,8 @@ import CallKit
                     completion(false, error.localizedDescription)
                     return
                 }
-
                 if let httpResponse = response as? HTTPURLResponse {
                     let statusCode = httpResponse.statusCode
-
                     if let data = data, let responseBody = String(data: data, encoding: .utf8) {
                         completion(statusCode == 200, "HTTP \(statusCode): \(responseBody)")
                     } else {
@@ -362,347 +277,136 @@ import CallKit
                     completion(false, "لا استجابة من السيرفر")
                 }
             }
-
             task.resume()
         } catch {
             completion(false, "فشل تحويل JSON: \(error.localizedDescription)")
         }
     }
 
-    // MARK: - Sanitization Helpers
+    // =======================================================================
+    // 🧪 اختبار CallKit محلياً
+    // =======================================================================
+    func testLocalCallKit(result: @escaping FlutterResult) {
+        writeLog("🧪 بدء اختبار CallKit محلياً...")
+        let testUUID = UUID().uuidString
+        let callData = flutter_callkit_incoming.Data(
+            id: testUUID,
+            nameCaller: "اختبار تشخيصي",
+            handle: "07700000000",
+            type: 0
+        )
+        callData.appName = "منصة بيتي - تشخيص"
+        callData.duration = 30000
+        callData.extra = [
+            "test": true,
+            "timestamp": Date().timeIntervalSince1970,
+            "room_name": "test_diagnostic_\(Int(Date().timeIntervalSince1970))",
+            "livekit_url": "wss://call.beytei.com",
+            "token": "test_token_\(testUUID)"
+        ] as NSDictionary
 
-    private func sanitizedDictionary(_ input: [AnyHashable: Any]) -> [String: Any] {
-        var output: [String: Any] = [:]
+        writeLog("🔔 عرض CallKit تجريبي (UUID: \(testUUID))...")
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: false)
+        callKitShownCount += 1
 
-        for (key, value) in input {
-            guard let stringKey = key as? String else { continue }
-            output[stringKey] = sanitizedValue(value)
-        }
-
-        return output
-    }
-
-    private func sanitizedStringDictionary(_ input: [String: Any]) -> [String: Any] {
-        var output: [String: Any] = [:]
-
-        for (key, value) in input {
-            output[key] = sanitizedValue(value)
-        }
-
-        return output
-    }
-
-    private func sanitizedValue(_ value: Any) -> Any {
-        if let dict = value as? [AnyHashable: Any] {
-            return sanitizedDictionary(dict)
-        }
-
-        if let array = value as? [Any] {
-            return array.map { sanitizedValue($0) }
-        }
-
-        // ✅ تم التصحيح: استخدام Foundation.Data لحل غموض النوع
-        if let data = value as? Foundation.Data {
-            return data.base64EncodedString()
-        }
-
-        if value is String || value is NSNumber || value is NSNull {
-            return value
-        }
-
-        return String(describing: value)
-    }
-
-    // MARK: - Native CallKit Helpers
-
-    private func reportNativeIncomingCall(
-        uuidString: String,
-        callerName: String,
-        handle: String,
-        payload: [String: Any],
-        pushCompletion: @escaping () -> Void
-    ) {
-        let callUUID = UUID(uuidString: uuidString) ?? UUID()
-
-        var normalizedPayload = sanitizedStringDictionary(payload)
-        normalizedPayload["id"] = callUUID.uuidString
-
-        pendingPayloadByUUID[callUUID] = normalizedPayload
-        activeCallUUIDs.insert(callUUID)
-
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: handle)
-        update.localizedCallerName = callerName
-        update.hasVideo = false
-
-        var finished = false
-
-        let finishOnce: () -> Void = {
-            if !finished {
-                finished = true
-                pushCompletion()
-                self.writeLog("✅ تم استدعاء completion() بعد Native CallKit")
-            }
-        }
-
-        writeLog("📞 جاري الإبلاغ عن مكالمة Native: \(callUUID.uuidString)")
-
-        callKitProvider.reportNewIncomingCall(with: callUUID, update: update) { error in
-            if let error = error {
-                self.lastError = error.localizedDescription
-                self.writeLog("❌ فشل Native CallKit: \(error.localizedDescription)")
-
-                self.activeCallUUIDs.remove(callUUID)
-                self.answeredCallUUIDs.remove(callUUID)
-                self.pendingPayloadByUUID.removeValue(forKey: callUUID)
-            } else {
-                self.callKitShownCount += 1
-                self.writeLog("✅ تم عرض Native CallKit بنجاح")
-            }
-
-            finishOnce()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            finishOnce()
-        }
-    }
-
-    private func deliverCallEventToFlutter(payload: [String: Any], event: String) {
-        writeLog("📨 إرسال حدث المكالمة إلى Flutter: \(event)")
-
-        let safePayload = sanitizedStringDictionary(payload)
-
-        if let controller = window?.rootViewController as? FlutterViewController {
-            let channel = FlutterMethodChannel(
-                name: "beytei_native_call",
-                binaryMessenger: controller.binaryMessenger
-            )
-
-            channel.invokeMethod("onCallEvent", arguments: [
-                "event": event,
-                "payload": safePayload
-            ])
-
-            writeLog("✅ تم إرسال حدث \(event) إلى Flutter مباشرة")
-        } else {
-            if let data = try? JSONSerialization.data(withJSONObject: safePayload, options: []),
-               let jsonString = String(data: data, encoding: .utf8) {
-                UserDefaults.standard.set(jsonString, forKey: "pending_native_call_payload")
-                UserDefaults.standard.set(event, forKey: "pending_native_call_event")
-                writeLog("💾 تم حفظ حدث المكالمة مؤقتًا في UserDefaults: \(event)")
-            } else {
-                UserDefaults.standard.set("{}", forKey: "pending_native_call_payload")
-                UserDefaults.standard.set(event, forKey: "pending_native_call_event")
-                writeLog("⚠️ تم حفظ حدث المكالمة مؤقتًا لكن payload غير قابل للتحويل إلى JSON")
-            }
-        }
-    }
-
-    private func endNativeCallIfNeeded(uuidString: String) {
-        guard let callUUID = UUID(uuidString: uuidString) else { return }
-
-        if activeCallUUIDs.contains(callUUID) {
-            let wasAnswered = answeredCallUUIDs.contains(callUUID)
-            let payload = pendingPayloadByUUID[callUUID] ?? [:]
-
-            // ✅ تم التصحيح: استخدام reportCall بدلاً من endCall (غير موجود في CXProvider)
-            callKitProvider.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
-
-            activeCallUUIDs.remove(callUUID)
-            answeredCallUUIDs.remove(callUUID)
-            pendingPayloadByUUID.removeValue(forKey: callUUID)
-
-            deliverCallEventToFlutter(payload: payload, event: wasAnswered ? "end" : "decline")
-
-            writeLog("🚫 تم إنهاء مكالمة Native: \(uuidString)")
-        }
+        result(["success": true, "message": "تم إرسال أمر CallKit بنجاح.", "uuid": testUUID])
     }
 }
 
-// MARK: - PKPushRegistryDelegate
-
+// =======================================================================
+// 📞 VoIP Push Registry Delegate (النسخة النهائية المُصححة)
+// =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
-    func pushRegistry(
-        _ registry: PKPushRegistry,
-        didUpdate credentials: PKPushCredentials,
-        for type: PKPushType
-    ) {
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
 
-        let deviceToken = credentials.token.map { String(format: "%02x", $0) }.joined()
-
+        let deviceToken = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
         UserDefaults.standard.set(deviceToken, forKey: "flutter.voip_token")
-
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(deviceToken)
-
-        writeLog("🔑 VoIP Token: \(deviceToken.prefix(15))... length=\(deviceToken.count)")
+        writeLog("🔑 تم استلام توكن VoIP: \(deviceToken.prefix(15))... (الطول: \(deviceToken.count))")
     }
 
-    func pushRegistry(
-        _ registry: PKPushRegistry,
-        didInvalidatePushTokenFor type: PKPushType
-    ) {
-        guard type == .voIP else { return }
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, withCompletionHandler completion: @escaping () -> Void) {
 
-        UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
-        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP("")
+        // 🔥🔥🔥 بصمة الإثبات القاطع: إذا ظهر هذا السطر في السجلات، فالكود الجديد يعمل 100% 🔥🔥🔥
+        writeLog("🔥🔥🔥 إثبات قاطع: تم استلام إشعار VoIP! 🔥🔥🔥")
 
-        writeLog("⚠️ تم إبطال VoIP Token")
-    }
-
-    func pushRegistry(
-        _ registry: PKPushRegistry,
-        didReceiveIncomingPushWith payload: PKPushPayload,
-        for type: PKPushType,
-        withCompletionHandler completion: @escaping () -> Void
-    ) {
-        writeLog("🔥🔥 وصل إشعار VoIP إلى AppDelegate")
-
+        // 1. رفض أي شيء ليس VoIP فوراً مع استدعاء completion
         guard type == .voIP else {
-            writeLog("⚠️ تم تجاهل إشعار غير VoIP")
             completion()
             return
         }
 
         pushKitReceivedCount += 1
-
-        let dict = sanitizedDictionary(payload.dictionaryPayload)
+        let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
         lastPushKitPayload = dict
 
-        writeLog("⬇️ Payload: \(dict)")
+        writeLog("⬇️ استلام إشعار VoIP (#\(pushKitReceivedCount)) Payload: \(dict)")
 
-        let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? ""
-        let callUUID = UUID(uuidString: rawId) ?? UUID()
-        let validUUID = callUUID.uuidString
+        // 2. استخراج الـ UUID بأمان
+        let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? UUID().uuidString
+        let validUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
 
+        // 3. فحص حالة الإلغاء فوراً (مطابق لمنطق السيرفر V2)
         let typeValue = dict["type"]
-        let actionValue = dict["action"] as? String
-        let isCancelFlag = (dict["is_cancel"] as? Bool) == true
-
-        let isCancelNumeric =
-            (typeValue as? Int == 1) ||
-            (typeValue as? String == "1")
-
-        let isCancel =
-            actionValue == "cancel_call" ||
-            (typeValue as? String == "cancel_call") ||
-            isCancelFlag ||
-            isCancelNumeric
+        let actionValue = dict["action"]
+        let isCancel = (typeValue as? String == "cancel_call") ||
+                       (actionValue as? String == "cancel_call") ||
+                       (typeValue as? String == "cancel") ||
+                       (actionValue as? String == "cancel")
 
         if isCancel {
-            writeLog("🚫 طلب إلغاء مكالمة عبر VoIP Push: \(validUUID)")
-
-            let wasAnswered = answeredCallUUIDs.contains(callUUID)
-            let payloadForFlutter = pendingPayloadByUUID[callUUID] ?? [:]
-            let wasActive = activeCallUUIDs.contains(callUUID)
-
-            if wasActive {
-                // ✅ تم التصحيح: استخدام reportCall بدلاً من endCall
-                callKitProvider.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
-
-                activeCallUUIDs.remove(callUUID)
-                answeredCallUUIDs.remove(callUUID)
-                pendingPayloadByUUID.removeValue(forKey: callUUID)
-
-                deliverCallEventToFlutter(
-                    payload: payloadForFlutter,
-                    event: wasAnswered ? "end" : "decline"
-                )
-
-                writeLog("✅ تم إنهاء المكالمة النشطة بسبب cancel")
-            } else {
-                writeLog("⚠️ وصل cancel بدون مكالمة نشطة في Native CallKit")
-            }
-
-            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
-                let callData = flutter_callkit_incoming.Data(
-                    id: validUUID,
-                    nameCaller: "",
-                    handle: "",
-                    type: 1
-                )
-
-                plugin.endCall(callData)
-            }
-
-            completion()
+            writeLog("🚫 إلغاء المكالمة (UUID: \(validUUID))")
+            let callData = flutter_callkit_incoming.Data(id: validUUID, nameCaller: "", handle: "", type: 0)
+            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
+            completion() // ⚠️ حاسم: إنهاء المعالجة فوراً
             return
         }
 
-        let callerName =
-            (dict["nameCaller"] as? String) ??
-            (dict["driver_name"] as? String) ??
-            (dict["name"] as? String) ??
-            "مندوب بيتي"
+        // 4. استخراج البيانات (مطابق تماماً لما يرسله الـ Backend)
+        let callerName = (dict["nameCaller"] as? String) ?? (dict["driver_name"] as? String) ?? (dict["caller_name"] as? String) ?? "مندوب بيتي"
+        let handle = (dict["handle"] as? String) ?? (dict["driver_phone"] as? String) ?? (dict["caller_phone"] as? String) ?? "مكالمة واردة"
+        let duration = (dict["duration"] as? Int) ?? 60000
 
-        let handle =
-            (dict["handle"] as? String) ??
-            (dict["driver_phone"] as? String) ??
-            "مكالمة واردة"
+        var avatar = (dict["avatar"] as? String) ?? (dict["driver_image"] as? String) ?? (dict["caller_image"] as? String) ?? ""
+        if avatar.hasPrefix("http://") {
+            avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
+        }
 
-        reportNativeIncomingCall(
-            uuidString: validUUID,
-            callerName: callerName,
+        let extraDict = (dict["extra"] as? [String: Any]) ?? dict
+
+        let callData = flutter_callkit_incoming.Data(
+            id: validUUID, // ⚠️ يجب أن يطابق الـ UUID المستلم
+            nameCaller: callerName,
             handle: handle,
-            payload: dict,
-            pushCompletion: completion
+            type: 0 // 0 = مكالمة واردة
         )
-    }
-}
+        callData.appName = "منصة بيتي"
+        callData.avatar = avatar
+        callData.duration = duration
+        callData.extra = extraDict as NSDictionary
 
-// MARK: - CXProviderDelegate
+        writeLog("🔔 جاري عرض CallKit (UUID: \(validUUID), Caller: \(callerName))")
 
-extension AppDelegate: CXProviderDelegate {
+        // 5. 🔥 الإصلاح الجذري للـ Crash: التنفيذ بشكل متزامن (Synchronously)
+        // لأن الـ PKPushRegistry تم تهيئته على الـ main queue، فنحن بالفعل على الخيط الرئيسي.
+        // استخدام DispatchQueue.main.async هنا يؤجل التنفيذ للـ RunLoop التالي،
+        // مما يجعل iOS يظن أن التطبيق تجاهل الإشعار فيقوم بقتل التطبيق (Crash).
 
-    func providerDidReset(_ provider: CXProvider) {
-        writeLog("🔄 تم إعادة تعيين CXProvider")
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
+        self.callKitShownCount += 1
+        self.writeLog("✅ تم إرسال أمر CallKit بنجاح")
 
-        activeCallUUIDs.removeAll()
-        answeredCallUUIDs.removeAll()
-        pendingPayloadByUUID.removeAll()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        writeLog("✅ المستخدم رد على المكالمة Native")
-
-        // ✅ تم التصحيح: استخدام action.callUUID بدلاً من action.call.uuid
-        answeredCallUUIDs.insert(action.callUUID)
-
-        let payload = pendingPayloadByUUID[action.callUUID] ?? [:]
-
-        action.fulfill()
-
-        deliverCallEventToFlutter(payload: payload, event: "accept")
+        // ⚠️ حاسم جداً: إخبار نظام iOS أننا انتهينا من معالجة الإشعار فوراً
+        // عدم استدعاء هذا السطر هو السبب المباشر لرسالة _terminateAppIfThereAreUnhandledVoIPPushes
+        completion()
     }
 
-    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        // ✅ تم التصحيح: استخدام action.callUUID بدلاً من action.call.uuid
-        let uuid = action.callUUID
-        let wasAnswered = answeredCallUUIDs.contains(uuid)
-        let payload = pendingPayloadByUUID[uuid] ?? [:]
-
-        writeLog(wasAnswered ? "⛔ تم إنهاء المكالمة Native بعد الرد" : "⛔ تم رفض المكالمة Native")
-
-        answeredCallUUIDs.remove(uuid)
-        activeCallUUIDs.remove(uuid)
-        pendingPayloadByUUID.removeValue(forKey: uuid)
-
-        action.fulfill()
-
-        deliverCallEventToFlutter(payload: payload, event: wasAnswered ? "end" : "decline")
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
-        action.fulfill()
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        guard type == .voIP else { return }
+        UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP("")
+        writeLog("⚠️ تم إبطال توكن VoIP")
     }
 }
