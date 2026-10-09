@@ -47,12 +47,17 @@ final ValueNotifier<Map<String, dynamic>?> activeTrackingNotifier = ValueNotifie
 final ValueNotifier<Map<String, dynamic>?> activeTaxiChatNotifier = ValueNotifier(null);
 
 // =======================================================================
-// 🔥 متغير عالمي لحفظ بيانات آخر مكالمة واردة (لمنع فقدان البيانات عند الرد)
+// 🔥 متغير عالمي لحفظ بيانات آخر مكالمة واردة
 // =======================================================================
 Map<String, dynamic>? _lastIncomingCallData;
 
 // =======================================================================
-// 🔥 دوال مساعدة للتحقق من نوع الرسالة (تقبل النص والرقم)
+// 🔥 قناة Native iOS CallKit (تُستخدم على iOS فقط)
+// =======================================================================
+const MethodChannel _nativeCallChannel = MethodChannel('beytei_native_call');
+
+// =======================================================================
+// 🔥 دوال مساعدة للتحقق من نوع الرسالة
 // =======================================================================
 bool isVoipCall(dynamic data) {
   if (data == null) return false;
@@ -74,7 +79,7 @@ bool _payloadValueIsBlank(dynamic value) {
 }
 
 // =======================================================================
-// 🔥 مساعد: توحيد بيانات المكالمة القادمة من iOS Native CallKit
+// 🔥 مساعد: توحيد بيانات المكالمة
 // =======================================================================
 Map<String, dynamic> normalizeNativeCallPayload(Map<String, dynamic> payload) {
   final Map<String, dynamic> result = Map<String, dynamic>.from(payload);
@@ -126,31 +131,26 @@ Map<String, dynamic> normalizeNativeCallPayload(Map<String, dynamic> payload) {
     result['extra'] = extraMap;
   }
 
-  // توافق مع السيرفر القديم الذي قد يرسل channel_name بدل room_name
   if (_payloadValueIsBlank(result['room_name']) &&
       !_payloadValueIsBlank(result['channel_name'])) {
     result['room_name'] = result['channel_name'];
   }
 
-  // توافق مع تسمية driver_name بدل nameCaller
   if (_payloadValueIsBlank(result['nameCaller']) &&
       !_payloadValueIsBlank(result['driver_name'])) {
     result['nameCaller'] = result['driver_name'];
   }
 
-  // توافق مع تسمية driver_phone بدل handle
   if (_payloadValueIsBlank(result['handle']) &&
       !_payloadValueIsBlank(result['driver_phone'])) {
     result['handle'] = result['driver_phone'];
   }
 
-  // توافق مع تسمية driver_image بدل avatar
   if (_payloadValueIsBlank(result['avatar']) &&
       !_payloadValueIsBlank(result['driver_image'])) {
     result['avatar'] = result['driver_image'];
   }
 
-  // توافق مع possible livekit_token
   if (_payloadValueIsBlank(result['token']) &&
       !_payloadValueIsBlank(result['livekit_token'])) {
     result['token'] = result['livekit_token'];
@@ -185,25 +185,32 @@ void handleNotificationClick(Map<String, dynamic> data) {
 }
 
 // =======================================================================
-// 🔥 1. دوال مساعدة لإظهار المكالمة (مصححة لتعمل في الـ Foreground والخلفية)
+// 🔥 دالة إظهار المكالمة (For Android - uses flutter_callkit_incoming)
+// على iOS: Native CXProvider يعرض CallKit، ولا نحتاج هذه الدالة
 // =======================================================================
 Future<void> showIncomingCall(Map<String, dynamic> data) async {
-  print("📞 [Show Call] جاري تجهيز بيانات المكالمة...");
+  // 🔥 إذا كنا على iOS، لا نستخدم هذه الدالة
+  // لأن Native CXProvider يعرض المكالمة تلقائياً
+  if (Platform.isIOS) {
+    print("🍏 [Show Call] iOS detected - Native CXProvider handles display");
+    // نحفظ البيانات فقط
+    _lastIncomingCallData = data;
+    return;
+  }
 
-  // ✅ حفظ البيانات في الذاكرة المؤقتة فورا
+  // ====== من هنا وما بعد: Android فقط ======
+  print("🤖 [Show Call] Android - Using flutter_callkit_incoming...");
+
   _lastIncomingCallData = data;
 
-  // 🔥 الإصلاح الحاسم: استخدام الـ ID المرسل من السيرفر، وإذا لم يوجد نولد واحدا
   String currentUuid = (data['id'] as String?) ?? (data['order_id'] as String?) ?? const Uuid().v4();
-  print("🔑 [Show Call] باستخدام UUID: $currentUuid");
+  print("🔑 [Show Call] UUID: $currentUuid");
 
   final String driverName = data['driver_name'] ?? data['nameCaller'] ?? 'مندوب بيتي';
   final String driverPhone = data['driver_phone'] ?? data['handle'] ?? 'اتصال وارد';
 
-  // 🔥 إصلاح رابط الصورة: نستخدم الصورة المحلية كخيار افتراضي وأمن 100%
   String driverImage = data['driver_image'] ?? data['avatar'] ?? 'assets/default_avatar.png';
 
-  // الحفاظ على الأمان: إذا أرسل السيرفر رابطا، نتأكد أنه HTTPS وليس HTTP
   if (driverImage.startsWith('http://')) {
     driverImage = driverImage.replaceFirst('http://', 'https://');
   }
@@ -213,10 +220,10 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
   final String token = data['token'] ?? '';
   final String orderId = data['order_id']?.toString() ?? '';
 
-  print("📞 [Show Call] Driver: $driverName, Room: $roomName, Token: ${token.isEmpty ? 'فارغ' : 'موجود'}");
+  print("📞 [Show Call] Driver: $driverName, Room: $roomName");
 
   final params = CallKitParams(
-    id: currentUuid, // استخدام الـ UUID الصحيح من السيرفر
+    id: currentUuid,
     nameCaller: driverName,
     appName: 'منصة بيتي',
     avatar: driverImage,
@@ -267,31 +274,35 @@ Future<void> showIncomingCall(Map<String, dynamic> data) async {
   );
 
   try {
-    print("🚀 [Show Call] جاري استدعاء FlutterCallkitIncoming...");
+    print("🚀 [Show Call] Calling FlutterCallkitIncoming...");
     await FlutterCallkitIncoming.showCallkitIncoming(params);
-    print("✅ [Show Call] تم إرسال أمر العرض بنجاح!");
+    print("✅ [Show Call] Done!");
   } catch (e) {
-    print("❌ [Show Call] فشل عرض المكالمة: $e");
+    print("❌ [Show Call] Failed: $e");
   }
 }
 
 // =======================================================================
-// 🔥 2. معالج الخلفية
+// 🔥 معالج الخلفية
 // =======================================================================
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  print("🔥 [Background] Handling a background message: ${message.messageId}");
+  print("🔥 [Background] Message: ${message.messageId}");
   print("🔥 [Background] Data: ${message.data}");
 
   if (isCancelCall(message.data)) {
     print("❌ [Background] Cancel call received");
-    await FlutterCallkitIncoming.endAllCalls();
+    // على iOS، Native CXProvider يتولى الإلغاء
+    if (Platform.isAndroid) {
+      await FlutterCallkitIncoming.endAllCalls();
+    }
     return;
   }
 
   if (isVoipCall(message.data)) {
-    print("📞 [Background] VoIP call received - showing incoming call");
+    print("📞 [Background] VoIP call - showing on Android only");
+    // showIncomingCall internally checks Platform.isIOS
     await showIncomingCall(message.data);
   }
 }
@@ -344,7 +355,7 @@ Future<void> _saveAndRegisterToken(String token) async {
       voipToken = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
       if (voipToken != null && voipToken.isNotEmpty) {
         await prefs.setString('voip_token', voipToken);
-        print("🍏 [Apple PushKit] تم التقاط توكن المكالمات بنجاح: $voipToken");
+        print("🍏 [Apple PushKit] VoIP Token: $voipToken");
       }
     } catch (e) {
       print("⚠️ فشل جلب توكن VoIP: $e");
@@ -353,21 +364,19 @@ Future<void> _saveAndRegisterToken(String token) async {
 }
 
 // =======================================================================
-// 🔥 3. استراتيجية الأذونات (معدلة لمنع التوقف)
+// 🔥 استراتيجية الأذونات
 // =======================================================================
 Future<void> requestLocationPermissionOnly() async {
   print("🔐 التحقق من حالة الـ GPS...");
   bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
   if (!serviceEnabled) {
-    print("⚠️ خدمة الموقع (GPS) مغلقة. سيتم تجاوز الطلب لمنع توقف التطبيق.");
+    print("⚠️ خدمة الموقع (GPS) مغلقة.");
     return;
   }
 
-  print("🔐 التحقق من إذن الموقع...");
   final status = await Permission.location.status;
 
   if (!status.isGranted && !status.isPermanentlyDenied) {
-    print("🔍 جاري طلب إذن الموقع...");
     await Permission.location.request();
   }
 
@@ -417,10 +426,10 @@ void main() async {
   try {
     if (FirebaseAuth.instance.currentUser == null) {
       await FirebaseAuth.instance.signInAnonymously();
-      print("✅ تم تسجيل دخول الزبون مجهول الهوية في فايربيس بنجاح");
+      print("✅ Firebase anonymous sign-in");
     }
   } catch (e) {
-    print("⚠️ خطأ في مصادقة فايربيس: $e");
+    print("⚠️ Firebase auth error: $e");
   }
 
   try {
@@ -475,29 +484,33 @@ void main() async {
   );
 
   // =======================================================================
-  // ✅ معالجة رسائل FCM في الواجهة الأمامية (مع حماية المكالمة المقبولة)
+  // ✅ معالجة رسائل FCM في الواجهة الأمامية
   // =======================================================================
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    print("🔔 [FCM] Received message in foreground");
-    print("🔔 [FCM] Data: ${message.data}");
+    print("🔔 [FCM] Foreground: ${message.data}");
 
     if (isCancelCall(message.data)) {
       print("❌ [Foreground] Cancel call received");
 
       if (activeCallNotifier.value != null) {
-        print("🛡️ [PROTECTED] تم تجاهل cancel_call لأن المكالمة مقبولة بالفعل!");
+        print("🛡️ [PROTECTED] تجاهل cancel_call (المكالمة مقبولة)");
         return;
       }
 
-      await FlutterCallkitIncoming.endAllCalls();
+      // 🔥 على iOS: Native يعالج الإلغاء
+      // على Android: نستخدم المكتبة
+      if (Platform.isAndroid) {
+        await FlutterCallkitIncoming.endAllCalls();
+      }
       activeCallNotifier.value = null;
       _lastIncomingCallData = null;
       return;
     }
 
     if (isVoipCall(message.data)) {
-      print("📞 [Foreground] VoIP call received");
-      // 🔥 هذا هو السطر الحاسم لعرض المكالمة عندما يكون التطبيق مفتوحا
+      print("📞 [Foreground] VoIP call");
+      // on iOS: Native AppDelegate سيتولى الأمر
+      // on Android: showIncomingCall سيُظهر المكالمة
       showIncomingCall(message.data);
     } else {
       _showLocalNotification(message);
@@ -545,13 +558,7 @@ class _MyAppState extends State<MyApp> {
   late AppStateNotifier _appStateNotifier;
   late GoRouter _router;
 
-  // =======================================================================
-  // 🔥 iOS Native CallKit Channel
-  // هذه القناة تُستخدم فقط على iOS عندما يعرض AppDelegate المكالمة عبر CXProvider مباشرة
-  // =======================================================================
-  static final MethodChannel nativeCallChannel = MethodChannel('beytei_native_call');
-
-  // لمنع تكرار فتح نفس المكالمة إذا وصل事件 أكثر من مرة
+  // لمنع تكرار فتح نفس المكالمة
   final Set<String> _handledNativeCallIds = <String>{};
 
   @override
@@ -562,8 +569,7 @@ class _MyAppState extends State<MyApp> {
 
     _setupCallKitListener();
 
-    // 🔥 مهم جدًا: تشغيل مستمع iOS Native CallKit فقط على iOS
-    // حتى لا يتأثر Android إطلاقًا
+    // 🔥 مستمع Native iOS فقط على iOS (Android غير متأثر)
     if (Platform.isIOS) {
       _setupNativeCallListener();
     }
@@ -573,7 +579,7 @@ class _MyAppState extends State<MyApp> {
 
       FirebaseMessaging.instance.getInitialMessage().then((message) {
         if (message != null) {
-          print("🚀 [App Launch] فتح التطبيق من إشعار والتقاط البيانات");
+          print("🚀 [App Launch] من إشعار");
           handleNotificationClick(message.data);
         }
       });
@@ -593,7 +599,7 @@ class _MyAppState extends State<MyApp> {
     try {
       dynamic calls = await FlutterCallkitIncoming.activeCalls();
       if (calls is List && calls.isNotEmpty) {
-        print("🚀 [App Launch] مكالمة نشطة موجودة! سيتم العرض فورا...");
+        print("🚀 [App Launch] مكالمة نشطة موجودة!");
         var firstCall = calls.first;
 
         if (firstCall is Map) {
@@ -613,10 +619,10 @@ class _MyAppState extends State<MyApp> {
   }
 
   // =======================================================================
-  // 🔥 مستمع أحداث iOS Native CallKit
+  // 🔥 مستمع أحداث iOS Native CallKit (iOS فقط)
   // =======================================================================
   void _setupNativeCallListener() {
-    nativeCallChannel.setMethodCallHandler((call) async {
+    _nativeCallChannel.setMethodCallHandler((call) async {
       if (!mounted) return;
 
       if (call.method == 'onCallEvent') {
@@ -647,51 +653,30 @@ class _MyAppState extends State<MyApp> {
         print("🍏 [Native iOS Call] event=$event");
         print("🍏 [Native iOS Call] payload=$payload");
 
-        // =======================================================================
-        // 🔥 جديد: حدث "incoming" من AppDelegate
-        // يُرسل بعد أن ينجح iOS في الإبلاغ عن المكالمة عبر CallKit
-        // هنا نحفظ البيانات فقط، ولا نفتح شاشة LiveKit
-        // شاشة LiveKit ستُفتح فقط عندما يضغط المستخدم "رد" (حدث accept)
-        // =======================================================================
+        // ======================= حدث "incoming" =======================
         if (event == 'incoming') {
           final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
-
           final String callId = normalized['id']?.toString() ?? '';
 
           final bool hasRoom = !_payloadValueIsBlank(normalized['room_name']);
           final bool hasToken = !_payloadValueIsBlank(normalized['token']);
 
           if (hasRoom && hasToken) {
-            // 🔥 نحفظ البيانات فقط، لا نفتح شاشة المكالمة
             _lastIncomingCallData = normalized;
-            print("📞 [Native iOS Call] مكالمة واردة (ID: $callId) - بانتظار رد المستخدم");
-            print("📞 [Native iOS Call] Room: ${normalized['room_name']}");
+            print("📞 [Native iOS Call] incoming (ID: $callId) - awaiting accept");
           } else {
-            print("⚠️ [Native iOS Call] حدث incoming لكن بيانات المكالمة ناقصة");
-            print("⚠️ hasRoom=$hasRoom, hasToken=$hasToken");
-
-            // في حال كانت البيانات ناقصة، نجرب استخراجها من الحقول البديلة
-            if (_lastIncomingCallData != null) {
-              print("♻️ [Native iOS Call] استخدام البيانات المحفوظة مسبقًا كاحتياطي");
-            }
+            print("⚠️ [Native iOS Call] incoming but data incomplete");
           }
-
-          // ⚠️ مهم: لا نستدعي _clearPendingNativeCall هنا
-          // لأننا قد نحتاج البيانات عند وصول حدث accept لاحقاً
           return;
         }
 
-        // =======================================================================
-        // ✅ حدث "accept" - المستخدم ضغط "رد" على CallKit
-        // هنا نفتح شاشة LiveKit
-        // =======================================================================
+        // ======================= حدث "accept" =======================
         if (event == 'accept') {
           final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
-
           final String callId = normalized['id']?.toString() ?? '';
 
           if (callId.isNotEmpty && _handledNativeCallIds.contains(callId)) {
-            print("♻️ [Native iOS Call] تم تجاهل حدث accept مكرر لنفس المكالمة");
+            print("♻️ [Native iOS Call] accept مكرر - تجاهل");
             await _clearPendingNativeCall();
             return;
           }
@@ -706,20 +691,17 @@ class _MyAppState extends State<MyApp> {
           if (hasRoom && hasToken) {
             _lastIncomingCallData = normalized;
             activeCallNotifier.value = normalized;
-            print("✅ [Native iOS Call] تم فتح شاشة المكالمة من iOS Native CallKit");
+            print("✅ [Native iOS Call] فتح شاشة LiveKit");
           } else if (_lastIncomingCallData != null) {
-            // 🔥 Fallback: نستخدم البيانات المحفوظة من حدث incoming
             activeCallNotifier.value = _lastIncomingCallData;
-            print("♻️ [Native iOS Call] تم فتح شاشة المكالمة من البيانات المحفوظة مسبقًا (incoming)");
+            print("♻️ [Native iOS Call] استخدام بيانات محفوظة");
           } else {
-            print("⚠️ [Native iOS Call] بيانات المكالمة غير كافية لفتح شاشة LiveKit");
+            print("⚠️ [Native iOS Call] بيانات ناقصة");
           }
 
           await _clearPendingNativeCall();
         }
-        // =======================================================================
-        // ❌ حدث "end" أو "decline" أو "timeout" - انتهاء/رفض المكالمة
-        // =======================================================================
+        // ======================= event: end/decline/timeout =======================
         else if (event == 'end' || event == 'decline' || event == 'timeout') {
           final String callId = payload['id']?.toString() ?? '';
 
@@ -730,18 +712,18 @@ class _MyAppState extends State<MyApp> {
           activeCallNotifier.value = null;
           _lastIncomingCallData = null;
 
-          print("❌ [Native iOS Call] تم إنهاء/رفض المكالمة الأصلية");
+          print("❌ [Native iOS Call] end/decline/timeout");
 
           await _clearPendingNativeCall();
         }
       }
     });
 
-    // 🔥 عند بدء التطبيق، افحص هل هناك مكالمة أصلية محفوظة مسبقًا
     _checkPendingNativeCall();
   }
+
   // =======================================================================
-  // 🔥 فحص المكالمة الأصلية المعلقة في SharedPreferences
+  // 🔥 فحص المكالمة الأصلية المعلقة
   // =======================================================================
   Future<void> _checkPendingNativeCall() async {
     try {
@@ -754,7 +736,6 @@ class _MyAppState extends State<MyApp> {
         return;
       }
 
-      // إذا كانت هناك مكالمة مفتوحة بالفعل، لا نكرر فتحها
       if (activeCallNotifier.value != null) {
         await prefs.remove('pending_native_call_payload');
         await prefs.remove('pending_native_call_event');
@@ -769,18 +750,16 @@ class _MyAppState extends State<MyApp> {
           payload = Map<String, dynamic>.from(decoded);
         }
       } catch (e) {
-        print("❌ [Pending Native Call] فشل فك JSON: $e");
+        print("❌ [Pending Native Call] JSON parse error: $e");
         await prefs.remove('pending_native_call_payload');
         await prefs.remove('pending_native_call_event');
         return;
       }
 
       print("🍏 [Pending Native Call] event=$event");
-      print("🍏 [Pending Native Call] payload=$payload");
 
       if (event == 'accept') {
         final Map<String, dynamic> normalized = normalizeNativeCallPayload(payload);
-
         final String callId = normalized['id']?.toString() ?? '';
 
         if (callId.isNotEmpty && _handledNativeCallIds.contains(callId)) {
@@ -799,10 +778,10 @@ class _MyAppState extends State<MyApp> {
         if (hasRoom && hasToken) {
           _lastIncomingCallData = normalized;
           activeCallNotifier.value = normalized;
-          print("✅ [Pending Native Call] تم فتح شاشة المكالمة من البيانات المعلقة");
+          print("✅ [Pending Native Call] فتح شاشة LiveKit");
         } else if (_lastIncomingCallData != null) {
           activeCallNotifier.value = _lastIncomingCallData;
-          print("♻️ [Pending Native Call] تم فتح شاشة المكالمة من البيانات المحفوظة");
+          print("♻️ [Pending Native Call] استخدام بيانات محفوظة");
         }
 
         await prefs.remove('pending_native_call_payload');
@@ -825,9 +804,6 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  // =======================================================================
-  // 🔥 تنظيف المكالمة المعلقة
-  // =======================================================================
   Future<void> _clearPendingNativeCall() async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -836,11 +812,29 @@ class _MyAppState extends State<MyApp> {
     } catch (_) {}
   }
 
+  // =======================================================================
+  // 🔥 إعلام Native iOS بإنهاء المكالمة (iOS فقط)
+  // =======================================================================
+  Future<void> notifyNativeCallEnded(String callId) async {
+    // ⚠️ على Android: لا نفعل أي شيء
+    if (!Platform.isIOS) return;
+    if (callId.isEmpty) return;
+
+    try {
+      await _nativeCallChannel.invokeMethod('endNativeCall', {
+        'callId': callId,
+      });
+      print("📞 [Native Call End] iOS informed: $callId");
+    } catch (e) {
+      print("⚠️ فشل إعلام native: $e");
+    }
+  }
+
   void _setupCallKitListener() {
     FlutterCallkitIncoming.onEvent.listen((dynamic event) async {
       if (event == null) return;
 
-      print("📞 [CallKit Event] Received: $event");
+      print("📞 [CallKit Event] $event");
 
       String? eventType;
       Map<String, dynamic>? eventData;
@@ -870,38 +864,46 @@ class _MyAppState extends State<MyApp> {
             }
           }
         } catch (e) {
-          print("⚠️ تعذر استخراج callKitParams، سيتم الاعتماد على البيانات الاحتياطية.");
+          print("⚠️ تعذر استخراج callKitParams");
         }
       } catch (e) {
         print("⚠️ Failed to parse event: $e");
       }
 
       if (eventType == null) {
-        print("⚠️ لم يتم التعرف على نوع الحدث.");
+        print("⚠️ نوع حدث غير معروف.");
         return;
       }
 
-      print("📞 [CallKit Event] Parsed Type: $eventType");
+      print("📞 [CallKit Event] Type: $eventType");
+
+      // 🔥 على iOS: Native يتولى الأمر عبر onCallEvent
+      // لكننا نبقي هذا للحالات الخاصة (Android أو Fallback)
+      if (Platform.isIOS && eventType == 'Accept') {
+        // نتجاهل هذا على iOS لأن Native سيرسل 'accept' عبر قناته
+        print("🍏 [iOS] تجاهل حدث المكتبة (Native يتولى الأمر)");
+        return;
+      }
 
       if (eventData == null || eventData.isEmpty || eventData['room_name'] == null) {
-        print("♻️ [FALLBACK] يتم الاعتماد الكلي على _lastIncomingCallData");
+        print("♻️ [FALLBACK] استخدام _lastIncomingCallData");
         eventData = _lastIncomingCallData;
       }
 
       if (eventType == 'Accept' || eventType.contains('actionCallAccept')) {
-        print("✅ [CallKit] تم الضغط على رد... جاري فتح الشاشة");
-
+        print("✅ [CallKit] تم الرد");
         final mergedData = {
           ...?_lastIncomingCallData,
           ...?(eventData ?? {}),
         };
-
-        print("🔍 [DEBUG] Room: ${mergedData['room_name']}, Token exists: ${mergedData['token'] != null}");
         activeCallNotifier.value = mergedData;
       } else if (eventType == 'Decline' || eventType == 'Ended' || eventType == 'Timeout' ||
           eventType.contains('actionCallDecline') || eventType.contains('actionCallEnded') || eventType.contains('actionCallTimeout')) {
-        print("❌ [CallKit] المكالمة انتهت أو رُفضت.");
-        await FlutterCallkitIncoming.endAllCalls();
+        print("❌ [CallKit] انتهت أو رُفضت");
+        // 🔥 على Android فقط
+        if (Platform.isAndroid) {
+          await FlutterCallkitIncoming.endAllCalls();
+        }
         activeCallNotifier.value = null;
         _lastIncomingCallData = null;
       }
@@ -978,12 +980,10 @@ class _MyAppState extends State<MyApp> {
             children: [
               if (child != null) child,
 
-              // 1. المكالمة الصوتية (محدثة لـ LiveKit)
+              // 1. المكالمة الصوتية
               ValueListenableBuilder<Map<String, dynamic>?>(
                 valueListenable: activeCallNotifier,
                 builder: (context, callData, _) {
-                  print("🔍 [UI Builder] حالة callData: ${callData == null ? 'فارغة (null)' : 'موجودة وتحتوي على بيانات'}");
-
                   if (callData == null) return const SizedBox.shrink();
 
                   final extractedData = _extractCallData(callData);
@@ -993,15 +993,21 @@ class _MyAppState extends State<MyApp> {
                     return const SizedBox.shrink();
                   }
 
-                  print("📞 [Call Screen] ✅ SHOWING SCREEN with room: ${extractedData['roomName']}");
+                  print("📞 [Call Screen] SHOWING - room: ${extractedData['roomName']}");
+
+                  // 🔥 استخراج callId من البيانات
+                  final String callId = callData['id']?.toString() ??
+                      callData['order_id']?.toString() ??
+                      '';
 
                   return ActiveVoiceCallScreen(
                     roomName: extractedData['roomName']!,
                     livekitUrl: extractedData['livekitUrl']!,
                     token: extractedData['token']!,
                     remoteName: extractedData['driverName']!,
+                    callId: callId,
                     onCallEnded: () {
-                      print("📞 [Call Screen] Call ended callback triggered");
+                      print("📞 [Call Screen] Ended");
                       activeCallNotifier.value = null;
                     },
                   );
@@ -1125,7 +1131,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
   String _appInfo = 'جاري التحميل...';
   String _testResult = '';
 
-  // 🔥 متغيرات زر طلب المكالمة من السيرفر
   String _serverCallResult = '';
   bool _isRequestingCall = false;
 
@@ -1221,7 +1226,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     }
   }
 
-  // 🔥 دالة طلب مكالمة تشخيصية من السيرفر
   Future<void> _requestCallFromServer() async {
     setState(() {
       _isRequestingCall = true;
@@ -1231,7 +1235,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     try {
       String deviceType = Platform.isIOS ? 'ios' : (Platform.isAndroid ? 'android' : 'unknown');
 
-      // تنظيف نص التوكن من أي نصوص إضافية
       String cleanVoipToken = _voipToken.contains('❌') ? '' : _voipToken.split('\n')[0].trim();
       String cleanFcmToken = _fcmToken.contains('❌') ? '' : _fcmToken.split('\n')[0].trim();
 
@@ -1298,7 +1301,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     await prefs.remove('fcm_token');
     await prefs.remove('ios_debug_logs');
 
-    // 🔥 تنظيف بيانات iOS Native CallKit المعلقة أيضًا
     await prefs.remove('pending_native_call_payload');
     await prefs.remove('pending_native_call_event');
 
@@ -1316,7 +1318,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
     );
   }
 
-  // 🔥 دالة نسخ كل البيانات
   Future<void> _copyAllToClipboard() async {
     final buffer = StringBuffer();
     buffer.writeln('═══════════════════════════════════════');
@@ -1408,7 +1409,6 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // الأزرار الرئيسية
             Row(
               children: [
                 Expanded(
@@ -1546,15 +1546,15 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
                 children: [
                   Text('💡 دليل التشخيص السريع', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.yellow)),
                   SizedBox(height: 8),
-                  Text('1. إذا كان توكن VoIP مفقودا: التطبيق لم يسجل PushKit. تأكد من Info.plist و Xcode Capabilities.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('1. توكن VoIP مفقود: التطبيق لم يسجل PushKit.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
-                  Text('2. إذا كان "استلام VoIP: 0": الإشعار لم يصل من السيرفر. افحص التوكن في قاعدة البيانات.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('2. "استلام VoIP: 0": الإشعار لم يصل من السيرفر.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
-                  Text('3. إذا كان "استلام > 0" لكن "عرض CallKit: 0": مكتبة flutter_callkit_incoming تفشل. جرب اختبار CallKit محليا.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('3. "استلام > 0" لكن "عرض CallKit: 0": مشكلة في العرض.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
-                  Text('4. إذا نجح الاختبار المحلي لكن المكالمة الحقيقية تفشل: المشكلة في الـ Backend (البيانات المرسلة).', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('4. اختبار محلي يعمل لكن الحقيقي لا: المشكلة في Backend.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                   SizedBox(height: 4),
-                  Text('5. إذا انهار التطبيق عند المكالمة: اضغط "مسح الكاش" ثم أعد تشغيل التطبيق.', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                  Text('5. إذا انهار التطبيق: اضغط "مسح الكاش" وأعد التشغيل.', style: TextStyle(fontSize: 11, color: Colors.white70)),
                 ],
               ),
             ),
@@ -1567,7 +1567,7 @@ class _IOSDiagnosticConsoleState extends State<IOSDiagnosticConsole> {
 }
 
 // =======================================================================
-// 🔥 6. شاشة المكالمة (محدثة بالكامل لـ LiveKit - النسخة المحسنة والآمنة)
+// 🔥 شاشة المكالمة (تدعم iOS Native CallKit + Android)
 // =======================================================================
 class ActiveVoiceCallScreen extends StatefulWidget {
   final String roomName;
@@ -1575,6 +1575,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
   final String token;
   final String remoteName;
   final String? orderId;
+  final String? callId;  // 🔥 جديد: لإنهاء المكالمة على iOS
   final VoidCallback? onCallEnded;
 
   const ActiveVoiceCallScreen({
@@ -1584,6 +1585,7 @@ class ActiveVoiceCallScreen extends StatefulWidget {
     required this.token,
     required this.remoteName,
     this.orderId,
+    this.callId,
     this.onCallEnded,
   });
 
@@ -1619,7 +1621,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
     _timeoutTimer = Timer(const Duration(seconds: 45), () {
       if (!_isRemoteConnected && mounted && !_isEngineReleased) {
-        print("⏳ انتهى الوقت ولم يتم الاتصال (Order: ${widget.orderId ?? 'N/A'})");
+        print("⏳ Timeout (Order: ${widget.orderId ?? 'N/A'})");
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('السائق لا يرد حاليا'), backgroundColor: Colors.orange),
         );
@@ -1675,7 +1677,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
             }
           });
           _startTimer();
-          print("✅ الزبون: تم استقبال مسار الصوت (سيُشغَّل تلقائيا)");
+          print("✅ الزبون: تم استقبال مسار الصوت");
         }
       });
 
@@ -1721,7 +1723,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
             _remoteParticipant = _room!.remoteParticipants.values.first;
           });
           _startTimer();
-          print("✅ الزبون: السائق موجود مسبقا في الغرفة (فحص فوري)!");
+          print("✅ الزبون: السائق موجود مسبقا في الغرفة");
         }
 
         await _room!.localParticipant?.setMicrophoneEnabled(true);
@@ -1730,7 +1732,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         try {
           await Hardware.instance.setSpeakerphoneOn(_isSpeaker);
         } catch (e) {
-          print("⚠️ تحذير: فشل في تبديل السماعة تلقائيا: $e");
+          print("⚠️ فشل تبديل السماعة: $e");
         }
       }
     } catch (e) {
@@ -1787,7 +1789,28 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       print("Error releasing LiveKit room: $e");
     }
 
-    await FlutterCallkitIncoming.endAllCalls();
+    // 🔥🔥🔥 التعديل الأهم 🔥🔥🔥
+    // على iOS: نعلم Native بأن المكالمة انتهت (لإغلاق CallKit الأصلي)
+    // على Android: نستخدم المكتبة كما كان يعمل سابقاً
+    if (Platform.isIOS) {
+      // iOS: استخدام Native CallKit
+      if (widget.callId != null && widget.callId!.isNotEmpty) {
+        try {
+          await _nativeCallChannel.invokeMethod('endNativeCall', {
+            'callId': widget.callId,
+          });
+          print("📞 [Call End] iOS informed: ${widget.callId}");
+        } catch (e) {
+          print("⚠️ فشل إعلام iOS بإنهاء المكالمة: $e");
+        }
+      } else {
+        print("⚠️ [Call End] callId مفقود على iOS");
+      }
+    } else {
+      // Android: استخدام المكتبة (كما كان يعمل)
+      await FlutterCallkitIncoming.endAllCalls();
+      print("🤖 [Call End] Android: endAllCalls()");
+    }
 
     if (mounted) {
       if (widget.onCallEnded != null) {
@@ -1813,7 +1836,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       }
     }
 
-    FlutterCallkitIncoming.endAllCalls();
+    // 🔥 على Android فقط: إنهاء المكتبة عند dispose
+    // على iOS: Native يتولى الأمر ولا نستدعي المكتبة
+    if (Platform.isAndroid) {
+      FlutterCallkitIncoming.endAllCalls();
+    }
+
     super.dispose();
   }
 
