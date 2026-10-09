@@ -17,7 +17,7 @@ import Network
     private var callKitShownCount = 0
     private var lastError: String?
 
-    // 🔥 جديد: خريطة لتخزين بيانات المكالمات النشطة حسب الـ UUID
+    // 🔥 خريطة لتخزين بيانات المكالمات النشطة حسب الـ UUID
     // تُستخدم لاحقاً عند ضغط المستخدم على "رد" في CallKit
     private var activeCallMap: [UUID: [String: Any]] = [:]
 
@@ -289,7 +289,7 @@ import Network
     }
 
     // =======================================================================
-    // 🧪 اختبار CallKit محلياً (يعمل ✅ - نتركه كما هو)
+    // 🧪 اختبار CallKit محلياً (يعمل ✅ - لم يتم تعديله)
     // =======================================================================
     func testLocalCallKit(result: @escaping FlutterResult) {
         writeLog("🧪 بدء اختبار CallKit محلياً...")
@@ -319,7 +319,7 @@ import Network
 }
 
 // =======================================================================
-// 📞 VoIP Push Registry Delegate - النسخة النهائية المُصلحة
+// 📞 VoIP Push Registry Delegate - النسخة النهائية المُصلحة V2
 // =======================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -348,25 +348,22 @@ extension AppDelegate: PKPushRegistryDelegate {
         }
 
         // 🔥 حاسم جداً: طلب وقت إضافي من iOS لضمان إكمال معالجة المكالمة
-        // هذا يمنع iOS من قتل التطبيق أثناء عملية الإبلاغ
         var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "VoIPCallProcessing") {
-            // في حال انتهاء المهلة، نُنهي المهمة
             if backgroundTaskID != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskID)
                 backgroundTaskID = .invalid
             }
         }
 
-        // دالة مساعدة لإنهاء المهمة بشكل نظيف في كل المسارات
+        // دالة مساعدة لإنهاء المهمة بشكل نظيف
         let finishTask = { [weak self] in
             guard let self = self else { return }
             if backgroundTaskID != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskID)
                 backgroundTaskID = .invalid
             }
-            completion()
-            self.writeLog("✅ تم استدعاء completion() وإغلاق Background Task")
+            self.writeLog("✅ تم إغلاق Background Task")
         }
 
         pushKitReceivedCount += 1
@@ -391,6 +388,8 @@ extension AppDelegate: PKPushRegistryDelegate {
             writeLog("🚫 إلغاء المكالمة (UUID: \(callUUID))")
             let callData = flutter_callkit_incoming.Data(id: callUUID.uuidString, nameCaller: "", handle: "", type: 0)
             SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
+            // ✅ استدعاء completion فوراً بعد الإلغاء (شرط iOS)
+            completion()
             finishTask()
             return
         }
@@ -444,42 +443,70 @@ extension AppDelegate: PKPushRegistryDelegate {
         writeLog("🔔 عرض CallKit (UUID: \(callUUID), Caller: \(callerName))")
 
         // ===================================================================
-        // 🔥🔥🔥 الإصلاح الجذري للمشكلتين 🔥🔥🔥
+        // 🔥🔥🔥 الإصلاح الجذري النهائي 🔥🔥🔥
         // ===================================================================
-        // نستدعي showCallkitIncoming ثم ننتظر قليلاً قبل استدعاء completion()
-        // هذا يضمن أن iOS يرى الإبلاغ عن المكالمة فعلياً قبل قتل التطبيق.
-        //
-        // السبب: مكتبة flutter_callkit_incoming تنفذ reportNewIncomingCall
-        // بشكل async داخلياً، لذا completion() يُنفّذ قبل أن يسجل iOS المكالمة.
+        // المبدأ الأساسي:
+        // 1. نستدعي showCallkitIncoming() - وهي بدورها تُبلّغ iOS عن المكالمة
+        //    (تستدعي reportNewIncomingCall داخلياً)
+        // 2. نستدعي completion() فوراً - هذا الشرط الذي فرضته آبل
+        //    وإلا تقوم بقتل التطبيق (_terminateAppIfThereAreUnhandledVoIPPushes)
+        // 3. إعلام Flutter يتم بشكل منفصل عبر RunLoop التالي
+        //    (لا يؤثر على completion() ولا على الإبلاغ عن المكالمة)
         // ===================================================================
         if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+
+            // ✅ الخطوة 1: الإبلاغ عن المكالمة (متزامن من داخل Plugin)
             plugin.showCallkitIncoming(callData, fromPushKit: true)
             self.callKitShownCount += 1
             writeLog("✅ تم إرسال أمر CallKit بنجاح")
 
-            // 🔥 تأخير بسيط لضمان معالجة CallKit قبل إخبار iOS بالانتهاء
-            // هذه المهلة القصيرة (500ms) كافية جداً لـ reportNewIncomingCall
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self = self else { return }
-                self.writeLog("✅ تأكيد معالجة الإشعار إلى iOS بعد 500ms")
+            // ✅ الخطوة 2: استدعاء completion() فوراً - هذا شرط iOS الأساسي
+            // لا نؤخره أبداً لأن iOS يقتل التطبيق إذا تجاوزنا المهلة
+            completion()
+            writeLog("✅ تم استدعاء completion() فوراً - iOS الآن راضٍ")
 
-                // إعلام Flutter ببدء المكالمة الواردة (لمنع مشكلة الـ Foreground)
-                self.notifyFlutterIncomingCall(data: extraDict)
-
+            // ✅ الخطوة 3: إعلام Flutter بالحدث بشكل منفصل (لا يؤثر على completion)
+            // نستخدم DispatchQueue.main.async (وليس asyncAfter) لضمان التنفيذ في أقرب فرصة
+            DispatchQueue.main.async { [weak self] in
+                self?.notifyFlutterIncomingCall(data: extraDict)
                 finishTask()
             }
+
         } else {
             writeLog("❌ فشل: plugin.sharedInstance غير موجود")
+            completion()
             finishTask()
         }
     }
 
     // =======================================================================
     // 📢 إعلام Flutter بوجود مكالمة واردة (يحل مشكلة Foreground)
+    // النسخة المُحسّنة: تتعامل مع جميع أنواع View Controller
     // =======================================================================
     private func notifyFlutterIncomingCall(data: [String: Any]) {
-        guard let controller = window?.rootViewController as? FlutterViewController else {
-            writeLog("⚠️ لا يمكن إعلام Flutter: rootViewController ليس FlutterViewController")
+
+        // 🔥 محاولة الحصول على FlutterViewController بجميع الطرق الممكنة
+        var flutterVC: FlutterViewController? = nil
+
+        // الحالة 1: rootViewController هو FlutterViewController مباشرة
+        if let vc = window?.rootViewController as? FlutterViewController {
+            flutterVC = vc
+        }
+        // الحالة 2: rootViewController هو UINavigationController
+        else if let nav = window?.rootViewController as? UINavigationController {
+            flutterVC = nav.topViewController as? FlutterViewController
+        }
+        // الحالة 3: rootViewController هو UITabBarController
+        else if let tab = window?.rootViewController as? UITabBarController {
+            flutterVC = tab.selectedViewController as? FlutterViewController
+        }
+        // الحالة 4: البحث في presentedViewController
+        else if let presented = window?.rootViewController?.presentedViewController as? FlutterViewController {
+            flutterVC = presented
+        }
+
+        guard let controller = flutterVC else {
+            writeLog("⚠️ لا يمكن إعلام Flutter: لم يتم العثور على FlutterViewController")
             return
         }
 
