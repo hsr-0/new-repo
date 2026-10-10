@@ -56,6 +56,22 @@ Map<String, dynamic>? _lastIncomingCallData;
 // =======================================================================
 const MethodChannel _nativeCallChannel = MethodChannel('beytei_native_call');
 
+// Native CallKit hangup must reach the LiveKit screen BEFORE its overlay is
+// removed. The active screen then closes the room, timers and microphone.
+final ValueNotifier<String?> nativeEndedCallId = ValueNotifier<String?>(null);
+
+// Display name inside the customer's Flutter call screen. Native iOS CallKit
+// caller name comes from the server payload, so it is configured on PHP side.
+String _beyteiDriverDisplayName(dynamic rawName) {
+  final String name = (rawName ?? '').toString().trim();
+  if (name.startsWith('مندوب منصة بيتي')) return name;
+  if (name.isEmpty || name == 'السائق' || name == 'الكابتن' ||
+      name == 'مندوب بيتي') {
+    return 'مندوب منصة بيتي';
+  }
+  return 'مندوب منصة بيتي - $name';
+}
+
 // =======================================================================
 // 🔥 دوال مساعدة للتحقق من نوع الرسالة
 // =======================================================================
@@ -689,6 +705,7 @@ class _MyAppState extends State<MyApp> {
           final bool hasToken = !_payloadValueIsBlank(normalized['token']);
 
           if (hasRoom && hasToken) {
+            nativeEndedCallId.value = null;
             _lastIncomingCallData = normalized;
             activeCallNotifier.value = normalized;
             print("✅ [Native iOS Call] فتح شاشة LiveKit");
@@ -703,17 +720,28 @@ class _MyAppState extends State<MyApp> {
         }
         // ======================= event: end/decline/timeout =======================
         else if (event == 'end' || event == 'decline' || event == 'timeout') {
-          final String callId = payload['id']?.toString() ?? '';
+          final normalized = normalizeNativeCallPayload(payload);
+          final String callId = normalized['id']?.toString().trim().isNotEmpty == true
+              ? normalized['id'].toString()
+              : (activeCallNotifier.value?['id']?.toString() ?? '');
 
           if (callId.isNotEmpty) {
             _handledNativeCallIds.remove(callId);
           }
 
-          activeCallNotifier.value = null;
+          final activeId = activeCallNotifier.value?['id']?.toString() ?? '';
+          if (activeCallNotifier.value != null &&
+              (callId.isEmpty || activeId.isEmpty || callId == activeId)) {
+            // Do NOT clear the overlay first: the screen must disconnect
+            // LiveKit and stop its timer through its own _endCall().
+            nativeEndedCallId.value = activeId.isNotEmpty ? activeId : callId;
+          } else if (activeCallNotifier.value == null) {
+            // Declined while ringing, before the LiveKit screen opened.
+            nativeEndedCallId.value = null;
+          }
+
           _lastIncomingCallData = null;
-
-          print("❌ [Native iOS Call] end/decline/timeout");
-
+          print('📴 [Native iOS Call] $event; closing LiveKit if active');
           await _clearPendingNativeCall();
         }
       }
@@ -899,13 +927,22 @@ class _MyAppState extends State<MyApp> {
         activeCallNotifier.value = mergedData;
       } else if (eventType == 'Decline' || eventType == 'Ended' || eventType == 'Timeout' ||
           eventType.contains('actionCallDecline') || eventType.contains('actionCallEnded') || eventType.contains('actionCallTimeout')) {
-        print("❌ [CallKit] انتهت أو رُفضت");
-        // 🔥 على Android فقط
-        if (Platform.isAndroid) {
+        print('📴 [CallKit] end/decline/timeout; clean LiveKit before hiding UI');
+        if (Platform.isIOS) {
+          final id = activeCallNotifier.value?['id']?.toString() ?? '';
+          if (id.isNotEmpty) {
+            // Native plugin events can precede the MethodChannel event.
+            nativeEndedCallId.value = id;
+          } else {
+            _lastIncomingCallData = null;
+          }
+        } else {
+          // The Android call overlay is not the LiveKit room. Keep this
+          // existing behavior for incoming calls not yet accepted.
           await FlutterCallkitIncoming.endAllCalls();
+          activeCallNotifier.value = null;
+          _lastIncomingCallData = null;
         }
-        activeCallNotifier.value = null;
-        _lastIncomingCallData = null;
       }
     });
   }
@@ -923,8 +960,10 @@ class _MyAppState extends State<MyApp> {
       'roomName': extraData['room_name']?.toString() ?? rawData['room_name']?.toString() ?? '',
       'livekitUrl': extraData['livekit_url']?.toString() ?? rawData['livekit_url']?.toString() ?? 'wss://call.beytei.com',
       'token': extraData['token']?.toString() ?? rawData['token']?.toString() ?? '',
-      'driverName': extraData['driver_name']?.toString() ?? rawData['driver_name']?.toString() ??
-          extraData['nameCaller']?.toString() ?? rawData['nameCaller']?.toString() ?? 'كابتن بيتي',
+      'driverName': _beyteiDriverDisplayName(
+        extraData['driver_name'] ?? rawData['driver_name'] ??
+            extraData['nameCaller'] ?? rawData['nameCaller'] ?? 'السائق',
+      ),
     };
   }
 
@@ -1611,12 +1650,26 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   String _errorMessage = "";
   bool _isEngineReleased = false;
 
+  // Native CallKit may end a call before Flutter's on-screen hangup is used.
+  void _handleNativeHangup() {
+    if (!mounted || _isEngineReleased) return;
+    final incomingEndId = nativeEndedCallId.value;
+    if (incomingEndId == null || incomingEndId.isEmpty) return;
+    if (widget.callId != null &&
+        widget.callId!.isNotEmpty &&
+        widget.callId != incomingEndId) return;
+    _endCall(notifyOther: true, closeNative: false);
+  }
+
   AudioTrack? _remoteAudioTrack;
   RemoteParticipant? _remoteParticipant;
 
   @override
   void initState() {
     super.initState();
+    if (Platform.isIOS) {
+      nativeEndedCallId.addListener(_handleNativeHangup);
+    }
     _initLiveKit();
 
     _timeoutTimer = Timer(const Duration(seconds: 45), () {
@@ -1632,8 +1685,10 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
 
   Future<void> _initLiveKit() async {
     await Future.delayed(const Duration(milliseconds: 1200));
+    if (!mounted || _isEngineReleased) return;
 
     final status = await Permission.microphone.request();
+    if (!mounted || _isEngineReleased) return;
     if (status.isDenied || status.isPermanentlyDenied) {
       if (!mounted) return;
       setState(() {
@@ -1655,8 +1710,25 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
         ));
       }
 
+      if (!mounted || _isEngineReleased) return;
       _room = Room();
       _listener = _room!.createListener();
+
+      // A hangup message is independent of the microphone/audio track state.
+      _listener!.on<DataReceivedEvent>((event) {
+        if (_isEngineReleased || event.topic != 'beytei_call') return;
+        try {
+          final message = jsonDecode(utf8.decode(event.data));
+          if (message is Map &&
+              message['action'] == 'call_ended' &&
+              message['room_name']?.toString() == widget.roomName) {
+            print('📴 Received LiveKit hangup from remote participant');
+            _endCall(notifyOther: false);
+          }
+        } catch (error) {
+          print('⚠️ Invalid LiveKit hangup message: $error');
+        }
+      });
 
       _listener!.on<ParticipantConnectedEvent>((event) {
         if (mounted && !_isEngineReleased && !_isRemoteConnected) {
@@ -1690,20 +1762,19 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       });
 
       _listener!.on<ParticipantDisconnectedEvent>((event) {
-        if (mounted && _isConnected && !_isEngineReleased) {
-          print("📞 الزبون: السائق أنهى المكالمة.");
-          _endCall();
-        }
+        if (!mounted || _isEngineReleased) return;
+        print('📴 Remote LiveKit participant left the room');
+        _endCall(notifyOther: false);
       });
 
       _listener!.on<RoomDisconnectedEvent>((event) {
-        if (mounted && !_isEngineReleased) {
-          print("⚠️ الزبون: انقطع الاتصال بالغرفة.");
-          _endCall();
-        }
+        if (!mounted || _isEngineReleased) return;
+        print('📴 LiveKit room disconnected');
+        _endCall(notifyOther: false);
       });
 
-      await _room!.connect(
+      final connectingRoom = _room!;
+      await connectingRoom.connect(
         widget.livekitUrl,
         widget.token,
         roomOptions: const RoomOptions(
@@ -1712,6 +1783,11 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
           defaultAudioPublishOptions: AudioPublishOptions(),
         ),
       );
+
+      if (_isEngineReleased || !mounted) {
+        try { await connectingRoom.disconnect(); } catch (_) {}
+        return;
+      }
 
       if (mounted) {
         setState(() => _isConnected = true);
@@ -1774,55 +1850,115 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
   }
 
-  void _endCall() async {
+  Future<void> _endCall({
+    bool notifyOther = true,
+    bool closeNative = true,
+  }) async {
+    // Exactly-once cleanup: native events, LiveKit events and the hangup
+    // button can all fire almost simultaneously.
     if (_isEngineReleased) return;
     _isEngineReleased = true;
 
+    // Stop the counters IMMEDIATELY, not after network operations.
     _durationTimer?.cancel();
     _timeoutTimer?.cancel();
+    _durationTimer = null;
+    _timeoutTimer = null;
+    _isConnected = false;
+    _isRemoteConnected = false;
 
-    try {
-      await _listener?.dispose();
-      await _room?.disconnect();
-      _room = null;
-    } catch (e) {
-      print("Error releasing LiveKit room: $e");
-    }
+    final Room? currentRoom = _room;
+    final EventsListener<RoomEvent>? currentListener = _listener;
+    _room = null;
+    _listener = null;
 
-    // 🔥🔥🔥 التعديل الأهم 🔥🔥🔥
-    // على iOS: نعلم Native بأن المكالمة انتهت (لإغلاق CallKit الأصلي)
-    // على Android: نستخدم المكتبة كما كان يعمل سابقاً
-    if (Platform.isIOS) {
-      // iOS: استخدام Native CallKit
-      if (widget.callId != null && widget.callId!.isNotEmpty) {
-        try {
-          await _nativeCallChannel.invokeMethod('endNativeCall', {
-            'callId': widget.callId,
-          });
-          print("📞 [Call End] iOS informed: ${widget.callId}");
-        } catch (e) {
-          print("⚠️ فشل إعلام iOS بإنهاء المكالمة: $e");
-        }
-      } else {
-        print("⚠️ [Call End] callId مفقود على iOS");
-      }
-    } else {
-      // Android: استخدام المكتبة (كما كان يعمل)
-      await FlutterCallkitIncoming.endAllCalls();
-      print("🤖 [Call End] Android: endAllCalls()");
-    }
-
+    // Dismiss the Flutter overlay immediately. Its dispose() sees the
+    // cleanup guard and leaves the async LiveKit teardown to this function.
     if (mounted) {
+      _lastIncomingCallData = null;
       if (widget.onCallEnded != null) {
         widget.onCallEnded!();
       } else {
-        Navigator.pop(context);
+        Navigator.of(context).maybePop();
       }
     }
+
+    // Notify a still-connected remote party before leaving the room.
+    // They must support this message (the driver's app needs the same logic).
+    if (notifyOther && currentRoom?.localParticipant != null) {
+      try {
+        final message = jsonEncode({
+          'action': 'call_ended',
+          'room_name': widget.roomName,
+          'call_id': widget.callId ?? '',
+        });
+        await currentRoom!.localParticipant!.publishData(
+          utf8.encode(message),
+          reliable: true,
+          topic: 'beytei_call',
+        ).timeout(const Duration(seconds: 2));
+        print('✅ LiveKit hangup signal sent');
+      } catch (error) {
+        print('⚠️ Could not send LiveKit hangup signal: $error');
+      }
+    }
+
+    try {
+      await currentRoom?.localParticipant?.setMicrophoneEnabled(false);
+    } catch (error) {
+      print('⚠️ Could not mute microphone: $error');
+    }
+
+    try {
+      await currentRoom?.disconnect();
+    } catch (error) {
+      print('⚠️ Could not disconnect LiveKit: $error');
+    }
+
+    try {
+      await currentListener?.dispose();
+    } catch (error) {
+      print('⚠️ Could not dispose LiveKit listener: $error');
+    }
+
+    try {
+      await currentRoom?.dispose();
+    } catch (error) {
+      print('⚠️ Could not dispose LiveKit room: $error');
+    }
+
+    // End the native CallKit call only when Flutter started the hangup.
+    // If native CallKit initiated it, the native action is already in flight.
+    if (Platform.isIOS) {
+      if (closeNative &&
+          widget.callId != null &&
+          widget.callId!.isNotEmpty) {
+        try {
+          await _nativeCallChannel.invokeMethod(
+            'endNativeCall',
+            {'callId': widget.callId},
+          );
+          print('✅ iOS CallKit ended: ${widget.callId}');
+        } catch (error) {
+          print('⚠️ Could not end iOS CallKit: $error');
+        }
+      }
+    } else {
+      try {
+        await FlutterCallkitIncoming.endAllCalls();
+      } catch (error) {
+        print('⚠️ Could not end Android CallKit: $error');
+      }
+    }
+
+    print('✅ Call, microphone and timers are now ended');
   }
 
   @override
   void dispose() {
+    if (Platform.isIOS) {
+      nativeEndedCallId.removeListener(_handleNativeHangup);
+    }
     _durationTimer?.cancel();
     _timeoutTimer?.cancel();
 
