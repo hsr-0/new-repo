@@ -46,7 +46,6 @@ import Network
 
         // ============================================================
         // 🔥🔥🔥 الخطوة 1: تهيئة CXProvider الخاص بنا أولاً 🔥🔥🔥
-        // هذا يجب أن يحدث قبل أي شيء آخر
         // ============================================================
         let providerConfig = CXProviderConfiguration()
         providerConfig.supportsVideo = false
@@ -59,8 +58,6 @@ import Network
 
         self.callKitProvider = CXProvider(configuration: providerConfig)
         self.callKitProvider?.setDelegate(self, queue: nil)  // nil = main queue
-
-        writeLog("🧠 تم تجهيز Native CXProvider")
 
         // ============================================================
         // الخطوة 2: تهيئة Firebase والمكتبات
@@ -459,7 +456,7 @@ import Network
 }
 
 // ===========================================================================
-// 📞 PushKit Delegate - النسخة النهائية باستخدام CXProvider مباشرة
+// 📞 PushKit Delegate - النسخة النهائية المُحسّنة (SYNC-FIRST)
 // ===========================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -472,46 +469,26 @@ extension AppDelegate: PKPushRegistryDelegate {
         writeLog("🔑 تم استلام توكن VoIP: \(deviceToken.prefix(15))... (الطول: \(deviceToken.count))")
     }
 
+    // ===========================================================================
+    // 🚀 الدالة الحرجة - استقبال VoIP Push
+    // ⚠️⚠️⚠️ تحذير: iOS يمنح ~5 ثوانٍ فقط قبل قتل التطبيق
+    // ⚠️⚠️⚠️ لا تنفذ أي عملية بطيئة (writeLog أو UserDefaults) قبل reportNewIncomingCall
+    // ===========================================================================
     func pushRegistry(_ registry: PKPushRegistry,
                       didReceiveIncomingPushWith payload: PKPushPayload,
                       for type: PKPushType,
                       withCompletionHandler completion: @escaping () -> Void) {
-
-        writeLog("🔥🔥🔥 استلام VoIP Push 🔥🔥🔥")
 
         guard type == .voIP else {
             completion()
             return
         }
 
-        pushKitReceivedCount += 1
+        // ✅ استخراج البيانات الأساسية فقط (بدون أي عمليات بطيئة)
         let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
-        lastPushKitPayload = dict
-
-        writeLog("⬇️ Payload: \(dict)")
-
-        // استخراج UUID
-        let rawId = (dict["id"] as? String) ?? (dict["order_id"] as? String) ?? UUID().uuidString
+        let rawId = (dict["id"] as? String) ?? UUID().uuidString
         let callUUID = UUID(uuidString: rawId) ?? UUID()
 
-        // فحص الإلغاء
-        let typeValue = dict["type"]
-        let actionValue = dict["action"]
-        let isCancel = (typeValue as? String == "cancel_call") ||
-                       (actionValue as? String == "cancel_call") ||
-                       (typeValue as? String == "cancel") ||
-                       (actionValue as? String == "cancel")
-
-        if isCancel {
-            writeLog("🚫 إلغاء المكالمة")
-            let endCallAction = CXEndCallAction(call: callUUID)
-            let transaction = CXTransaction(action: endCallAction)
-            CXCallController().request(transaction) { _ in }
-            completion()
-            return
-        }
-
-        // استخراج البيانات
         let callerName = (dict["nameCaller"] as? String)
                       ?? (dict["driver_name"] as? String)
                       ?? (dict["caller_name"] as? String)
@@ -522,35 +499,43 @@ extension AppDelegate: PKPushRegistryDelegate {
                   ?? (dict["caller_phone"] as? String)
                   ?? "مكالمة واردة"
 
-        var avatar = (dict["avatar"] as? String)
-                  ?? (dict["driver_image"] as? String)
-                  ?? (dict["caller_image"] as? String)
-                  ?? ""
+        // فحص الإلغاء
+        let typeValue = dict["type"]
+        let actionValue = dict["action"]
+        let isCancel = (typeValue as? String == "cancel_call") ||
+                       (actionValue as? String == "cancel_call") ||
+                       (typeValue as? String == "cancel") ||
+                       (actionValue as? String == "cancel")
 
-        if avatar.hasPrefix("http://") {
-            avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
-        }
-
-        var extraDict: [String: Any] = (dict["extra"] as? [String: Any]) ?? dict
-        extraDict["id"] = callUUID.uuidString
-        extraDict["nameCaller"] = callerName
-        extraDict["handle"] = handle
-        extraDict["avatar"] = avatar
-        extraDict["room_name"] = (dict["room_name"] as? String) ?? ""
-        extraDict["livekit_url"] = (dict["livekit_url"] as? String) ?? "wss://call.beytei.com"
-        extraDict["token"] = (dict["token"] as? String) ?? ""
-        extraDict["order_id"] = (dict["order_id"] as? String) ?? ""
-
-        activeCallMap[callUUID] = extraDict
-        UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID.uuidString)")
-
-        // 🔥🔥🔥 استخدام CXProvider مباشرة - SYNC 🔥🔥🔥
         guard let provider = self.callKitProvider else {
-            writeLog("❌ CXProvider غير موجود!")
+            // ⚠️ لا يمكن الإبلاغ! نستدعي completion فوراً لتجنب قتل التطبيق
             completion()
+            // الآن نسجل الخطأ بشكل منفصل
+            DispatchQueue.main.async {
+                self.writeLog("❌ CXProvider غير موجود - لم يتم الإبلاغ")
+                self.lastError = "CXProvider missing"
+            }
             return
         }
 
+        // =================================================================
+        // 🚫 حالة الإلغاء - سريعة
+        // =================================================================
+        if isCancel {
+            let endCallAction = CXEndCallAction(call: callUUID)
+            let transaction = CXTransaction(action: endCallAction)
+            CXCallController().request(transaction) { _ in }
+            completion()
+
+            DispatchQueue.main.async {
+                self.writeLog("🚫 إلغاء المكالمة (UUID: \(callUUID))")
+            }
+            return
+        }
+
+        // =================================================================
+        // 🔥🔥🔥 الحالة الطبيعية: الإبلاغ الفوري عن المكالمة
+        // =================================================================
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: handle)
         update.localizedCallerName = callerName
@@ -560,29 +545,60 @@ extension AppDelegate: PKPushRegistryDelegate {
         update.supportsUngrouping = false
         update.supportsDTMF = false
 
-        writeLog("🔔 إبلاغ iOS عن المكالمة (UUID: \(callUUID))")
-
-        // ✅ هذه الدالة مهمة: يجب أن تُستدعى completion() بعد نجاح/فشل الإبلاغ
+        // 🔥🔥🔥 الأهم: الإبلاغ فوراً بدون أي writeLog قبل هذا السطر
         provider.reportNewIncomingCall(with: callUUID, update: update) { [weak self] error in
-            guard let self = self else {
-                completion()
-                return
-            }
 
-            if let error = error {
-                self.lastError = error.localizedDescription
-                self.writeLog("❌ فشل الإبلاغ: \(error.localizedDescription)")
-            } else {
-                self.callKitShownCount += 1
-                self.writeLog("✅ تم إبلاغ iOS بنجاح - CallKit يظهر")
-            }
-
-            // ✅ استدعاء completion() - الآن iOS راضٍ
+            // ✅✅✅ الأهم: استدعاء completion() كأول شيء في الـ callback
             completion()
-            self.writeLog("✅ تم استدعاء completion() - iOS راضٍ")
 
-            // ✅ إعلام Flutter بشكل منفصل
+            // ============================================================
+            // الآن ننفذ العمليات الثقيلة (لأن iOS أصبح راضياً)
+            // ============================================================
             DispatchQueue.main.async {
+                guard let self = self else { return }
+
+                // 1. تسجيل الاستلام
+                self.pushKitReceivedCount += 1
+                self.lastPushKitPayload = dict
+                self.writeLog("🔥 استلام VoIP Push #\(self.pushKitReceivedCount) (UUID: \(callUUID))")
+                self.writeLog("✅ تم استدعاء completion() - iOS راضٍ")
+
+                // 2. معالجة الخطأ إن وُجد
+                if let error = error {
+                    self.lastError = error.localizedDescription
+                    self.writeLog("❌ فشل الإبلاغ عن المكالمة: \(error.localizedDescription)")
+                    return
+                }
+
+                // 3. نجاح الإبلاغ
+                self.callKitShownCount += 1
+                self.writeLog("✅ تم الإبلاغ بنجاح - CallKit يظهر الآن")
+
+                // 4. معالجة البيانات الكاملة
+                var avatar = (dict["avatar"] as? String)
+                          ?? (dict["driver_image"] as? String)
+                          ?? (dict["caller_image"] as? String)
+                          ?? ""
+
+                if avatar.hasPrefix("http://") {
+                    avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
+                }
+
+                var extraDict: [String: Any] = (dict["extra"] as? [String: Any]) ?? dict
+                extraDict["id"] = callUUID.uuidString
+                extraDict["nameCaller"] = callerName
+                extraDict["handle"] = handle
+                extraDict["avatar"] = avatar
+                extraDict["room_name"] = (dict["room_name"] as? String) ?? ""
+                extraDict["livekit_url"] = (dict["livekit_url"] as? String) ?? "wss://call.beytei.com"
+                extraDict["token"] = (dict["token"] as? String) ?? ""
+                extraDict["order_id"] = (dict["order_id"] as? String) ?? ""
+
+                // 5. حفظ البيانات
+                self.activeCallMap[callUUID] = extraDict
+                UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID.uuidString)")
+
+                // 6. إعلام Flutter
                 self.notifyFlutterIncomingCall(data: extraDict)
             }
         }
