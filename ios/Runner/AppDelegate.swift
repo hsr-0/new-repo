@@ -378,7 +378,7 @@ import Network
 }
 
 // ===========================================================================
-// 📞 PushKit Delegate - النسخة النهائية الصحيحة (بدون CXProvider مزدوج)
+// 📞 PushKit Delegate - النسخة النهائية المُصحّحة حسب توثيق المكتبة الرسمي
 // ===========================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -392,7 +392,8 @@ extension AppDelegate: PKPushRegistryDelegate {
     }
 
     // ===========================================================================
-    // 🚀 دالة استقبال VoIP Push - النسخة المُصلحة جذرياً
+    // 🚀 دالة استقبال VoIP Push - النسخة المُصحّحة حسب توثيق المكتبة الرسمي
+    // ⚠️ التوثيق الرسمي يقول: يجب تأخير completion() بـ 1.5 ثانية
     // ===========================================================================
     func pushRegistry(_ registry: PKPushRegistry,
                       didReceiveIncomingPushWith payload: PKPushPayload,
@@ -434,7 +435,7 @@ extension AppDelegate: PKPushRegistryDelegate {
                        (actionValue as? String == "cancel")
 
         // ===================================================================
-        // 🔥🔥🔥 الحل الجذري: استخدام المكتبة فقط (بدون CXProvider خاص بنا)
+        // 🔥🔥🔥 حالة الإلغاء
         // ===================================================================
         if isCancel {
             let callData = flutter_callkit_incoming.Data(id: callUUID, nameCaller: "", handle: "", type: 0)
@@ -447,7 +448,9 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // بناء بيانات CallKit
+        // ===================================================================
+        // 🔥🔥🔥 الحالة الطبيعية: بناء بيانات CallKit
+        // ===================================================================
         let callData = flutter_callkit_incoming.Data(
             id: callUUID,
             nameCaller: callerName,
@@ -470,13 +473,24 @@ extension AppDelegate: PKPushRegistryDelegate {
 
         callData.extra = extraDict as NSDictionary
 
-        // ✅ الإبلاغ الفوري عبر المكتبة (CXProvider النشط الوحيد)
+        // ===================================================================
+        // ✅ الخطوة 1: الإبلاغ الفوري عبر المكتبة
+        // ===================================================================
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
 
-        // ✅ استدعاء completion() فوراً بعد ذلك
-        completion()
+        // ===================================================================
+        // ✅✅✅ الخطوة 2: تأخير completion() بـ 1.5 ثانية (حسب التوثيق الرسمي)
+        // ⚠️ المكتبة تُنفّذ showCallkitIncoming بشكل غير متزامن داخلياً
+        // ⚠️ لذا يجب تأخير completion() حتى تكتمل عملية الإبلاغ
+        // ⚠️ التوثيق يقول: "if you don't call completion() ... there may be app crash"
+        // ===================================================================
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            completion()
+        }
 
-        // ✅ العمليات البطيئة بعد completion
+        // ===================================================================
+        // ✅ الخطوة 3: العمليات البطيئة (بعد الإبلاغ)
+        // ===================================================================
         DispatchQueue.main.async {
             self.pushKitReceivedCount += 1
             self.lastPushKitPayload = dict
@@ -486,7 +500,7 @@ extension AppDelegate: PKPushRegistryDelegate {
             UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID)")
 
             self.writeLog("🔥 استلام VoIP Push #\(self.pushKitReceivedCount) - تم عرض CallKit بنجاح (UUID: \(callUUID))")
-            self.writeLog("✅ تم استدعاء completion() - iOS راضٍ")
+            self.writeLog("✅ سيتم استدعاء completion() بعد 1.5 ثانية - iOS راضٍ")
 
             // إعلام Flutter
             self.notifyFlutterIncomingCall(data: extraDict)
