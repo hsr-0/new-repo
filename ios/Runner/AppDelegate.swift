@@ -8,9 +8,10 @@ import CallKit
 import flutter_callkit_incoming
 import SystemConfiguration
 import Network
+import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, CallkitIncomingAppDelegate {
 
     var voipRegistry: PKPushRegistry?
 
@@ -160,7 +161,7 @@ import Network
         report["pushKit"] = [
             "isRegistered": voipRegistry != nil,
             "receivedCount": pushKitReceivedCount,
-            "callKitShownCount": callKitShownCount,
+            "callKitShownCount": callKitShownCount, // Callback completed; not an independent UI-visibility signal
             "lastError": lastError ?? "لا يوجد"
         ]
 
@@ -366,14 +367,67 @@ import Network
         if let vc = window?.rootViewController as? FlutterViewController { flutterVC = vc }
         else if let nav = window?.rootViewController as? UINavigationController { flutterVC = nav.topViewController as? FlutterViewController }
         else if let tab = window?.rootViewController as? UITabBarController { flutterVC = tab.selectedViewController as? FlutterViewController }
+        else if let presented = window?.rootViewController?.presentedViewController as? FlutterViewController { flutterVC = presented }
 
-        guard let controller = flutterVC else { return }
+        guard let controller = flutterVC else {
+            writeLog("⚠️ تعذر إرسال حدث إنهاء المكالمة إلى Flutter؛ لا توجد FlutterViewController")
+            return
+        }
 
         let channel = FlutterMethodChannel(
             name: "beytei_native_call",
             binaryMessenger: controller.binaryMessenger
         )
         channel.invokeMethod("onCallEvent", arguments: ["event": "end", "payload": data]) { _ in }
+    }
+
+    // MARK: - CallkitIncomingAppDelegate callbacks
+    // These callbacks connect the native CallKit answer/end actions to Flutter.
+    func onAccept(_ call: Call, _ action: CXAnswerCallAction) {
+        writeLog("📞 CallKit: قبول المكالمة \(call.data.uuid)")
+        action.fulfill()
+        let callData = call.data.toJSON()
+        DispatchQueue.main.async {
+            self.notifyFlutterCallAccepted(data: callData)
+        }
+    }
+
+    func onDecline(_ call: Call, _ action: CXEndCallAction) {
+        writeLog("📵 CallKit: رفض المكالمة \(call.data.uuid)")
+        action.fulfill()
+        let callData = call.data.toJSON()
+        DispatchQueue.main.async {
+            self.notifyFlutterCallEnded(data: callData)
+        }
+    }
+
+    func onEnd(_ call: Call, _ action: CXEndCallAction) {
+        writeLog("📴 CallKit: إنهاء المكالمة \(call.data.uuid)")
+        action.fulfill()
+        let callData = call.data.toJSON()
+        DispatchQueue.main.async {
+            self.notifyFlutterCallEnded(data: callData)
+        }
+    }
+
+    func onTimeOut(_ call: Call) {
+        writeLog("⌛ CallKit: انتهت مهلة الرنين للمكالمة \(call.data.uuid)")
+        let callData = call.data.toJSON()
+        DispatchQueue.main.async {
+            self.notifyFlutterCallEnded(data: callData)
+        }
+    }
+
+    func didActivateAudioSession(_ audioSession: AVAudioSession) {
+        writeLog("🔊 CallKit activated the audio session")
+    }
+
+    func didDeactivateAudioSession(_ audioSession: AVAudioSession) {
+        writeLog("🔇 CallKit deactivated the audio session")
+    }
+
+    func providerDidReset() {
+        writeLog("⚠️ CallKit provider was reset")
     }
 }
 
@@ -385,7 +439,7 @@ extension AppDelegate: PKPushRegistryDelegate {
     func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
         guard type == .voIP else { return }
 
-        let deviceToken = credentials.token.map { String(format: "%02.2hhx", $0) }.joined()
+        let deviceToken = credentials.token.map { String(format: "%02x", $0) }.joined()
         UserDefaults.standard.set(deviceToken, forKey: "flutter.voip_token")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP(deviceToken)
         writeLog("🔑 تم استلام توكن VoIP: \(deviceToken.prefix(15))... (الطول: \(deviceToken.count))")
@@ -395,62 +449,84 @@ extension AppDelegate: PKPushRegistryDelegate {
     // 🚀 دالة استقبال VoIP Push - النسخة المُصحّحة حسب توثيق المكتبة الرسمي
     // ⚠️ التوثيق الرسمي يقول: يجب تأخير completion() بـ 1.5 ثانية
     // ===========================================================================
-    func pushRegistry(_ registry: PKPushRegistry,
-                      didReceiveIncomingPushWith payload: PKPushPayload,
-                      for type: PKPushType,
-                      withCompletionHandler completion: @escaping () -> Void) {
-
+    // Apple's Swift protocol name is `completion:` (not `withCompletionHandler:`).
+    // This exact selector is required for PushKit to invoke this delegate method.
+    func pushRegistry(
+        _ registry: PKPushRegistry,
+        didReceiveIncomingPushWith payload: PKPushPayload,
+        for type: PKPushType,
+        completion: @escaping () -> Void
+    ) {
         guard type == .voIP else {
             completion()
             return
         }
 
-        // استخراج البيانات الأساسية فقط
+        // Keep this log before any other work so it is visible as early as possible.
+        writeLog("📥 دخلت دالة استقبال PushKit")
+
         let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
+        let nestedExtra = dict["extra"] as? [String: Any] ?? [:]
+
         let rawId = (dict["id"] as? String) ?? UUID().uuidString
         let callUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
 
-        let callerName = (dict["nameCaller"] as? String)
-                      ?? (dict["driver_name"] as? String)
-                      ?? "مندوب بيتي"
+        // Read from top level first, then from `extra`; ignore blank top-level values.
+        func payloadString(_ key: String, fallback: String = "") -> String {
+            if let value = dict[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+            if let value = nestedExtra[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+            return fallback
+        }
 
-        let handle = (dict["handle"] as? String)
-                  ?? (dict["driver_phone"] as? String)
-                  ?? "مكالمة واردة"
+        let callerName = payloadString(
+            "nameCaller",
+            fallback: payloadString("driver_name", fallback: "مندوب بيتي")
+        )
+        let handle = payloadString(
+            "handle",
+            fallback: payloadString("driver_phone", fallback: "مكالمة واردة")
+        )
 
-        var avatar = (dict["avatar"] as? String)
-                  ?? (dict["driver_image"] as? String)
-                  ?? ""
-
+        var avatar = payloadString(
+            "avatar",
+            fallback: payloadString("driver_image", fallback: "")
+        )
         if avatar.hasPrefix("http://") {
             avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
         }
 
-        // فحص الإلغاء
-        let typeValue = dict["type"]
-        let actionValue = dict["action"]
-        let isCancel = (typeValue as? String == "cancel_call") ||
-                       (actionValue as? String == "cancel_call") ||
-                       (typeValue as? String == "cancel") ||
-                       (actionValue as? String == "cancel")
+        // Cancellation messages must end the existing call, not create a new call.
+        let typeValue = dict["type"] as? String
+        let actionValue = dict["action"] as? String
+        let isCancel = typeValue == "cancel_call" ||
+            actionValue == "cancel_call" ||
+            typeValue == "cancel" ||
+            actionValue == "cancel"
 
-        // ===================================================================
-        // 🔥🔥🔥 حالة الإلغاء
-        // ===================================================================
         if isCancel {
-            let callData = flutter_callkit_incoming.Data(id: callUUID, nameCaller: "", handle: "", type: 0)
-            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
-            completion()
+            let cancelData = flutter_callkit_incoming.Data(
+                id: callUUID,
+                nameCaller: "",
+                handle: "",
+                type: 0
+            )
 
-            DispatchQueue.main.async {
-                self.writeLog("🚫 إلغاء المكالمة (UUID: \(callUUID))")
+            if let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance {
+                plugin.endCall(cancelData)
+                writeLog("🚫 أُرسل طلب إنهاء المكالمة إلى CallKit (UUID: \(callUUID))")
+            } else {
+                lastError = "CallKit plugin instance is nil while cancelling a call"
+                writeLog("❌ لا توجد نسخة من مكتبة CallKit عند طلب الإلغاء")
             }
+
+            completion()
             return
         }
 
-        // ===================================================================
-        // 🔥🔥🔥 الحالة الطبيعية: بناء بيانات CallKit
-        // ===================================================================
         let callData = flutter_callkit_incoming.Data(
             id: callUUID,
             nameCaller: callerName,
@@ -461,49 +537,59 @@ extension AppDelegate: PKPushRegistryDelegate {
         callData.avatar = avatar
         callData.duration = 60000
 
-        var extraDict: [String: Any] = (dict["extra"] as? [String: Any]) ?? dict
+        // Preserve all nested extra values (for example `test`) and normalize
+        // connection fields from either the top level or nested `extra`.
+        var extraDict = nestedExtra
         extraDict["id"] = callUUID
         extraDict["nameCaller"] = callerName
         extraDict["handle"] = handle
         extraDict["avatar"] = avatar
-        extraDict["room_name"] = (dict["room_name"] as? String) ?? ""
-        extraDict["livekit_url"] = (dict["livekit_url"] as? String) ?? "wss://call.beytei.com"
-        extraDict["token"] = (dict["token"] as? String) ?? ""
-        extraDict["order_id"] = (dict["order_id"] as? String) ?? ""
-
+        extraDict["room_name"] = payloadString(
+            "room_name",
+            fallback: payloadString("channel_name", fallback: "")
+        )
+        extraDict["livekit_url"] = payloadString(
+            "livekit_url",
+            fallback: "wss://call.beytei.com"
+        )
+        extraDict["token"] = payloadString(
+            "token",
+            fallback: payloadString("livekit_token", fallback: "")
+        )
+        extraDict["order_id"] = payloadString("order_id", fallback: "")
         callData.extra = extraDict as NSDictionary
 
-        // ===================================================================
-        // ✅ الخطوة 1: الإبلاغ الفوري عبر المكتبة
-        // ===================================================================
-        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
-
-        // ===================================================================
-        // ✅✅✅ الخطوة 2: تأخير completion() بـ 1.5 ثانية (حسب التوثيق الرسمي)
-        // ⚠️ المكتبة تُنفّذ showCallkitIncoming بشكل غير متزامن داخلياً
-        // ⚠️ لذا يجب تأخير completion() حتى تكتمل عملية الإبلاغ
-        // ⚠️ التوثيق يقول: "if you don't call completion() ... there may be app crash"
-        // ===================================================================
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
+            lastError = "CallKit plugin instance is nil"
+            writeLog("❌ CallKit plugin instance is nil; incoming call could not be reported")
+            // Do not claim the call was displayed. Without the plugin/provider there
+            // is no successful CallKit report in this path.
             completion()
+            return
         }
 
-        // ===================================================================
-        // ✅ الخطوة 3: العمليات البطيئة (بعد الإبلاغ)
-        // ===================================================================
-        DispatchQueue.main.async {
-            self.pushKitReceivedCount += 1
-            self.lastPushKitPayload = dict
-            self.callKitShownCount += 1
-            self.activeCallMap[UUID(uuidString: callUUID) ?? UUID()] = extraDict
+        writeLog("📞 إرسال طلب عرض المكالمة إلى CallKit: \(callUUID)")
 
-            UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID)")
+        // Use the library's completion overload. It is called after the library's
+        // reportNewIncomingCall completion handler, unlike an arbitrary fixed delay.
+        plugin.showCallkitIncoming(callData, fromPushKit: true) {
+            // Call PushKit's completion exactly once, after the CallKit reporting path
+            // has completed. The library overload does not expose the CallKit error,
+            // so this log means callback completed, not that the UI is guaranteed shown.
+            completion()
 
-            self.writeLog("🔥 استلام VoIP Push #\(self.pushKitReceivedCount) - تم عرض CallKit بنجاح (UUID: \(callUUID))")
-            self.writeLog("✅ سيتم استدعاء completion() بعد 1.5 ثانية - iOS راضٍ")
+            DispatchQueue.main.async {
+                self.pushKitReceivedCount += 1
+                self.lastPushKitPayload = dict
+                self.callKitShownCount += 1
+                self.activeCallMap[UUID(uuidString: callUUID) ?? UUID()] = extraDict
+                UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID)")
 
-            // إعلام Flutter
-            self.notifyFlutterIncomingCall(data: extraDict)
+                self.writeLog("✅ اكتمل callback الخاص ببلاغ CallKit (UUID: \(callUUID))")
+                self.writeLog("ℹ️ عداد CallKit يعبّر عن اكتمال callback، وليس تأكيداً مستقلاً لظهور الواجهة")
+
+                self.notifyFlutterIncomingCall(data: extraDict)
+            }
         }
     }
 
