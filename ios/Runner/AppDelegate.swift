@@ -14,9 +14,6 @@ import Network
 
     var voipRegistry: PKPushRegistry?
 
-    // 🔥 CXProvider خاص بنا - يُبلّغ iOS SYNCHRONOUSLY عن المكالمات
-    var callKitProvider: CXProvider?
-
     private var pushKitReceivedCount = 0
     private var lastPushKitPayload: [String: Any]?
     private var callKitShownCount = 0
@@ -44,30 +41,16 @@ import Network
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
 
-        // ============================================================
-        // 🔥🔥🔥 الخطوة 1: تهيئة CXProvider الخاص بنا أولاً 🔥🔥🔥
-        // ============================================================
-        let providerConfig = CXProviderConfiguration()
-        providerConfig.supportsVideo = false
-        providerConfig.maximumCallGroups = 1
-        providerConfig.maximumCallsPerCallGroup = 1
-        providerConfig.supportedHandleTypes = [.generic, .phoneNumber]
-        if let logoImage = UIImage(named: "CallKitLogo") {
-            providerConfig.iconTemplateImageData = logoImage.pngData()
-        }
-
-        self.callKitProvider = CXProvider(configuration: providerConfig)
-        self.callKitProvider?.setDelegate(self, queue: nil)  // nil = main queue
-
-        // ============================================================
-        // الخطوة 2: تهيئة Firebase والمكتبات
-        // ============================================================
         FirebaseApp.configure()
         GeneratedPluginRegistrant.register(with: self)
 
-        // ============================================================
-        // الخطوة 3: قناة التشخيص
-        // ============================================================
+        // ===================================================================
+        // ⚠️⚠️⚠️ ملاحظة حاسمة: لا نُهيّئ CXProvider هنا أبداً
+        // المكتبة flutter_callkit_incoming تُدير CXProvider بنفسها
+        // إنشاء CXProvider إضافي = تعارض = iOS يتجاهلنا = Crash
+        // ===================================================================
+
+        // قناة التشخيص
         if let controller = window?.rootViewController as? FlutterViewController {
             let diagnosticChannel = FlutterMethodChannel(
                 name: "beytei_deep_debugger",
@@ -82,29 +65,19 @@ import Network
                     let logs = UserDefaults.standard.stringArray(forKey: "ios_debug_logs") ?? []
                     let token = UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ لا يوجد"
                     result(["logs": logs.joined(separator: "\n\n"), "token": token])
-                    self.writeLog("📋 تم طلب السجلات من Flutter")
 
                 case "runFullDiagnostics":
                     let serverUrl = call.arguments as? String ?? ""
-                    self.writeLog("🔬 بدء التشخيص الشامل...")
                     let report = self.collectFullDiagnosticReport()
                     self.sendDiagnosticToServer(report: report, serverUrl: serverUrl) { success, response in
-                        if success {
-                            self.writeLog("✅ تم إرسال التقرير للسيرفر بنجاح")
-                        } else {
-                            self.writeLog("❌ فشل إرسال التقرير: \(response ?? "unknown")")
-                        }
                         result(["success": success, "report": report, "serverResponse": response ?? ""])
                     }
 
                 case "testLocalCallKit":
-                    self.writeLog("🧪 بدء اختبار CallKit محلياً...")
                     self.testLocalCallKit(result: result)
 
                 case "checkPermissions":
-                    let status = self.checkAllPermissions()
-                    result(status)
-                    self.writeLog("🔐 تم فحص الأذونات")
+                    result(self.checkAllPermissions())
 
                 case "getPushKitStatus":
                     let status: [String: Any] = [
@@ -117,20 +90,17 @@ import Network
                     result(status)
 
                 case "endNativeCall":
-                    // 🔥 إنهاء مكالمة Native من Dart
+                    // 🔥 إنهاء مكالمة عبر المكتبة (وليس CXProvider خاص بنا)
                     if let args = call.arguments as? [String: Any],
-                       let callId = args["callId"] as? String,
-                       let uuid = UUID(uuidString: callId) {
-                        self.writeLog("📞 إعلام iOS بإنهاء المكالمة: \(callId)")
-                        let endCallAction = CXEndCallAction(call: uuid)
-                        let transaction = CXTransaction(action: endCallAction)
-                        CXCallController().request(transaction) { error in
-                            if let error = error {
-                                self.writeLog("❌ فشل إنهاء المكالمة: \(error.localizedDescription)")
-                            } else {
-                                self.writeLog("✅ تم إنهاء المكالمة بنجاح")
-                            }
-                        }
+                       let callId = args["callId"] as? String {
+                        let callData = flutter_callkit_incoming.Data(
+                            id: callId,
+                            nameCaller: "",
+                            handle: "",
+                            type: 0
+                        )
+                        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
+                        self.writeLog("📞 endCall via Library: \(callId)")
                     }
                     result(true)
 
@@ -140,14 +110,12 @@ import Network
             })
         }
 
-        // ============================================================
-        // 🔥🔥🔥 الخطوة 4: تهيئة PushKit 🔥🔥🔥
-        // ============================================================
+        // تهيئة PushKit
         self.voipRegistry = PKPushRegistry(queue: .main)
         self.voipRegistry?.delegate = self
         self.voipRegistry?.desiredPushTypes = [.voIP]
 
-        writeLog("🚀 التطبيق بدأ + PushKit + Native CXProvider + Diagnostic Channel")
+        writeLog("🚀 التطبيق بدأ - باستخدام flutter_callkit_incoming فقط (بدون CXProvider مزدوج)")
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
@@ -221,17 +189,10 @@ import Network
             "isAvailable": SwiftFlutterCallkitIncomingPlugin.sharedInstance != nil
         ]
 
-        report["nativeProvider"] = [
-            "isReady": callKitProvider != nil
-        ]
-
         report["timestamp"] = ISO8601DateFormatter().string(from: Date())
         return report
     }
 
-    // =======================================================================
-    // 🔐 فحص الأذونات
-    // =======================================================================
     func checkAllPermissions() -> [String: Any] {
         let center = UNUserNotificationCenter.current()
         var result: [String: Any] = [:]
@@ -263,9 +224,6 @@ import Network
         }
     }
 
-    // =======================================================================
-    // 🌐 فحص الشبكة
-    // =======================================================================
     func checkNetworkStatus() -> [String: Any] {
         var result: [String: Any] = [:]
         guard let url = URL(string: "https://api.push.apple.com") else {
@@ -294,9 +252,6 @@ import Network
         return result
     }
 
-    // =======================================================================
-    // 📤 إرسال التقرير للسيرفر
-    // =======================================================================
     func sendDiagnosticToServer(report: [String: Any], serverUrl: String, completion: @escaping (Bool, String?) -> Void) {
         guard let url = URL(string: serverUrl) else {
             completion(false, "URL غير صالح")
@@ -333,11 +288,8 @@ import Network
         }
     }
 
-    // =======================================================================
-    // 🧪 اختبار CallKit محلياً (يستخدم المكتبة - يعمل)
-    // =======================================================================
     func testLocalCallKit(result: @escaping FlutterResult) {
-        writeLog("🧪 بدء اختبار CallKit محلياً...")
+        writeLog("🧪 اختبار CallKit محلياً...")
         let testUUID = UUID().uuidString
         let callData = flutter_callkit_incoming.Data(
             id: testUUID,
@@ -349,13 +301,11 @@ import Network
         callData.duration = 30000
         callData.extra = [
             "test": true,
-            "timestamp": Date().timeIntervalSince1970,
             "room_name": "test_diagnostic_\(Int(Date().timeIntervalSince1970))",
             "livekit_url": "wss://call.beytei.com",
             "token": "test_token_\(testUUID)"
         ] as NSDictionary
 
-        writeLog("🔔 عرض CallKit تجريبي (UUID: \(testUUID))...")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: false)
         callKitShownCount += 1
 
@@ -363,7 +313,7 @@ import Network
     }
 
     // =======================================================================
-    // 📢 إعلام Flutter - مكالمة واردة
+    // 📢 إعلام Flutter
     // =======================================================================
     func notifyFlutterIncomingCall(data: [String: Any]) {
         var flutterVC: FlutterViewController? = nil
@@ -379,7 +329,7 @@ import Network
         }
 
         guard let controller = flutterVC else {
-            writeLog("⚠️ لا يمكن إعلام Flutter: لم يتم العثور على FlutterViewController")
+            writeLog("⚠️ لا يمكن إعلام Flutter")
             return
         }
 
@@ -393,22 +343,14 @@ import Network
             "payload": data
         ]) { _ in }
 
-        writeLog("📢 تم إعلام Flutter بوجود مكالمة واردة")
+        writeLog("📢 تم إعلام Flutter")
     }
 
-    // =======================================================================
-    // 📢 إعلام Flutter - تم قبول المكالمة
-    // =======================================================================
     func notifyFlutterCallAccepted(data: [String: Any]) {
         var flutterVC: FlutterViewController? = nil
-
-        if let vc = window?.rootViewController as? FlutterViewController {
-            flutterVC = vc
-        } else if let nav = window?.rootViewController as? UINavigationController {
-            flutterVC = nav.topViewController as? FlutterViewController
-        } else if let tab = window?.rootViewController as? UITabBarController {
-            flutterVC = tab.selectedViewController as? FlutterViewController
-        }
+        if let vc = window?.rootViewController as? FlutterViewController { flutterVC = vc }
+        else if let nav = window?.rootViewController as? UINavigationController { flutterVC = nav.topViewController as? FlutterViewController }
+        else if let tab = window?.rootViewController as? UITabBarController { flutterVC = tab.selectedViewController as? FlutterViewController }
 
         guard let controller = flutterVC else { return }
 
@@ -416,28 +358,14 @@ import Network
             name: "beytei_native_call",
             binaryMessenger: controller.binaryMessenger
         )
-
-        channel.invokeMethod("onCallEvent", arguments: [
-            "event": "accept",
-            "payload": data
-        ]) { _ in }
-
-        writeLog("📢 تم إعلام Flutter بقبول المكالمة")
+        channel.invokeMethod("onCallEvent", arguments: ["event": "accept", "payload": data]) { _ in }
     }
 
-    // =======================================================================
-    // 📢 إعلام Flutter - انتهاء المكالمة
-    // =======================================================================
     func notifyFlutterCallEnded(data: [String: Any]) {
         var flutterVC: FlutterViewController? = nil
-
-        if let vc = window?.rootViewController as? FlutterViewController {
-            flutterVC = vc
-        } else if let nav = window?.rootViewController as? UINavigationController {
-            flutterVC = nav.topViewController as? FlutterViewController
-        } else if let tab = window?.rootViewController as? UITabBarController {
-            flutterVC = tab.selectedViewController as? FlutterViewController
-        }
+        if let vc = window?.rootViewController as? FlutterViewController { flutterVC = vc }
+        else if let nav = window?.rootViewController as? UINavigationController { flutterVC = nav.topViewController as? FlutterViewController }
+        else if let tab = window?.rootViewController as? UITabBarController { flutterVC = tab.selectedViewController as? FlutterViewController }
 
         guard let controller = flutterVC else { return }
 
@@ -445,18 +373,12 @@ import Network
             name: "beytei_native_call",
             binaryMessenger: controller.binaryMessenger
         )
-
-        channel.invokeMethod("onCallEvent", arguments: [
-            "event": "end",
-            "payload": data
-        ]) { _ in }
-
-        writeLog("📢 تم إعلام Flutter بانتهاء المكالمة")
+        channel.invokeMethod("onCallEvent", arguments: ["event": "end", "payload": data]) { _ in }
     }
 }
 
 // ===========================================================================
-// 📞 PushKit Delegate - النسخة النهائية المُحسّنة (SYNC-FIRST)
+// 📞 PushKit Delegate - النسخة النهائية الصحيحة (بدون CXProvider مزدوج)
 // ===========================================================================
 extension AppDelegate: PKPushRegistryDelegate {
 
@@ -470,9 +392,7 @@ extension AppDelegate: PKPushRegistryDelegate {
     }
 
     // ===========================================================================
-    // 🚀 الدالة الحرجة - استقبال VoIP Push
-    // ⚠️⚠️⚠️ تحذير: iOS يمنح ~5 ثوانٍ فقط قبل قتل التطبيق
-    // ⚠️⚠️⚠️ لا تنفذ أي عملية بطيئة (writeLog أو UserDefaults) قبل reportNewIncomingCall
+    // 🚀 دالة استقبال VoIP Push - النسخة المُصلحة جذرياً
     // ===========================================================================
     func pushRegistry(_ registry: PKPushRegistry,
                       didReceiveIncomingPushWith payload: PKPushPayload,
@@ -484,20 +404,26 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // ✅ استخراج البيانات الأساسية فقط (بدون أي عمليات بطيئة)
+        // استخراج البيانات الأساسية فقط
         let dict = payload.dictionaryPayload as? [String: Any] ?? [:]
         let rawId = (dict["id"] as? String) ?? UUID().uuidString
-        let callUUID = UUID(uuidString: rawId) ?? UUID()
+        let callUUID = UUID(uuidString: rawId)?.uuidString ?? UUID().uuidString
 
         let callerName = (dict["nameCaller"] as? String)
                       ?? (dict["driver_name"] as? String)
-                      ?? (dict["caller_name"] as? String)
                       ?? "مندوب بيتي"
 
         let handle = (dict["handle"] as? String)
                   ?? (dict["driver_phone"] as? String)
-                  ?? (dict["caller_phone"] as? String)
                   ?? "مكالمة واردة"
+
+        var avatar = (dict["avatar"] as? String)
+                  ?? (dict["driver_image"] as? String)
+                  ?? ""
+
+        if avatar.hasPrefix("http://") {
+            avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
+        }
 
         // فحص الإلغاء
         let typeValue = dict["type"]
@@ -507,24 +433,12 @@ extension AppDelegate: PKPushRegistryDelegate {
                        (typeValue as? String == "cancel") ||
                        (actionValue as? String == "cancel")
 
-        guard let provider = self.callKitProvider else {
-            // ⚠️ لا يمكن الإبلاغ! نستدعي completion فوراً لتجنب قتل التطبيق
-            completion()
-            // الآن نسجل الخطأ بشكل منفصل
-            DispatchQueue.main.async {
-                self.writeLog("❌ CXProvider غير موجود - لم يتم الإبلاغ")
-                self.lastError = "CXProvider missing"
-            }
-            return
-        }
-
-        // =================================================================
-        // 🚫 حالة الإلغاء - سريعة
-        // =================================================================
+        // ===================================================================
+        // 🔥🔥🔥 الحل الجذري: استخدام المكتبة فقط (بدون CXProvider خاص بنا)
+        // ===================================================================
         if isCancel {
-            let endCallAction = CXEndCallAction(call: callUUID)
-            let transaction = CXTransaction(action: endCallAction)
-            CXCallController().request(transaction) { _ in }
+            let callData = flutter_callkit_incoming.Data(id: callUUID, nameCaller: "", handle: "", type: 0)
+            SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
             completion()
 
             DispatchQueue.main.async {
@@ -533,74 +447,49 @@ extension AppDelegate: PKPushRegistryDelegate {
             return
         }
 
-        // =================================================================
-        // 🔥🔥🔥 الحالة الطبيعية: الإبلاغ الفوري عن المكالمة
-        // =================================================================
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: handle)
-        update.localizedCallerName = callerName
-        update.hasVideo = false
-        update.supportsHolding = false
-        update.supportsGrouping = false
-        update.supportsUngrouping = false
-        update.supportsDTMF = false
+        // بناء بيانات CallKit
+        let callData = flutter_callkit_incoming.Data(
+            id: callUUID,
+            nameCaller: callerName,
+            handle: handle,
+            type: 0
+        )
+        callData.appName = "منصة بيتي"
+        callData.avatar = avatar
+        callData.duration = 60000
 
-        // 🔥🔥🔥 الأهم: الإبلاغ فوراً بدون أي writeLog قبل هذا السطر
-        provider.reportNewIncomingCall(with: callUUID, update: update) { [weak self] error in
+        var extraDict: [String: Any] = (dict["extra"] as? [String: Any]) ?? dict
+        extraDict["id"] = callUUID
+        extraDict["nameCaller"] = callerName
+        extraDict["handle"] = handle
+        extraDict["avatar"] = avatar
+        extraDict["room_name"] = (dict["room_name"] as? String) ?? ""
+        extraDict["livekit_url"] = (dict["livekit_url"] as? String) ?? "wss://call.beytei.com"
+        extraDict["token"] = (dict["token"] as? String) ?? ""
+        extraDict["order_id"] = (dict["order_id"] as? String) ?? ""
 
-            // ✅✅✅ الأهم: استدعاء completion() كأول شيء في الـ callback
-            completion()
+        callData.extra = extraDict as NSDictionary
 
-            // ============================================================
-            // الآن ننفذ العمليات الثقيلة (لأن iOS أصبح راضياً)
-            // ============================================================
-            DispatchQueue.main.async {
-                guard let self = self else { return }
+        // ✅ الإبلاغ الفوري عبر المكتبة (CXProvider النشط الوحيد)
+        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(callData, fromPushKit: true)
 
-                // 1. تسجيل الاستلام
-                self.pushKitReceivedCount += 1
-                self.lastPushKitPayload = dict
-                self.writeLog("🔥 استلام VoIP Push #\(self.pushKitReceivedCount) (UUID: \(callUUID))")
-                self.writeLog("✅ تم استدعاء completion() - iOS راضٍ")
+        // ✅ استدعاء completion() فوراً بعد ذلك
+        completion()
 
-                // 2. معالجة الخطأ إن وُجد
-                if let error = error {
-                    self.lastError = error.localizedDescription
-                    self.writeLog("❌ فشل الإبلاغ عن المكالمة: \(error.localizedDescription)")
-                    return
-                }
+        // ✅ العمليات البطيئة بعد completion
+        DispatchQueue.main.async {
+            self.pushKitReceivedCount += 1
+            self.lastPushKitPayload = dict
+            self.callKitShownCount += 1
+            self.activeCallMap[UUID(uuidString: callUUID) ?? UUID()] = extraDict
 
-                // 3. نجاح الإبلاغ
-                self.callKitShownCount += 1
-                self.writeLog("✅ تم الإبلاغ بنجاح - CallKit يظهر الآن")
+            UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID)")
 
-                // 4. معالجة البيانات الكاملة
-                var avatar = (dict["avatar"] as? String)
-                          ?? (dict["driver_image"] as? String)
-                          ?? (dict["caller_image"] as? String)
-                          ?? ""
+            self.writeLog("🔥 استلام VoIP Push #\(self.pushKitReceivedCount) - تم عرض CallKit بنجاح (UUID: \(callUUID))")
+            self.writeLog("✅ تم استدعاء completion() - iOS راضٍ")
 
-                if avatar.hasPrefix("http://") {
-                    avatar = avatar.replacingOccurrences(of: "http://", with: "https://")
-                }
-
-                var extraDict: [String: Any] = (dict["extra"] as? [String: Any]) ?? dict
-                extraDict["id"] = callUUID.uuidString
-                extraDict["nameCaller"] = callerName
-                extraDict["handle"] = handle
-                extraDict["avatar"] = avatar
-                extraDict["room_name"] = (dict["room_name"] as? String) ?? ""
-                extraDict["livekit_url"] = (dict["livekit_url"] as? String) ?? "wss://call.beytei.com"
-                extraDict["token"] = (dict["token"] as? String) ?? ""
-                extraDict["order_id"] = (dict["order_id"] as? String) ?? ""
-
-                // 5. حفظ البيانات
-                self.activeCallMap[callUUID] = extraDict
-                UserDefaults.standard.set(extraDict, forKey: "call_\(callUUID.uuidString)")
-
-                // 6. إعلام Flutter
-                self.notifyFlutterIncomingCall(data: extraDict)
-            }
+            // إعلام Flutter
+            self.notifyFlutterIncomingCall(data: extraDict)
         }
     }
 
@@ -609,64 +498,5 @@ extension AppDelegate: PKPushRegistryDelegate {
         UserDefaults.standard.removeObject(forKey: "flutter.voip_token")
         SwiftFlutterCallkitIncomingPlugin.sharedInstance?.setDevicePushTokenVoIP("")
         writeLog("⚠️ تم إبطال توكن VoIP")
-    }
-}
-
-// ===========================================================================
-// 📞 CXProvider Delegate - للتعامل مع أحداث CallKit (قبول/رفض/إنهاء)
-// ===========================================================================
-extension AppDelegate: CXProviderDelegate {
-
-    func providerDidReset(_ provider: CXProvider) {
-        writeLog("🔄 تم إعادة تعيين CXProvider")
-        activeCallMap.removeAll()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        writeLog("✅ المستخدم قَبِل المكالمة: \(action.callUUID)")
-
-        if let data = activeCallMap[action.callUUID] {
-            notifyFlutterCallAccepted(data: data)
-        }
-
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        writeLog("❌ المستخدم رفض/أنهى المكالمة: \(action.callUUID)")
-
-        if let data = activeCallMap[action.callUUID] {
-            notifyFlutterCallEnded(data: data)
-        }
-
-        activeCallMap.removeValue(forKey: action.callUUID)
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
-        action.fulfill()
-    }
-
-    func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        writeLog("🎤 تم تفعيل جلسة الصوت")
-
-        do {
-            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
-            try audioSession.setActive(true)
-        } catch {
-            writeLog("❌ فشل تفعيل الصوت: \(error.localizedDescription)")
-        }
-    }
-
-    func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
-        writeLog("🔇 تم إيقاف جلسة الصوت")
     }
 }
