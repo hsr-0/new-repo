@@ -1,4 +1,5 @@
 import UIKit
+import AVFoundation
 import Flutter
 import Firebase
 import FirebaseMessaging
@@ -117,6 +118,24 @@ import Network
                         "voipToken": UserDefaults.standard.string(forKey: "flutter.voip_token") ?? "❌ مفقود"
                     ]
                     result(status)
+
+                case "endNativeCall":
+                    // 🔥 إنهاء مكالمة Native من Dart
+                    if let args = call.arguments as? [String: Any],
+                       let callId = args["callId"] as? String,
+                       let uuid = UUID(uuidString: callId) {
+                        self.writeLog("📞 إعلام iOS بإنهاء المكالمة: \(callId)")
+                        let endCallAction = CXEndCallAction(call: uuid)
+                        let transaction = CXTransaction(action: endCallAction)
+                        CXCallController().request(transaction) { error in
+                            if let error = error {
+                                self.writeLog("❌ فشل إنهاء المكالمة: \(error.localizedDescription)")
+                            } else {
+                                self.writeLog("✅ تم إنهاء المكالمة بنجاح")
+                            }
+                        }
+                    }
+                    result(true)
 
                 default:
                     result(FlutterMethodNotImplemented)
