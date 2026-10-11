@@ -87,6 +87,48 @@ bool isCancelCall(dynamic data) {
   return type == 'cancel_call' || type == 1 || type == '1';
 }
 
+// Cancel only the ringing call identified by the server. FCM is best-effort
+// on suspended iPhones; the native Swift server-status watcher is the fallback.
+Future<void> beyteiCancelRingingCall(Map<String, dynamic> data) async {
+  final String cancelId = (data['uuid'] ?? data['id'] ?? '').toString().trim();
+  if (cancelId.isEmpty) {
+    print('⚠️ cancel_call without UUID: ignoring to protect other calls');
+    return;
+  }
+  // An already answered call is ended by LiveKit, not by a late ringing cancel.
+  if (activeCallNotifier.value != null) {
+    print('🛡️ Late cancel ignored: call is active in Flutter');
+    return;
+  }
+  final String incomingId =
+  (_lastIncomingCallData?['id'] ?? '').toString().trim();
+  if (incomingId.isNotEmpty &&
+      incomingId.toLowerCase() != cancelId.toLowerCase()) {
+    print('🛡️ Cancel UUID does not match the current ringing call');
+    return;
+  }
+  try {
+    if (Platform.isIOS) {
+      // Persist a short-lived marker for the race where FCM arrives before PushKit.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+        'beytei_cancel_${cancelId.toUpperCase()}',
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      final ok = await _nativeCallChannel.invokeMethod<bool>('endNativeCall', {
+        'callId': cancelId,
+      });
+      if (ok != true) await FlutterCallkitIncoming.endCall(cancelId);
+    } else {
+      await FlutterCallkitIncoming.endCall(cancelId);
+    }
+    _lastIncomingCallData = null;
+    print('📴 Cancellation applied to incoming call $cancelId');
+  } catch (error) {
+    print('⚠️ Could not cancel ringing CallKit call: $error');
+  }
+}
+
 // =======================================================================
 // 🔥 مساعد: هل القيمة فارغة؟
 // =======================================================================
@@ -308,11 +350,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   print("🔥 [Background] Data: ${message.data}");
 
   if (isCancelCall(message.data)) {
-    print("❌ [Background] Cancel call received");
-    // على iOS، Native CXProvider يتولى الإلغاء
-    if (Platform.isAndroid) {
-      await FlutterCallkitIncoming.endAllCalls();
-    }
+    print('📴 [Background] Cancel ringing call received');
+    await beyteiCancelRingingCall(message.data);
     return;
   }
 
@@ -506,20 +545,8 @@ void main() async {
     print("🔔 [FCM] Foreground: ${message.data}");
 
     if (isCancelCall(message.data)) {
-      print("❌ [Foreground] Cancel call received");
-
-      if (activeCallNotifier.value != null) {
-        print("🛡️ [PROTECTED] تجاهل cancel_call (المكالمة مقبولة)");
-        return;
-      }
-
-      // 🔥 على iOS: Native يعالج الإلغاء
-      // على Android: نستخدم المكتبة
-      if (Platform.isAndroid) {
-        await FlutterCallkitIncoming.endAllCalls();
-      }
-      activeCallNotifier.value = null;
-      _lastIncomingCallData = null;
+      print('📴 [Foreground] Cancel ringing call received');
+      await beyteiCancelRingingCall(message.data);
       return;
     }
 
@@ -937,11 +964,14 @@ class _MyAppState extends State<MyApp> {
             _lastIncomingCallData = null;
           }
         } else {
-          // The Android call overlay is not the LiveKit room. Keep this
-          // existing behavior for incoming calls not yet accepted.
-          await FlutterCallkitIncoming.endAllCalls();
-          activeCallNotifier.value = null;
-          _lastIncomingCallData = null;
+          // Active Android voice calls need the same LiveKit cleanup as iOS.
+          final id = activeCallNotifier.value?['id']?.toString() ?? '';
+          if (id.isNotEmpty) {
+            nativeEndedCallId.value = id;
+          } else {
+            _lastIncomingCallData = null;
+            await FlutterCallkitIncoming.endAllCalls();
+          }
         }
       }
     });
@@ -1126,19 +1156,6 @@ class _MyAppState extends State<MyApp> {
               ),
 
               // زر التشخيص العائم
-              Positioned(
-                bottom: 20,
-                left: 20,
-                child: FloatingActionButton.small(
-                  onPressed: () {
-                    _router.routerDelegate.navigatorKey.currentState?.push(
-                      MaterialPageRoute(builder: (_) => const IOSDiagnosticConsole()),
-                    );
-                  },
-                  backgroundColor: Colors.red,
-                  child: const Icon(Icons.bug_report, color: Colors.white, size: 20),
-                ),
-              ),
             ],
           ),
         );
@@ -1667,9 +1684,7 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
   @override
   void initState() {
     super.initState();
-    if (Platform.isIOS) {
-      nativeEndedCallId.addListener(_handleNativeHangup);
-    }
+    nativeEndedCallId.addListener(_handleNativeHangup);
     _initLiveKit();
 
     _timeoutTimer = Timer(const Duration(seconds: 45), () {
@@ -1850,6 +1865,22 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     }
   }
 
+  Future<void> _closeNativeCallImmediately(String id) async {
+    try {
+      final ok = await _nativeCallChannel.invokeMethod<bool>(
+          'endNativeCall', {'callId': id});
+      if (ok != true) await FlutterCallkitIncoming.endCall(id);
+      print('✅ Native iOS CallKit ended: $id');
+    } catch (error) {
+      print('⚠️ Native endNativeCall failed, trying Flutter plugin: $error');
+      try {
+        await FlutterCallkitIncoming.endCall(id);
+      } catch (fallbackError) {
+        print('⚠️ Both CallKit close methods failed: $fallbackError');
+      }
+    }
+  }
+
   Future<void> _endCall({
     bool notifyOther = true,
     bool closeNative = true,
@@ -1871,6 +1902,20 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     final EventsListener<RoomEvent>? currentListener = _listener;
     _room = null;
     _listener = null;
+
+    // Close the native call now, BEFORE awaiting LiveKit publish/disconnect.
+    // The previously delayed call to endNativeCall could leave iOS CallKit
+    // visible while the driver had already disconnected.
+    if (Platform.isIOS && closeNative) {
+      final id = widget.callId?.trim() ?? '';
+      if (id.isNotEmpty) {
+        unawaited(_closeNativeCallImmediately(id));
+      } else {
+        unawaited(FlutterCallkitIncoming.endAllCalls());
+      }
+    } else if (Platform.isAndroid) {
+      unawaited(FlutterCallkitIncoming.endAllCalls());
+    }
 
     // Dismiss the Flutter overlay immediately. Its dispose() sees the
     // cleanup guard and leaves the async LiveKit teardown to this function.
@@ -1927,38 +1972,12 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
       print('⚠️ Could not dispose LiveKit room: $error');
     }
 
-    // End the native CallKit call only when Flutter started the hangup.
-    // If native CallKit initiated it, the native action is already in flight.
-    if (Platform.isIOS) {
-      if (closeNative &&
-          widget.callId != null &&
-          widget.callId!.isNotEmpty) {
-        try {
-          await _nativeCallChannel.invokeMethod(
-            'endNativeCall',
-            {'callId': widget.callId},
-          );
-          print('✅ iOS CallKit ended: ${widget.callId}');
-        } catch (error) {
-          print('⚠️ Could not end iOS CallKit: $error');
-        }
-      }
-    } else {
-      try {
-        await FlutterCallkitIncoming.endAllCalls();
-      } catch (error) {
-        print('⚠️ Could not end Android CallKit: $error');
-      }
-    }
-
     print('✅ Call, microphone and timers are now ended');
   }
 
   @override
   void dispose() {
-    if (Platform.isIOS) {
-      nativeEndedCallId.removeListener(_handleNativeHangup);
-    }
+    nativeEndedCallId.removeListener(_handleNativeHangup);
     _durationTimer?.cancel();
     _timeoutTimer?.cancel();
 

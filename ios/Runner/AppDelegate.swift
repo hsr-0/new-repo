@@ -21,6 +21,79 @@ import UserNotifications
     private var lastError: String?
     private var activeCallMap: [UUID: [String: Any]] = [:]
 
+    // Best-effort native cancellation watcher while CallKit is ringing.
+    // A suspended app may pause timers; FCM and CallKit's own timeout remain
+    // fallbacks. The backend state is always authoritative.
+    private var ringStatusTimers: [String: Timer] = [:]
+
+    private func stopRingStatusWatch(uuid: String) {
+        let key = uuid.uppercased()
+        ringStatusTimers[key]?.invalidate()
+        ringStatusTimers.removeValue(forKey: key)
+    }
+
+    @discardableResult
+    private func endSpecificCall(uuid: String, reason: String) -> Bool {
+        let normalized = UUID(uuidString: uuid)?.uuidString ?? uuid
+        stopRingStatusWatch(uuid: normalized)
+        guard let plugin = SwiftFlutterCallkitIncomingPlugin.sharedInstance else {
+            writeLog("⚠️ لا يوجد CallKit plugin عند إغلاق \(normalized)")
+            return false
+        }
+        let callData = flutter_callkit_incoming.Data(
+            id: normalized, nameCaller: "", handle: "", type: 0
+        )
+        plugin.endCall(callData)
+        writeLog("📴 Closing CallKit \(normalized) | \(reason)")
+        return true
+    }
+
+    private func checkServerCallStatus(orderId: String, uuid: String) {
+        guard !orderId.isEmpty, !uuid.isEmpty else { return }
+        var components = URLComponents(string:
+            "https://re.beytei.com/wp-json/beytei-calls/v1/status")!
+        components.queryItems = [
+            URLQueryItem(name: "order_id", value: orderId),
+            URLQueryItem(name: "uuid", value: uuid)
+        ]
+        guard let url = components.url else { return }
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 5
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data = data,
+                  let object = try? JSONSerialization.jsonObject(with: data)
+                    as? [String: Any],
+                  let state = object["state"] as? String else { return }
+            if ["cancelled", "declined", "missed"].contains(state) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    guard self.ringStatusTimers[uuid.uppercased()] != nil else { return }
+                    self.endSpecificCall(uuid: uuid, reason: "server status: \(state)")
+                    self.notifyFlutterCallEnded(data: ["id": uuid, "order_id": orderId])
+                }
+            }
+        }.resume()
+    }
+
+    private func startRingStatusWatch(orderId: String, uuid: String) {
+        guard !orderId.isEmpty, !uuid.isEmpty else { return }
+        let key = uuid.uppercased()
+        stopRingStatusWatch(uuid: key)
+        var attempts = 0
+        let timer = Timer(timeInterval: 3, repeats: true) { [weak self] timer in
+            attempts += 1
+            if attempts > 20 { timer.invalidate(); self?.ringStatusTimers.removeValue(forKey: key); return }
+            self?.checkServerCallStatus(orderId: orderId, uuid: key)
+        }
+        ringStatusTimers[key] = timer
+        RunLoop.main.add(timer, forMode: .common)
+        checkServerCallStatus(orderId: orderId, uuid: key)
+    }
+
     // =======================================================================
     // 📝 نظام التسجيل
     // =======================================================================
@@ -91,19 +164,14 @@ import UserNotifications
                     result(status)
 
                 case "endNativeCall":
-                    // 🔥 إنهاء مكالمة عبر المكتبة (وليس CXProvider خاص بنا)
                     if let args = call.arguments as? [String: Any],
-                       let callId = args["callId"] as? String {
-                        let callData = flutter_callkit_incoming.Data(
-                            id: callId,
-                            nameCaller: "",
-                            handle: "",
-                            type: 0
-                        )
-                        SwiftFlutterCallkitIncomingPlugin.sharedInstance?.endCall(callData)
-                        self.writeLog("📞 endCall via Library: \(callId)")
+                       let callId = args["callId"] as? String,
+                       !callId.isEmpty {
+                        result(self.endSpecificCall(uuid: callId, reason: "Flutter hangup or cancel"))
+                    } else {
+                        result(FlutterError(code: "missing_call_id", message: "callId required", details: nil))
                     }
-                    result(true)
+
 
                 default:
                     result(FlutterMethodNotImplemented)
@@ -384,6 +452,7 @@ import UserNotifications
     // MARK: - CallkitIncomingAppDelegate callbacks
     // These callbacks connect the native CallKit answer/end actions to Flutter.
     func onAccept(_ call: Call, _ action: CXAnswerCallAction) {
+        stopRingStatusWatch(uuid: String(describing: call.data.uuid))
         writeLog("📞 CallKit: قبول المكالمة \(call.data.uuid)")
         action.fulfill()
         let callData = call.data.toJSON()
@@ -393,6 +462,7 @@ import UserNotifications
     }
 
     func onDecline(_ call: Call, _ action: CXEndCallAction) {
+        stopRingStatusWatch(uuid: String(describing: call.data.uuid))
         writeLog("📵 CallKit: رفض المكالمة \(call.data.uuid)")
         action.fulfill()
         let callData = call.data.toJSON()
@@ -402,6 +472,7 @@ import UserNotifications
     }
 
     func onEnd(_ call: Call, _ action: CXEndCallAction) {
+        stopRingStatusWatch(uuid: String(describing: call.data.uuid))
         writeLog("📴 CallKit: إنهاء المكالمة \(call.data.uuid)")
         action.fulfill()
         let callData = call.data.toJSON()
@@ -411,6 +482,7 @@ import UserNotifications
     }
 
     func onTimeOut(_ call: Call) {
+        stopRingStatusWatch(uuid: String(describing: call.data.uuid))
         writeLog("⌛ CallKit: انتهت مهلة الرنين للمكالمة \(call.data.uuid)")
         let callData = call.data.toJSON()
         DispatchQueue.main.async {
@@ -588,7 +660,19 @@ extension AppDelegate: PKPushRegistryDelegate {
                 self.writeLog("✅ اكتمل callback الخاص ببلاغ CallKit (UUID: \(callUUID))")
                 self.writeLog("ℹ️ عداد CallKit يعبّر عن اكتمال callback، وليس تأكيداً مستقلاً لظهور الواجهة")
 
-                self.notifyFlutterIncomingCall(data: extraDict)
+                let markerKey = "flutter.beytei_cancel_\(callUUID.uppercased())"
+                let cancelledAt = UserDefaults.standard.object(forKey: markerKey) as? Int ?? 0
+                let ageMillis = Int(Date().timeIntervalSince1970 * 1000) - cancelledAt
+                if cancelledAt > 0 && ageMillis >= 0 && ageMillis < 120000 {
+                    self.endSpecificCall(uuid: callUUID, reason: "FCM cancellation arrived before PushKit")
+                    UserDefaults.standard.removeObject(forKey: markerKey)
+                } else {
+                    self.startRingStatusWatch(
+                        orderId: extraDict["order_id"] as? String ?? "",
+                        uuid: callUUID
+                    )
+                    self.notifyFlutterIncomingCall(data: extraDict)
+                }
             }
         }
     }
