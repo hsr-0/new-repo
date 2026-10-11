@@ -554,7 +554,7 @@ class _DriverRatingBottomSheetState extends State<DriverRatingBottomSheet> {
     'طلب الدفع نقداً',
     'أخذ مبلغ إضافي',
     'القيادة بتهور',
-    'عدم تشغيل مكيف الهواء',
+    'عدم لبس الزي المنصة',
     'مشكلة بالانطلاق/الوصول'
   ];
 
@@ -569,9 +569,13 @@ class _DriverRatingBottomSheetState extends State<DriverRatingBottomSheet> {
   }
 
   Future<void> _submitRating() async {
-    if (_rating == 0) {
+    if (_isSubmitting) return;
+
+    if (_rating < 1 || _rating > 5) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى تحديد عدد النجوم أولاً للتقييم')),
+        const SnackBar(
+          content: Text('يرجى تحديد عدد النجوم أولاً'),
+        ),
       );
       return;
     }
@@ -579,45 +583,93 @@ class _DriverRatingBottomSheetState extends State<DriverRatingBottomSheet> {
     setState(() => _isSubmitting = true);
 
     try {
-      final auth = Provider.of<AuthProvider>(context, listen: false);
-
-      // إرسال البيانات إلى السيرفر ليتم التعامل معها من قبل نظام الإدارة (Laravel)
       final response = await http.post(
-        Uri.parse('https://de.beytei.com/api/taxi/v2/rate-driver'),
+        Uri.parse(
+          'https://de.beytei.com/api/taxi/v2/rate-driver',
+        ),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${auth.token}',
+          'Accept': 'application/json',
         },
-        body: json.encode({
+        body: jsonEncode({
           'order_id': widget.orderId,
           'rating': _rating,
           'tags': _selectedTags,
           'comment': _commentController.text.trim(),
         }),
+      ).timeout(const Duration(seconds: 20));
+
+      Map<String, dynamic> data = {};
+
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          data = decoded;
+        }
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 &&
+          data['success'] == true) {
+
+        final messenger = ScaffoldMessenger.of(context);
+
+        Navigator.of(context).pop(true);
+
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              data['message']?.toString() ??
+                  'تم إرسال التقييم بنجاح',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            data['message']?.toString() ??
+                'فشل إرسال التقييم (${response.statusCode})',
+          ),
+          backgroundColor: Colors.red,
+        ),
       );
 
-      if (response.statusCode == 200) {
-        if (!mounted) return;
-        Navigator.pop(context); // إغلاق النافذة
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('تم إرسال تقييمك بنجاح، شكراً لمساهمتك!'),
-                backgroundColor: Colors.green
-            )
-        );
-      } else {
-        throw Exception('فشل الإرسال');
-      }
+    } on TimeoutException {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'انتهت مهلة الاتصال. يرجى التحقق من حالة التقييم قبل إعادة المحاولة.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+
     } catch (e) {
       if (!mounted) return;
+
+      debugPrint('Rating error: $e');
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('حدث خطأ بالاتصال، يرجى المحاولة لاحقاً')),
+        const SnackBar(
+          content: Text('تعذر الاتصال بسيرفر التقييم'),
+          backgroundColor: Colors.red,
+        ),
       );
+
     } finally {
-      if (mounted) setState(() => _isSubmitting = false);
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     // تحديد قائمة الأزرار (Tags) بناءً على النجوم
