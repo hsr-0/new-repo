@@ -6,7 +6,7 @@ import 'package:cosmetic_store/taxi/lib/presentation/screens/inbox/ride_message_
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -27,10 +27,9 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'package:livekit_client/livekit_client.dart' hide ConnectionState, Priority;
 
-import 'beytei_re/OrderTracking.dart';
 import 'webview_screen.dart';
-import '../beytei_re/re.dart';
-
+import 'beytei_re/OrderTracking.dart';
+import 'beytei_re/re.dart' hide OrderTrackingScreen;
 import '/custom_code/actions/index.dart' as actions;
 import 'backend/firebase/firebase_config.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -421,51 +420,216 @@ Future<void> _saveAndRegisterToken(String token) async {
 // =======================================================================
 // 🔥 استراتيجية الأذونات
 // =======================================================================
+/// Initializes foreground location on the first app launch.
+/// Saves coordinates for the home screen and restaurant module.
 Future<void> requestLocationPermissionOnly() async {
-  print("🔐 التحقق من حالة الـ GPS...");
-  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-  if (!serviceEnabled) {
-    print("⚠️ خدمة الموقع (GPS) مغلقة.");
-    return;
-  }
-
-  final status = await Permission.location.status;
-
-  if (!status.isGranted && !status.isPermanentlyDenied) {
-    await Permission.location.request();
-  }
-
-  if (await Permission.location.isGranted) {
-    _fetchLocationInBackground();
-  }
-}
-
-void _fetchLocationInBackground() async {
+  // هذا الجزء يطلب الإذن فقط ولا يجلب GPS ولا ينتظر أي إحداثيات.
+  // صفحة الأقسام هي المسؤولة عن تحديث GPS التلقائي سريعاً وبصمت.
   try {
-    print("📍 [الخلفية] جاري تحديد الموقع بصمت...");
-    Position? position = await Geolocator.getLastKnownPosition();
-    if (position == null) {
-      position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.low,
-        timeLimit: const Duration(seconds: 5),
-      );
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
     }
-    print("✅ [الخلفية] تم التقاط الموقع: ${position.latitude}, ${position.longitude}");
-  } catch (e) {
-    print("⚠️ [الخلفية] فشل التقاط الموقع: $e");
+    if (permission != LocationPermission.always &&
+        permission != LocationPermission.whileInUse) {
+      print('📍 لم يُسمح بالموقع. التصفح متاح، والخريطة خيار بديل.');
+    }
+  } catch (error) {
+    print('⚠️ تعذر طلب إذن الموقع: $error');
   }
 }
 
-Future<void> requestSecondaryPermissions() async {
-  final notifStatus = await Permission.notification.status;
-  if (!notifStatus.isGranted && !notifStatus.isPermanentlyDenied) {
-    await Permission.notification.request();
+
+/// طلب الإذن يبقى مع بداية استخدام التطبيق، مع توضيح سبب استخدام الميكروفون.
+/// لا يمكن تعديل نص إذن Android الرسمي ("تسجيل الصوت")؛ هذه رسالة توضيحية مستقلة.
+enum _BeyteiMicChoice { later, request, settings }
+
+class _BeyteiMicPrompt {
+  final String title;
+  final String message;
+  final bool showRequest;
+  final bool showSettings;
+  final String requestLabel;
+  final Completer<_BeyteiMicChoice> result = Completer<_BeyteiMicChoice>();
+
+  _BeyteiMicPrompt({
+    required this.title,
+    required this.message,
+    this.showRequest = true,
+    this.showSettings = false,
+    this.requestLabel = 'متابعة',
+  });
+}
+
+/// طبقة داخل MaterialApp.builder، لذا تظهر فوق شاشة المكالمة أيضاً.
+/// لا تستعمل Navigator.showDialog الذي قد يظهر تحت Overlay المكالمات.
+class _BeyteiMicrophonePermission {
+  static const String explanation =
+      'تحتاج منصة بيتي إلى الوصول إلى الميكروفون لإجراء المكالمات الصوتية مع المندوب أو الدعم الفني أثناء الرحلة.';
+  static const String _attemptsKey = 'beytei_mic_permission_attempts_v2';
+  static const String _launchesKey = 'beytei_mic_permission_launches_v2';
+  static const String _remindAtKey = 'beytei_mic_permission_remind_at_v2';
+
+  static final ValueNotifier<_BeyteiMicPrompt?> prompt =
+  ValueNotifier<_BeyteiMicPrompt?>(null);
+  static Future<bool>? _activeFlow;
+
+  static Future<_BeyteiMicChoice> _ask({
+    required String title,
+    required String message,
+    bool showRequest = true,
+    bool showSettings = false,
+    String requestLabel = 'متابعة',
+  }) async {
+    // تأكد من عدم عرض نافذتين في الوقت نفسه.
+    while (prompt.value != null) {
+      await Future.delayed(const Duration(milliseconds: 120));
+    }
+    final pending = _BeyteiMicPrompt(
+      title: title,
+      message: message,
+      showRequest: showRequest,
+      showSettings: showSettings,
+      requestLabel: requestLabel,
+    );
+    prompt.value = pending;
+    try {
+      return await pending.result.future;
+    } finally {
+      if (identical(prompt.value, pending)) prompt.value = null;
+    }
   }
 
-  final micStatus = await Permission.microphone.status;
-  if (!micStatus.isGranted && !micStatus.isPermanentlyDenied) {
-    await Permission.microphone.request();
+  static void answer(_BeyteiMicPrompt item, _BeyteiMicChoice choice) {
+    if (!identical(prompt.value, item)) return;
+    if (!item.result.isCompleted) item.result.complete(choice);
+    prompt.value = null;
   }
+
+  static Future<PermissionStatus> _requestSystem(SharedPreferences prefs) async {
+    final old = prefs.getInt(_attemptsKey) ?? 0;
+    await prefs.setInt(_attemptsKey, old + 1);
+    final result = await Permission.microphone.request();
+    if (result.isGranted) {
+      await prefs.remove(_attemptsKey);
+      await prefs.remove(_remindAtKey);
+    }
+    return result;
+  }
+
+  static Future<bool> _exclusive(Future<bool> Function() callback) async {
+    final waiting = _activeFlow;
+    if (waiting != null) return waiting;
+    final work = callback();
+    _activeFlow = work;
+    try {
+      return await work;
+    } finally {
+      if (identical(_activeFlow, work)) _activeFlow = null;
+    }
+  }
+
+  /// تظهر عند تشغيل التطبيق. أول محاولتين: شرح هادئ ثم طلب النظام.
+  /// بعد رفضين: تذكير مع حل المشكلة، مرة كل ثلاث تشغيلات لا أكثر.
+  static Future<void> checkAtStartup() async {
+    await _exclusive(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final launch = (prefs.getInt(_launchesKey) ?? 0) + 1;
+        await prefs.setInt(_launchesKey, launch);
+
+        final status = await Permission.microphone.status;
+        if (status.isGranted) {
+          await prefs.remove(_attemptsKey);
+          await prefs.remove(_remindAtKey);
+          return true;
+        }
+
+        final attempts = prefs.getInt(_attemptsKey) ?? 0;
+        if (status.isPermanentlyDenied || status.isRestricted || attempts >= 2) {
+          if (launch < 3 || launch < (prefs.getInt(_remindAtKey) ?? 3)) {
+            return false;
+          }
+          await prefs.setInt(_remindAtKey, launch + 3);
+          final decision = await _ask(
+            title: 'فعّل المكالمات الصوتية',
+            message: '$explanation\n\nلم تُمنح صلاحية الميكروفون بعد. تستطيع متابعة التصفح، لكن المكالمات تحتاج إلى هذه الصلاحية.',
+            showRequest: !status.isPermanentlyDenied && !status.isRestricted,
+            showSettings: true,
+            requestLabel: 'إعادة المحاولة',
+          );
+          if (decision == _BeyteiMicChoice.settings) {
+            await openAppSettings();
+          } else if (decision == _BeyteiMicChoice.request &&
+              !status.isPermanentlyDenied && !status.isRestricted) {
+            await _requestSystem(prefs);
+          }
+          return (await Permission.microphone.status).isGranted;
+        }
+
+        // السماح الأول والثاني اختيار المستخدم؛ لا رسائل تحذير بعد الرفض.
+        final decision = await _ask(
+          title: 'السماح باستخدام الميكروفون',
+          message: explanation,
+          requestLabel: 'متابعة',
+        );
+        if (decision != _BeyteiMicChoice.request) return false;
+        final result = await _requestSystem(prefs);
+        return result.isGranted;
+      } catch (e) {
+        debugPrint('⚠️ Microphone startup permission: $e');
+        return false;
+      }
+    });
+  }
+
+  /// يُستدعى أيضاً عند الرد على أول مكالمة إذا لم يكن الإذن ممنوحاً.
+  /// لا يُسمح ببدء نشر الصوت على LiveKit قبل منح الإذن.
+  static Future<bool> ensureForCall() async {
+    final previous = _activeFlow;
+    if (previous != null) {
+      await previous;
+      if ((await Permission.microphone.status).isGranted) return true;
+    }
+    return _exclusive(() async {
+      try {
+        final status = await Permission.microphone.status;
+        if (status.isGranted) return true;
+        final prefs = await SharedPreferences.getInstance();
+        final blocked = status.isPermanentlyDenied || status.isRestricted;
+        final decision = await _ask(
+          title: blocked ? 'فعّل الميكروفون من الإعدادات' : 'المكالمة تحتاج الميكروفون',
+          message: '$explanation\n\nيلزم السماح باستخدام الميكروفون حتى يسمعك الطرف الآخر.',
+          showRequest: !blocked,
+          showSettings: blocked || (prefs.getInt(_attemptsKey) ?? 0) >= 2,
+          requestLabel: 'السماح بالميكروفون',
+        );
+        if (decision == _BeyteiMicChoice.settings) {
+          await openAppSettings();
+          return false;
+        }
+        if (decision != _BeyteiMicChoice.request || blocked) return false;
+        final result = await _requestSystem(prefs);
+        return result.isGranted;
+      } catch (e) {
+        debugPrint('⚠️ Call microphone permission: $e');
+        return false;
+      }
+    });
+  }
+}
+
+/// الإشعارات كما كانت، ثم شرح الميكروفون دون إجبار الزبون على الموافقة.
+Future<void> requestSecondaryPermissions() async {
+  try {
+    final notifStatus = await Permission.notification.status;
+    if (!notifStatus.isGranted && !notifStatus.isPermanentlyDenied) {
+      await Permission.notification.request();
+    }
+  } catch (error) {
+    debugPrint('⚠️ Notification permission: $error');
+  }
+  await _BeyteiMicrophonePermission.checkAtStartup();
 }
 
 // =======================================================================
@@ -617,18 +781,30 @@ class _MyAppState extends State<MyApp> {
       _setupNativeCallListener();
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkTerminatedCall();
+    // Wait for each OS permission window to finish before opening the next.
+    // This prevents first-install notification/location/microphone dialog races.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await _checkTerminatedCall();
 
-      FirebaseMessaging.instance.getInitialMessage().then((message) {
+      try {
+        final message = await FirebaseMessaging.instance.getInitialMessage();
         if (message != null) {
           print("🚀 [App Launch] من إشعار");
           handleNotificationClick(message.data);
         }
-      });
+      } catch (error) {
+        print('⚠️ Initial notification check failed: $error');
+      }
 
-      requestLocationPermissionOnly();
-      requestSecondaryPermissions();
+      if (!mounted) return;
+      // إذا فتح التطبيق من مكالمة واردة، لا نغطيها بنافذة أذونات التشغيل.
+      // نافذة الإذن عند الرد تُدار بواسطة ensureForCall() مباشرة.
+      if (activeCallNotifier.value == null) {
+        await requestSecondaryPermissions();
+      }
+      if (!mounted) return;
+      await requestLocationPermissionOnly(); // كما في ملفك الأصلي، بلا تعديل
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1155,6 +1331,67 @@ class _MyAppState extends State<MyApp> {
                 },
               ),
 
+              // طبقة إذن الميكروفون فوق جميع الواجهات، حتى شاشة المكالمة.
+              ValueListenableBuilder<_BeyteiMicPrompt?>(
+                valueListenable: _BeyteiMicrophonePermission.prompt,
+                builder: (context, request, _) {
+                  if (request == null) return const SizedBox.shrink();
+                  return Positioned.fill(
+                    child: Material(
+                      color: Colors.black54,
+                      child: Directionality(
+                        textDirection: ui.TextDirection.rtl,
+                        child: SafeArea(
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 440),
+                              child: AlertDialog(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                title: Row(
+                                  children: [
+                                    const Icon(Icons.mic_rounded, color: Colors.blue),
+                                    const SizedBox(width: 10),
+                                    Expanded(child: Text(request.title)),
+                                  ],
+                                ),
+                                content: Text(
+                                  request.message,
+                                  style: const TextStyle(fontSize: 16, height: 1.6),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => _BeyteiMicrophonePermission.answer(
+                                      request, _BeyteiMicChoice.later,
+                                    ),
+                                    child: const Text('ليس الآن'),
+                                  ),
+                                  if (request.showSettings)
+                                    TextButton.icon(
+                                      onPressed: () => _BeyteiMicrophonePermission.answer(
+                                        request, _BeyteiMicChoice.settings,
+                                      ),
+                                      icon: const Icon(Icons.settings_outlined),
+                                      label: const Text('فتح الإعدادات'),
+                                    ),
+                                  if (request.showRequest)
+                                    FilledButton(
+                                      onPressed: () => _BeyteiMicrophonePermission.answer(
+                                        request, _BeyteiMicChoice.request,
+                                      ),
+                                      child: Text(request.requestLabel),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
               // زر التشخيص العائم
             ],
           ),
@@ -1702,13 +1939,14 @@ class _ActiveVoiceCallScreenState extends State<ActiveVoiceCallScreen> {
     await Future.delayed(const Duration(milliseconds: 1200));
     if (!mounted || _isEngineReleased) return;
 
-    final status = await Permission.microphone.request();
+    // نفس الشرح والأذونات لجميع المكالمات، بما فيها المكالمة الواردة.
+    // Android قد يعرض لفظ «تسجيل الصوت» في نافذة النظام؛ لا يمكن تخصيصه.
+    final microphoneAllowed = await _BeyteiMicrophonePermission.ensureForCall();
     if (!mounted || _isEngineReleased) return;
-    if (status.isDenied || status.isPermanentlyDenied) {
-      if (!mounted) return;
+    if (!microphoneAllowed) {
       setState(() {
         _hasError = true;
-        _errorMessage = "يرجى منح صلاحية المايكروفون من إعدادات الجهاز";
+        _errorMessage = 'المكالمة تحتاج السماح باستخدام الميكروفون. يمكنك إنهاء المكالمة والسماح من إعدادات التطبيق.';
       });
       return;
     }

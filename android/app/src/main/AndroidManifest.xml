@@ -11,18 +11,22 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
-    <!-- تم إضافة إذن المايكروفون للخدمات الأمامية هنا -->
+    <!-- Preserved pending separate Android call-service verification. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
+    <!-- Remove permissions introduced by dependencies when unused. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" tools:node="remove" />
 
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
+    <!-- Location is needed only while using the app. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Remove any background location permission added by a dependency. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove" />
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
@@ -72,14 +76,13 @@
             android:name="com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver"
             android:exported="true" />
 
-        <!-- تم تعديل foregroundServiceType هنا -->
+        <!-- CallKit foreground service types intentionally unchanged. -->
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitNotificationService"
             android:exported="true"
             android:foregroundServiceType="phoneCall|microphone"
             tools:replace="android:exported,android:foregroundServiceType" />
 
-        <!-- تم تعديل foregroundServiceType هنا أيضاً -->
         <service
             android:name="com.hiennv.flutter_callkit_incoming.CallkitSoundService"
             android:exported="false"

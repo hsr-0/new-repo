@@ -206,7 +206,63 @@ class AppConstants {
   static const String CACHE_KEY_RESTAURANTS_PREFIX = 'cache_restaurants_area_';
   static const String CACHE_KEY_MENU_PREFIX = 'cache_menu_restaurant_';
   static const String CACHE_TIMESTAMP_PREFIX = 'cache_time_';
+  static const Duration menuCacheLifetime = Duration(hours: 8);
+  static const Duration restaurantsCacheLifetime = Duration(hours: 24);
 }
+
+// FCM data payload: {type: "refresh_menu" | "refresh_status", restaurant_id: "123"}.
+// Only invalidate the changed restaurant; fallback cache expiration guarantees eventual updates.
+class BeyteiMenuCacheEvents {
+  static final ValueNotifier<int> changedRestaurant = ValueNotifier<int>(-1);
+  static const Set<String> eventTypes = {
+    'refresh_menu', 'refresh_status', 'restaurant_menu_updated',
+    'restaurant_updated', 'menu_updated', 'restaurant_status_updated',
+  };
+  static bool isMenuEvent(Map<String, dynamic> data) =>
+      eventTypes.contains(data['type']?.toString() ?? '');
+
+  static Future<int> invalidate(Map<String, dynamic> data) async {
+    if (!isMenuEvent(data)) return -1;
+    final id = int.tryParse(data['restaurant_id']?.toString() ?? '') ?? 0;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    if (id > 0) {
+      await prefs.setBool('beytei_menu_dirty_$id', true);
+      await prefs.setInt('beytei_menu_event_$id',
+          (prefs.getInt('beytei_menu_event_$id') ?? 0) + 1);
+    } else {
+      // Legacy area-wide status update (id=0): invalidate only cached menus.
+      for (final key in prefs.getKeys().where((x) =>
+          x.startsWith(AppConstants.CACHE_KEY_MENU_PREFIX))) {
+        final restaurantId = key.substring(AppConstants.CACHE_KEY_MENU_PREFIX.length);
+        await prefs.setBool('beytei_menu_dirty_$restaurantId', true);
+        await prefs.setInt('beytei_menu_event_$restaurantId',
+            (prefs.getInt('beytei_menu_event_$restaurantId') ?? 0) + 1);
+      }
+    }
+    // Existing home JSON remains available for instant rendering, but gets revalidated
+    // on next entry. Never delete cached menus or users' carts for an update signal.
+    for (final key in prefs.getKeys().where((x) =>
+        x.startsWith('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_'))) {
+      await prefs.setInt(key, 0);
+    }
+    return id;
+  }
+
+  static Future<void> handleForeground(RemoteMessage message) async {
+    final id = await invalidate(message.data);
+    if (id == -1) return;
+    changedRestaurant.value = id;
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+    try {
+      final provider = Provider.of<CustomerProvider>(context, listen: false);
+      // One status batch ONLY in response to an actual update notification.
+      await provider.refreshStatusesAfterPush();
+    } catch (_) { /* Root widget may not be mounted yet. */ }
+  }
+}
+
 // 🔥 أضف هذا السطر في البداية لتعريف المفتاح عالمياً
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -215,6 +271,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
 
   final messageType = message.data['type'];
+  if (BeyteiMenuCacheEvents.isMenuEvent(message.data)) {
+    await BeyteiMenuCacheEvents.invalidate(message.data);
+    return;
+  }
 
   // 📞 مكالمات VoIP
   if (messageType == 'voip_call') {
@@ -1707,6 +1767,76 @@ class CustomerProvider with ChangeNotifier {
   Map<String, List<dynamic>> _homeData = {};
   List<Restaurant> _allRestaurants = [];
   Map<int, List<FoodItem>> _menuItems = {};
+  final Map<int, List<dynamic>> _menuSections = {};
+  final Map<int, bool> _menuAcceptingOrders = {};
+  final Map<int, String> _menuOperationMode = {};
+  final Map<int, DateTime?> _menuPausedUntil = {};
+  final Map<int, String> _menuAutoOpen = {};
+  final Map<int, String> _menuAutoClose = {};
+  final Set<int> _modernMenuIds = {};
+  bool hasBundledMenuFor(int restaurantId) => _modernMenuIds.contains(restaurantId);
+  List<dynamic> sectionsFor(int restaurantId) => _menuSections[restaurantId] ?? [];
+  bool? acceptingOrdersFor(int restaurantId) {
+    final lastStatus = _menuAcceptingOrders[restaurantId];
+    if (lastStatus == null) return null;
+    final pausedUntil = _menuPausedUntil[restaurantId];
+    if (pausedUntil != null && pausedUntil.isAfter(DateTime.now())) return false;
+    if (_menuOperationMode[restaurantId] == 'auto') {
+      final open = _menuAutoOpen[restaurantId];
+      final close = _menuAutoClose[restaurantId];
+      if (open != null && close != null &&
+          RegExp(r'^\d{2}:\d{2}$').hasMatch(open) &&
+          RegExp(r'^\d{2}:\d{2}$').hasMatch(close)) {
+        final now = DateTime.now();
+        final minute = now.hour * 60 + now.minute;
+        final op = int.parse(open.substring(0, 2)) * 60 + int.parse(open.substring(3));
+        final cl = int.parse(close.substring(0, 2)) * 60 + int.parse(close.substring(3));
+        // Preserves overnight schedules; actual server checks still govern checkout.
+        if (op != cl) return op < cl ? minute >= op && minute < cl : (minute >= op || minute < cl);
+      }
+    }
+    return lastStatus;
+  }
+
+  Duration? timeUntilLocalAvailabilityChange(int restaurantId) {
+    if (_menuOperationMode[restaurantId] != 'auto') return null;
+    final open = _menuAutoOpen[restaurantId];
+    final close = _menuAutoClose[restaurantId];
+    final valid = RegExp(r'^\d{2}:\d{2}$');
+    if (open == null || close == null || !valid.hasMatch(open) || !valid.hasMatch(close)) return null;
+    final now = DateTime.now();
+    final times = [open, close];
+    final delays = <Duration>[];
+    for (final value in times) {
+      var next = DateTime(now.year, now.month, now.day,
+          int.parse(value.substring(0, 2)), int.parse(value.substring(3)));
+      if (!next.isAfter(now)) next = next.add(const Duration(days: 1));
+      delays.add(next.difference(now));
+    }
+    delays.sort((a,b) => a.compareTo(b));
+    return delays.first;
+  }
+
+  void reapplyCachedAvailability(int restaurantId) {
+    final accepting = acceptingOrdersFor(restaurantId) ?? false;
+    final eligible = _allRestaurants.any((r) => r.id == restaurantId && r.isDeliverable);
+    for (final product in _menuItems[restaurantId] ?? <FoodItem>[]) {
+      product.isDeliverable = accepting && eligible && product.isProductAvailable;
+    }
+    notifyListeners();
+  }
+
+  String openingLabelFor(int restaurantId, Restaurant fallback) {
+    final value = _menuAutoOpen[restaurantId] ?? fallback.autoOpenTime;
+    return RegExp(r'^\d{2}:\d{2}$').hasMatch(value)
+        ? value : 'الوقت الذي يحدده المطعم';
+  }
+
+  Future<void> refreshStatusesAfterPush() async {
+    if (_allRestaurants.isEmpty) return;
+    await _fetchAndApplyFreshStatuses();
+    notifyListeners();
+  }
 
   // قائمة العروض النشطة
   List<Offer> _activeOffers = [];
@@ -1732,6 +1862,13 @@ class CustomerProvider with ChangeNotifier {
     _homeData = {};
     _allRestaurants = [];
     _menuItems = {};
+    _menuSections.clear();
+    _menuAcceptingOrders.clear();
+    _menuOperationMode.clear();
+    _menuPausedUntil.clear();
+    _menuAutoOpen.clear();
+    _menuAutoClose.clear();
+    _modernMenuIds.clear();
     _activeOffers = [];
     _lastLoadedAreaId = -1;
     _hasError = false;
@@ -1784,19 +1921,17 @@ class CustomerProvider with ChangeNotifier {
     _lastLoadedAreaId = areaId;
     _hasError = false;
 
-    // 🔥 أ) محاولة العرض الفوري من الكاش
+    // Instant stale-while-revalidate: show existing local home snapshot first.
     if (!isRefresh) {
-      bool isCacheAvailable = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId', minutes: 5);
-      if (isCacheAvailable) {
-        await _loadHomeFromCache(areaId);
-        if (_allRestaurants.isNotEmpty) {
-          _isLoadingHome = false;
-          notifyListeners(); // عرض الكاش فوراً للسرعة
-          // 🔥 تحديث الحالة في الخلفية وتحديث الواجهة فوراً عند الانتهاء
-          _syncStatusesSilently(areaId);
-          return;
-        }
+      final isValid = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId',
+          minutes: AppConstants.restaurantsCacheLifetime.inMinutes);
+      await _loadHomeFromCache(areaId);
+      if (isValid && _allRestaurants.isNotEmpty) {
+        _isLoadingHome = false;
+        notifyListeners();
+        return; // No status API request per launch; listen for actual server changes.
       }
+      if (_allRestaurants.isNotEmpty) notifyListeners();
     }
 
     if (_homeData.isEmpty) {
@@ -1815,7 +1950,7 @@ class CustomerProvider with ChangeNotifier {
       final restaurantsJson = results[1];
       _processAndSetHomeData(deliverableJson, restaurantsJson);
 
-      // 🔥 جلب الحالة الفعلية مباشرة ودمجها قبل العرض النهائي (يضمن دقة 100% من أول لحظة)
+      // Only one lightweight status batch with an expired home snapshot.
       await _fetchAndApplyFreshStatuses();
 
       await _saveHomeToCache(areaId, deliverableJson, restaurantsJson);
@@ -1975,36 +2110,48 @@ class CustomerProvider with ChangeNotifier {
   // ============================================================
   // 2. جلب قائمة الطعام (المنيو)
   // ============================================================
+  final Set<int> _menuFetchesInFlight = {};
   Future<void> fetchMenuForRestaurant(int restaurantId, {bool isRefresh = false}) async {
     _hasError = false;
-
-    if (!isRefresh && !_menuItems.containsKey(restaurantId)) {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload(); // Receive dirty flags written by the background FCM isolate.
+    final dirty = prefs.getBool('beytei_menu_dirty_$restaurantId') ?? false;
+    final initialEvent = prefs.getInt('beytei_menu_event_$restaurantId') ?? 0;
+    final valid = await _isCacheValid(
+      '${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId',
+      minutes: AppConstants.menuCacheLifetime.inMinutes,
+    );
+    // Always display cached products and categories immediately, even if expired.
+    if (!_menuItems.containsKey(restaurantId)) {
       await _loadMenuFromCache(restaurantId);
     }
-
-    if (!_menuItems.containsKey(restaurantId)) {
-      _isLoadingMenu = true;
-      notifyListeners();
-    }
-
-    if (!isRefresh && _menuItems.containsKey(restaurantId) && await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}menu_$restaurantId', minutes: 600)) {
-      print("✅ استخدام الكاش للمنيو (البيانات حديثة)");
+    final hasCache = _menuItems.containsKey(restaurantId);
+    if (!isRefresh && hasCache && valid && !dirty) {
       _isLoadingMenu = false;
       notifyListeners();
       return;
     }
-
+    if (_menuFetchesInFlight.contains(restaurantId)) return;
+    _menuFetchesInFlight.add(restaurantId);
+    _isLoadingMenu = !hasCache;
+    notifyListeners();
     try {
       final jsonStr = await _apiService.getRawMenu(restaurantId);
       _processAndSetMenu(restaurantId, jsonStr);
       await _saveMenuToCache(restaurantId, jsonStr);
+      await prefs.reload();
+      if ((prefs.getInt('beytei_menu_event_$restaurantId') ?? 0) == initialEvent) {
+        await prefs.setBool('beytei_menu_dirty_$restaurantId', false);
+      }
     } catch (e) {
-      print("⚠️ فشل تحديث المنيو من الشبكة: $e");
-      if (!_menuItems.containsKey(restaurantId)) {
+      print('⚠️ فشل تحميل المنيو. سيبقى الكاش متاحاً: $e');
+      if (!hasCache) {
         _hasError = true;
         _menuItems[restaurantId] = [];
       }
+      // On failure keep dirty flag so next visit can retry, without polling.
     } finally {
+      _menuFetchesInFlight.remove(restaurantId);
       _isLoadingMenu = false;
       notifyListeners();
     }
@@ -2012,21 +2159,48 @@ class CustomerProvider with ChangeNotifier {
 
   void _processAndSetMenu(int restaurantId, String jsonStr) {
     try {
-      final List<dynamic> decoded = json.decode(jsonStr);
-      List<FoodItem> items = decoded.map((jsonObj) => FoodItem.fromJson(jsonObj)).toList();
+      final dynamic parsed = json.decode(jsonStr);
+      // V3 sends product options, sections and restaurant status in one response.
+      // Older installations still return a plain WooCommerce product array.
+      final bool modern = parsed is Map && parsed['products'] is List;
+      final List<dynamic> decoded = modern ? (parsed['products'] as List) : (parsed as List);
+      if(modern) _modernMenuIds.add(restaurantId);
+      else _modernMenuIds.remove(restaurantId);
+      _menuSections[restaurantId] = modern && parsed['sections'] is List
+          ? List<dynamic>.from(parsed['sections']) : [];
+      final restaurantData = modern && parsed['restaurant'] is Map
+          ? Map<String, dynamic>.from(parsed['restaurant']) : <String, dynamic>{};
+      final availability = restaurantData['accepting_orders'];
+      _menuAcceptingOrders[restaurantId] = availability == true || (availability == null &&
+          _allRestaurants.any((r) => r.id == restaurantId && r.isOpen));
+      _menuOperationMode[restaurantId] = restaurantData['operation_mode']?.toString() ?? '';
+      _menuAutoOpen[restaurantId] = restaurantData['auto_open_time']?.toString() ?? '';
+      _menuAutoClose[restaurantId] = restaurantData['auto_close_time']?.toString() ?? '';
+      _menuPausedUntil[restaurantId] = DateTime.tryParse(restaurantData['pause_until']?.toString() ?? '');
+      List<FoodItem> items = decoded.map((jsonObj) => FoodItem.fromJson(
+        Map<String, dynamic>.from(jsonObj as Map), restaurantId: restaurantId,
+      )).toList();
 
       Restaurant? restaurant = _allRestaurants.firstWhere(
               (r) => r.id == restaurantId,
           orElse: () => Restaurant(id: 0, name: '', imageUrl: '', isOpen: false, autoOpenTime: '', autoCloseTime: '', latitude: 0, longitude: 0)
       );
 
-      bool isAvailable = restaurant.isDeliverable && restaurant.isOpen;
-
+      // The server is authoritative about opening/pausing and hidden items.
+      // The client only combines this status with area delivery eligibility.
+      final bool isAvailable = restaurant.isDeliverable &&
+          (acceptingOrdersFor(restaurantId) ?? restaurant.isOpen);
       for (var item in items) {
-        item.isDeliverable = isAvailable;
+        item.isDeliverable = isAvailable && item.isProductAvailable;
       }
 
       _menuItems[restaurantId] = items;
+      if (modern && restaurantData['accepting_orders'] is bool) {
+        updateSingleRestaurantStatus(restaurantId,
+            acceptingOrdersFor(restaurantId) ?? false,
+            restaurantData['auto_open_time']?.toString(),
+            restaurantData['auto_close_time']?.toString());
+      }
     } catch (e) {
       print("Error parsing menu: $e");
       throw Exception('Menu parsing error');
@@ -2887,6 +3061,47 @@ class FoodItem {
   double selectedWeight;
   String customNote;
   final double platformMarkup;
+  final bool isProductAvailable;
+  final List<Map<String, dynamic>> menuOptionGroups;
+  final List<Map<String, dynamic>> selectedMenuOptions;
+  final String unavailableReason;
+
+  bool get hasMenuOptions => menuOptionGroups.isNotEmpty;
+  double get menuExtrasPrice {
+    var amount = 0.0;
+    for (final groupSelection in selectedMenuOptions) {
+      final gid = groupSelection['group_id']?.toString() ?? '';
+      final ids = (groupSelection['option_ids'] as List? ?? []).map((e) => e.toString()).toSet();
+      for (final group in menuOptionGroups) {
+        if (group['id']?.toString() != gid) continue;
+        for (final opt in (group['options'] as List? ?? [])) {
+          if (opt is Map && ids.contains(opt['id']?.toString())) {
+            amount += double.tryParse(opt['price_delta'].toString()) ?? 0;
+          }
+        }
+      }
+    }
+    return amount;
+  }
+  String get selectedOptionsSummary {
+    final pieces = <String>[];
+    for (final selection in selectedMenuOptions) {
+      final groupId = selection['group_id']?.toString();
+      for (final group in menuOptionGroups) {
+        if (group['id']?.toString() != groupId) continue;
+        final selectedIds = (selection['option_ids'] as List? ?? []).map((e) => e.toString()).toSet();
+        final labels = (group['options'] as List? ?? [])
+            .whereType<Map>().where((o) => selectedIds.contains(o['id']?.toString()))
+            .map((o) => o['name']?.toString() ?? '').where((x) => x.isNotEmpty).toList();
+        if (labels.isNotEmpty) pieces.add('${group['name']}: ${labels.join('، ')}');
+      }
+    }
+    return pieces.join(' | ');
+  }
+  String get selectedOptionsKey => jsonEncode((selectedMenuOptions.toList()
+    ..sort((a,b) => a['group_id'].toString().compareTo(b['group_id'].toString())))
+      .map((s) => {'group_id':s['group_id'], 'option_ids':
+  ((s['option_ids'] as List? ?? []).map((e)=>e.toString()).toList()..sort())}).toList());
 
   FoodItem({
     required this.id,
@@ -2906,12 +3121,17 @@ class FoodItem {
     this.selectedWeight = 1.0,
     this.customNote = '',
     this.platformMarkup = 0.0,
+    this.isProductAvailable = true,
+    this.menuOptionGroups = const [],
+    this.selectedMenuOptions = const [],
+    this.unavailableReason = '',
   });
 
   FoodItem copyWith({
     double? selectedWeight,
     String? customNote,
     int? quantity,
+    List<Map<String, dynamic>>? selectedMenuOptions,
   }) {
     return FoodItem(
       id: id, name: name, description: description, price: price, salePrice: salePrice,
@@ -2922,10 +3142,14 @@ class FoodItem {
       customNote: customNote ?? this.customNote,
       quantity: quantity ?? this.quantity,
       platformMarkup: platformMarkup,
+      isProductAvailable: isProductAvailable,
+      menuOptionGroups: menuOptionGroups,
+      selectedMenuOptions: selectedMenuOptions ?? this.selectedMenuOptions,
+      unavailableReason: unavailableReason,
     );
   }
 
-  factory FoodItem.fromJson(Map<String, dynamic> json) {
+  factory FoodItem.fromJson(Map<String, dynamic> json, {int? restaurantId}) {
     double safeParseDouble(dynamic value, [double defaultValue = 0.0]) {
       if (value == null) return defaultValue;
       if (value is double) return value;
@@ -2940,7 +3164,10 @@ class FoodItem {
       if (images is List && images.isNotEmpty && images[0] is Map && images[0]['src'] != null) {
         return images[0]['src'];
       }
-      return 'https://via.placeholder.com/150';
+      if (json['image_url'] is String && json['image_url'].toString().isNotEmpty) {
+        return json['image_url'].toString();
+      }
+      return '';
     }
     int extractRestaurantId(Map<String, dynamic> json) {
       if (json['meta_data'] != null && json['meta_data'] is List) {
@@ -2952,27 +3179,45 @@ class FoodItem {
       }
       dynamic categories = json['categories'];
       if (categories is List && categories.isNotEmpty && categories[0] is Map) {
-        return categories[0]['id'];
+        return int.tryParse(categories[0]['id'].toString()) ?? 0;
       }
       return 0;
     }
     List<int> catIds = [];
     if (json['categories'] != null && json['categories'] is List) {
-      catIds = (json['categories'] as List).map((c) => c['id'] as int).toList();
+      catIds = (json['categories'] as List)
+          .map((c) => int.tryParse((c as Map)['id'].toString()) ?? 0).toList();
     }
+    if (json['category_id'] != null) {
+      final childId = safeParseInt(json['category_id']);
+      if (childId > 0 && !catIds.contains(childId)) catIds.add(childId);
+    }
+    final rawGroups = json['option_groups'] ?? json['menu_option_groups'] ?? json['groups'];
+    final groups = rawGroups is List ? rawGroups.whereType<Map>()
+        .map((g) => Map<String, dynamic>.from(g)).toList() : <Map<String, dynamic>>[];
+    final active = json['is_available'];
+    final status = json['status']?.toString();
+    // New backend separates actual stock/visibility from restaurant opening hours.
+    // Legacy responses are conservative: an unavailable product stays unavailable.
+    final intrinsic = json['product_available'];
+    final bool productAvailable = (status == null || status == 'publish') &&
+        (intrinsic is bool ? intrinsic : active != false);
 
     return FoodItem(
       id: json['id'] ?? 0,
       name: json['name'] ?? 'غير متوفر',
       description: json['short_description'] is String ? json['short_description'].replaceAll(RegExp(r'<[^>]*>|&nbsp;'), '').trim() : '',
-      price: safeParseDouble(json['regular_price']),
+      price: safeParseDouble(json['regular_price'] ?? json['price']),
       salePrice: (json['sale_price'] != '' && json['sale_price'] != null) ? safeParseDouble(json['sale_price'], -1.0) : null,
       imageUrl: extractImageUrl(json['images']),
-      categoryId: extractRestaurantId(json),
+      categoryId: restaurantId ?? safeParseInt(json['restaurant_id'], extractRestaurantId(json)),
       allCategoryIds: catIds,
       averageRating: safeParseDouble(json['average_rating']),
       ratingCount: safeParseInt(json['rating_count']),
       platformMarkup: safeParseDouble(json['platform_markup']),
+      isProductAvailable: productAvailable,
+      menuOptionGroups: groups,
+      unavailableReason: (json['unavailable_reason'] ?? 'غير متوفر حالياً').toString(),
     );
   }
 
@@ -2983,7 +3228,7 @@ class FoodItem {
   double get basePrice => (hasIndividualSale ? salePrice! : price) + platformMarkup;
 
   // 🔥 3. السعر النهائي للوزن والكمية
-  double get finalPrice => basePrice * selectedWeight;
+  double get finalPrice => basePrice * selectedWeight + menuExtrasPrice;
 
   String get formattedFinalPrice => '${NumberFormat('#,###', 'ar_IQ').format(finalPrice)} د.ع';
   double get displayPrice => finalPrice;
@@ -3331,7 +3576,8 @@ class PremiumCampaignProvider with ChangeNotifier {
       // إذا وصلنا للمنتج المطلوب، نأخذ خصمه ونتوقف
       if (currentItem.id == item.id &&
           currentItem.selectedWeight == item.selectedWeight &&
-          currentItem.customNote == item.customNote) {
+          currentItem.customNote == item.customNote &&
+          currentItem.selectedOptionsKey == item.selectedOptionsKey) {
         targetDiscount = calculatedDiscount;
         break;
       }
@@ -3360,7 +3606,8 @@ class PremiumCampaignProvider with ChangeNotifier {
     double discountVal = double.tryParse(_config!['discount_value'].toString()) ?? 0;
 
     if (cartItems != null) {
-      bool inCart = cartItems.any((i) => i.id == item.id && i.selectedWeight == item.selectedWeight && i.customNote == item.customNote);
+      bool inCart = cartItems.any((i) => i.id == item.id && i.selectedWeight == item.selectedWeight &&
+          i.customNote == item.customNote && i.selectedOptionsKey == item.selectedOptionsKey);
 
       if (inCart) {
         // إذا كان المنتج في السلة بالفعل
@@ -4304,6 +4551,10 @@ class CartProvider with ChangeNotifier {
   bool get hasBoxReward => _boxRewardDiscount > 0;
 
   bool _weightsAreEqual(double w1, double w2) => (w1 - w2).abs() < 0.001;
+  bool _sameLine(FoodItem a, FoodItem b) => a.id == b.id &&
+      _weightsAreEqual(a.selectedWeight,b.selectedWeight) &&
+      a.customNote.trim() == b.customNote.trim() &&
+      a.selectedOptionsKey == b.selectedOptionsKey;
 
   double get totalDiscountAmount {
     double couponDiscount = 0.0;
@@ -4462,8 +4713,10 @@ class CartProvider with ChangeNotifier {
     return result;
   }  // --- إدارة السلة ---
   void addToCart(FoodItem foodItem, BuildContext context, {int quantity = 1}) {
-    if (!foodItem.isDeliverable) return;
-
+    if (!foodItem.isDeliverable || !foodItem.isProductAvailable) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('غير متوفر حالياً')));
+      return;
+    }
     if (_items.isNotEmpty) {
       int currentRestaurantId = _items.first.categoryId;
       if (currentRestaurantId != foodItem.categoryId) {
@@ -4493,11 +4746,7 @@ class CartProvider with ChangeNotifier {
   }
 
   void _performAddToCart(FoodItem foodItem, int quantity, BuildContext context) {
-    final existingIndex = _items.indexWhere((item) =>
-    item.id == foodItem.id &&
-        _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight) &&
-        item.customNote.trim() == foodItem.customNote.trim()
-    );
+    final existingIndex = _items.indexWhere((item) => _sameLine(item, foodItem));
 
     if (existingIndex != -1) {
       _items[existingIndex].quantity += quantity;
@@ -4510,12 +4759,12 @@ class CartProvider with ChangeNotifier {
   }
 
   void incrementQuantity(FoodItem foodItem) {
-    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight) && item.customNote == foodItem.customNote);
+    final itemIndex = _items.indexWhere((item) => _sameLine(item, foodItem));
     if (itemIndex != -1) { _items[itemIndex].quantity++; notifyListeners(); }
   }
 
   void decrementQuantity(FoodItem foodItem) {
-    final itemIndex = _items.indexWhere((item) => item.id == foodItem.id && _weightsAreEqual(item.selectedWeight, foodItem.selectedWeight) && item.customNote == foodItem.customNote);
+    final itemIndex = _items.indexWhere((item) => _sameLine(item, foodItem));
     if (itemIndex != -1) {
       if (_items[itemIndex].quantity > 1) _items[itemIndex].quantity--;
       else _items.removeAt(itemIndex);
@@ -4549,6 +4798,68 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
 
   // 🔥 إضافة متغير الحماية من النقر المزدوج
   bool _isAdding = false;
+  final Map<String, Set<String>> _chosenMenuOptions = {};
+
+  List<Map<String, dynamic>> get _selectedForServer {
+    final result = <Map<String,dynamic>>[];
+    for (final g in widget.foodItem.menuOptionGroups) {
+      final gid = g['id']?.toString() ?? '';
+      final ids = (_chosenMenuOptions[gid] ?? {}).toList()..sort();
+      if (ids.isNotEmpty) result.add({'group_id': gid,'option_ids':ids});
+    }
+    return result;
+  }
+  double get _extraPrice {
+    return widget.foodItem.copyWith(selectedMenuOptions:_selectedForServer).menuExtrasPrice;
+  }
+  bool get _optionsValid {
+    for (final g in widget.foodItem.menuOptionGroups) {
+      final gid = g['id']?.toString() ?? '';
+      final count = (_chosenMenuOptions[gid] ?? {}).length;
+      final min = int.tryParse(g['min_select']?.toString() ?? '') ?? (g['required'] == true ? 1 : 0);
+      final max = int.tryParse(g['max_select']?.toString() ?? '') ?? 1;
+      if (count < min || count > max) return false;
+    }
+    return true;
+  }
+  void _toggleMenuChoice(Map<String,dynamic> group, Map option) {
+    final gid = group['id'].toString();
+    final oid = option['id'].toString();
+    final single = group['type'] == 'single';
+    final max = int.tryParse(group['max_select']?.toString() ?? '') ?? 1;
+    setState(() {
+      final active = _chosenMenuOptions.putIfAbsent(gid, () => <String>{});
+      if (active.contains(oid)) {active.remove(oid);return;}
+      if (single) active.clear();
+      if (active.length < max) active.add(oid);
+    });
+  }
+  Widget _buildRestaurantOptions() {
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      for(final group in widget.foodItem.menuOptionGroups) ...[
+        Padding(padding:const EdgeInsets.only(top:12,bottom:6),
+            child:Row(children:[
+              Expanded(child:Text(group['name']?.toString() ?? 'الإضافات',style:const TextStyle(fontWeight:FontWeight.bold,fontSize:16))),
+              Text(group['required'] == true?'إجباري':'اختياري',style:const TextStyle(color:Colors.grey)),
+            ])),
+        for(final raw in (group['options'] as List? ?? []))
+          if(raw is Map) Builder(builder:(ctx){
+            final gid = group['id']?.toString() ?? '';
+            final oid = raw['id']?.toString() ?? '';
+            final selected = _chosenMenuOptions[gid]?.contains(oid) ?? false;
+            final extra = double.tryParse(raw['price_delta'].toString()) ?? 0;
+            return ListTile(
+              dense:true,contentPadding:EdgeInsets.zero,
+              leading:Icon(selected?Icons.check_circle:Icons.radio_button_unchecked,
+                  color:selected?Theme.of(ctx).primaryColor:Colors.grey),
+              title:Text(raw['name']?.toString() ?? ''),
+              trailing:Text(extra > 0?'+${NumberFormat('#,###','ar_IQ').format(extra)} د.ع':'مجاني'),
+              onTap:_isAdding?null:()=>_toggleMenuChoice(group,raw),
+            );
+          }),
+      ],
+    ]);
+  }
 
   @override
   void dispose() {
@@ -4596,21 +4907,22 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
     final cart = Provider.of<CartProvider>(context, listen: false); // 👈 التعديل الأهم هنا
 
     // 👈 تمرير محتويات السلة لكي يعرف إذا كان الخصم متاحاً أم نفد
+    // Preview uses the selected weight/sauce and calculates entirely on-device.
+    final previewItem = widget.foodItem.copyWith(
+      selectedWeight: widget.isMarket ? _currentWeight : 1.0,
+      selectedMenuOptions: _selectedForServer,
+    );
     final priceData = premium.calculateItemPrice(
-        widget.foodItem,
-        widget.foodItem.categoryId,
+        previewItem,
+        previewItem.categoryId,
         cartItems: cart.items
     );
 
     final bool hasPremiumDiscount = priceData['has_discount'] ?? false;
 
     // جلب السعر الجديد والقديم للقطعة الواحدة (قبل ضربه في الوزن)
-    final double baseNewPrice = priceData['new_price'] ?? widget.foodItem.basePrice;
-    final double baseOldPrice = priceData['old_price'] ?? widget.foodItem.basePrice;
-
-    // حساب السعر النهائي للقطعة الواحدة حسب الوزن المختار
-    double itemNewPrice = baseNewPrice * _currentWeight;
-    double itemOldPrice = baseOldPrice * _currentWeight;
+    final double itemNewPrice = (priceData['new_price'] ?? previewItem.finalPrice).toDouble();
+    final double itemOldPrice = (priceData['old_price'] ?? previewItem.finalPrice).toDouble();
 
     // حساب الإجمالي للكمية المطلوبة
     double totalNewPrice = itemNewPrice * quantity;
@@ -4703,6 +5015,10 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
               const SizedBox(height: 20),
             ],
 
+            if (!widget.isMarket && widget.foodItem.menuOptionGroups.isNotEmpty) ...[
+              _buildRestaurantOptions(),
+              const SizedBox(height:12),
+            ],
             // 📝 حقل الملاحظات (للجميع)
             TextField(
               controller: _noteController,
@@ -4739,8 +5055,8 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
 
             // 🔥 زر الإضافة المحمي من النقر المزدوج
             ElevatedButton(
-              onPressed: _isAdding
-                  ? null // تعطيل الزر تماماً إذا كانت الإضافة جارية
+              onPressed: (_isAdding || !_optionsValid || !widget.foodItem.isDeliverable)
+                  ? null
                   : () {
                 // ✅ قفل الزر فوراً لمنع أي نقرات لاحقة
                 setState(() => _isAdding = true);
@@ -4748,6 +5064,7 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
                 FoodItem cartItem = widget.foodItem.copyWith(
                   selectedWeight: widget.isMarket ? _currentWeight : 1.0,
                   customNote: _noteController.text.trim(),
+                  selectedMenuOptions: _selectedForServer,
                 );
 
                 Provider.of<CartProvider>(context, listen: false).addToCart(cartItem, context, quantity: quantity);
@@ -4976,21 +5293,19 @@ class ApiService {
     }
   }
   Future<List<dynamic>> checkRestaurantsStatusLight(List<int> ids) async {
-    if (ids.isEmpty) return [];
-
+    if(ids.isEmpty)return [];
     return _executeWithRetry(() async {
-      final response = await http.post(
+      final uri=Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/customer-restaurants-status')
+          .replace(queryParameters:{'ids':ids.take(100).join(',')});
+      final response=await http.get(uri,headers:{'Accept':'application/json'}).timeout(API_TIMEOUT);
+      if(response.statusCode==200)return json.decode(response.body) as List<dynamic>;
+      if(response.statusCode!=404)throw Exception('تعذر تحديث حالة المطاعم');
+      // Older backend compatibility only (without pause support).
+      final old=await http.post(
         Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/check-statuses-light'),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({'ids': ids}),
-      );
-
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
-      return [];
+        headers:{'Content-Type':'application/json'},body:json.encode({'ids':ids}),
+      ).timeout(API_TIMEOUT);
+      return old.statusCode==200?json.decode(old.body) as List<dynamic>:[];
     });
   }
 
@@ -5222,15 +5537,70 @@ class ApiService {
     });
   }
 
+  // Prices, weights and sauces arrive once with the menu. The widget calculates locally.
   Future<String> getRawMenu(int restaurantId) async {
-    const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
-    final url = '$BEYTEI_URL/wp-json/wc/v3/products?category=$restaurantId&per_page=100&_fields=$fields';
-
     return _executeWithRetry(() async {
-      final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/customer-restaurant-menu/$restaurantId'),
+        headers:{'Accept':'application/json'},
+      ).timeout(API_TIMEOUT);
       if (response.statusCode == 200) return response.body;
-      throw Exception('Failed to load menu raw');
+      // Older servers are supported until the V3 extension is installed.
+      if (response.statusCode != 404) throw Exception('تعذر تحميل المنيو: ${response.statusCode}');
+      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data,platform_markup';
+      final legacy = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/wc/v3/products?category=$restaurantId&per_page=100&_fields=$fields'),
+        headers:{'Authorization':_authString},
+      ).timeout(API_TIMEOUT);
+      if (legacy.statusCode == 200) return legacy.body;
+      throw Exception('فشل تحميل قائمة المطعم');
     });
+  }
+
+  // Called once at checkout, NEVER when selecting each weight/sauce.
+  // The final WooCommerce request also validates prices and availability.
+  Future<void> verifyMenuBeforeCheckout(List<FoodItem> cart,int restaurantId) async {
+    if(cart.isEmpty || restaurantId <= 0) return;
+    final response=await http.get(Uri.parse(
+        '$BEYTEI_URL/wp-json/restaurant-app/v1/customer-restaurant-menu/$restaurantId'),
+      headers:{'Accept':'application/json'},
+    ).timeout(API_TIMEOUT);
+    if (response.statusCode == 404) return; // legacy backend: WooCommerce validates at checkout
+    if (response.statusCode != 200) throw Exception('تعذر التأكد من توفر الوجبات؛ حاول مجدداً');
+    final data=json.decode(response.body);
+    if (data is! Map || data['products'] is! List) throw Exception('بيانات المنيو غير صحيحة');
+    if ((data['restaurant'] as Map?)?['accepting_orders'] != true)
+      throw Exception('المطعم لا يستقبل طلبات حالياً');
+    final latest=<int,FoodItem>{};
+    for(final row in data['products'] as List){
+      final product=FoodItem.fromJson(Map<String,dynamic>.from(row as Map),restaurantId:restaurantId);
+      latest[product.id]=product;
+    }
+    for(final item in cart){
+      final fresh=latest[item.id];
+      if(fresh==null || !fresh.isProductAvailable) throw Exception('الوجبة ${item.name} غير متوفرة حالياً');
+      // Prevent silently charging a changed price or deleted sauce/weight.
+      if((fresh.basePrice - item.basePrice).abs()>0.01)
+        throw Exception('تغير سعر ${item.name}. يرجى تحديث السلة قبل المتابعة');
+      if(fresh.hasMenuOptions != item.hasMenuOptions)
+        throw Exception('تغيرت خيارات ${item.name}. يرجى إعادة إضافتها للسلة');
+      final selected=item.selectedMenuOptions;
+      for(final g in fresh.menuOptionGroups){
+        final ids=selected.where((s)=>s['group_id']?.toString()==g['id']?.toString())
+            .expand((s)=>(s['option_ids'] as List? ?? [])).map((e)=>e.toString()).toList();
+        final min=int.tryParse(g['min_select']?.toString()??'')??(g['required']==true?1:0);
+        final max=int.tryParse(g['max_select']?.toString()??'')??1;
+        final available=(g['options'] as List? ?? []).whereType<Map>().map((o)=>o['id'].toString()).toSet();
+        if(ids.length<min || ids.length>max || ids.toSet().length!=ids.length || ids.any((id)=>!available.contains(id)))
+          throw Exception('تغيرت خيارات ${item.name}. يرجى إعادة اختيارها');
+      }
+      final allowedGroupIds=fresh.menuOptionGroups.map((g)=>g['id'].toString()).toSet();
+      if(selected.any((e)=>!allowedGroupIds.contains(e['group_id']?.toString())))
+        throw Exception('تغيرت خيارات ${item.name}. يرجى تحديث السلة');
+      final confirmed=fresh.copyWith(selectedMenuOptions:selected);
+      if((confirmed.menuExtrasPrice-item.menuExtrasPrice).abs()>0.01)
+        throw Exception('تغير سعر الإضافات لوجبة ${item.name}. يرجى تحديث السلة');
+    }
   }
 
   Future<bool> createProduct(String token, String name, String price, String? salePrice, String? description, File? imageFile) async {
@@ -5588,7 +5958,22 @@ class ApiService {
         "city": "Default",
         "postcode": "10001"
       },
-      "line_items": cartItems.map((item) => {"product_id": item.id, "quantity": item.quantity}).toList(),
+      "line_items": cartItems.map((item) => {
+        "product_id":item.id,
+        "quantity":item.quantity,
+        if (item.selectedMenuOptions.isNotEmpty || item.hasMenuOptions || item.customNote.trim().isNotEmpty || (item.selectedWeight - 1.0).abs() > 0.00001)
+          "meta_data":[
+            // Send ONLY the selected IDs; the server maps them to names once
+            // at checkout and forwards the saved labels to the courier.
+            if (item.hasMenuOptions) {"key":"_beytei_selected_options","value":item.selectedMenuOptions},
+            if (item.customNote.trim().isNotEmpty)
+              {"key":"_beytei_customer_note","value":item.customNote.trim()},
+            // Keep legacy market/weight picker descriptive; this metadata
+            // never authorizes a client price and does not change totals.
+            if ((item.selectedWeight - 1.0).abs() > 0.00001 && !item.hasMenuOptions)
+              {"key":"_beytei_selected_weight_kg","value":item.selectedWeight.toString()},
+          ],
+      }).toList(),
       "coupon_lines": couponLines,
       "shipping_lines": shippingLines,
       "meta_data": [
@@ -6510,7 +6895,7 @@ class FoodCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool canOrder = food.isDeliverable;
+    final bool canOrder = food.isDeliverable && food.isProductAvailable;
 
     // 🔥 التعديل الأهم: نستخدم Consumer2 لربط شاشة المنيو بالسلة لمعرفة الحد الأقصى للخصم
     return Consumer2<PremiumCampaignProvider, CartProvider>(
@@ -6563,6 +6948,10 @@ class FoodCard extends StatelessWidget {
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),
+                              if (!canOrder) ...[
+                                const SizedBox(height:5),
+                                Text('غير متوفر حالياً',style:TextStyle(color:Colors.red.shade700,fontWeight:FontWeight.bold,fontSize:12)),
+                              ],
                               if (food.description.isNotEmpty) ...[
                                 const SizedBox(height: 6),
                                 Text(
@@ -6701,10 +7090,8 @@ class HorizontalRestaurantCard extends StatelessWidget {
 
     return GestureDetector(
       // 2. Update onTap
-        onTap: canOrder
-            ? () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => MenuScreen(restaurant: restaurant)))
-            : () => _showClosedDialog(context, restaurant), // <-- Show dialog
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => MenuScreen(restaurant: restaurant))),
         child: Opacity(
             opacity: 1.0, // 3. Remove opacity dimming
             child: Container(
@@ -6847,9 +7234,8 @@ class RestaurantCard extends StatelessWidget {
       elevation: 3,
       shadowColor: Colors.black.withOpacity(0.1),
       child: InkWell(
-        onTap: canOrder
-            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)))
-            : () => _showClosedDialog(context, restaurant),
+        onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant))),
         child: Opacity(
           opacity: canOrder ? 1.0 : 0.6,
           child: Column(
@@ -8397,6 +8783,7 @@ class RestaurantModule extends StatefulWidget {
 
 
 class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBindingObserver {
+  StreamSubscription<RemoteMessage>? _menuPushSubscription;
 
   @override
   void initState() {
@@ -8417,6 +8804,7 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _menuPushSubscription?.cancel();
     super.dispose();
   }
 
@@ -8424,11 +8812,26 @@ class _RestaurantModuleState extends State<RestaurantModule> with WidgetsBinding
     await NotificationService.initialize();
     await FirebaseMessaging.instance.requestPermission();
     FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessage);
+    _menuPushSubscription = FirebaseMessaging.onMessage.listen((message) {
+      if (BeyteiMenuCacheEvents.isMenuEvent(message.data)) {
+        BeyteiMenuCacheEvents.handleForeground(message);
+      }
+    });
+    final initial = await FirebaseMessaging.instance.getInitialMessage();
+    if (initial != null && BeyteiMenuCacheEvents.isMenuEvent(initial.data)) {
+      await BeyteiMenuCacheEvents.invalidate(initial.data);
+    }
     print("✅ Notification & Call Services Initialized");
   }
 
   Future<void> _handleBackgroundMessage(RemoteMessage message) async {
     print("🔔 [Background Message] Received: ${message.data}");
+    if (BeyteiMenuCacheEvents.isMenuEvent(message.data)) {
+      await BeyteiMenuCacheEvents.invalidate(message.data);
+      BeyteiMenuCacheEvents.changedRestaurant.value =
+          int.tryParse(message.data['restaurant_id']?.toString() ?? '') ?? 0;
+      return;
+    }
 
     if (message.data['type'] == 'voip_call') {
       // 🔥 1. استخراج البيانات الجديدة الخاصة بـ LiveKit من الإشعار
@@ -11166,13 +11569,8 @@ class ModernHorizontalRestaurantCard extends StatelessWidget {
     bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
 
     return GestureDetector(
-      onTap: () {
-        if (canOrder) {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
-        } else {
-          _showClosedDialog(context, restaurant);
-        }
-      },
+      onTap: () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant))),
       child: Opacity(
         opacity: canOrder ? 1.0 : 0.6,
         child: Container(
@@ -11265,21 +11663,8 @@ class ModernVerticalRestaurantCard extends StatelessWidget {
     bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
 
     return GestureDetector(
-      onTap: () {
-        if (canOrder) {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
-        } else {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-              title: const Text("عذراً"),
-              content: Text(!restaurant.isDeliverable ? "هذا المتجر لا يوصل لمنطقتك المحددة حالياً." : "المتجر مغلق حالياً. يفتح في: ${restaurant.autoOpenTime}"),
-              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("حسناً"))],
-            ),
-          );
-        }
-      },
+      onTap: () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant))),
       child: Opacity(
         opacity: canOrder ? 1.0 : 0.6,
         child: Container(
@@ -11758,13 +12143,8 @@ class HomeScreenState extends State<HomeScreen> {
     String displayText = isBoxReward ? "اطلب وربح  🎁" : discountText;
 
     return GestureDetector(
-      onTap: () {
-        if (canOrder) {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)));
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('المتجر مغلق أو خارج التغطية')));
-        }
-      },
+      onTap: () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant))),
       child: Card(
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -12364,6 +12744,7 @@ class PermissionService {
     return true;
   }
 }
+
 class MenuScreen extends StatefulWidget {
   final Restaurant restaurant;
   const MenuScreen({super.key, required this.restaurant});
@@ -12381,6 +12762,63 @@ class _MenuScreenState extends State<MenuScreen> {
   double _deliveryFee = -1.0;
   bool _isLoadingDeliveryFee = true;
   String _deliveryMessage = 'جاري التحقق من الموقع...';
+  // هذه الإحداثيات تخص طلب المطعم الحالي، ولا تتغير عند تحديث GPS في main.dart.
+  double? _deliveryLat;
+  double? _deliveryLng;
+  String _deliverySource = 'auto';
+  bool _isUsingManualLocation = false;
+  bool _isFetchingGps = false;
+  double _originalFee = -1;
+  double _deliveryDiscount = 0;
+  int _quoteRequestId = 0;
+  static const String _checkoutQuoteKey = 'beytei_delivery_quote_v3';
+
+  // Local wall-clock timer only: never requests the network. Keeps automatic opening
+  // and closing times correct even when a customer leaves the menu open.
+  Timer? _openingBoundaryTimer;
+  void _scheduleAvailabilityBoundary() {
+    _openingBoundaryTimer?.cancel();
+    if (!mounted) return;
+    final provider = Provider.of<CustomerProvider>(context, listen: false);
+    final until = provider.timeUntilLocalAvailabilityChange(widget.restaurant.id);
+    if (until == null) return;
+    _openingBoundaryTimer = Timer(until + const Duration(seconds: 2), () {
+      if (!mounted) return;
+      provider.reapplyCachedAvailability(widget.restaurant.id);
+      _scheduleAvailabilityBoundary();
+    });
+  }
+
+  // No polling. Refresh this menu only when Firebase reports a change.
+  void _handleMenuUpdated() {
+    final id = BeyteiMenuCacheEvents.changedRestaurant.value;
+    if (mounted && (id == widget.restaurant.id || id == 0)) {
+      _refreshMenuSilently();
+    }
+  }
+
+  Future<void> _refreshMenuSilently() async {
+    if (!mounted) return;
+    final provider=Provider.of<CustomerProvider>(context,listen:false);
+    await provider.fetchMenuForRestaurant(widget.restaurant.id,isRefresh:true);
+    if(!mounted) return;
+    _scheduleAvailabilityBoundary();
+    final accepting=provider.acceptingOrdersFor(widget.restaurant.id);
+    if(accepting!=null) {
+      provider.updateSingleRestaurantStatus(widget.restaurant.id,accepting,
+          widget.restaurant.autoOpenTime,widget.restaurant.autoCloseTime);
+    }
+    if(provider.hasBundledMenuFor(widget.restaurant.id)){
+      final sections=provider.sectionsFor(widget.restaurant.id);
+      final changed=jsonEncode(sections)!=jsonEncode(_subcategories);
+      if(changed)setState((){
+        _subcategories=List<dynamic>.from(sections);
+        _categoryKeys.clear();
+        _categoryKeys[0]=GlobalKey();
+        for(final cat in _subcategories) _categoryKeys[cat['id']]=GlobalKey();
+      });
+    }
+  }
 
   final ScrollController _scrollController = ScrollController();
   final ScrollController _categoryScrollController = ScrollController();
@@ -12393,89 +12831,301 @@ class _MenuScreenState extends State<MenuScreen> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initData();
-      _performFullLocationAndFeeCheck();
+    BeyteiMenuCacheEvents.changedRestaurant.addListener(_handleMenuUpdated);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _initData();
+      if (!mounted) return;
+      final provider = Provider.of<CustomerProvider>(context, listen: false);
+      final accepting = provider.acceptingOrdersFor(widget.restaurant.id) ?? widget.restaurant.isOpen;
+      if (accepting && widget.restaurant.isDeliverable) {
+        _performFullLocationAndFeeCheck();
+      } else {
+        setState(() {
+          _isLoadingDeliveryFee = false;
+          _deliveryFee = -1;
+          _deliveryMessage = 'التصفح فقط - الطلب غير متاح حالياً';
+        });
+      }
     });
   }
 
   @override
   void dispose() {
+    BeyteiMenuCacheEvents.changedRestaurant.removeListener(_handleMenuUpdated);
+    _openingBoundaryTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _categoryScrollController.dispose();
     super.dispose();
   }
 
+  bool _validCoordinates(double lat, double lng) =>
+      lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 &&
+          !(lat == 0 && lng == 0);
+
+  bool _isManualSource(String value) =>
+      value.toLowerCase().contains('manual') || value.toLowerCase().contains('map');
+
+  bool _campaignIncludesRestaurant(PremiumCampaignProvider premium) {
+    final config = premium.config;
+    if (config == null) return false;
+    final raw = config['included_restaurants'];
+    if (raw is! List || raw.isEmpty) return true;
+    return raw.any((id) => int.tryParse(id.toString()) == widget.restaurant.id);
+  }
+
+  // يستعمل منطق مزود العروض نفسه، مع دعم التوصيل المجاني (0 دينار).
+  Map<String, dynamic> _discountForDestination(
+      PremiumCampaignProvider premium, double lat, double lng, double baseFee) {
+    if (!_campaignIncludesRestaurant(premium) || baseFee < 0) {
+      return {'display_fee': baseFee, 'discount_amount': 0.0,
+        'has_discount': false, 'message': '', 'is_outside_polygon': false};
+    }
+    final result = premium.checkDeliveryDiscount(
+      userLat: lat, userLng: lng, originalDeliveryFee: baseFee,
+    );
+    final config = premium.config;
+    if (config != null && config['discount_type'] == 'delivery_fee' &&
+        premium.targetPolygon.isNotEmpty && premium.discountedDeliveryFee == 0 &&
+        premium.isPointInsidePolygon(lat, lng) && baseFee > 0) {
+      return {'display_fee': 0.0, 'discount_amount': baseFee,
+        'has_discount': true, 'message': 'توصيل مجاني ضمن منطقة العرض',
+        'is_outside_polygon': false};
+    }
+    return result;
+  }
+
   Future<void> _performFullLocationAndFeeCheck() async {
     if (!mounted) return;
     setState(() {
       _isLoadingDeliveryFee = true;
-      _deliveryMessage = 'جاري تجهيز البيانات...';
+      _deliveryMessage = 'جاري تحديد سعر التوصيل...';
     });
     try {
-      final savedLocation = await LocationService.getSavedLocationSimple();
-      if (savedLocation != null && savedLocation.lat != 0.0) {
-        await _calculateDeliveryFee();
-        return;
-      }
-      if (mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final current = await LocationService.getSavedLocation();
+      if (!mounted) return;
+      if (current == null || !_validCoordinates(current.lat, current.lng)) {
         setState(() {
+          _deliveryFee = -1;
           _isLoadingDeliveryFee = false;
-          _deliveryFee = -1.0;
-          _deliveryMessage = 'يرجى تحديد موقعك';
+          _deliveryMessage = 'يرجى تحديد موقع التوصيل';
         });
         _showLocationRequiredDialog();
+        return;
       }
+      // الموقع اليدوي لا يُستبدل بصمت؛ أما الموقع التلقائي فنحاول تحديثه مرة
+      // واحدة عند دخول المنيو، من دون طلب إذن جديد إذا كان مرفوضاً.
+      var lat = current.lat;
+      var lng = current.lng;
+      var source = current.source;
+      if (!_isManualSource(source)) {
+        final recentPosition = await LocationService.tryAutoDetectSilent(
+          timeout: const Duration(seconds: 8),
+        );
+        if (!mounted) return;
+        if (recentPosition != null && recentPosition.accuracy <= 300 &&
+            _validCoordinates(recentPosition.latitude, recentPosition.longitude)) {
+          lat = recentPosition.latitude;
+          lng = recentPosition.longitude;
+          source = 'auto_menu';
+          await LocationService.saveLocation(lat, lng, source: source,
+              areaId: prefs.getInt('selectedAreaId'));
+        } else {
+          // لا نسعّر اعتماداً على موقع تلقائي قديم قد يبعد كثيراً عن الزبون.
+          final timestamp = prefs.getInt(LocationService.LOCATION_TIMESTAMP_KEY);
+          final stale = timestamp == null ||
+              DateTime.now().millisecondsSinceEpoch - timestamp >
+                  const Duration(minutes: 15).inMilliseconds;
+          if (stale) {
+            setState(() {
+              _deliveryFee = -1;
+              _isLoadingDeliveryFee = false;
+              _deliveryMessage = 'الموقع السابق قديم؛ حدّد الموقع الحالي أو اختر الخريطة';
+            });
+            _showLocationRequiredDialog();
+            return;
+          }
+        }
+      }
+      _deliveryLat = lat;
+      _deliveryLng = lng;
+      _deliverySource = source;
+      _isUsingManualLocation = _isManualSource(source);
+      await _calculateDeliveryFee();
     } catch (e) {
-      print('⚠️ فشل الفحص: $e');
+      if (mounted) setState(() {
+        _isLoadingDeliveryFee = false;
+        _deliveryFee = -1;
+        _deliveryMessage = 'تعذر قراءة الموقع، يرجى المحاولة';
+      });
     }
   }
 
   Future<void> _calculateDeliveryFee() async {
-    if (!mounted) return;
+    final lat = _deliveryLat;
+    final lng = _deliveryLng;
+    if (!mounted || lat == null || lng == null || !_validCoordinates(lat, lng)) {
+      if (mounted) setState(() {_deliveryFee = -1; _isLoadingDeliveryFee = false;});
+      return;
+    }
+    final request = ++_quoteRequestId;
+    setState(() {
+      _isLoadingDeliveryFee = true;
+      _deliveryMessage = 'جاري حساب السعر والعروض...';
+    });
     try {
-      final savedLocation = await LocationService.getSavedLocationSimple();
-      if (savedLocation == null || savedLocation.lat == 0.0) {
-        setState(() {
-          _deliveryFee = -1.0;
-          _isLoadingDeliveryFee = false;
-          _deliveryMessage = 'الموقع غير متوفر';
-        });
+      final prefs = await SharedPreferences.getInstance();
+      final areaId = prefs.getInt('selectedAreaId') ?? prefs.getInt('shared_area_id') ?? 0;
+      final areaName = prefs.getString('selectedAreaName') ?? prefs.getString('shared_area_name') ?? 'المنطقة';
+      final config = Provider.of<DeliveryConfigProvider>(context, listen: false);
+      final premium = Provider.of<PremiumCampaignProvider>(context, listen: false);
+      if (config.cachedConfig == null) await config.fetchAndCacheConfig();
+      if (premium.config == null) await premium.fetchCampaignConfig(areaId);
+      if (!mounted || request != _quoteRequestId) return;
+      // لا نعرض أجرة افتراضية على أنها تسعيرة مؤكدة من السيرفر.
+      if (config.cachedConfig == null) {
+        setState(() {_deliveryFee = -1; _isLoadingDeliveryFee = false;
+        _deliveryMessage = 'تعذر جلب تسعيرة التوصيل، أعد المحاولة';});
         return;
       }
-      final configProvider = Provider.of<DeliveryConfigProvider>(context, listen: false);
-      if (configProvider.cachedConfig == null) {
-        await configProvider.fetchAndCacheConfig();
+      final result = config.calculateFeeDetails(
+        userLat: lat, userLng: lng, restaurantId: widget.restaurant.id,
+        areaId: areaId, areaName: areaName,
+      );
+      final baseFee = (result['fee'] as num?)?.toDouble() ?? -1;
+      if (baseFee < 0) throw StateError('No valid delivery quote');
+      final discount = _discountForDestination(premium, lat, lng, baseFee);
+      final amount = (discount['display_fee'] as num?)?.toDouble() ?? baseFee;
+      final discountValue = (discount['discount_amount'] as num?)?.toDouble() ?? 0;
+      final serviceFee = (result['service_fee'] as num?)?.toDouble() ?? 0;
+      final cashback = (result['cashback_amount'] as num?)?.toDouble() ?? 0;
+      final message = (result['message'] ?? '').toString();
+      // تسعيرة شاشة المنيو محفوظة مع الموقع ذاته لاستعمالها في إتمام الطلب.
+      final quote = <String, dynamic>{
+        'restaurant_id': widget.restaurant.id,
+        'lat': lat, 'lng': lng, 'source': _deliverySource,
+        'area_id': areaId, 'area_name': areaName,
+        'original_fee': baseFee, 'display_fee': amount,
+        'service_fee': serviceFee, 'cashback': cashback,
+        'discount_amount': discountValue,
+        'has_discount': discount['has_discount'] == true,
+        'is_outside_polygon': discount['is_outside_polygon'] == true,
+        'discount_message': (discount['message'] ?? '').toString(),
+        'message': message,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+      await prefs.setString(_checkoutQuoteKey, jsonEncode(quote));
+      if (!mounted || request != _quoteRequestId) return;
+      setState(() {
+        _deliveryFee = amount;
+        _originalFee = baseFee;
+        _deliveryDiscount = discountValue;
+        _deliveryMessage = message;
+        _isLoadingDeliveryFee = false;
+      });
+    } catch (e) {
+      debugPrint('Menu fee calculation failed: $e');
+      if (mounted && request == _quoteRequestId) setState(() {
+        _deliveryFee = -1;
+        _isLoadingDeliveryFee = false;
+        _deliveryMessage = 'تعذر حساب التوصيل؛ حاول مجدداً';
+      });
+    }
+  }
+
+  // المستخدم هو من يطلب الانتقال إلى موقعه الحالي. إذا فشل GPS لا نمسح موقعه اليدوي.
+  Future<void> _tryUseCurrentGpsInMenu() async {
+    if (_isFetchingGps || !mounted) return;
+    setState(() => _isFetchingGps = true);
+    try {
+      if (!await geolocator.Geolocator.isLocationServiceEnabled()) {
+        _showMenuLocationMessage('خدمة الموقع مغلقة. فعّل GPS أو استخدم موقع الخريطة.');
+        await geolocator.Geolocator.openLocationSettings();
+        return;
+      }
+      var permission = await geolocator.Geolocator.checkPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        permission = await geolocator.Geolocator.requestPermission();
+      }
+      if (permission != geolocator.LocationPermission.whileInUse &&
+          permission != geolocator.LocationPermission.always) {
+        _showMenuLocationMessage('لم تمنح إذن الموقع. يمكنك اختيار موقع التوصيل من الخريطة.');
+        if (permission == geolocator.LocationPermission.deniedForever) {
+          await geolocator.Geolocator.openAppSettings();
+        }
+        return;
+      }
+      final pos = await geolocator.Geolocator.getCurrentPosition(
+        desiredAccuracy: geolocator.LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 18),
+      );
+      if (!_validCoordinates(pos.latitude, pos.longitude) || pos.accuracy > 300) {
+        _showMenuLocationMessage('دقة GPS غير كافية للتسعير. أبقينا موقع الخريطة، ويمكنك المحاولة لاحقاً.');
+        return;
       }
       final prefs = await SharedPreferences.getInstance();
-      final areaId = prefs.getInt('shared_area_id') ?? prefs.getInt('selectedAreaId') ?? 0;
-      final areaName = prefs.getString('shared_area_name') ?? prefs.getString('selectedAreaName') ?? 'المنطقة';
-
-      final result = configProvider.calculateFeeDetails(
-        userLat: savedLocation.lat,
-        userLng: savedLocation.lng,
-        restaurantId: widget.restaurant.id,
-        areaId: areaId,
-        areaName: areaName,
-      );
-
-      if (mounted) {
-        setState(() {
-          _deliveryFee = result['fee'] as double;
-          _deliveryMessage = result['message'] as String;
-          _isLoadingDeliveryFee = false;
-        });
-      }
+      await LocationService.saveLocation(pos.latitude, pos.longitude,
+          source: 'auto_menu', areaId: prefs.getInt('selectedAreaId'));
+      if (!mounted) return;
+      _deliveryLat = pos.latitude;
+      _deliveryLng = pos.longitude;
+      _deliverySource = 'auto_menu';
+      setState(() => _isUsingManualLocation = false);
+      await _calculateDeliveryFee();
+      _showMenuLocationMessage('تم تحديث موقع التوصيل والسعر حسب موقعك الحالي.');
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _deliveryFee = -1.0;
-          _isLoadingDeliveryFee = false;
-          _deliveryMessage = 'خطأ في الحساب';
-        });
-      }
+      _showMenuLocationMessage('تعذّر تحديد موقعك الآن. سنحتفظ بموقع التوصيل السابق، أو اختره من الخريطة.');
+    } finally {
+      if (mounted) setState(() => _isFetchingGps = false);
     }
+  }
+
+  void _showMenuLocationMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message), behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 4),
+    ));
+  }
+
+  Widget _buildManualLocationNotice() {
+    if (!_isUsingManualLocation) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 12, 14, 2),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7E8),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFFDB9E)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.location_on_outlined, color: Color(0xFFA96906)),
+          SizedBox(width: 8),
+          Expanded(child: Text('تم تحديد موقع التوصيل يدوياً',
+              style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF744800)))),
+        ]),
+        const SizedBox(height: 6),
+        const Text('سعر التوصيل محسوب لهذا الموقع. هل تريد التوصيل لموقعك الحالي بدلاً منه؟',
+            style: TextStyle(fontSize: 12, height: 1.4)),
+        const SizedBox(height: 9),
+        Wrap(spacing: 8, runSpacing: 5, children: [
+          FilledButton.icon(
+            onPressed: _isFetchingGps ? null : _tryUseCurrentGpsInMenu,
+            icon: _isFetchingGps ? const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.my_location, size: 17),
+            label: const Text('استخدم موقعي الحالي'),
+          ),
+          TextButton.icon(
+            onPressed: _handleManualLocationPickInMenu,
+            icon: const Icon(Icons.map_outlined, size: 17),
+            label: const Text('تعديل على الخريطة'),
+          ),
+        ]),
+      ]),
+    );
   }
 
   void _showLocationRequiredDialog() {
@@ -12553,7 +13203,7 @@ class _MenuScreenState extends State<MenuScreen> {
                             OutlinedButton.icon(
                               onPressed: () async {
                                 Navigator.pop(ctx);
-                                _performFullLocationAndFeeCheck();
+                                _tryUseCurrentGpsInMenu();
                               },
                               icon: const Icon(Icons.gps_fixed),
                               label: const Text('أعد المحاولة بالـ GPS'),
@@ -12588,55 +13238,78 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<bool> _handleManualLocationPickInMenu() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedLoc = await LocationService.getSavedLocationSimple();
-      final areaId = prefs.getInt('selectedAreaId');
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => MapLocationPicker(
-            mapStyleUrl: 'https://tiles.openfreemap.org/styles/liberty',
-            initialLat: savedLoc?.lat,
-            initialLng: savedLoc?.lng,
-          ),
+      final savedLat = _deliveryLat;
+      final savedLng = _deliveryLng;
+      final result = await Navigator.push(context, MaterialPageRoute(
+        builder: (_) => MapLocationPicker(
+          mapStyleUrl: 'https://tiles.openfreemap.org/styles/liberty',
+          initialLat: savedLat, initialLng: savedLng,
         ),
-      );
-      if (result != null && result is Map) {
-        double? lat = double.tryParse(result['lat'].toString());
-        double? lng = double.tryParse(result['lng'].toString());
-        if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
-          await LocationService.saveLocation(lat, lng, source: result['source'] ?? 'manual_map', areaId: areaId);
-          if (mounted) {
-            setState(() {
-              _isLoadingDeliveryFee = true;
-              _deliveryMessage = 'جاري تحديث الموقع وحساب التسعيرة...';
-            });
-          }
-          await Future.delayed(const Duration(milliseconds: 300));
+      ));
+      if (!mounted) return false;
+      if (result is Map && result['lat'] != null && result['lng'] != null) {
+        final lat = double.tryParse(result['lat'].toString());
+        final lng = double.tryParse(result['lng'].toString());
+        if (lat != null && lng != null && _validCoordinates(lat, lng)) {
+          final prefs = await SharedPreferences.getInstance();
+          await LocationService.saveLocation(lat, lng,
+              source: 'manual_map', areaId: prefs.getInt('selectedAreaId'));
+          _deliveryLat = lat;
+          _deliveryLng = lng;
+          _deliverySource = 'manual_map';
+          setState(() => _isUsingManualLocation = true);
           await _calculateDeliveryFee();
-          return true;
+          return _deliveryFee >= 0;
         }
       }
       return false;
     } catch (e) {
+      debugPrint('Manual location picker error: $e');
       return false;
     }
   }
 
   void _retryCalculation() {
-    _performFullLocationAndFeeCheck();
+    if (_deliveryLat != null && _deliveryLng != null) {
+      _calculateDeliveryFee();
+    } else {
+      _tryUseCurrentGpsInMenu();
+    }
+  }
+
+  Future<bool> _cachedSectionsStillValid(SharedPreferences prefs, int id) async {
+    final t = prefs.getInt('cats_cache_time_$id') ?? 0;
+    if (prefs.getBool('beytei_menu_dirty_$id') ?? false) return false;
+    final age = DateTime.now().millisecondsSinceEpoch - t;
+    return t > 0 && age >= 0 && age < AppConstants.menuCacheLifetime.inMilliseconds;
   }
 
   Future<void> _initData() async {
     final provider = Provider.of<CustomerProvider>(context, listen: false);
+    // One menu response holds items, sections, options, and effective open/paused state.
     await provider.fetchMenuForRestaurant(widget.restaurant.id);
-    _checkRestaurantStatusNow();
-
+    if (!mounted) return;
+    _scheduleAvailabilityBoundary();
+    final modernSections=provider.sectionsFor(widget.restaurant.id);
+    if (provider.hasBundledMenuFor(widget.restaurant.id)) {
+      setState(() {
+        _subcategories=modernSections;
+        _isLoadingCats=false;
+        _categoryKeys.clear();
+        _categoryKeys[0]=GlobalKey();
+        for(final cat in _subcategories) _categoryKeys[cat['id']]=GlobalKey();
+      });
+    }
+    final accepting=provider.acceptingOrdersFor(widget.restaurant.id);
+    if(accepting != null){
+      provider.updateSingleRestaurantStatus(widget.restaurant.id,accepting,
+          widget.restaurant.autoOpenTime, widget.restaurant.autoCloseTime);
+    }
     final prefs = await SharedPreferences.getInstance();
     final cacheKey = 'cats_${widget.restaurant.id}';
     final cachedCats = prefs.getString(cacheKey);
 
-    if (cachedCats != null && mounted) {
+    if (!provider.hasBundledMenuFor(widget.restaurant.id) && cachedCats != null && mounted) {
       setState(() {
         _subcategories = json.decode(cachedCats);
         _isLoadingCats = false;
@@ -12648,8 +13321,16 @@ class _MenuScreenState extends State<MenuScreen> {
     }
 
     try {
-      final cats = await ApiService().getSubcategories(widget.restaurant.id);
-      prefs.setString(cacheKey, json.encode(cats));
+      final bool shouldFetchCats = cachedCats == null ||
+          !(await _cachedSectionsStillValid(prefs, widget.restaurant.id));
+      final cats = provider.hasBundledMenuFor(widget.restaurant.id) ? modernSections :
+      (shouldFetchCats ? await ApiService().getSubcategories(widget.restaurant.id)
+          : (json.decode(cachedCats) as List<dynamic>));
+      if (provider.hasBundledMenuFor(widget.restaurant.id) || shouldFetchCats) {
+        await prefs.setString(cacheKey, json.encode(cats));
+        await prefs.setInt('cats_cache_time_${widget.restaurant.id}',
+            DateTime.now().millisecondsSinceEpoch);
+      }
       if (mounted) {
         setState(() {
           _subcategories = cats;
@@ -12768,36 +13449,14 @@ class _MenuScreenState extends State<MenuScreen> {
     return true;
   }
 
+  // No extra HTTP call while entering menu: availability is bundled with menu.
   Future<void> _checkRestaurantStatusNow() async {
-    final provider = Provider.of<CustomerProvider>(context, listen: false);
-    try {
-      final statusList = await ApiService().checkRestaurantsStatusLight([widget.restaurant.id]);
-      if (statusList.isNotEmpty && mounted) {
-        final status = statusList.first;
-        if (status['is_open'] != true) {
-          provider.updateSingleRestaurantStatus(widget.restaurant.id, false, status['auto_open'], status['auto_close']);
-          if (mounted) {
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (ctx) => AlertDialog(
-                title: const Text("تنبيه 🛑", style: TextStyle(fontWeight: FontWeight.bold)),
-                content: const Text("عذراً، هذا المطعم أغلق للتو ولا يمكن استقبال طلبات جديدة حالياً."),
-                actions: [
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      Navigator.pop(context);
-                    },
-                    child: const Text("حسناً"),
-                  )
-                ],
-              ),
-            );
-          }
-        }
-      }
-    } catch (e) {}
+    final provider=Provider.of<CustomerProvider>(context,listen:false);
+    final accepting=provider.acceptingOrdersFor(widget.restaurant.id);
+    if(accepting==false){
+      provider.updateSingleRestaurantStatus(widget.restaurant.id,false,
+          widget.restaurant.autoOpenTime,widget.restaurant.autoCloseTime);
+    }
   }
 
   Widget _buildDeliveryFeeWidget() {
@@ -12949,6 +13608,39 @@ class _MenuScreenState extends State<MenuScreen> {
                 ),
               ),
             ),
+            // Closed restaurants remain browsable; all add-to-cart actions stay disabled.
+            SliverToBoxAdapter(child: Consumer<CustomerProvider>(
+              builder: (context, provider, _) {
+                final accepting = provider.acceptingOrdersFor(widget.restaurant.id) ??
+                    widget.restaurant.isOpen;
+                final deliverable = provider.allRestaurants.any((r) =>
+                r.id == widget.restaurant.id && r.isDeliverable) || widget.restaurant.isDeliverable;
+                if (accepting && deliverable) return const SizedBox.shrink();
+                final hours = provider.openingLabelFor(widget.restaurant.id, widget.restaurant);
+                return Container(
+                  margin: const EdgeInsets.fromLTRB(14, 14, 14, 4),
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.shade200)),
+                  child: Row(children: [
+                    const Icon(Icons.storefront_outlined, color: Colors.deepOrange),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(!deliverable
+                        ? 'يمكنك تصفح المنيو، لكن التوصيل غير متاح إلى منطقتك الآن.'
+                        : 'المطعم مغلق حالياً ولا يستقبل الطلبات. وقت الفتح: $hours. يمكنك تصفح المنيو الآن.',
+                        style: const TextStyle(fontWeight: FontWeight.w600))),
+                  ]),
+                );
+              },
+            )),
+            SliverToBoxAdapter(child: _buildManualLocationNotice()),
+            if (_deliveryDiscount > 0 && _originalFee > _deliveryFee)
+              SliverToBoxAdapter(child: Padding(
+                padding: const EdgeInsets.fromLTRB(15, 8, 15, 0),
+                child: Text('🚚 خصم التوصيل مفعل: ${NumberFormat('#,###').format(_originalFee)} ← ${NumberFormat('#,###').format(_deliveryFee)} د.ع',
+                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 13)),
+              )),
             SliverToBoxAdapter(
               child: Consumer<PremiumCampaignProvider>(
                 builder: (context, premium, child) {
@@ -13111,7 +13803,7 @@ class _MenuScreenState extends State<MenuScreen> {
                 } else {
                   for (var cat in _subcategories) {
                     final catItems = menu.where((item) => item.allCategoryIds.contains(cat['id'])).toList();
-                    if (catItems.isEmpty) continue;
+                    // Keep new empty sections visible; they will fill when the manager adds meals.
 
                     sliverSections.add(
                       SliverToBoxAdapter(
@@ -13128,6 +13820,12 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     );
 
+                    if (catItems.isEmpty) {
+                      sliverSections.add(const SliverToBoxAdapter(child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal:16,vertical:12),
+                        child:Text('لا توجد وجبات في هذا القسم حالياً',style:TextStyle(color:Colors.grey)),
+                      )));
+                    }
                     sliverSections.add(
                       SliverList(
                         delegate: SliverChildBuilderDelegate(
@@ -13306,6 +14004,7 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 }
+
 class _StickyCategoryDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
   _StickyCategoryDelegate({required this.child});
@@ -13408,7 +14107,7 @@ class DetailScreen extends StatelessWidget {
 
     // ✨ --- [إضافة جديدة] ---
     // 1. جلب حالة المنتج
-    final bool isDeliverable = foodItem.isDeliverable;
+    final bool isDeliverable = foodItem.isDeliverable && foodItem.isProductAvailable;
 
     // 2. جلب بيانات المطعم الأب (للحصول على الأوقات)
     final provider = Provider.of<CustomerProvider>(context, listen: false);
@@ -13472,7 +14171,15 @@ class DetailScreen extends StatelessWidget {
             ? ElevatedButton.icon(
           icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
           label: const Text("إضافة إلى السلة", style: TextStyle(color: Colors.white, fontSize: 18)),
-          onPressed: () => Provider.of<CartProvider>(context, listen: false).addToCart(foodItem, context),
+          onPressed: () {
+            if (foodItem.hasMenuOptions) {
+              showModalBottomSheet(context:context,isScrollControlled:true,
+                  backgroundColor:Colors.transparent,
+                  builder:(_)=>FoodItemBottomSheet(foodItem:foodItem));
+            } else {
+              Provider.of<CartProvider>(context, listen: false).addToCart(foodItem, context);
+            }
+          },
           style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)), backgroundColor: Theme.of(context).primaryColor),
         )
         // 2. في حال كان مغلقاً (اعرض الرسالة كما في صورتك)
@@ -13486,7 +14193,7 @@ class DetailScreen extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                "ليس متاح الآن",
+                "غير متوفر حالياً",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.red.shade700,
@@ -13715,8 +14422,8 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
           final priceData = premium.calculateItemPrice(item, item.categoryId, cartItems: cart.items);
           final bool hasPremiumDiscount = priceData['has_discount'] ?? false;
 
-          final double itemNewPrice = priceData['new_price'] ?? item.finalPrice;
-          final double itemOldPrice = priceData['old_price'] ?? item.finalPrice;
+          final double itemNewPrice = (priceData['new_price'] ?? item.finalPrice).toDouble();
+          final double itemOldPrice = (priceData['old_price'] ?? item.finalPrice).toDouble();
 
           return Card(
               elevation: 2,
@@ -13741,6 +14448,10 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), maxLines: 2, overflow: TextOverflow.ellipsis),
+                              if (item.selectedOptionsSummary.isNotEmpty) ...[
+                                const SizedBox(height:4),
+                                Text(item.selectedOptionsSummary,style:const TextStyle(fontSize:12,color:Colors.blueGrey)),
+                              ],
                               const SizedBox(height: 6),
 
                               // 🔥 عرض السعر المشطوب (في حال وجود خصم)
@@ -13989,6 +14700,7 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
     );
   }
 }
+
 class CheckoutScreen extends StatefulWidget {
   final CartProvider cart;
   const CheckoutScreen({super.key, required this.cart});
@@ -14003,6 +14715,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
   final _phoneController = TextEditingController();
   final _addressController = TextEditingController();
   final _couponController = TextEditingController();
+
+  // The profile is local and scoped to the current Firebase identity.
+  bool _isDeliveryProfileLoading = true;
+  bool _hasSavedDeliveryProfile = false;
+  bool _isEditingDeliveryProfile = true;
+  bool _requiresLandmarkConfirmation = false;
+  Map<String, String>? _savedProfileSnapshot;
+  final String _checkoutSessionId = const Uuid().v4();
+  bool _isCalculatingFees = true;
+  bool _locationChosenInCheckout = false;
+  double? _selectedCheckoutLat;
+  double? _selectedCheckoutLng;
+  String _selectedCheckoutSource = 'auto';
+  int _pricingSequence = 0;
+  bool _isLoadingLocationGps = false;
+  static const String _checkoutQuoteKey = 'beytei_delivery_quote_v3';
+  double? _savedLandmarkLatitude;
+  double? _savedLandmarkLongitude;
 
   bool _isSubmitting = false;
   bool _isApplyingCoupon = false;
@@ -14025,6 +14755,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     super.initState();
     _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(reverse: true);
     _couponController.text = widget.cart.appliedCoupon ?? '';
+    _loadDeliveryProfile();
     WidgetsBinding.instance.addPostFrameCallback((_) => _calculateInitialFees());
   }
 
@@ -14038,76 +14769,668 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     super.dispose();
   }
 
+  String get _deliveryProfileStorageKey {
+    final uid = fb_auth.FirebaseAuth.instance.currentUser?.uid ?? 'guest';
+    return 'beytei_checkout_delivery_profile_v1_$uid';
+  }
+
+  // يقبل المسافات والشرطات والأرقام العربية ورموز +964 / 00964.
+  String _normalizePhone(String raw) {
+    const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+    const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+    final converted = raw.replaceAllMapped(RegExp(r'[٠-٩۰-۹]'), (match) {
+      final char = match.group(0)!;
+      final arabicIndex = arabicDigits.indexOf(char);
+      final index = arabicIndex >= 0 ? arabicIndex : persianDigits.indexOf(char);
+      return index.toString();
+    });
+    var digits = converted.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.startsWith('00964')) digits = digits.substring(2);
+    if (digits.startsWith('964')) digits = '0${digits.substring(3)}';
+    if (digits.startsWith('7') && digits.length == 10) digits = '0$digits';
+    return digits;
+  }
+
+  String? _nameError(String? input) {
+    final value = (input ?? '').trim();
+    if (value.length < 2) return 'يرجى إدخال الاسم الكامل';
+    if (value.length > 80) return 'الاسم طويل جداً';
+    return null;
+  }
+
+  // التحقق مرن في طول الرقم: الأرقام غير المعتادة تحتاج تأكيداً فقط.
+  String? _phoneError(String? input) {
+    final phone = _normalizePhone(input ?? '');
+    if (phone.isEmpty) return 'يرجى إدخال رقم الهاتف';
+    if (!phone.startsWith('07') || phone.length < 10 || phone.length > 13) {
+      return 'يرجى مراجعة رقم الهاتف';
+    }
+    return null;
+  }
+
+  Future<bool> _confirmUnusualPhoneIfNeeded() async {
+    final phone = _normalizePhone(_phoneController.text);
+    if (RegExp(r'^07[0-9]{9}$').hasMatch(phone)) return true;
+    if (!mounted) return false;
+    return await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تأكيد رقم الهاتف'),
+        content: Text(
+          'رقم الهاتف $phone مختلف عن الطول المعتاد للأرقام العراقية. '
+              'تأكد منه حتى يتمكن المندوب من الاتصال بك. هل تريد المتابعة؟',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('تعديل الرقم'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('متابعة بهذا الرقم'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
+  String? _landmarkError(String? input) {
+    final value = (input ?? '').trim();
+    if (value.length < 4) return 'اكتب أقرب نقطة دالة بشكل أوضح';
+    if (value.length > 180) return 'نقطة الدلالة طويلة جداً';
+    return null;
+  }
+
+  void _deliveryMessage(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: error ? Colors.red.shade700 : const Color(0xFF177A45),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _loadDeliveryProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_deliveryProfileStorageKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final name = (decoded['name'] ?? '').toString().trim();
+          final phone = _normalizePhone((decoded['phone'] ?? '').toString());
+          final landmark = (decoded['landmark'] ?? '').toString().trim();
+          if (_nameError(name) == null && _phoneError(phone) == null &&
+              _landmarkError(landmark) == null) {
+            _nameController.text = name;
+            _phoneController.text = phone;
+            _addressController.text = landmark;
+            _savedProfileSnapshot = {
+              'name': name, 'phone': phone, 'landmark': landmark,
+            };
+
+            bool locationChanged = false;
+            final storedLat = double.tryParse((decoded['landmark_lat'] ?? '').toString());
+            final storedLng = double.tryParse((decoded['landmark_lng'] ?? '').toString());
+            _savedLandmarkLatitude = storedLat;
+            _savedLandmarkLongitude = storedLng;
+            final currentLocation = await LocationService.getSavedLocationSimple();
+            if (storedLat != null && storedLng != null && currentLocation != null) {
+              locationChanged = geolocator.Geolocator.distanceBetween(
+                storedLat, storedLng, currentLocation.lat, currentLocation.lng,
+              ) > 750;
+            }
+            if (!mounted) return;
+            setState(() {
+              _hasSavedDeliveryProfile = true;
+              _requiresLandmarkConfirmation = locationChanged;
+              _isEditingDeliveryProfile = locationChanged;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Could not load delivery profile: $e');
+    } finally {
+      if (mounted) setState(() => _isDeliveryProfileLoading = false);
+    }
+  }
+
+  Future<bool> _saveDeliveryProfile({bool showMessage = true}) async {
+    final name = _nameController.text.trim();
+    final phone = _normalizePhone(_phoneController.text);
+    final landmark = _addressController.text.trim();
+    final validationError = _nameError(name) ?? _phoneError(phone) ??
+        _landmarkError(landmark);
+    if (validationError != null) {
+      if (mounted) {
+        setState(() => _isEditingDeliveryProfile = true);
+        _deliveryMessage(validationError, error: true);
+      }
+      return false;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // Location coordinates are NOT frozen with the textual landmark.
+      // We retain them only to remind users to check a landmark after moving.
+      final loc = await LocationService.getSavedLocationSimple();
+      final payload = jsonEncode({
+        'name': name,
+        'phone': phone,
+        'landmark': landmark,
+        if (loc != null) 'landmark_lat': loc.lat,
+        if (loc != null) 'landmark_lng': loc.lng,
+      });
+      final saved = await prefs.setString(_deliveryProfileStorageKey, payload);
+      if (!saved) throw StateError('Local storage did not confirm save');
+      if (!mounted) return false;
+      _phoneController.text = phone;
+      _savedProfileSnapshot = {
+        'name': name, 'phone': phone, 'landmark': landmark,
+      };
+      _savedLandmarkLatitude = loc?.lat;
+      _savedLandmarkLongitude = loc?.lng;
+      setState(() {
+        _hasSavedDeliveryProfile = true;
+        _isEditingDeliveryProfile = false;
+        _requiresLandmarkConfirmation = false;
+      });
+      FocusScope.of(context).unfocus();
+      if (showMessage) _deliveryMessage('تم حفظ بيانات التوصيل للطلبات القادمة ✓');
+      return true;
+    } catch (e) {
+      debugPrint('Could not save delivery profile: $e');
+      _deliveryMessage('تعذر حفظ البيانات، يرجى المحاولة مجدداً.', error: true);
+      return false;
+    }
+  }
+
+  void _cancelDeliveryProfileEdit() {
+    final original = _savedProfileSnapshot;
+    if (original == null) return;
+    _nameController.text = original['name'] ?? '';
+    _phoneController.text = original['phone'] ?? '';
+    _addressController.text = original['landmark'] ?? '';
+    setState(() => _isEditingDeliveryProfile = false);
+  }
+
+  Widget _deliveryInfoLine(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 19, color: const Color(0xFF406690)),
+          const SizedBox(width: 10),
+          SizedBox(width: 87, child: Text(label,
+              style: const TextStyle(fontSize: 12, color: Colors.black54))),
+          Expanded(child: Text(value,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              softWrap: true)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeliveryProfileCard() {
+    final accent = const Color(0xFF1765BD);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE5EAF0)),
+        boxShadow: const [BoxShadow(
+          color: Color(0x09000000), blurRadius: 18, offset: Offset(0, 5),
+        )],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF3FF),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.contact_phone_outlined, color: accent, size: 23),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('بيانات التوصيل', style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold,
+                  )),
+                  SizedBox(height: 2),
+                  Text('تنحفظ مرة وتبقى جاهزة للطلبات القادمة',
+                      style: TextStyle(color: Colors.black54, fontSize: 11)),
+                ],
+              )),
+              if (_hasSavedDeliveryProfile && !_isEditingDeliveryProfile)
+                TextButton.icon(
+                  onPressed: () => setState(() => _isEditingDeliveryProfile = true),
+                  icon: const Icon(Icons.edit_outlined, size: 17),
+                  label: const Text('تعديل'),
+                ),
+            ],
+          ),
+          const Divider(height: 24),
+          if (_isDeliveryProfileLoading)
+            const Center(child: Padding(
+              padding: EdgeInsets.all(15),
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ))
+          else if (_hasSavedDeliveryProfile && !_isEditingDeliveryProfile) ...[
+            Row(children: [
+              Icon(Icons.check_circle_rounded, size: 18,
+                  color: Colors.green.shade700),
+              const SizedBox(width: 7),
+              const Text('البيانات محفوظة وجاهزة', style: TextStyle(
+                color: Color(0xFF177A45), fontSize: 12,
+                fontWeight: FontWeight.w600,
+              )),
+            ]),
+            const SizedBox(height: 9),
+            _deliveryInfoLine(Icons.person_outline, 'الاسم', _nameController.text),
+            _deliveryInfoLine(Icons.phone_outlined, 'الهاتف', _phoneController.text),
+            _deliveryInfoLine(Icons.place_outlined, 'نقطة الدلالة', _addressController.text),
+          ] else ...[
+            if (_requiresLandmarkConfirmation) ...[
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: const Row(children: [
+                  Icon(Icons.info_outline, color: Colors.deepOrange, size: 19),
+                  SizedBox(width: 7),
+                  Expanded(child: Text(
+                    'يبدو أن موقعك تغيّر. راجع أقرب نقطة دالة ثم اضغط حفظ.',
+                    style: TextStyle(fontSize: 12),
+                  )),
+                ]),
+              ),
+              const SizedBox(height: 12),
+            ],
+            TextFormField(
+              controller: _nameController,
+              textInputAction: TextInputAction.next,
+              textCapitalization: TextCapitalization.words,
+              maxLength: 80,
+              decoration: InputDecoration(
+                labelText: 'الاسم الكامل',
+                prefixIcon: const Icon(Icons.person_outline),
+                filled: true, fillColor: const Color(0xFFF9FBFD),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              validator: _nameError,
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              textDirection: ui.TextDirection.ltr,
+              textInputAction: TextInputAction.next,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9+\s\-]')),
+                LengthLimitingTextInputFormatter(20),
+              ],
+              decoration: InputDecoration(
+                labelText: 'رقم الهاتف',
+                hintText: '07xxxxxxxxx',
+                prefixIcon: const Icon(Icons.phone_outlined),
+                filled: true, fillColor: const Color(0xFFF9FBFD),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              validator: _phoneError,
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: _addressController,
+              maxLines: 2,
+              minLines: 1,
+              maxLength: 180,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: 'أقرب نقطة دالة',
+                hintText: 'مثلاً: قرب جامع الحي، مقابل الصيدلية',
+                helperText: 'الموقع على الخريطة يُحدد بشكل منفصل وبصورة تلقائية',
+                helperMaxLines: 2,
+                prefixIcon: const Icon(Icons.place_outlined),
+                filled: true, fillColor: const Color(0xFFF9FBFD),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              validator: _landmarkError,
+            ),
+            const SizedBox(height: 3),
+            Row(children: [
+              Expanded(child: ElevatedButton.icon(
+                onPressed: _isSubmitting
+                    ? null : () async { await _saveDeliveryProfile(); },
+                icon: const Icon(Icons.check_rounded),
+                label: Text(_hasSavedDeliveryProfile ? 'حفظ التعديلات' : 'حفظ بيانات التوصيل'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent, foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              )),
+              if (_hasSavedDeliveryProfile) ...[
+                const SizedBox(width: 8),
+                TextButton(onPressed: _cancelDeliveryProfileEdit,
+                    child: const Text('إلغاء')),
+              ],
+            ]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _checkLandmarkAfterGps(double latitude, double longitude) {
+    final storedLat = _savedLandmarkLatitude;
+    final storedLng = _savedLandmarkLongitude;
+    if (!_hasSavedDeliveryProfile || storedLat == null || storedLng == null) return;
+    final meters = geolocator.Geolocator.distanceBetween(
+      storedLat, storedLng, latitude, longitude,
+    );
+    if (meters > 750 && mounted && !_requiresLandmarkConfirmation) {
+      setState(() {
+        _requiresLandmarkConfirmation = true;
+        _isEditingDeliveryProfile = true;
+      });
+    }
+  }
+
+  bool _validCoordinates(double lat, double lng) =>
+      lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 &&
+          !(lat == 0 && lng == 0);
+
+  bool _manualSource(String source) =>
+      source.toLowerCase().contains('manual') || source.toLowerCase().contains('map');
+
+  bool _campaignIncludesRestaurant(PremiumCampaignProvider premium, int id) {
+    final config = premium.config;
+    if (config == null) return false;
+    final raw = config['included_restaurants'];
+    if (raw is! List || raw.isEmpty) return true;
+    return raw.any((r) => int.tryParse(r.toString()) == id);
+  }
+
+  Map<String, dynamic> _discountForDestination(PremiumCampaignProvider premium,
+      double lat, double lng, double baseFee, int restaurantId) {
+    if (!_campaignIncludesRestaurant(premium, restaurantId) || baseFee < 0) {
+      return {'display_fee': baseFee, 'discount_amount': 0.0,
+        'has_discount': false, 'message': '', 'is_outside_polygon': false};
+    }
+    final result = premium.checkDeliveryDiscount(
+      userLat: lat, userLng: lng, originalDeliveryFee: baseFee,
+    );
+    if (premium.config?['discount_type'] == 'delivery_fee' &&
+        premium.targetPolygon.isNotEmpty && premium.discountedDeliveryFee == 0 &&
+        premium.isPointInsidePolygon(lat, lng) && baseFee > 0) {
+      return {'display_fee': 0.0, 'discount_amount': baseFee,
+        'has_discount': true, 'message': 'توصيل مجاني ضمن منطقة العرض',
+        'is_outside_polygon': false};
+    }
+    return result;
+  }
+
+  // لا نعتمد GPS التلقائي أثناء إتمام الطلب؛ نحترم النقطة التي شُرحت أجرتها في المنيو.
   Future<void> _calculateInitialFees() async {
-    final prefs = await SharedPreferences.getInstance();
-    int areaId = prefs.getInt('selectedAreaId') ?? 0;
-    String areaName = prefs.getString('selectedAreaName') ?? "";
-    final savedLoc = await LocationService.getSavedLocationSimple();
-
-    if (savedLoc != null && savedLoc.lat != 0.0) {
+    final request = ++_pricingSequence;
+    if (!mounted) return;
+    setState(() {
+      _isCalculatingFees = true;
+      _locationMessage = 'جاري مطابقة أجرة التوصيل مع المنيو...';
+    });
+    try {
+      if (widget.cart.items.isEmpty) {
+        if (mounted) setState(() {
+          _isCalculatingFees = false;
+          _deliveryFee = -1;
+          _locationMessage = 'السلة فارغة';
+        });
+        return;
+      }
+      final restaurantId = widget.cart.items.first.categoryId;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      Map<String, dynamic>? previousQuote;
+      final raw = prefs.getString(_checkoutQuoteKey);
+      if (!_locationChosenInCheckout && raw != null && raw.isNotEmpty) {
+        try {
+          final obj = jsonDecode(raw);
+          if (obj is Map && int.tryParse(obj['restaurant_id'].toString()) == restaurantId) {
+            final lat = (obj['lat'] as num?)?.toDouble();
+            final lng = (obj['lng'] as num?)?.toDouble();
+            final timestamp = (obj['timestamp'] as num?)?.toInt() ?? 0;
+            final age = DateTime.now().millisecondsSinceEpoch - timestamp;
+            if (lat != null && lng != null && _validCoordinates(lat, lng) &&
+                age >= 0 && age < const Duration(minutes: 45).inMilliseconds) {
+              previousQuote = Map<String, dynamic>.from(obj);
+              _selectedCheckoutLat = lat;
+              _selectedCheckoutLng = lng;
+              _selectedCheckoutSource = (obj['source'] ?? 'auto').toString();
+            }
+          }
+        } catch (_) {}
+      }
+      if (_selectedCheckoutLat == null || _selectedCheckoutLng == null) {
+        final saved = await LocationService.getSavedLocation();
+        if (saved != null && _validCoordinates(saved.lat, saved.lng)) {
+          _selectedCheckoutLat = saved.lat;
+          _selectedCheckoutLng = saved.lng;
+          _selectedCheckoutSource = saved.source;
+        }
+      }
+      final lat = _selectedCheckoutLat;
+      final lng = _selectedCheckoutLng;
+      if (lat == null || lng == null || !_validCoordinates(lat, lng)) {
+        if (mounted) setState(() {
+          _deliveryFee = -1;
+          _isCalculatingFees = false;
+          _locationMessage = 'موقع التوصيل غير معروف. حدده من الخريطة.';
+        });
+        return;
+      }
+      final areaId = _locationChosenInCheckout
+          ? (prefs.getInt('selectedAreaId') ?? 0)
+          : ((previousQuote?['area_id'] as num?)?.toInt() ?? prefs.getInt('selectedAreaId') ?? 0);
+      final areaName = _locationChosenInCheckout
+          ? (prefs.getString('selectedAreaName') ?? 'المنطقة')
+          : (previousQuote?['area_name']?.toString() ?? prefs.getString('selectedAreaName') ?? 'المنطقة');
+      if (previousQuote != null && mounted) {
+        // إبقاء السعر الذي شاهده المستخدم ظاهرًا أثناء التحقق من التسعير الجديدة.
+        setState(() {
+          _deliveryFee = (previousQuote!['display_fee'] as num?)?.toDouble() ?? -1;
+          _originalDeliveryFee = (previousQuote['original_fee'] as num?)?.toDouble() ?? _deliveryFee;
+          _serviceFee = (previousQuote['service_fee'] as num?)?.toDouble() ?? 0;
+          _cashbackAmount = (previousQuote['cashback'] as num?)?.toDouble() ?? 0;
+          _deliveryDiscountAmount = (previousQuote['discount_amount'] as num?)?.toDouble() ?? 0;
+          _hasDeliveryDiscount = previousQuote['has_discount'] == true;
+          _isOutsideDeliveryPolygon = previousQuote['is_outside_polygon'] == true;
+          _deliveryDiscountMessage = (previousQuote['discount_message'] ?? '').toString();
+          _locationMessage = '${previousQuote['message'] ?? 'موقع التوصيل المعتمد من المنيو'}';
+        });
+      }
       final configProvider = Provider.of<DeliveryConfigProvider>(context, listen: false);
-      if (configProvider.cachedConfig == null) await configProvider.fetchAndCacheConfig();
-
-      final result = configProvider.calculateFeeDetails(
-        userLat: savedLoc.lat, userLng: savedLoc.lng,
-        restaurantId: widget.cart.items.first.categoryId,
+      final premium = Provider.of<PremiumCampaignProvider>(context, listen: false);
+      // تحديث ملف التسعير والعرض للحصول على أحدث شروط السيرفر قبل إرسال الطلب.
+      await Future.wait<void>([
+        configProvider.fetchAndCacheConfig(),
+        premium.fetchCampaignConfig(areaId),
+      ]);
+      if (!mounted || request != _pricingSequence) return;
+      if (configProvider.cachedConfig == null) {
+        setState(() {
+          _isCalculatingFees = false;
+          _deliveryFee = -1;
+          _locationMessage = 'تعذر التأكد من تسعيرة السيرفر. أعد المحاولة.';
+        });
+        return;
+      }
+      final feeDetails = configProvider.calculateFeeDetails(
+        userLat: lat, userLng: lng, restaurantId: restaurantId,
         areaId: areaId, areaName: areaName,
       );
-
-      double baseFee = (result['fee'] ?? -1.0) as double;
-      _originalDeliveryFee = baseFee;
-
-      // 🔥 فحص خصم التوصيل من العرض المميز (المضلع)
-      final premium = Provider.of<PremiumCampaignProvider>(context, listen: false);
-      final deliveryDiscountResult = premium.checkDeliveryDiscount(
-        userLat: savedLoc.lat,
-        userLng: savedLoc.lng,
-        originalDeliveryFee: baseFee > 0 ? baseFee : 0.0,
-      );
-
-      if (mounted) setState(() {
-        _serviceFee = (result['service_fee'] ?? 0.0) as double;
-        _cashbackAmount = (result['cashback_amount'] ?? 0.0) as double;
-        _locationMessage = (result['message'] ?? "تم تحديد الموقع بنجاح") as String;
+      final baseFee = (feeDetails['fee'] as num?)?.toDouble() ?? -1;
+      if (baseFee < 0) throw StateError('Pricing unavailable');
+      final deal = _discountForDestination(premium, lat, lng, baseFee, restaurantId);
+      final newFee = (deal['display_fee'] as num?)?.toDouble() ?? baseFee;
+      final newService = (feeDetails['service_fee'] as num?)?.toDouble() ?? 0;
+      final discountAmount = (deal['discount_amount'] as num?)?.toDouble() ?? 0;
+      if (previousQuote != null) {
+        final oldFee = (previousQuote['display_fee'] as num?)?.toDouble() ?? -1;
+        final oldService = (previousQuote['service_fee'] as num?)?.toDouble() ?? 0;
+        if ((newFee - oldFee).abs() > 0.01 || (newService - oldService).abs() > 0.01) {
+          // السعر لم يعد مطابقاً للمنيو. لا نستبدله بصمت إطلاقاً.
+          final accepted = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('تحديث تسعيرة التوصيل'),
+              content: Text('تغيرت التسعيرة منذ فتح المنيو (مثلاً بسبب تحديث أسعار المنطقة أو الحملة).\n'
+                  'في المنيو: ${NumberFormat('#,###').format(oldFee + oldService)} د.ع\n'
+                  'الآن: ${NumberFormat('#,###').format(newFee + newService)} د.ع\n'
+                  'هل توافق على السعر الجديد؟'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('رجوع للسلة')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('موافق على السعر الجديد')),
+              ],
+            ),
+          );
+          if (!mounted || request != _pricingSequence) return;
+          if (accepted != true) {
+            Navigator.pop(context);
+            return;
+          }
+        }
+      }
+      _checkLandmarkAfterGps(lat, lng);
+      final newQuote = <String, dynamic>{
+        'restaurant_id': restaurantId, 'lat': lat, 'lng': lng,
+        'source': _selectedCheckoutSource,
+        'area_id': areaId, 'area_name': areaName,
+        'original_fee': baseFee, 'display_fee': newFee,
+        'service_fee': newService,
+        'cashback': (feeDetails['cashback_amount'] as num?)?.toDouble() ?? 0,
+        'discount_amount': discountAmount,
+        'has_discount': deal['has_discount'] == true,
+        'is_outside_polygon': deal['is_outside_polygon'] == true,
+        'discount_message': (deal['message'] ?? '').toString(),
+        'message': (feeDetails['message'] ?? '').toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+      await prefs.setString(_checkoutQuoteKey, jsonEncode(newQuote));
+      if (!mounted || request != _pricingSequence) return;
+      setState(() {
+        _isCalculatingFees = false;
+        _deliveryFee = newFee;
+        _originalDeliveryFee = baseFee;
+        _serviceFee = newService;
+        _cashbackAmount = (feeDetails['cashback_amount'] as num?)?.toDouble() ?? 0;
+        _deliveryDiscountAmount = discountAmount;
+        _hasDeliveryDiscount = deal['has_discount'] == true;
+        _isOutsideDeliveryPolygon = deal['is_outside_polygon'] == true;
+        _deliveryDiscountMessage = (deal['message'] ?? '').toString();
+        _locationMessage = (feeDetails['message'] ?? 'الموقع المحدد للتوصيل').toString();
         _capturedPosition = geolocator.Position(
-          latitude: savedLoc.lat, longitude: savedLoc.lng, timestamp: DateTime.now(),
-          accuracy: 0, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0, altitudeAccuracy: 0, headingAccuracy: 0,
+          latitude: lat, longitude: lng, timestamp: DateTime.now(),
+          accuracy: 20, altitude: 0, heading: 0, speed: 0, speedAccuracy: 0,
+          altitudeAccuracy: 0, headingAccuracy: 0,
         );
-
-        // تحديث بيانات خصم التوصيل
-        _hasDeliveryDiscount = deliveryDiscountResult['has_discount'] ?? false;
-        _deliveryDiscountAmount = (deliveryDiscountResult['discount_amount'] ?? 0.0) as double;
-        _isOutsideDeliveryPolygon = deliveryDiscountResult['is_outside_polygon'] ?? false;
-        _deliveryDiscountMessage = (deliveryDiscountResult['message'] ?? '') as String;
-
-        // السعر الذي سيدفعه الزبون فعلياً (المخفض إذا كان داخل المضلع)
-        _deliveryFee = (deliveryDiscountResult['display_fee'] ?? baseFee) as double;
       });
-    } else {
-      if (mounted) setState(() => _locationMessage = "يرجى تحديد الموقع على الخريطة");
+    } catch (e) {
+      debugPrint('Checkout quote calculation failed: $e');
+      if (mounted && request == _pricingSequence) setState(() {
+        _isCalculatingFees = false;
+        _deliveryFee = -1;
+        _locationMessage = 'فشل احتساب التسعيرة. حاول تغيير الموقع أو أعد المحاولة.';
+      });
     }
   }
 
   Future<void> _openMapPicker() async {
-    final savedLoc = await LocationService.getSavedLocationSimple();
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => MapLocationPicker(initialLat: savedLoc?.lat, initialLng: savedLoc?.lng)),
-    );
-    if (result != null && result is Map) {
-      setState(() {
-        _deliveryFee = -1.0; _serviceFee = 0.0; _cashbackAmount = 0.0;
-        _locationMessage = "جاري تحديث الموقع وحساب التسعيرة...";
-      });
-      double newLat = double.tryParse(result['lat'].toString()) ?? 0.0;
-      double newLng = double.tryParse(result['lng'].toString()) ?? 0.0;
-      if (newLat != 0.0 && newLng != 0.0) {
+    // Cancel any in-flight quote check before the user opens the map.
+    ++_pricingSequence;
+    if (mounted) setState(() => _isCalculatingFees = true);
+    final result = await Navigator.push(context, MaterialPageRoute(
+      builder: (_) => MapLocationPicker(
+        mapStyleUrl: 'https://tiles.openfreemap.org/styles/liberty',
+        initialLat: _selectedCheckoutLat, initialLng: _selectedCheckoutLng,
+      ),
+    ));
+    if (!mounted) return;
+    if (result is Map && result['lat'] != null && result['lng'] != null) {
+      final lat = double.tryParse(result['lat'].toString());
+      final lng = double.tryParse(result['lng'].toString());
+      if (lat != null && lng != null && _validCoordinates(lat, lng)) {
+        _locationChosenInCheckout = true;
+        _selectedCheckoutLat = lat;
+        _selectedCheckoutLng = lng;
+        _selectedCheckoutSource = 'manual_checkout';
         final prefs = await SharedPreferences.getInstance();
-        int areaId = prefs.getInt('selectedAreaId') ?? 0;
-        await LocationService.saveLocation(newLat, newLng, source: 'manual_checkout', areaId: areaId);
-        await Future.delayed(const Duration(milliseconds: 300));
+        await LocationService.saveLocation(lat, lng,
+            source: 'manual_checkout', areaId: prefs.getInt('selectedAreaId'));
         await _calculateInitialFees();
+        return;
       }
+    }
+    await _calculateInitialFees(); // عودة دون تعديل: التحقق من السعر القديم.
+  }
+
+  Future<void> _useCurrentGpsInCheckout() async {
+    if (_isLoadingLocationGps || _isSubmitting || !mounted) return;
+    setState(() => _isLoadingLocationGps = true);
+    try {
+      if (!await geolocator.Geolocator.isLocationServiceEnabled()) {
+        _deliveryMessage('خدمة الموقع مغلقة؛ يمكنك تشغيل GPS أو إبقاء موقع الخريطة.', error: true);
+        await geolocator.Geolocator.openLocationSettings();
+        return;
+      }
+      var permission = await geolocator.Geolocator.checkPermission();
+      if (permission == geolocator.LocationPermission.denied) {
+        permission = await geolocator.Geolocator.requestPermission();
+      }
+      if (permission != geolocator.LocationPermission.whileInUse &&
+          permission != geolocator.LocationPermission.always) {
+        _deliveryMessage('لم تمنح الموقع؛ سيبقى موقع التوصيل الذي اخترته يدوياً.', error: true);
+        if (permission == geolocator.LocationPermission.deniedForever) {
+          await geolocator.Geolocator.openAppSettings();
+        }
+        return;
+      }
+      final pos = await geolocator.Geolocator.getCurrentPosition(
+        desiredAccuracy: geolocator.LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 18),
+      );
+      if (!_validCoordinates(pos.latitude, pos.longitude) || pos.accuracy > 300) {
+        _deliveryMessage('GPS غير دقيق حالياً، أبقينا موقعك السابق.', error: true);
+        return;
+      }
+      _locationChosenInCheckout = true;
+      _selectedCheckoutLat = pos.latitude;
+      _selectedCheckoutLng = pos.longitude;
+      _selectedCheckoutSource = 'auto_checkout';
+      final prefs = await SharedPreferences.getInstance();
+      await LocationService.saveLocation(pos.latitude, pos.longitude,
+          source: 'auto_checkout', areaId: prefs.getInt('selectedAreaId'));
+      if (mounted) await _calculateInitialFees();
+    } catch (e) {
+      _deliveryMessage('فشل جلب GPS. بقي موقع التوصيل السابق دون تغيير.', error: true);
+    } finally {
+      if (mounted) setState(() => _isLoadingLocationGps = false);
     }
   }
 
@@ -14207,14 +15530,31 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
               child: ListTile(
                 leading: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.blue.shade50, shape: BoxShape.circle), child: const Icon(Icons.location_on, color: Colors.blue)),
                 title: const Text("موقع التوصيل", style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: _deliveryFee == -1.0
+                subtitle: _isCalculatingFees
                     ? const Row(children: [SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 8), Text("جاري الحساب...", style: TextStyle(color: Colors.blue, fontSize: 12))])
-                    : Text(_locationMessage, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                    : Text(_locationMessage, style: TextStyle(color: _deliveryFee < 0 ? Colors.red.shade700 : Colors.grey.shade600, fontSize: 12)),
                 trailing: TextButton.icon(onPressed: _openMapPicker, icon: const Icon(Icons.map), label: const Text("تعديل")),
               ),
             ),
             const SizedBox(height: 15),
-
+            if (_manualSource(_selectedCheckoutSource))
+              Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(color: const Color(0xFFFFF7E8),
+                    border: Border.all(color: const Color(0xFFFFDB9E)),
+                    borderRadius: BorderRadius.circular(14)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('📍 موقع التوصيل محدد يدوياً',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 5),
+                  const Text('السعر محسوب للموقع الظاهر. هل تريد التوصيل لموقعك الحالي؟',
+                      style: TextStyle(fontSize: 12)),
+                  const SizedBox(height: 8),
+                  TextButton.icon(onPressed: _isLoadingLocationGps ? null : _useCurrentGpsInCheckout,
+                      icon: const Icon(Icons.my_location), label: const Text('استخدم موقعي الحالي')),
+                ]),
+              ),
             // 🔥 الرسالة الوهمية إذا كان الزبون خارج مضلع خصم التوصيل
             if (_isOutsideDeliveryPolygon && _deliveryDiscountMessage.isNotEmpty)
               Container(
@@ -14266,14 +15606,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                 ),
               ),
 
-            // ✍️ البيانات
-            const Text("بيانات التوصيل", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            const SizedBox(height: 10),
-            TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'الاسم الكامل', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person_outline), fillColor: Colors.white, filled: true), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
-            const SizedBox(height: 12),
-            TextFormField(controller: _phoneController, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'رقم الهاتف', border: OutlineInputBorder(), prefixIcon: Icon(Icons.phone_outlined), fillColor: Colors.white, filled: true), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
-            const SizedBox(height: 12),
-            TextFormField(controller: _addressController, decoration: const InputDecoration(labelText: 'أقرب نقطة دالة', border: OutlineInputBorder(), prefixIcon: Icon(Icons.home_outlined), fillColor: Colors.white, filled: true), validator: (v) => v!.isEmpty ? 'مطلوب' : null),
+            // ✍️ حفظ بيانات التوصيل مرة واحدة مع عرض مختصر وزر تعديل
+            _buildDeliveryProfileCard(),
             const SizedBox(height: 20),
 
             // 🎟️ كود الخصم
@@ -14410,7 +15744,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                   const Text("بيبسي مجاني 🎁", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
                 ])),
 
-                _buildSummaryRow("رسوم التوصيل:", _deliveryFee == -1.0 ? 0 : _deliveryFee, isLoading: _deliveryFee == -1.0),
+                _buildSummaryRow("رسوم التوصيل:", _deliveryFee, isLoading: _isCalculatingFees),
 
                 // 🔥 عرض تفاصيل خصم التوصيل (السعر الأصلي مشطوب + قيمة الخصم)
                 if (_hasDeliveryDiscount && _deliveryDiscountAmount > 0) ...[
@@ -14430,7 +15764,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
 
                 if (_serviceFee > 0) _buildSummaryRow("رسوم الخدمة:", _serviceFee),
                 const Divider(height: 20, thickness: 1),
-                _buildSummaryRow("الإجمالي الكلي:", grandTotal, isTotal: true, isLoading: _deliveryFee == -1.0),
+                _buildSummaryRow("الإجمالي الكلي:", grandTotal, isTotal: true, isLoading: _isCalculatingFees),
               ]),
             ),
             const SizedBox(height: 30),
@@ -14439,28 +15773,42 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
             SizedBox(
               height: 55,
               child: ElevatedButton(
-                onPressed: (_isSubmitting || _deliveryFee == -1.0) ? null : () async {
-                  if (!_formKey.currentState!.validate()) return;
+                onPressed: (_isSubmitting || _isDeliveryProfileLoading || _isCalculatingFees ||
+                    _isLoadingLocationGps || _capturedPosition == null || _deliveryFee < 0 ||
+                    widget.cart.items.isEmpty) ? null : () async {
+                  if (_requiresLandmarkConfirmation) {
+                    setState(() => _isEditingDeliveryProfile = true);
+                    _deliveryMessage('راجع نقطة الدلالة واضغط حفظ قبل تأكيد الطلب.', error: true);
+                    return;
+                  }
+                  if (_isEditingDeliveryProfile && !_formKey.currentState!.validate()) return;
+                  if (!await _saveDeliveryProfile(showMessage: false)) return;
+                  if (!await _confirmUnusualPhoneIfNeeded()) return;
+                  if (!mounted) return;
                   setState(() => _isSubmitting = true);
                   try {
                     final prefs = await SharedPreferences.getInstance();
                     final int currentZoneId = prefs.getInt('selectedAreaId') ?? 0;
                     final int? firstRestaurantId = widget.cart.items.isNotEmpty ? widget.cart.items.first.categoryId : null;
 
+                    // Single final request: WooCommerce order creation validates current
+                    // restaurant/meal availability and prices using V3 server hooks.
+                    // Do not re-download the full menu at checkout.
                     // 🚀 إرسال الطلب النهائي للسيرفر
                     final createdOrder = await ApiService().submitOrder(
                       name: _nameController.text,
-                      phone: _phoneController.text,
+                      phone: _normalizePhone(_phoneController.text),
                       address: _addressController.text,
                       cartItems: widget.cart.items,
                       couponCode: finalCouponCode,
                       position: _capturedPosition,
-                      deliveryFee: _originalDeliveryFee > 0 ? _originalDeliveryFee : _deliveryFee, // 🔥 السعر الحقيقي (للسائق)
+                      deliveryFee: _deliveryFee, // السعر الظاهر للزبون بعد الخصم
+                      originalDeliveryFee: _originalDeliveryFee > 0 ? _originalDeliveryFee : _deliveryFee, // للسائق
                       zoneId: currentZoneId,
                       restaurantId: firstRestaurantId,
                       regionId: currentZoneId,
                       platformMarkupTotal: widget.cart.totalPlatformMarkup,
-                      checkoutSessionId: const Uuid().v4(),
+                      checkoutSessionId: _checkoutSessionId,
                       discountAmount: totalDiscountSent,
                       finalTotal: grandTotal,
                       usedPremiumCampaign: usedPremium,
@@ -14470,15 +15818,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                     if (!mounted) return;
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
 
-                    // 🔥 مسح خصم الصندوق بعد نجاح الطلب
+                    // ✅ تم إنشاء الطلب بنجاح: احفظ المراجع قبل إزالة شاشة الدفع.
+                    // لدى MainScreen أربعة Navigators مستقلة، والسلة هي التبويب 3.
+                    // لا تفتح التتبع داخل Navigator السلة؛ وإلا سيظهر الطلب القديم
+                    // عند الضغط على «عرض السلة» في المرات القادمة.
+                    final cartTabNavigator = Navigator.of(context);
+                    final appRootNavigator = Navigator.of(context, rootNavigator: true);
+                    final navigationProvider = Provider.of<NavigationProvider>(context, listen: false);
+                    final notificationProvider = Provider.of<NotificationProvider>(context, listen: false);
+
+                    // الاحتفاظ بجميع ميزات الصندوق والكوبونات وسعر التوصيل.
                     widget.cart.removeBoxReward();
                     wallet.clearBoxReward();
                     widget.cart.clearCart();
-                    Provider.of<NotificationProvider>(context, listen: false).triggerRefresh();
-                    Provider.of<NavigationProvider>(context, listen: false).changeTab(2);
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (_) => OrderTrackingScreen(order: createdOrder)),
-                          (route) => route.isFirst,
+                    await prefs.remove(_checkoutQuoteKey);
+                    notificationProvider.triggerRefresh();
+
+                    // أعِد التبويب 3 إلى CartScreen وأزِل CheckoutScreen منه.
+                    // الطلب المكتمل سيبقى في سجل «طلباتي»؛ لا نحذف أي طلب من السيرفر.
+                    cartTabNavigator.popUntil((route) => route.isFirst);
+                    navigationProvider.changeTab(2);
+
+                    // افتح تتبع الطلب الجديد على Navigator الرئيسي فقط.
+                    // عند العودة من التتبع، سيعود الزبون إلى «طلباتي»؛
+                    // وعند الضغط على السلة ستظهر CartScreen الطبيعية.
+                    appRootNavigator.push(
+                      MaterialPageRoute(
+                        builder: (_) => OrderTrackingScreen(order: createdOrder),
+                      ),
                     );
                   } catch (e) {
                     if (mounted) {
@@ -14516,7 +15883,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
           isLoading
               ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
               : Text(
-            amount == 0 && !isTotal ? "مجاناً" : "${NumberFormat('#,###').format(amount)} د.ع",
+            amount < 0 && !isDiscount ? 'غير متوفر'
+                : amount == 0 && !isTotal ? "مجاناً"
+                : "${NumberFormat('#,###').format(amount)} د.ع",
             style: TextStyle(fontSize: isTotal ? 20 : 15, fontWeight: FontWeight.bold, color: isDiscount ? Colors.red : (isTotal ? Theme.of(context).primaryColor : Colors.black87)),
           ),
         ],
@@ -14524,8 +15893,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     );
   }
 }
-
-
 class OrdersHistoryScreen extends StatefulWidget {
   const OrdersHistoryScreen({super.key});
 
@@ -14533,26 +15900,41 @@ class OrdersHistoryScreen extends StatefulWidget {
   State<OrdersHistoryScreen> createState() => _OrdersHistoryScreenState();
 }
 
-class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
+class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> with WidgetsBindingObserver {
   late Future<List<Order>> _ordersFuture;
   bool _isSyncing = false; // حالة المزامنة الحالية
+  StreamSubscription<RemoteMessage>? _orderUpdatesSubscription;
+  late final NotificationProvider _notificationProvider;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadOrders();
+    _orderUpdatesSubscription = FirebaseMessaging.onMessage.listen((message) {
+      final data = message.data;
+      if (data['order_id'] != null &&
+          (data['new_status'] != null || data['status'] != null ||
+              data['driver_name'] != null)) {
+        _refreshOrders();
+      }
+    });
 
     // 🔥 الاستماع لتنبيهات التحديث (من السلة أو الإشعارات)
-    Provider.of<NotificationProvider>(context, listen: false).addListener(_refreshOrders);
+    _notificationProvider = Provider.of<NotificationProvider>(context, listen: false);
+    _notificationProvider.addListener(_refreshOrders);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshOrders();
   }
 
   @override
   void dispose() {
-    try {
-      Provider.of<NotificationProvider>(context, listen: false).removeListener(_refreshOrders);
-    } catch (e) {
-      // تجاهل الخطأ في حال كان الـ Provider غير متاح
-    }
+    WidgetsBinding.instance.removeObserver(this);
+    _orderUpdatesSubscription?.cancel();
+    _notificationProvider.removeListener(_refreshOrders);
     super.dispose();
   }
 
@@ -14586,77 +15968,59 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
   // 🔥 دالة المزامنة مع سيرفر التاكسي (نفس منطق التتبع)
   // ============================================================
   Future<void> _syncActiveOrdersWithServer() async {
+    if (_isSyncing || !mounted) return;
+    setState(() => _isSyncing = true);
     try {
-      // أ. جلب الطلبات المحلية
       final localOrders = await OrderHistoryService().getOrders();
-      if (localOrders.isEmpty) return;
-
-      // ب. فلترة الطلبات النشطة فقط (لحماية الأداء)
-      final activeStatuses = ['pending', 'processing', 'on-hold', 'accepted', 'at_store', 'picked_up', 'out-for-delivery', 'driver-assigned'];
-      final activeOrders = localOrders.where((o) => activeStatuses.contains(o.status.toLowerCase())).toList();
-
-      if (activeOrders.isEmpty) return; // لا يوجد ما يزامن
-
-      // ج. بدء المزامنة
-      setState(() => _isSyncing = true);
-
+      if (!mounted || localOrders.isEmpty) return;
+      final activeStatuses = <String>{
+        'pending', 'processing', 'on-hold', 'accepted', 'at_store',
+        'at-store', 'picked_up', 'picked-up', 'out-for-delivery',
+        'out_for_delivery', 'driver-assigned',
+      };
+      // Limit the number of concurrent calls for large history lists.
+      final activeOrders = localOrders
+          .where((o) => activeStatuses.contains(o.status.toLowerCase()))
+          .take(20).toList();
+      if (activeOrders.isEmpty) return;
       final auth = Provider.of<AuthProvider>(context, listen: false);
-      final String? taxiToken = auth.taxiToken;
+      final token = auth.taxiToken;
       bool hasChanges = false;
-
-      // د. المرور على الطلبات النشطة وفحصها
-      for (var order in activeOrders) {
-        try {
-          // استخدام النقطة المخصصة الموثوقة
-          final response = await http.get(
-            Uri.parse('https://banner.beytei.com/wp-json/taxi/v2/delivery/status-by-source/${order.id}'),
-            headers: {
-              'Content-Type': 'application/json',
-              if (taxiToken != null) 'Authorization': 'Bearer $taxiToken',
-            },
-          ).timeout(const Duration(seconds: 5)); // مهلة قصيرة لعدم تعطيل التطبيق
-
-          if (response.statusCode == 200) {
-            final data = json.decode(response.body);
-            String serverStatus = data['order_status']?.toString().toLowerCase() ?? order.status;
-            String? driverName = data['driver_name'];
-
-            // هل هناك تغيير؟
-            if (serverStatus != order.status.toLowerCase()) {
-              // تحديث الحالة في الكائن المحلي
-              // ملاحظة: كلاس Order قد يكون immutable، لذا نحتاج لتحديثه عبر الخدمة
-              await OrderHistoryService().updateOrderStatusLocally(order.id, serverStatus);
-
-              // تحديث اسم السائق إذا وجد (اختياري حسب هيكلية الكلاس)
-              if (driverName != null && driverName.isNotEmpty) {
-                // إذا كان الكلاس يدعم التحديث الكامل، يمكن استدعاء دالة تحديث كاملة هنا
-              }
-
-              hasChanges = true;
-              print("🔄 تم تحديث الطلب #${order.id}: ${order.status} -> $serverStatus");
-            }
+      for (var i = 0; i < activeOrders.length; i += 4) {
+        final batch = activeOrders.skip(i).take(4).toList();
+        // Download concurrently, but write SharedPreferences SEQUENTIALLY.
+        // Parallel writes to the one order_history key can lose status changes.
+        final results = await Future.wait(batch.map((order) async {
+          final info = await DriverRatingAccess.fetchDriverStatus(
+            order.id, taxiToken: token,
+          );
+          return (order: order, info: info);
+        }));
+        for (final result in results) {
+          final info = result.info;
+          if (info == null) continue;
+          final order = result.order;
+          final next = info.status.toLowerCase();
+          final prev = order.status.toLowerCase();
+          final nextProgress = DriverRatingAccess.progress(next);
+          final prevProgress = DriverRatingAccess.progress(prev);
+          if (next != prev && (DriverRatingAccess.isEnded(next) ||
+              (nextProgress >= 0 && nextProgress >= prevProgress))) {
+            await OrderHistoryService().updateOrderStatusLocally(order.id, next);
+            hasChanges = true;
           }
-        } catch (e) {
-          // في حال فشل الاتصال، نتجاهل الخطأ ونعتمد على الكاش (لا نوقف التطبيق)
-          print("⚠️ فشل مزامنة الطلب #${order.id}: $e");
+          if (info.driverName?.trim().isNotEmpty ?? false) {
+            hasChanges = true;
+          }
         }
       }
-
-      // هـ. إذا حدثت تغييرات، نعيد تحميل القائمة لتحديث الواجهة
       if (hasChanges && mounted) {
-        setState(() {
-          _ordersFuture = OrderHistoryService().getOrders();
-        });
-        // تحديث السلة أيضاً لضمان التزامن الشامل
-        Provider.of<NotificationProvider>(context, listen: false).triggerRefresh();
+        setState(() => _ordersFuture = OrderHistoryService().getOrders());
       }
-
     } catch (e) {
-      print("⚠️ خطأ عام في المزامنة: $e");
+      debugPrint('Failed to refresh orders for rating: $e');
     } finally {
-      if (mounted) {
-        setState(() => _isSyncing = false);
-      }
+      if (mounted) setState(() => _isSyncing = false);
     }
   }
 
@@ -14737,6 +16101,953 @@ class _OrdersHistoryScreenState extends State<OrdersHistoryScreen> {
     );
   }
 }
+
+// Shared eligibility, rating status and driver details for Tracking and Order History.
+// A driver can be rated after ACCEPTANCE, never merely after restaurant processing.
+class DriverRatingAccess {
+  static const String _ratedPrefix = 'beytei_driver_rating_sent_order_';
+  static const String _driverPrefix = 'beytei_delivery_driver_name_order_';
+
+  static bool canRate(String? rawStatus) {
+    final status = (rawStatus ?? '').toLowerCase().trim().replaceAll('_', '-');
+    return const {
+      'accepted', 'at-store', 'picked-up', 'out-for-delivery',
+      'on-the-way', 'delivered', 'completed',
+    }.contains(status);
+  }
+
+  static bool isEnded(String? rawStatus) {
+    final status = (rawStatus ?? '').toLowerCase().trim();
+    return const {'cancelled', 'canceled', 'failed', 'refunded', 'trash'}.contains(status);
+  }
+
+  static int progress(String? rawStatus) {
+    switch ((rawStatus ?? '').toLowerCase().trim().replaceAll('_', '-')) {
+      case 'pending': return 0;
+      case 'on-hold': return 1;
+      case 'processing': return 2;
+      case 'driver-assigned': return 3;
+      case 'accepted': return 4;
+      case 'at-store': return 5;
+      case 'picked-up': return 6;
+      case 'out-for-delivery':
+      case 'on-the-way': return 7;
+      case 'delivered': return 8;
+      case 'completed': return 9;
+      default: return -1;
+    }
+  }
+
+  static Future<bool> isRated(int orderId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('$_ratedPrefix$orderId') ?? false;
+  }
+
+  static Future<void> markRated(int orderId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('$_ratedPrefix$orderId', true);
+  }
+
+  static Future<String?> cachedDriverName(int orderId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final name = prefs.getString('$_driverPrefix$orderId');
+    return name == null || name.trim().isEmpty ? null : name.trim();
+  }
+
+  static Future<void> cacheDriverName(int orderId, String? driverName) async {
+    if (driverName == null || driverName.trim().isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('$_driverPrefix$orderId', driverName.trim());
+  }
+
+  // Same taxi status API already used by OrderTrackingScreen, with the
+  // former history endpoint as a compatibility fallback.
+  static Future<DriverRatingServerStatus?> fetchDriverStatus(
+      int orderId, {String? taxiToken}
+      ) async {
+    final urls = [
+      'https://de.beytei.com/api/taxi/v2/delivery/status-by-source/$orderId',
+      'https://banner.beytei.com/wp-json/taxi/v2/delivery/status-by-source/$orderId',
+    ];
+    for (final url in urls) {
+      try {
+        final response = await http.get(
+          Uri.parse(url),
+          headers: {
+            'Accept': 'application/json',
+            if (taxiToken != null && taxiToken.isNotEmpty)
+              'Authorization': 'Bearer $taxiToken',
+          },
+        ).timeout(const Duration(seconds: 7));
+        if (response.statusCode != 200) continue;
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map) continue;
+        final data = decoded['data'] is Map ? decoded['data'] as Map : decoded;
+        final rawStatus = data['status'] ?? data['order_status'] ?? data['delivery_status'];
+        if (rawStatus == null || rawStatus.toString().trim().isEmpty) continue;
+        final driverName = (data['driver_name'] ?? data['driverName'])?.toString();
+        if (driverName != null && driverName.trim().isNotEmpty) {
+          await cacheDriverName(orderId, driverName);
+        }
+        return DriverRatingServerStatus(
+          status: rawStatus.toString().toLowerCase().trim(),
+          driverName: driverName,
+        );
+      } catch (e) {
+        debugPrint('Delivery rating status lookup failed: $e');
+      }
+    }
+    return null;
+  }
+}
+
+class DriverRatingServerStatus {
+  final String status;
+  final String? driverName;
+  const DriverRatingServerStatus({required this.status, this.driverName});
+}
+
+class OrderTrackingScreen extends StatefulWidget {
+  final dynamic order;
+  const OrderTrackingScreen({super.key, required this.order});
+
+  @override
+  State<OrderTrackingScreen> createState() => _OrderTrackingScreenState();
+}
+
+class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
+  late String _currentStatus;
+  String? _driverName;
+  bool _isSyncing = false;
+  bool _ratingAlreadySubmitted = false;
+  StreamSubscription<RemoteMessage>? _fcmSubscription;
+
+  // متغير لمنع منح الصندوق مرتين لنفس الطلب في الجلسة الواحدة
+  bool _boxAlreadyClaimedThisSession = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentStatus = widget.order.status ?? 'pending';
+    _driverName = widget.order.driverName;
+
+    _syncWithServers();
+    _listenToTaxiUpdates();
+    _refreshRatingState();
+  }
+
+  Future<void> _refreshRatingState() async {
+    try {
+      final rated = await DriverRatingAccess.isRated(widget.order.id);
+      if (mounted) setState(() => _ratingAlreadySubmitted = rated);
+    } catch (e) {
+      debugPrint('Could not load rating state: $e');
+    }
+  }
+
+  Future<void> _syncWithServers() async {
+    if (!mounted) return;
+    setState(() => _isSyncing = true);
+
+    await _syncWithTaxiServer();
+
+    if (mounted) setState(() => _isSyncing = false);
+  }
+
+  // Read the SAME accepted-status source used by the Orders History list.
+  Future<bool> _syncWithTaxiServer() async {
+    try {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final info = await DriverRatingAccess.fetchDriverStatus(
+        widget.order.id, taxiToken: auth.taxiToken,
+      );
+      if (info == null || !mounted) return false;
+      setState(() {
+        _currentStatus = info.status;
+        if (info.driverName != null && info.driverName!.isNotEmpty) {
+          _driverName = info.driverName;
+        }
+      });
+      await _updateLocalStorage(widget.order.id, info.status);
+      await _checkAndClaimBoxOnDelivery(info.status);
+      return true;
+    } catch (e) {
+      debugPrint('Tracking status refresh failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> _updateLocalStorage(int orderId, String newStatus) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? ordersString = prefs.getString('order_history');
+
+      if (ordersString != null) {
+        List<dynamic> orders = json.decode(ordersString);
+        bool isChanged = false;
+
+        for (var i = 0; i < orders.length; i++) {
+          if (orders[i]['id'].toString() == orderId.toString()) {
+            orders[i]['status'] = newStatus;
+            isChanged = true;
+            break;
+          }
+        }
+
+        if (isChanged) {
+          await prefs.setString('order_history', json.encode(orders));
+          print("💾 تم تحديث الكاش المحلي إلى: $newStatus");
+        }
+      }
+    } catch (e) {
+      print("❌ فشل تحديث الذاكرة المحلية: $e");
+    }
+  }
+
+  Future<void> _checkAndClaimBoxOnDelivery(String status) async {
+    if (status.toLowerCase() != 'delivered' && status.toLowerCase() != 'completed') {
+      return;
+    }
+
+    if (_boxAlreadyClaimedThisSession) return;
+
+    final hasClaimed = await _hasClaimedBoxForOrder(widget.order.id);
+    if (hasClaimed) {
+      _boxAlreadyClaimedThisSession = true;
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final int areaId = prefs.getInt('selectedAreaId') ?? 0;
+
+    if (areaId == 84) {
+      print("ℹ️ منطقة الكوت (84) - نظام الكاش باك فقط، لا صناديق.");
+      return;
+    }
+
+    try {
+      print("🎁 جاري منح صندوق فضي للطلب #${widget.order.id}...");
+
+      if (mounted) {
+        final wallet = Provider.of<SmartWalletProvider>(context, listen: false);
+        await wallet.claimBoxOnDelivery(areaId);
+
+        await _markOrderAsBoxClaimed(widget.order.id);
+        _boxAlreadyClaimedThisSession = true;
+
+        print("✅ تم منح الصندوق الفضي بنجاح للطلب #${widget.order.id}");
+
+        if (mounted) {
+          _showBoxRewardSnackbar();
+        }
+      }
+    } catch (e) {
+      print("❌ فشل منح الصندوق: $e");
+    }
+  }
+
+  Future<bool> _hasClaimedBoxForOrder(int orderId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> claimedOrders = prefs.getStringList('claimed_box_orders') ?? [];
+      return claimedOrders.contains(orderId.toString());
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<void> _markOrderAsBoxClaimed(int orderId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> claimedOrders = prefs.getStringList('claimed_box_orders') ?? [];
+      if (!claimedOrders.contains(orderId.toString())) {
+        claimedOrders.add(orderId.toString());
+        await prefs.setStringList('claimed_box_orders', claimedOrders);
+      }
+    } catch (e) {
+      print("❌ فشل حفظ حالة المنح: $e");
+    }
+  }
+
+  void _showBoxRewardSnackbar() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.inventory_2, color: Colors.white),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                "🎁 مبروك! حصلت على صندوق فضي جديد!",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFF00BCD4),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  void _listenToTaxiUpdates() {
+    _fcmSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      final msgOrderId = message.data['order_id']?.toString();
+      final targetOrderId = widget.order.id.toString();
+
+      if (msgOrderId == targetOrderId) {
+        String? newStatus = (message.data['new_status'] ?? message.data['status'])?.toString();
+        String? driver = message.data['driver_name'];
+
+        if (mounted) {
+          setState(() {
+            if (newStatus != null) _currentStatus = newStatus;
+            if (driver != null && driver.isNotEmpty) _driverName = driver;
+          });
+        }
+
+        if (driver != null && driver.isNotEmpty) {
+          DriverRatingAccess.cacheDriverName(widget.order.id, driver);
+        }
+        if (newStatus != null) {
+          _updateLocalStorage(widget.order.id, newStatus);
+          _checkAndClaimBoxOnDelivery(newStatus);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _fcmSubscription?.cancel();
+    super.dispose();
+  }
+
+  int _getStepIndex(String status) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+      case 'on-hold': return 0;
+      case 'accepted':
+      case 'processing':
+      case 'driver-assigned': return 1;
+      case 'at_store':
+      case 'at-store': return 2;
+      case 'picked_up':
+      case 'picked-up':
+      case 'out-for-delivery':
+      case 'out_for_delivery': return 3;
+      case 'delivered':
+      case 'completed': return 4;
+      default: return 0;
+    }
+  }
+
+  // فتح نفس نافذة التقييم، ولكن بعد التأكد من قبول السائق.
+  Future<void> _openRatingBottomSheet() async {
+    if (_ratingAlreadySubmitted || await DriverRatingAccess.isRated(widget.order.id)) {
+      if (mounted) setState(() => _ratingAlreadySubmitted = true);
+      return;
+    }
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final lookup = await DriverRatingAccess.fetchDriverStatus(
+      widget.order.id, taxiToken: auth.taxiToken,
+    );
+    if (!mounted) return;
+    if (lookup == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('تعذّر التحقق من قبول المندوب. حاول مرة أخرى.'),
+      ));
+      return;
+    }
+    if (!DriverRatingAccess.canRate(lookup.status)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('يمكن تقييم المندوب بعد قبوله الطلب فقط.'),
+      ));
+      return;
+    }
+    final name = (lookup.driverName?.trim().isNotEmpty ?? false)
+        ? lookup.driverName!
+        : (_driverName ?? await DriverRatingAccess.cachedDriverName(widget.order.id) ?? 'المندوب');
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DriverRatingBottomSheet(orderId: widget.order.id, driverName: name),
+    );
+    if (!mounted) return;
+    if (result == true) setState(() => _ratingAlreadySubmitted = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    int currentStep = _getStepIndex(_currentStatus);
+    bool isCancelled = _currentStatus == 'cancelled' || _currentStatus == 'failed';
+    final bool canRateDriver = DriverRatingAccess.canRate(_currentStatus)
+        && !_ratingAlreadySubmitted && !isCancelled;
+
+    return Scaffold(
+      backgroundColor: Colors.grey[100],
+      appBar: AppBar(
+        title: Text('تتبع الطلب #${widget.order.id}'),
+        centerTitle: true,
+        actions: [
+          _isSyncing
+              ? const Center(
+              child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 15),
+                  child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)
+                  )
+              )
+          )
+              : IconButton(icon: const Icon(Icons.refresh), onPressed: _syncWithServers)
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _syncWithServers,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
+            children: [
+              // قسم التايم لاين
+              Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(vertical: 25, horizontal: 15),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 15)],
+                ),
+                child: isCancelled
+                    ? const Column(
+                  children: [
+                    Icon(Icons.cancel_outlined, color: Colors.red, size: 60),
+                    SizedBox(height: 10),
+                    Text("تم إلغاء الطلب", style: TextStyle(color: Colors.red, fontSize: 20, fontWeight: FontWeight.bold)),
+                  ],
+                )
+                    : _buildCustomTimeline(currentStep),
+              ),
+
+              // التقييم متاح بعد قبول المندوب وحتى بعد التسليم.
+              if (canRateDriver)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _openRatingBottomSheet,
+                      icon: const Icon(Icons.star_rate_rounded, color: Colors.white, size: 28),
+                      label: const Text(
+                        "قيّم المندوب الآن",
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber.shade600,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                        elevation: 4,
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (_ratingAlreadySubmitted && DriverRatingAccess.canRate(_currentStatus))
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Chip(
+                    avatar: Icon(Icons.check_circle, color: Colors.green),
+                    label: Text('تم تقييم المندوب لهذا الطلب'),
+                  ),
+                ),
+
+              // معلومات المندوب
+              if (currentStep >= 1 && _driverName != null && !isCancelled)
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade800,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))],
+                  ),
+                  child: Row(
+                    children: [
+                      const CircleAvatar(
+                        backgroundColor: Colors.white24,
+                        radius: 25,
+                        child: Icon(Icons.motorcycle, color: Colors.white, size: 28),
+                      ),
+                      const SizedBox(width: 15),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text("المندوب المسؤول", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                            Text(_driverName!, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => CustomerChatPage(
+                                orderId: widget.order.id.toString(),
+                                driverName: _driverName ?? 'المندوب',
+                                customerName: widget.order.customerName ?? 'الزبون',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.chat_bubble_rounded),
+                        color: Colors.white,
+                        iconSize: 28,
+                        tooltip: "محادثة المندوب",
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.green.shade600,
+                          padding: const EdgeInsets.all(10),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // ملخص الطلب والأسعار
+              Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 15)],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("ملخص الطلب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Divider(height: 30),
+                    _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
+                    const SizedBox(height: 15),
+
+                    // عرض السعر المشطوب والإجمالي بعد الخصم
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("الإجمالي المطلوب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Builder(
+                          builder: (context) {
+                            final double finalTotal = double.tryParse(widget.order.total.toString()) ?? 0.0;
+                            final double discountAmount = widget.order.discountAmount != null
+                                ? double.tryParse(widget.order.discountAmount.toString()) ?? 0.0
+                                : 0.0;
+                            final double originalTotal = widget.order.originalTotal != null
+                                ? double.tryParse(widget.order.originalTotal.toString()) ?? 0.0
+                                : (finalTotal + discountAmount);
+
+                            if (discountAmount > 0) {
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.shade50,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      "${NumberFormat('#,###', 'ar_IQ').format(finalTotal)} د.ع",
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.red),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    "${NumberFormat('#,###', 'ar_IQ').format(originalTotal)} د.ع",
+                                    style: TextStyle(
+                                      decoration: TextDecoration.lineThrough,
+                                      color: Colors.grey.shade500,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            } else {
+                              return Text(
+                                "${NumberFormat('#,###', 'ar_IQ').format(finalTotal)} د.ع",
+                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                              );
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPriceRow(String title, String value, {bool isBold = false, Color? color}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: TextStyle(fontSize: isBold ? 18 : 15, fontWeight: isBold ? FontWeight.bold : FontWeight.normal)),
+        Text(value, style: TextStyle(fontSize: isBold ? 18 : 15, fontWeight: FontWeight.bold, color: color ?? Colors.black87)),
+      ],
+    );
+  }
+
+  Widget _buildCustomTimeline(int currentStep) {
+    return Column(
+      children: [
+        _buildTimelineStep(0, "تم استلام الطلب", Icons.receipt_long, currentStep),
+        _buildTimelineStep(1, "جاري تحضير الطلب", Icons.soup_kitchen, currentStep),
+        _buildTimelineStep(2, "المندوب وصل للمطعم", Icons.storefront, currentStep),
+        _buildTimelineStep(3, "المندوب في الطريق إليك", Icons.delivery_dining, currentStep),
+        _buildTimelineStep(4, "تم توصيل الطلب بنجاح", Icons.check_circle_outline, currentStep),
+      ],
+    );
+  }
+
+  Widget _buildTimelineStep(int stepIndex, String title, IconData icon, int currentStep) {
+    bool isCompleted = currentStep >= stepIndex;
+    bool isActive = currentStep == stepIndex;
+
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          margin: const EdgeInsets.only(bottom: 10),
+          decoration: BoxDecoration(
+            color: isCompleted ? Colors.green : Colors.grey.shade200,
+            shape: BoxShape.circle,
+            border: isActive ? Border.all(color: Colors.green.shade200, width: 3) : null,
+          ),
+          child: Icon(icon, color: isCompleted ? Colors.white : Colors.grey, size: 24),
+        ),
+        const SizedBox(width: 15),
+        Text(
+            title,
+            style: TextStyle(
+                fontSize: isActive ? 17 : 15,
+                fontWeight: isCompleted ? FontWeight.bold : FontWeight.normal,
+                color: isCompleted ? Colors.black87 : Colors.grey
+            )
+        ),
+      ],
+    );
+  }
+}
+
+// ==========================================
+// شاشة التقييم السفلية الذكية (Smart Bottom Sheet)
+// ==========================================
+class DriverRatingBottomSheet extends StatefulWidget {
+  final int orderId;
+  final String driverName;
+
+  const DriverRatingBottomSheet({
+    Key? key,
+    required this.orderId,
+    required this.driverName,
+  }) : super(key: key);
+
+  @override
+  State<DriverRatingBottomSheet> createState() => _DriverRatingBottomSheetState();
+}
+
+class _DriverRatingBottomSheetState extends State<DriverRatingBottomSheet> {
+  int _rating = 0;
+  final List<String> _selectedTags = [];
+  final TextEditingController _commentController = TextEditingController();
+  bool _isSubmitting = false;
+
+  // الخيارات الإيجابية تظهر عند التقييم (4 أو 5 نجوم)
+  final List<String> _positiveTags = [
+    'معاملة جيدة',
+    'احترام الموعد',
+    'يرتدي زي المنصة ',
+    'سياقة آمنة',
+    'يحترم الخصوصية'
+  ];
+
+  // الخيارات السلبية تظهر عند التقييم (1 إلى 3 نجوم)
+  final List<String> _negativeTags = [
+    'معاملة سيئة',
+    'طلب الدفع نقداً',
+    'أخذ مبلغ إضافي',
+    'القيادة بتهور',
+    'عدم لبس الزي المنصة',
+    'مشكلة بالانطلاق/الوصول'
+  ];
+
+  void _toggleTag(String tag) {
+    setState(() {
+      if (_selectedTags.contains(tag)) {
+        _selectedTags.remove(tag);
+      } else {
+        _selectedTags.add(tag);
+      }
+    });
+  }
+
+  Future<void> _submitRating() async {
+    if (_isSubmitting) return;
+
+    if (await DriverRatingAccess.isRated(widget.orderId)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('تم تقييم هذا المندوب لهذا الطلب مسبقاً'),
+      ));
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    if (_rating < 1 || _rating > 5) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('يرجى تحديد عدد النجوم أولاً'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final response = await http.post(
+        Uri.parse(
+          'https://de.beytei.com/api/taxi/v2/rate-driver',
+        ),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'order_id': widget.orderId,
+          'rating': _rating,
+          'tags': _selectedTags,
+          'comment': _commentController.text.trim(),
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      Map<String, dynamic> data = {};
+
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          data = decoded;
+        }
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 &&
+          data['success'] == true) {
+
+        // The two entry points use this one local success marker.
+        try {
+          await DriverRatingAccess.markRated(widget.orderId);
+        } catch (e) {
+          debugPrint('Rating succeeded but local marker could not be saved: $e');
+        }
+        if (!mounted) return;
+        final messenger = ScaffoldMessenger.of(context);
+
+        Navigator.of(context).pop(true);
+
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              data['message']?.toString() ??
+                  'تم إرسال التقييم بنجاح',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            data['message']?.toString() ??
+                'فشل إرسال التقييم (${response.statusCode})',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+
+    } on TimeoutException {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'انتهت مهلة الاتصال. يرجى التحقق من حالة التقييم قبل إعادة المحاولة.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+
+    } catch (e) {
+      if (!mounted) return;
+
+      debugPrint('Rating error: $e');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تعذر الاتصال بسيرفر التقييم'),
+          backgroundColor: Colors.red,
+        ),
+      );
+
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    // تحديد قائمة الأزرار (Tags) بناءً على النجوم
+    List<String> currentTags = _rating >= 4 ? _positiveTags : (_rating > 0 ? _negativeTags : []);
+
+    return Container(
+      // تحديد هامش سفلي استجابة لظهور الكيبورد
+      padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+          left: 16,
+          right: 16,
+          top: 15
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // شريط السحب العلوي (مؤشر بصري)
+            Container(
+                width: 50,
+                height: 5,
+                decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(10)
+                )
+            ),
+            const SizedBox(height: 20),
+
+            Text("تقييم السائق", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey.shade800)),
+            const SizedBox(height: 5),
+            Text(widget.driverName, style: TextStyle(fontSize: 16, color: Colors.blue.shade700, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+
+            // صف النجوم الديناميكي
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(5, (index) {
+                return IconButton(
+                  icon: Icon(
+                    index < _rating ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: index < _rating ? Colors.amber : Colors.grey.shade400,
+                    size: 45,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _rating = index + 1;
+                      _selectedTags.clear(); // تفريغ الاختيارات السابقة عند تغيير التقييم
+                    });
+                  },
+                );
+              }),
+            ),
+
+            // ظهور الخيارات (Tags) فقط بعد اختيار النجوم
+            if (_rating > 0) ...[
+              const SizedBox(height: 15),
+              Text(
+                  _rating >= 4 ? "المميزات" : "المساوئ",
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)
+              ),
+              const SizedBox(height: 12),
+
+              Wrap(
+                spacing: 8.0,
+                runSpacing: 8.0,
+                alignment: WrapAlignment.center,
+                children: currentTags.map((tag) {
+                  bool isSelected = _selectedTags.contains(tag);
+                  bool isNegative = _rating < 4; // تحديد ما إذا كان التقييم سلبياً
+                  return ChoiceChip(
+                    label: Text(tag, style: TextStyle(color: isSelected ? Colors.white : Colors.black87)),
+                    selected: isSelected,
+                    selectedColor: isNegative ? Colors.red.shade500 : Colors.blue.shade600,
+                    backgroundColor: Colors.grey.shade100,
+                    onSelected: (bool selected) => _toggleTag(tag),
+                  );
+                }).toList(),
+              ),
+
+              const SizedBox(height: 20),
+
+              // حقل النص للملاحظات الإضافية
+              TextField(
+                controller: _commentController,
+                decoration: InputDecoration(
+                  hintText: "أخبرنا برأيك بخصوص الرحلة (اختياري)...",
+                  prefixIcon: const Icon(Icons.comment_outlined, color: Colors.grey),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: Colors.grey.shade100,
+                ),
+                maxLines: 2,
+              ),
+            ],
+
+            const SizedBox(height: 25),
+
+            // زر إرسال التقييم
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _isSubmitting ? null : _submitRating,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade700,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 2,
+                ),
+                child: _isSubmitting
+                    ? const SizedBox(height: 25, width: 25, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Text("إرسال التقييم", style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class RestaurantLoginScreen extends StatefulWidget {
   const RestaurantLoginScreen({super.key});
   @override
