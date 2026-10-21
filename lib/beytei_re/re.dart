@@ -1842,6 +1842,8 @@ class CustomerProvider with ChangeNotifier {
   List<Offer> _activeOffers = [];
 
   int _lastLoadedAreaId = -1;
+  bool _isRefreshingStatuses = false;
+  DateTime? _lastStatusRefresh;
   bool _isLoadingHome = false;
   bool _isLoadingMenu = false;
   bool _hasError = false;
@@ -1849,6 +1851,23 @@ class CustomerProvider with ChangeNotifier {
   // --- Getters ---
   Map<String, List<dynamic>> get homeData => _homeData;
   List<Restaurant> get allRestaurants => _allRestaurants;
+
+  // V13: available restaurants first, closed stores at the bottom.
+  // Sort a copy to preserve the server's original order within each status group.
+  List<Restaurant> get orderedRestaurants {
+    final result = List<Restaurant>.of(_allRestaurants);
+    final originalOrder = <int, int>{
+      for (var i = 0; i < result.length; i++) result[i].id: i,
+    };
+    int rank(Restaurant r) => r.isOpen && r.isDeliverable ? 0 :
+    r.isOpen ? 1 : 2;
+    result.sort((a, b) {
+      final priority = rank(a).compareTo(rank(b));
+      return priority != 0 ? priority :
+      (originalOrder[a.id] ?? 0).compareTo(originalOrder[b.id] ?? 0);
+    });
+    return result;
+  }
   Map<int, List<FoodItem>> get menuItems => _menuItems;
   List<Offer> get activeOffers => _activeOffers;
 
@@ -1871,6 +1890,7 @@ class CustomerProvider with ChangeNotifier {
     _modernMenuIds.clear();
     _activeOffers = [];
     _lastLoadedAreaId = -1;
+    _lastStatusRefresh = null;
     _hasError = false;
     notifyListeners();
   }
@@ -1918,18 +1938,27 @@ class CustomerProvider with ChangeNotifier {
   // 1. جلب بيانات الصفحة الرئيسية (المطاعم) - 🔥 النظام الهجين الذكي
   // ============================================================
   Future<void> fetchHomeData(int areaId, {bool isRefresh = false}) async {
+    if (_lastLoadedAreaId != areaId) {
+      // Never display cached restaurants from a different delivery area.
+      _homeData = {};
+      _allRestaurants = [];
+      _activeOffers = [];
+      _lastStatusRefresh = null;
+    }
+    final inMemory = _lastLoadedAreaId == areaId && _allRestaurants.isNotEmpty;
     _lastLoadedAreaId = areaId;
     _hasError = false;
 
-    // Instant stale-while-revalidate: show existing local home snapshot first.
+    // Paint the previous snapshot immediately; status refresh never blocks the grid.
     if (!isRefresh) {
       final isValid = await _isCacheValid('${AppConstants.CACHE_TIMESTAMP_PREFIX}home_$areaId',
           minutes: AppConstants.restaurantsCacheLifetime.inMinutes);
-      await _loadHomeFromCache(areaId);
+      if (!inMemory) await _loadHomeFromCache(areaId);
       if (isValid && _allRestaurants.isNotEmpty) {
         _isLoadingHome = false;
         notifyListeners();
-        return; // No status API request per launch; listen for actual server changes.
+        unawaited(_refreshRestaurantStatusesSilently(areaId));
+        return;
       }
       if (_allRestaurants.isNotEmpty) notifyListeners();
     }
@@ -1950,16 +1979,39 @@ class CustomerProvider with ChangeNotifier {
       final restaurantsJson = results[1];
       _processAndSetHomeData(deliverableJson, restaurantsJson);
 
-      // Only one lightweight status batch with an expired home snapshot.
-      await _fetchAndApplyFreshStatuses();
-
       await _saveHomeToCache(areaId, deliverableJson, restaurantsJson);
+      // Fetch real opening/paused states in the background, never delaying first paint.
+      unawaited(_refreshRestaurantStatusesSilently(areaId));
     } catch (e) {
       print("⚠️ فشل تحديث المطاعم من الشبكة: $e");
       if (_homeData.isEmpty) _hasError = true;
     } finally {
       _isLoadingHome = false;
       notifyListeners();
+    }
+  }
+
+  // One light status batch per short window; no full menu/API refresh on entry.
+  Future<void> _refreshRestaurantStatusesSilently(int areaId) async {
+    if (_lastLoadedAreaId != areaId || _allRestaurants.isEmpty ||
+        _isRefreshingStatuses) return;
+    final now = DateTime.now();
+    if (_lastStatusRefresh != null &&
+        now.difference(_lastStatusRefresh!) < const Duration(minutes: 2)) return;
+    _lastStatusRefresh = now;
+    _isRefreshingStatuses = true;
+    try {
+      await _fetchAndApplyFreshStatuses();
+      if (_lastLoadedAreaId != areaId) return;
+      notifyListeners();
+      // Persist current opening flags without extending the 24-hour home TTL.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('${AppConstants.CACHE_KEY_RESTAURANTS_PREFIX}${areaId}_list',
+          jsonEncode(_allRestaurants.map((r) => r.toJson()).toList()));
+    } catch (e) {
+      debugPrint('Background restaurant status sync skipped: $e');
+    } finally {
+      _isRefreshingStatuses = false;
     }
   }
 
@@ -1971,8 +2023,11 @@ class CustomerProvider with ChangeNotifier {
       final statuses = await _apiService.checkRestaurantsStatusLight(ids);
 
       for (var status in statuses) {
-        final int id = status['id'];
-        final bool serverIsOpen = status['is_open'] == true;
+        if (status is! Map || !status.containsKey('is_open')) continue;
+        final int id = int.tryParse(status['id'].toString()) ?? -1;
+        final flag = status['is_open'];
+        final bool serverIsOpen = flag == true || flag == 1 ||
+            flag?.toString().toLowerCase() == 'true' || flag?.toString() == '1';
         final String newAutoOpen = status['auto_open'] ?? '09:00';
         final String newAutoClose = status['auto_close'] ?? '22:00';
         final index = _allRestaurants.indexWhere((r) => r.id == id);
@@ -2064,11 +2119,9 @@ class CustomerProvider with ChangeNotifier {
 
       final restaurantsList = json.decode(restaurantsJson) as List;
 
-      List<Restaurant> parsedRestaurants = restaurantsList.map((jsonObj) {
-        // 🔥🔥🔥 سطر الفحص الذكي لمعرفة ما إذا كان الـ API يرسل البيانات بشكل صحيح 🔥🔥🔥
-        print("🕵️ فحص المتجر: ${jsonObj['name']} | نوعه القادم من السيرفر: ${jsonObj['beytei_store_type']}");
-        return Restaurant.fromJson(jsonObj);
-      }).toList();
+      final parsedRestaurants = restaurantsList
+          .map<Restaurant>((jsonObj) => Restaurant.fromJson(Map<String, dynamic>.from(jsonObj)))
+          .toList();
 
       for (var r in parsedRestaurants) {
         r.isDeliverable = deliverableIds.contains(r.id);
@@ -2993,8 +3046,13 @@ class Restaurant {
       var countMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_wc_rating_count', orElse: () => null);
       if (countMeta != null) rCount = int.tryParse(countMeta['value'].toString()) ?? 0;
 
-      var isOpenMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_is_open', orElse: () => null);
-      if (isOpenMeta != null) finalIsOpenStatus = isOpenMeta['value'].toString() == '1';
+      var isOpenMeta = metaData.firstWhere((m) => m is Map &&
+          (m['key'] == '_restaurant_is_open_final_state_received' ||
+              m['key'] == '_restaurant_is_open'), orElse: () => null);
+      if (isOpenMeta != null) {
+        final raw = isOpenMeta['value'].toString().toLowerCase();
+        finalIsOpenStatus = raw == '1' || raw == 'true' || raw == 'yes';
+      }
 
       var openMeta = metaData.firstWhere((m) => m is Map && m['key'] == '_restaurant_auto_open_time', orElse: () => null);
       if (openMeta != null) openTime = openMeta['value'].toString();
@@ -3013,6 +3071,13 @@ class Restaurant {
       if (typeMeta != null && typeMeta['value'] != null && typeMeta['value'].toString().isNotEmpty) {
         sType = typeMeta['value'].toString();
       }
+    }
+
+    // A direct backend status is authoritative when available.
+    final rawOpen = json['is_open'] ?? json['accepting_orders'];
+    if (rawOpen != null) {
+      final value = rawOpen.toString().toLowerCase();
+      finalIsOpenStatus = value == 'true' || value == '1';
     }
 
     // 🛡️🔥 استخراج الصورة بهيكل دفاعي يقبل جميع الصيغ (سيرفر، كاش، نصوص مباشرة)
@@ -3188,8 +3253,9 @@ class FoodItem {
       catIds = (json['categories'] as List)
           .map((c) => int.tryParse((c as Map)['id'].toString()) ?? 0).toList();
     }
-    if (json['category_id'] != null) {
-      final childId = safeParseInt(json['category_id']);
+    for (final key in const ['category_id', 'section_id', 'subcategory_id', 'menu_section_id']) {
+      if (json[key] == null) continue;
+      final childId = safeParseInt(json[key]);
       if (childId > 0 && !catIds.contains(childId)) catIds.add(childId);
     }
     final rawGroups = json['option_groups'] ?? json['menu_option_groups'] ?? json['groups'];
@@ -7194,109 +7260,81 @@ class RestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
   const RestaurantCard({super.key, required this.restaurant});
 
-  void _showClosedDialog(BuildContext context, Restaurant restaurant) {
-    String title = "المتجر مغلق حالياً";
-    String message = "لا يستقبل المتجر طلبات الآن.\n\nيفتح تلقائياً في: ${restaurant.autoOpenTime}\nيغلق تلقائياً في: ${restaurant.autoCloseTime}";
-    IconData icon = Icons.store_mall_directory_outlined;
-    Color iconColor = Colors.red.shade600;
-
-    if (!restaurant.isDeliverable) {
-      title = "خارج منطقة التوصيل";
-      message = "عذراً، هذا المتجر لا يوصل إلى منطقتك المحددة حالياً.";
-      icon = Icons.location_off_outlined;
-      iconColor = Colors.orange.shade700;
-    }
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Icon(icon, color: iconColor, size: 28),
-            const SizedBox(width: 10),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          ],
-        ),
-        content: Text(message, style: const TextStyle(fontSize: 14, height: 1.5)),
-        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("حسناً", style: TextStyle(fontWeight: FontWeight.bold)))],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final bool canOrder = restaurant.isDeliverable && restaurant.isOpen;
-
+    final isOpen = restaurant.isOpen;
+    final covered = restaurant.isDeliverable;
     return Card(
+      margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      elevation: 3,
-      shadowColor: Colors.black.withOpacity(0.1),
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: const Color(0xFFE8EDF4)),
+      ),
       child: InkWell(
         onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant))),
-        child: Opacity(
-          opacity: canOrder ? 1.0 : 0.6,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 1. الصورة
-              Expanded(
-                flex: 3,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    CachedNetworkImage(
-                      imageUrl: restaurant.imageUrl,
-                      fit: BoxFit.cover,
-                      placeholder: (context, url) => Container(color: Colors.grey[200]),
-                      errorWidget: (context, url, error) => const Icon(Icons.storefront, color: Colors.grey, size: 40),
-                    ),
-                    if (!canOrder)
-                      Container(
-                        color: Colors.black.withOpacity(0.6),
-                        child: Center(
-                            child: Text(
-                                !restaurant.isDeliverable ? 'خارج\nمنطقتك' : 'مغلق حالياً',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)
-                            )
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              // 2. اسم المطعم والتقييم
-              Expanded(
-                flex: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                          restaurant.name,
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.star, color: Colors.amber, size: 16),
-                          Text(" ${restaurant.averageRating.toStringAsFixed(1)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+          MaterialPageRoute(builder: (_) => MenuScreen(restaurant: restaurant)),
         ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(flex: 3, child: Stack(fit: StackFit.expand, children: [
+            CachedNetworkImage(
+              imageUrl: restaurant.imageUrl,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => Container(color: const Color(0xFFF1F5F9)),
+              errorWidget: (context, url, error) => Container(
+                color: const Color(0xFFF1F5F9),
+                child: const Icon(Icons.storefront_rounded, size: 34,
+                    color: Color(0xFF95A7BD)),
+              ),
+            ),
+            if (!isOpen)
+              Positioned.fill(child: Container(color: Colors.white.withOpacity(0.23))),
+            if (!isOpen || !covered)
+              Positioned(top: 9, right: 9, child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF26354B).withOpacity(0.89),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Text(!covered ? 'خارج التغطية' : 'مغلق حالياً',
+                    style: const TextStyle(color: Colors.white,
+                        fontSize: 10, fontWeight: FontWeight.w700)),
+              )),
+          ])),
+          Expanded(flex: 2, child: Padding(
+            padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(restaurant.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14,
+                        fontWeight: FontWeight.w800, color: Color(0xFF19283E))),
+                const SizedBox(height: 7),
+                Row(children: [
+                  const Icon(Icons.star_rounded, color: Color(0xFFFFB020), size: 17),
+                  const SizedBox(width: 3),
+                  Text(restaurant.averageRating.toStringAsFixed(1),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                          color: Color(0xFF556579))),
+                  const Spacer(),
+                  Container(width: 6, height: 6,
+                      decoration: BoxDecoration(shape: BoxShape.circle,
+                          color: isOpen && covered
+                              ? const Color(0xFF21A67A) : const Color(0xFF9AA8B8))),
+                  const SizedBox(width: 4),
+                  Flexible(child: Text(isOpen && covered ? 'يستقبل الطلبات' :
+                  (!covered ? 'تصفح فقط' : 'يفتح لاحقاً'),
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 10,
+                          color: Color(0xFF67788C), fontWeight: FontWeight.w600))),
+                ]),
+              ],
+            ),
+          )),
+        ]),
       ),
     );
   }
@@ -11940,7 +11978,7 @@ class HomeScreenState extends State<HomeScreen> {
 
               // (تم إزالة استدعاء النافذة المنبثقة من هنا لأننا نقلناه إلى _loadInitialData)
 
-              final allStores = (provider.homeData['restaurants'] as List<dynamic>? ?? []).cast<Restaurant>();
+              final allStores = provider.orderedRestaurants;
 
               List<Restaurant> filteredStores = allStores.where((store) {
                 if (_activeMainCategory == 'all') return true;
@@ -11956,9 +11994,11 @@ class HomeScreenState extends State<HomeScreen> {
 
               return RefreshIndicator(
                 onRefresh: () async {
-                  provider.fetchHomeData(_selectedAreaId!, isRefresh: true);
-                  provider.fetchOffers(_selectedAreaId!);
-                  await premiumProvider.fetchCampaignConfig(_selectedAreaId!);
+                  await Future.wait([
+                    provider.fetchHomeData(_selectedAreaId!, isRefresh: true),
+                    provider.fetchOffers(_selectedAreaId!),
+                    premiumProvider.fetchCampaignConfig(_selectedAreaId!),
+                  ]);
                 },
                 child: CustomScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -12104,25 +12144,37 @@ class HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
 
-                          if (provider.isLoadingHome && filteredStores.isEmpty)
-                            _buildHomeShimmer()
-                          else if (filteredStores.isEmpty)
-                            const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("لا توجد متاجر مطابقة في هذا القسم.")))
-                          else
-                            GridView.builder(
-                              physics: const NeverScrollableScrollPhysics(),
-                              shrinkWrap: true,
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 12, mainAxisSpacing: 12,
-                              ),
-                              itemCount: filteredStores.length,
-                              itemBuilder: (ctx, i) => RestaurantCard(restaurant: filteredStores[i]),
-                            ),
-                          const SizedBox(height: 30),
                         ],
                       ),
                     ),
+                    if (provider.isLoadingHome && filteredStores.isEmpty)
+                      SliverToBoxAdapter(child: _buildHomeShimmer())
+                    else if (filteredStores.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: Center(child: Padding(
+                          padding: EdgeInsets.all(40),
+                          child: Text('لا توجد متاجر مطابقة في هذا القسم.'),
+                        )),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        sliver: SliverGrid(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            childAspectRatio: 0.75,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                          ),
+                          delegate: SliverChildBuilderDelegate(
+                                (ctx, i) => RestaurantCard(restaurant: filteredStores[i]),
+                            childCount: filteredStores.length,
+                            addAutomaticKeepAlives: false,
+                            addRepaintBoundaries: true,
+                          ),
+                        ),
+                      ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 30)),
                   ],
                 ),
               );
@@ -12689,14 +12741,15 @@ class _RestaurantsScreenState extends State<RestaurantsScreen> {
             return const Center(child: Text("لا توجد مطاعم متاحة حالياً"));
           }
 
+          final sorted = provider.orderedRestaurants;
           return RefreshIndicator(
-            onRefresh: () => _loadInitialData(isRefresh: true),
+            onRefresh: () async => _loadInitialData(isRefresh: true),
             child: GridView.builder(
               padding: const EdgeInsets.all(15),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.7),
-              itemCount: provider.allRestaurants.length,
+              itemCount: sorted.length,
               itemBuilder: (context, index) {
-                return RestaurantCard(restaurant: provider.allRestaurants[index]);
+                return RestaurantCard(restaurant: sorted[index]);
               },
             ),
           );
@@ -12809,14 +12862,42 @@ class _MenuScreenState extends State<MenuScreen> {
           widget.restaurant.autoOpenTime,widget.restaurant.autoCloseTime);
     }
     if(provider.hasBundledMenuFor(widget.restaurant.id)){
-      final sections=provider.sectionsFor(widget.restaurant.id);
-      final changed=jsonEncode(sections)!=jsonEncode(_subcategories);
-      if(changed)setState((){
-        _subcategories=List<dynamic>.from(sections);
-        _categoryKeys.clear();
-        _categoryKeys[0]=GlobalKey();
-        for(final cat in _subcategories) _categoryKeys[cat['id']]=GlobalKey();
-      });
+      final sections = _sectionsWithMeals(provider.sectionsFor(widget.restaurant.id),
+          provider.menuItems[widget.restaurant.id] ?? const <FoodItem>[]);
+      if (jsonEncode(sections) != jsonEncode(_subcategories)) {
+        setState(() => _applyMenuSections(sections,
+            provider.menuItems[widget.restaurant.id] ?? const <FoodItem>[]));
+      }
+    }
+  }
+
+  List<dynamic> _sectionsWithMeals(List<dynamic> raw, List<FoodItem> menu) {
+    if (menu.isEmpty) return <dynamic>[];
+    final used = <int>{for (final item in menu) ...item.allCategoryIds};
+    return raw.where((section) {
+      if (section is! Map) return false;
+      final id = int.tryParse(section['id']?.toString() ?? '');
+      return id != null && used.contains(id);
+    }).toList();
+  }
+
+  void _applyMenuSections(List<dynamic> sections, List<FoodItem> items) {
+    final visible = _sectionsWithMeals(sections, items);
+    // Normalize IDs: the API may serialize section IDs as strings.
+    _subcategories = visible.map((raw) {
+      final section = Map<String, dynamic>.from(raw as Map);
+      section['id'] = int.parse(section['id'].toString());
+      section['name'] = section['name']?.toString() ?? 'القسم';
+      return section;
+    }).toList();
+    _isLoadingCats = false;
+    _categoryKeys.clear();
+    _categoryKeys[0] = GlobalKey();
+    for (final cat in _subcategories) {
+      _categoryKeys[cat['id'] as int] = GlobalKey();
+    }
+    if (_selectedCategoryId != 0 && !_categoryKeys.containsKey(_selectedCategoryId)) {
+      _selectedCategoryId = 0;
     }
   }
 
@@ -12921,8 +13002,12 @@ class _MenuScreenState extends State<MenuScreen> {
       var lng = current.lng;
       var source = current.source;
       if (!_isManualSource(source)) {
-        final recentPosition = await LocationService.tryAutoDetectSilent(
-          timeout: const Duration(seconds: 8),
+        final lastSavedMs = prefs.getInt(LocationService.LOCATION_TIMESTAMP_KEY) ?? 0;
+        final isRecent = lastSavedMs > 0 &&
+            DateTime.now().millisecondsSinceEpoch - lastSavedMs <
+                const Duration(minutes: 5).inMilliseconds;
+        final recentPosition = isRecent ? null : await LocationService.tryAutoDetectSilent(
+          timeout: const Duration(seconds: 5),
         );
         if (!mounted) return;
         if (recentPosition != null && recentPosition.accuracy <= 300 &&
@@ -13286,62 +13371,45 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _initData() async {
     final provider = Provider.of<CustomerProvider>(context, listen: false);
-    // One menu response holds items, sections, options, and effective open/paused state.
     await provider.fetchMenuForRestaurant(widget.restaurant.id);
     if (!mounted) return;
     _scheduleAvailabilityBoundary();
-    final modernSections=provider.sectionsFor(widget.restaurant.id);
-    if (provider.hasBundledMenuFor(widget.restaurant.id)) {
-      setState(() {
-        _subcategories=modernSections;
-        _isLoadingCats=false;
-        _categoryKeys.clear();
-        _categoryKeys[0]=GlobalKey();
-        for(final cat in _subcategories) _categoryKeys[cat['id']]=GlobalKey();
-      });
-    }
-    final accepting=provider.acceptingOrdersFor(widget.restaurant.id);
-    if(accepting != null){
-      provider.updateSingleRestaurantStatus(widget.restaurant.id,accepting,
+    final items = provider.menuItems[widget.restaurant.id] ?? const <FoodItem>[];
+
+    final accepting = provider.acceptingOrdersFor(widget.restaurant.id);
+    if (accepting != null) {
+      provider.updateSingleRestaurantStatus(widget.restaurant.id, accepting,
           widget.restaurant.autoOpenTime, widget.restaurant.autoCloseTime);
     }
+
+    // V13 menu endpoint already contains categories: zero extra HTTP calls.
+    if (provider.hasBundledMenuFor(widget.restaurant.id)) {
+      setState(() => _applyMenuSections(
+          provider.sectionsFor(widget.restaurant.id), items));
+      return;
+    }
+
+    // Legacy WooCommerce only: first display cached sections without waiting.
     final prefs = await SharedPreferences.getInstance();
     final cacheKey = 'cats_${widget.restaurant.id}';
     final cachedCats = prefs.getString(cacheKey);
-
-    if (!provider.hasBundledMenuFor(widget.restaurant.id) && cachedCats != null && mounted) {
-      setState(() {
-        _subcategories = json.decode(cachedCats);
-        _isLoadingCats = false;
-        _categoryKeys[0] = GlobalKey();
-        for (var cat in _subcategories) {
-          _categoryKeys[cat['id']] = GlobalKey();
-        }
-      });
+    List<dynamic> cached = <dynamic>[];
+    if (cachedCats != null) {
+      try {
+        final decoded = jsonDecode(cachedCats);
+        if (decoded is List) cached = decoded;
+        if (mounted) setState(() => _applyMenuSections(cached, items));
+      } catch (_) {}
     }
-
+    if (cachedCats != null && await _cachedSectionsStillValid(prefs, widget.restaurant.id)) {
+      return;
+    }
     try {
-      final bool shouldFetchCats = cachedCats == null ||
-          !(await _cachedSectionsStillValid(prefs, widget.restaurant.id));
-      final cats = provider.hasBundledMenuFor(widget.restaurant.id) ? modernSections :
-      (shouldFetchCats ? await ApiService().getSubcategories(widget.restaurant.id)
-          : (json.decode(cachedCats) as List<dynamic>));
-      if (provider.hasBundledMenuFor(widget.restaurant.id) || shouldFetchCats) {
-        await prefs.setString(cacheKey, json.encode(cats));
-        await prefs.setInt('cats_cache_time_${widget.restaurant.id}',
-            DateTime.now().millisecondsSinceEpoch);
-      }
-      if (mounted) {
-        setState(() {
-          _subcategories = cats;
-          _isLoadingCats = false;
-          _categoryKeys.clear();
-          _categoryKeys[0] = GlobalKey();
-          for (var cat in _subcategories) {
-            _categoryKeys[cat['id']] = GlobalKey();
-          }
-        });
-      }
+      final cats = await ApiService().getSubcategories(widget.restaurant.id);
+      await prefs.setString(cacheKey, jsonEncode(cats));
+      await prefs.setInt('cats_cache_time_${widget.restaurant.id}',
+          DateTime.now().millisecondsSinceEpoch);
+      if (mounted) setState(() => _applyMenuSections(cats, items));
     } catch (e) {
       if (mounted && cachedCats == null) setState(() => _isLoadingCats = false);
     }
@@ -13479,7 +13547,7 @@ class _MenuScreenState extends State<MenuScreen> {
       displayText = 'توصيل مجاني';
       icon = Icons.check_circle;
     } else {
-      displayText = '${NumberFormat('#,###', 'ar_IQ').format(_deliveryFee)} د.ع';
+      displayText = 'التوصيل  ${NumberFormat('#,###', 'ar_IQ').format(_deliveryFee)} د.ع';
       if (_deliveryMessage.contains('الافتراضي') || _deliveryMessage.contains('موحدة')) {
         bgColor = Colors.amber.withOpacity(0.8);
       }
@@ -13637,9 +13705,14 @@ class _MenuScreenState extends State<MenuScreen> {
             SliverToBoxAdapter(child: _buildManualLocationNotice()),
             if (_deliveryDiscount > 0 && _originalFee > _deliveryFee)
               SliverToBoxAdapter(child: Padding(
-                padding: const EdgeInsets.fromLTRB(15, 8, 15, 0),
-                child: Text('🚚 خصم التوصيل مفعل: ${NumberFormat('#,###').format(_originalFee)} ← ${NumberFormat('#,###').format(_deliveryFee)} د.ع',
-                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 13)),
+                padding: const EdgeInsets.fromLTRB(16, 9, 16, 3),
+                child: Row(children: [
+                  Icon(Icons.local_offer_rounded, color: Color(0xFF168565), size: 17),
+                  SizedBox(width: 7),
+                  Expanded(child: Text('عرض التوصيل محسوب ضمن السعر الظاهر',
+                      style: TextStyle(color: Color(0xFF168565),
+                          fontWeight: FontWeight.w700, fontSize: 12))),
+                ]),
               )),
             SliverToBoxAdapter(
               child: Consumer<PremiumCampaignProvider>(
@@ -13803,7 +13876,8 @@ class _MenuScreenState extends State<MenuScreen> {
                 } else {
                   for (var cat in _subcategories) {
                     final catItems = menu.where((item) => item.allCategoryIds.contains(cat['id'])).toList();
-                    // Keep new empty sections visible; they will fill when the manager adds meals.
+                    // Only sections containing actual meals should appear.
+                    if (catItems.isEmpty) continue;
 
                     sliverSections.add(
                       SliverToBoxAdapter(
@@ -13820,12 +13894,6 @@ class _MenuScreenState extends State<MenuScreen> {
                       ),
                     );
 
-                    if (catItems.isEmpty) {
-                      sliverSections.add(const SliverToBoxAdapter(child: Padding(
-                        padding: EdgeInsets.symmetric(horizontal:16,vertical:12),
-                        child:Text('لا توجد وجبات في هذا القسم حالياً',style:TextStyle(color:Colors.grey)),
-                      )));
-                    }
                     sliverSections.add(
                       SliverList(
                         delegate: SliverChildBuilderDelegate(
