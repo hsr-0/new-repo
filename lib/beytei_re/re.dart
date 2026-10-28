@@ -7,6 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart'; // ✅ مهم جداً
 import 'dart:ui' as ui; // ✅ لحل مشكلة Path
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
@@ -2190,7 +2191,7 @@ class CustomerProvider with ChangeNotifier {
     notifyListeners();
     try {
       final jsonStr = await _apiService.getRawMenu(restaurantId);
-      _processAndSetMenu(restaurantId, jsonStr);
+      await _processAndSetMenu(restaurantId, jsonStr);
       await _saveMenuToCache(restaurantId, jsonStr);
       await prefs.reload();
       if ((prefs.getInt('beytei_menu_event_$restaurantId') ?? 0) == initialEvent) {
@@ -2210,19 +2211,21 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  void _processAndSetMenu(int restaurantId, String jsonStr) {
+  Future<void> _processAndSetMenu(int restaurantId, String jsonStr) async {
     try {
-      final dynamic parsed = json.decode(jsonStr);
-      // V3 sends product options, sections and restaurant status in one response.
-      // Older installations still return a plain WooCommerce product array.
-      final bool modern = parsed is Map && parsed['products'] is List;
-      final List<dynamic> decoded = modern ? (parsed['products'] as List) : (parsed as List);
-      if(modern) _modernMenuIds.add(restaurantId);
+      final request = <String, dynamic>{
+        'restaurant_id': restaurantId, 'json': jsonStr,
+      };
+      // Long market menus are parsed on a separate isolate to prevent a UI freeze.
+      // Smaller menus avoid isolate startup overhead for faster ordinary restaurants.
+      final Map<String, dynamic> prepared = jsonStr.length >= 120000
+          ? await compute(_beyteiPrepareMenuPayload, request)
+          : _beyteiPrepareMenuPayload(request);
+      final bool modern = prepared['modern'] == true;
+      if (modern) _modernMenuIds.add(restaurantId);
       else _modernMenuIds.remove(restaurantId);
-      _menuSections[restaurantId] = modern && parsed['sections'] is List
-          ? List<dynamic>.from(parsed['sections']) : [];
-      final restaurantData = modern && parsed['restaurant'] is Map
-          ? Map<String, dynamic>.from(parsed['restaurant']) : <String, dynamic>{};
+      _menuSections[restaurantId] = prepared['sections'] as List<dynamic>;
+      final restaurantData = prepared['restaurant'] as Map<String, dynamic>;
       final availability = restaurantData['accepting_orders'];
       _menuAcceptingOrders[restaurantId] = availability == true || (availability == null &&
           _allRestaurants.any((r) => r.id == restaurantId && r.isOpen));
@@ -2230,9 +2233,7 @@ class CustomerProvider with ChangeNotifier {
       _menuAutoOpen[restaurantId] = restaurantData['auto_open_time']?.toString() ?? '';
       _menuAutoClose[restaurantId] = restaurantData['auto_close_time']?.toString() ?? '';
       _menuPausedUntil[restaurantId] = DateTime.tryParse(restaurantData['pause_until']?.toString() ?? '');
-      List<FoodItem> items = decoded.map((jsonObj) => FoodItem.fromJson(
-        Map<String, dynamic>.from(jsonObj as Map), restaurantId: restaurantId,
-      )).toList();
+      final items = prepared['items'] as List<FoodItem>;
 
       Restaurant? restaurant = _allRestaurants.firstWhere(
               (r) => r.id == restaurantId,
@@ -2265,7 +2266,7 @@ class CustomerProvider with ChangeNotifier {
     final jsonStr = prefs.getString('${AppConstants.CACHE_KEY_MENU_PREFIX}$restaurantId');
     if (jsonStr != null) {
       try {
-        _processAndSetMenu(restaurantId, jsonStr);
+        await _processAndSetMenu(restaurantId, jsonStr);
         notifyListeners();
       } catch (e) {
         print("خطأ في كاش المنيو: $e");
@@ -3311,6 +3312,31 @@ class FoodItem {
   }
 
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId, 'selectedWeight': selectedWeight};
+}
+
+// V14: Decode and prepare large market menus away from Flutter's UI isolate.
+// Keep the exact FoodItem model and server prices/options; no pagination or truncation.
+Map<String, dynamic> _beyteiPrepareMenuPayload(Map<String, dynamic> request) {
+  final restaurantId = request['restaurant_id'] as int;
+  final raw = request['json'] as String;
+  final dynamic parsed = jsonDecode(raw);
+  final modern = parsed is Map && parsed['products'] is List;
+  final List<dynamic> rows = modern ? (parsed['products'] as List) : (parsed as List);
+  final items = <FoodItem>[];
+  for (final row in rows) {
+    if (row is! Map) continue;
+    items.add(FoodItem.fromJson(
+      Map<String, dynamic>.from(row), restaurantId: restaurantId,
+    ));
+  }
+  return <String, dynamic>{
+    'modern': modern,
+    'items': items,
+    'sections': modern && parsed['sections'] is List
+        ? List<dynamic>.from(parsed['sections']) : <dynamic>[],
+    'restaurant': modern && parsed['restaurant'] is Map
+        ? Map<String, dynamic>.from(parsed['restaurant']) : <String, dynamic>{},
+  };
 }
 
 class Order {
@@ -7091,6 +7117,9 @@ class FoodCard extends StatelessWidget {
                                 imageUrl: food.imageUrl,
                                 width: 110,
                                 height: 110,
+                                // Prevent full-resolution market photos from filling memory.
+                                memCacheWidth: 320,
+                                memCacheHeight: 320,
                                 fit: BoxFit.cover,
                                 placeholder: (context, url) => Shimmer.fromColors(
                                   baseColor: Colors.grey[300]!, highlightColor: Colors.grey[100]!,
@@ -7314,12 +7343,6 @@ class RestaurantCard extends StatelessWidget {
                         fontWeight: FontWeight.w800, color: Color(0xFF19283E))),
                 const SizedBox(height: 7),
                 Row(children: [
-                  const Icon(Icons.star_rounded, color: Color(0xFFFFB020), size: 17),
-                  const SizedBox(width: 3),
-                  Text(restaurant.averageRating.toStringAsFixed(1),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                          color: Color(0xFF556579))),
-                  const Spacer(),
                   Container(width: 6, height: 6,
                       decoration: BoxDecoration(shape: BoxShape.circle,
                           color: isOpen && covered
@@ -11655,13 +11678,6 @@ class ModernHorizontalRestaurantCard extends StatelessWidget {
                         )
                       ],
                     ),
-                    const SizedBox(height: 5),
-                    Row(
-                      children: [
-                        const Icon(Icons.star, color: Colors.amber, size: 14),
-                        Text(" ${restaurant.averageRating.toStringAsFixed(1)}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
                     if (!canOrder)
                       const Padding(
                         padding: EdgeInsets.only(top: 4.0),
@@ -11743,20 +11759,6 @@ class ModernVerticalRestaurantCard extends StatelessWidget {
                           )
                       ),
                     ),
-                  Positioned(
-                    top: 10, right: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.star, color: Colors.amber, size: 16),
-                          const SizedBox(width: 4),
-                          Text(restaurant.averageRating.toStringAsFixed(1), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                  )
                 ],
               ),
               Padding(
@@ -12901,6 +12903,42 @@ class _MenuScreenState extends State<MenuScreen> {
     }
   }
 
+  // V14: Keep a lightweight category index, refreshed only on new menu data
+  // or changed section IDs. Food cards remain truly lazy via SliverList.builder.
+  List<FoodItem>? _lastIndexedMenu;
+  String _lastIndexedSectionKey = '';
+  final Map<int, List<FoodItem>> _categoryItems = {};
+  List<FoodItem> _uncategorizedItems = const <FoodItem>[];
+
+  void _ensureCategoryIndex(List<FoodItem> menu) {
+    final categoryIds = _subcategories.map((c) => c['id'] as int).toList();
+    final key = categoryIds.join(',');
+    if (identical(_lastIndexedMenu, menu) && _lastIndexedSectionKey == key) return;
+
+    final buckets = <int, List<FoodItem>>{
+      for (final id in categoryIds) id: <FoodItem>[],
+    };
+    final others = <FoodItem>[];
+    for (final food in menu) {
+      var matched = false;
+      final seenIds = <int>{};
+      for (final categoryId in food.allCategoryIds) {
+        if (!seenIds.add(categoryId)) continue;
+        final bucket = buckets[categoryId];
+        if (bucket == null) continue;
+        bucket.add(food);
+        matched = true;
+      }
+      if (!matched) others.add(food);
+    }
+    _categoryItems
+      ..clear()
+      ..addAll(buckets);
+    _uncategorizedItems = others;
+    _lastIndexedMenu = menu;
+    _lastIndexedSectionKey = key;
+  }
+
   final ScrollController _scrollController = ScrollController();
   final ScrollController _categoryScrollController = ScrollController();
   final Map<int, GlobalKey> _categoryKeys = {};
@@ -13649,26 +13687,7 @@ class _MenuScreenState extends State<MenuScreen> {
                         children: [
                           Text(widget.restaurant.name, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(8)),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.star, color: Colors.amber, size: 16),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      "${widget.restaurant.averageRating} (${widget.restaurant.ratingCount}+)",
-                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              _buildDeliveryFeeWidget(),
-                            ],
-                          )
+                          _buildDeliveryFeeWidget()
                         ],
                       ),
                     ),
@@ -13874,8 +13893,9 @@ class _MenuScreenState extends State<MenuScreen> {
                     ),
                   );
                 } else {
+                  _ensureCategoryIndex(menu);
                   for (var cat in _subcategories) {
-                    final catItems = menu.where((item) => item.allCategoryIds.contains(cat['id'])).toList();
+                    final catItems = _categoryItems[cat['id']] ?? const <FoodItem>[];
                     // Only sections containing actual meals should appear.
                     if (catItems.isEmpty) continue;
 
@@ -13910,8 +13930,7 @@ class _MenuScreenState extends State<MenuScreen> {
                     );
                   }
 
-                  final subcatIds = _subcategories.map((c) => c['id']).toList();
-                  final uncategorized = menu.where((item) => !item.allCategoryIds.any((id) => subcatIds.contains(id))).toList();
+                  final uncategorized = _uncategorizedItems;
                   if (uncategorized.isNotEmpty) {
                     sliverSections.add(
                       SliverToBoxAdapter(
