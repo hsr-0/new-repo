@@ -3294,8 +3294,16 @@ class FoodItem {
   // 🔥 2. السعر الأساسي للمنتج (مع أرباح المنصة)
   double get basePrice => (hasIndividualSale ? salePrice! : price) + platformMarkup;
 
-  // 🔥 3. السعر النهائي للوزن والكمية
-  double get finalPrice => basePrice * selectedWeight + menuExtrasPrice;
+  // V18: all cart/checkout displays use the same price per unit.
+  // For weighted produce, round AFTER weight/options to nearest 250 IQD,
+  // BEFORE multiplying by quantity. Unweighted products keep their catalog price.
+  double get rawUnitPrice => basePrice * selectedWeight + menuExtrasPrice;
+  double get finalPrice {
+    final raw = rawUnitPrice;
+    if ((selectedWeight - 1.0).abs() < 0.00001) return raw;
+    if (raw <= 0) return 0;
+    return max(250.0, (raw / 250.0).round() * 250.0);
+  }
 
   String get formattedFinalPrice => '${NumberFormat('#,###', 'ar_IQ').format(finalPrice)} د.ع';
   double get displayPrice => finalPrice;
@@ -5913,7 +5921,7 @@ class ApiService {
 
   Future<List<FoodItem>> _getProducts(String params, String cacheKey) async {
     return _executeWithRetry(() async {
-      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data';
+      const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data,platform_markup,restaurant_id,product_available,option_groups';
       final url = '$BEYTEI_URL/wp-json/wc/v3/products?$params&_fields=$fields';
 
       final response = await http.get(Uri.parse(url), headers: {'Authorization': _authString});
@@ -5927,7 +5935,15 @@ class ApiService {
 
   Future<List<FoodItem>> getOnSaleItems() => _getProducts('on_sale=true&per_page=100', 'onsale_items');
 
-  Future<List<FoodItem>> searchProducts({required String query}) => _getProducts('search=$query&per_page=20', 'search_$query');
+  // V18: search ALL Woo product types (food, market, fruit and grocery).
+  // Incremental page loading avoids a hard 20-result cutoff.
+  Future<List<FoodItem>> searchProducts({required String query, int page = 1, int perPage = 40}) {
+    final term = Uri.encodeQueryComponent(query.trim());
+    final pageSize = perPage.clamp(1, 100);
+    final pageNumber = page < 1 ? 1 : page;
+    return _getProducts('search=$term&per_page=$pageSize&page=$pageNumber',
+        'search_v18_${query.trim()}_${pageNumber}_$pageSize');
+  }
 
   Future<List<FoodItem>> getProductsByTag({required String tagName}) async {
     return _executeWithRetry(() async {
@@ -6051,18 +6067,28 @@ class ApiService {
         "postcode": "10001"
       },
       "line_items": cartItems.map((item) => {
-        "product_id":item.id,
-        "quantity":item.quantity,
+        "product_id": item.id,
+        "quantity": item.quantity,
+        // V19: item.finalPrice is the ONE rounded unit price containing
+        // selected weight AND option extras. Multiply quantity ONCE for the line.
+        // WooCommerce must verify the quote rather than silently change it.
+        "subtotal": (item.finalPrice * item.quantity).toStringAsFixed(2),
+        "total": (item.finalPrice * item.quantity).toStringAsFixed(2),
         if (item.selectedMenuOptions.isNotEmpty || item.hasMenuOptions || item.customNote.trim().isNotEmpty || (item.selectedWeight - 1.0).abs() > 0.00001)
           "meta_data":[
             // Send ONLY the selected IDs; the server maps them to names once
             // at checkout and forwards the saved labels to the courier.
+            {"key":"_beytei_client_unit_price","value":item.finalPrice.toStringAsFixed(2)},
+            {"key":"_beytei_client_line_total","value":(item.finalPrice * item.quantity).toStringAsFixed(2)},
             if (item.hasMenuOptions) {"key":"_beytei_selected_options","value":item.selectedMenuOptions},
             if (item.customNote.trim().isNotEmpty)
               {"key":"_beytei_customer_note","value":item.customNote.trim()},
             // Keep legacy market/weight picker descriptive; this metadata
             // never authorizes a client price and does not change totals.
-            if ((item.selectedWeight - 1.0).abs() > 0.00001 && !item.hasMenuOptions)
+            // V19: selected weight is independent of sauce/toppings/option groups.
+            // Always send it when selected; server can validate options and weight
+            // separately, without multiplying either value a second time.
+            if ((item.selectedWeight - 1.0).abs() > 0.00001)
               {"key":"_beytei_selected_weight_kg","value":item.selectedWeight.toString()},
           ],
       }).toList(),
@@ -6074,6 +6100,10 @@ class ApiService {
         {"key": "fcm_token", "value": fcmToken ?? ''},
         {"key": "_device_id", "value": deviceId},
         {"key": "_checkout_session_id", "value": checkoutSessionId},
+        {"key": "_beytei_client_pricing_version", "value": "18"},
+        {"key": "_beytei_client_items_total", "value": cartItems.fold<double>(0.0, (sum, item) => sum + item.finalPrice * item.quantity).toStringAsFixed(2)},
+        {"key": "_beytei_client_coupon_code", "value": couponCode ?? ""},
+        {"key": "_beytei_client_delivery_discount", "value": (deliveryDiscountAmount ?? 0).toStringAsFixed(2)},
 
         // 💰 6. إرسال البيانات المالية للسيرفر
         if (useSmartWallet) {"key": "_use_smart_wallet", "value": "yes"},
@@ -11874,10 +11904,10 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   void _onSearchSubmitted(String query) {
-    if (query.isNotEmpty && _selectedAreaId != null) {
-      Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => SearchScreen(searchQuery: query, selectedAreaId: _selectedAreaId!)));
-    }
+    if (_selectedAreaId == null) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => SearchScreen(searchQuery: query.trim(), selectedAreaId: _selectedAreaId!),
+    ));
   }
 
   // 🔥 دالة النافذة المنبثقة المعدلة (مع زر اطلب الآن)
@@ -12364,12 +12394,20 @@ class HomeScreenState extends State<HomeScreen> {
         controller: _searchController,
         textInputAction: TextInputAction.search,
         onSubmitted: _onSearchSubmitted,
-        decoration: const InputDecoration(
-          hintText: 'ابحث عن وجبة، مطعم...',
-          hintStyle: TextStyle(fontSize: 14),
-          prefixIcon: Icon(Icons.search, color: Colors.grey),
+        decoration: InputDecoration(
+          hintText: 'ابحث عن مطعم أو طبق أو خضروات...',
+          hintStyle: const TextStyle(fontSize: 13),
+          prefixIcon: IconButton(
+            icon: const Icon(Icons.search, color: Color(0xFF234C93)),
+            onPressed: () => _onSearchSubmitted(_searchController.text),
+          ),
+          suffixIcon: IconButton(
+            tooltip: 'بحث حسب النوع',
+            icon: const Icon(Icons.tune_rounded, color: Color(0xFF234C93)),
+            onPressed: () => _onSearchSubmitted(_searchController.text),
+          ),
           border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
         ),
       ),
     );
@@ -12802,13 +12840,46 @@ class PermissionService {
 
 class MenuScreen extends StatefulWidget {
   final Restaurant restaurant;
-  const MenuScreen({super.key, required this.restaurant});
+  // V18: when opening from product search, show the existing product picker.
+  final int? initialProductId;
+  final FoodItem? initialSearchProduct;
+  const MenuScreen({super.key, required this.restaurant,
+    this.initialProductId, this.initialSearchProduct});
 
   @override
   State<MenuScreen> createState() => _MenuScreenState();
 }
 
 class _MenuScreenState extends State<MenuScreen> {
+  bool _initialSearchProductShown = false;
+  void _openSearchedProductIfAvailable() {
+    if (_initialSearchProductShown || widget.initialProductId == null || !mounted) return;
+    _initialSearchProductShown = true;
+    final provider = Provider.of<CustomerProvider>(context, listen: false);
+    final candidates = provider.menuItems[widget.restaurant.id] ?? const <FoodItem>[];
+    FoodItem? selected;
+    for (final product in candidates) {
+      if (product.id == widget.initialProductId) {
+        selected = product;
+        break;
+      }
+    }
+    selected ??= widget.initialSearchProduct;
+    if (selected == null) return;
+    final accepting = provider.acceptingOrdersFor(widget.restaurant.id) ?? widget.restaurant.isOpen;
+    final canOrder = widget.restaurant.isDeliverable && accepting && selected.isProductAvailable;
+    if (!canOrder) return; // Closed stores remain viewable, never addable.
+    final food = selected;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => FoodItemBottomSheet(foodItem: food, isMarket: _isMarketSystem),
+      );
+    });
+  }
   int _selectedCategoryId = 0;
   List<dynamic> _subcategories = [];
   bool _isLoadingCats = true;
@@ -12944,16 +13015,21 @@ class _MenuScreenState extends State<MenuScreen> {
   final Map<int, GlobalKey> _categoryKeys = {};
   bool _isAutoScrolling = false;
 
-  bool get _isMarketSystem => widget.restaurant.storeType == 'market' || widget.restaurant.storeType == 'meat';
+  bool get _isMarketSystem => const <String>{
+    'market', 'meat', 'grocery', 'vegetable', 'vegetables',
+    'fruit', 'fruits', 'supermarket', 'greengrocer'
+  }.contains(widget.restaurant.storeType.toLowerCase());
 
   @override
   void initState() {
     super.initState();
+    if (widget.initialProductId != null) _shouldClearCart = false;
     _scrollController.addListener(_onScroll);
     BeyteiMenuCacheEvents.changedRestaurant.addListener(_handleMenuUpdated);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initData();
       if (!mounted) return;
+      _openSearchedProductIfAvailable();
       final provider = Provider.of<CustomerProvider>(context, listen: false);
       final accepting = provider.acceptingOrdersFor(widget.restaurant.id) ?? widget.restaurant.isOpen;
       if (accepting && widget.restaurant.isDeliverable) {
@@ -14125,63 +14201,407 @@ class MultiSliver extends StatelessWidget {
 // ✨ كلاس لجعل شريط الأقسام ثابتاً أثناء النزول
 // ✨ كلاس مساعد لدمج الـ Slivers معاً (ضعه في أي مكان أسفل الملف)
 
+// V18: Search stores AND products across all delivery-eligible store types.
+// Compact rows eliminate the narrow broken text shown in the search video.
 class SearchScreen extends StatefulWidget {
   final String searchQuery;
   final int selectedAreaId;
   const SearchScreen({super.key, required this.searchQuery, required this.selectedAreaId});
+
   @override
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
 class _SearchScreenState extends State<SearchScreen> {
-  late Future<List<FoodItem>> _searchFuture;
-  final ApiService _apiService = ApiService();
+  final ApiService _api = ApiService();
+  late final TextEditingController _queryController;
+  final ScrollController _productScroll = ScrollController();
+  final List<FoodItem> _products = [];
+  List<Restaurant> _stores = [];
+  bool _loadingStores = true;
+  bool _loadingProducts = false;
+  bool _moreProducts = true;
+  bool _loadingMore = false;
+  bool _productError = false;
+  int _productPage = 0;
+  int _searchId = 0;
+  String _query = '';
+  Timer? _debounce;
+  static const int _pageSize = 40;
+  static const Color _blue = Color(0xFF234C93);
+
+  static String _normalize(String value) => value
+      .toLowerCase().trim()
+      .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+      .replaceAll(RegExp(r'[إأآ]'), 'ا')
+      .replaceAll('ة', 'ه')
+      .replaceAll('ى', 'ي')
+      .replaceAll(RegExp(r'\s+'), ' ');
 
   @override
   void initState() {
     super.initState();
-    _loadAndFilterSearch();
+    _queryController = TextEditingController(text: widget.searchQuery);
+    _query = widget.searchQuery.trim();
+    _productScroll.addListener(() {
+      if (!_productScroll.hasClients || _loadingMore || _loadingProducts || !_moreProducts) return;
+      if (_productScroll.position.extentAfter < 450) _loadMoreProducts();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startSearch());
   }
 
-  void _loadAndFilterSearch() {
-    setState(() {
-      // ✨ [الإصلاح]: حذفنا areaId من هنا
-      _searchFuture = _apiService.searchProducts(query: widget.searchQuery).then((allResults) async {
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _queryController.dispose();
+    _productScroll.dispose();
+    super.dispose();
+  }
 
-        // (الكود التالي سليم ومهم للفلترة داخل التطبيق)
-        final deliverableIds = await _apiService.getDeliverableRestaurantIds(widget.selectedAreaId);
-
-        final provider = Provider.of<CustomerProvider>(context, listen: false);
-        final statusMap = { for (var r in provider.allRestaurants) r.id : r.isOpen };
-
-        // ✨ [الإصلاح الأهم]: الفلترة حسب المنطقة تتم هنا الآن
-        return allResults.where((item) {
-          final isDeliverable = deliverableIds.contains(item.categoryId);
-          if (!isDeliverable) return false; // فلترة المنطقة
-
-          item.isDeliverable = statusMap[item.categoryId] ?? false; // فلترة حالة الفتح
-          return true;
-        }).toList();
-      });
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 330), () {
+      if (!mounted || value.trim() == _query) return;
+      _query = value.trim();
+      _startSearch();
     });
+  }
+
+  void _startSearch() {
+    if (!mounted) return;
+    final runId = ++_searchId;
+    setState(() {
+      _products.clear();
+      _productPage = 0;
+      _moreProducts = _query.isNotEmpty;
+      _productError = false;
+      _loadingProducts = _query.isNotEmpty;
+      _loadingMore = false;
+      _loadingStores = true;
+    });
+    _refreshStores(runId);
+    if (_query.isNotEmpty) _loadMoreProducts();
+  }
+
+  Future<void> _refreshStores(int runId) async {
+    try {
+      final provider = Provider.of<CustomerProvider>(context, listen: false);
+      // Prefer shared cached/home restaurant data; never fetch every menu.
+      if (provider.allRestaurants.isEmpty) {
+        await provider.fetchAllRestaurants(widget.selectedAreaId);
+      }
+      if (!mounted || runId != _searchId) return;
+      final term = _normalize(_query);
+      final results = provider.orderedRestaurants.where((r) =>
+      r.isDeliverable && (term.isEmpty || _normalize(r.name).contains(term))).toList();
+      setState(() { _stores = results; _loadingStores = false; });
+    } catch (_) {
+      if (mounted && runId == _searchId) setState(() => _loadingStores = false);
+    }
+  }
+
+  Restaurant? _storeOf(FoodItem food, List<Restaurant> stores) {
+    for (final store in stores) {
+      if (store.id == food.categoryId) return store;
+    }
+    // Legacy products sometimes point to a child category; use their category list.
+    for (final store in stores) {
+      if (food.allCategoryIds.contains(store.id)) return store;
+    }
+    return null;
+  }
+
+  Future<void> _loadMoreProducts() async {
+    if (_loadingMore || !_moreProducts || _query.isEmpty) return;
+    final runId = _searchId;
+    final term = _query;
+    setState(() => _loadingMore = true);
+    try {
+      final provider = Provider.of<CustomerProvider>(context, listen: false);
+      if (provider.allRestaurants.isEmpty) {
+        await provider.fetchAllRestaurants(widget.selectedAreaId);
+      }
+      final eligible = provider.allRestaurants.where((r) => r.isDeliverable).toList();
+      final nextPage = _productPage + 1;
+      final page = await _api.searchProducts(query: term, page: nextPage, perPage: _pageSize);
+      if (!mounted || runId != _searchId) return;
+      final seen = _products.map((p) => p.id).toSet();
+      final matches = <FoodItem>[];
+      for (final food in page) {
+        if (!seen.add(food.id)) continue;
+        final store = _storeOf(food, eligible);
+        if (store == null) continue; // Do not display products outside selected area.
+        food.isDeliverable = store.isOpen && store.isDeliverable && food.isProductAvailable;
+        matches.add(food);
+      }
+      setState(() {
+        _products.addAll(matches);
+        _productPage = nextPage;
+        _moreProducts = page.length >= _pageSize;
+        _loadingProducts = false;
+        _loadingMore = false;
+        _productError = false;
+      });
+      // If the first page belongs to other cities, try the next page too.
+      if (_products.isEmpty && _moreProducts && nextPage < 3) _loadMoreProducts();
+    } catch (_) {
+      if (mounted && runId == _searchId) {
+        setState(() {
+          _loadingProducts = false;
+          _loadingMore = false;
+          _productError = true;
+        });
+      }
+    }
+  }
+
+  void _openStore(Restaurant store, {FoodItem? selected}) {
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MenuScreen(restaurant: store,
+          initialProductId: selected?.id,
+          initialSearchProduct: selected),
+    ));
+  }
+
+  Widget _searchField() => Container(
+    margin: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    decoration: BoxDecoration(color: const Color(0xFFF3F6FA),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE1E8F1))),
+    child: TextField(
+      controller: _queryController,
+      autofocus: widget.searchQuery.isEmpty,
+      textInputAction: TextInputAction.search,
+      onChanged: _onQueryChanged,
+      onSubmitted: (value) { _debounce?.cancel(); _query = value.trim(); _startSearch(); FocusScope.of(context).unfocus(); },
+      decoration: InputDecoration(
+        hintText: 'ابحث عن مطعم أو وجبة أو خضروات...',
+        border: InputBorder.none,
+        prefixIcon: const Icon(Icons.search, color: _blue),
+        suffixIcon: _queryController.text.isEmpty ? null : IconButton(
+          icon: const Icon(Icons.close, size: 19),
+          onPressed: () { _queryController.clear(); _query = ''; _startSearch(); },
+        ),
+      ),
+    ),
+  );
+
+  Widget _empty(String message) => Center(child: Padding(
+    padding: const EdgeInsets.all(30),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.search_off_rounded, color: Color(0xFF9EABBA), size: 42),
+      const SizedBox(height: 10),
+      Text(message, textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xFF677489), fontSize: 14)),
+    ]),
+  ));
+
+  Widget _storeResults() {
+    if (_loadingStores) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_stores.isEmpty) {
+      return _empty('لا توجد مطاعم أو متاجر مطابقة في منطقتك');
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      itemCount: _stores.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 9),
+      itemBuilder: (context, index) {
+        final store = _stores[index];
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _openStore(store),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFE8EDF4)),
+              ),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(11),
+                    child: CachedNetworkImage(
+                      imageUrl: store.imageUrl,
+                      width: 72,
+                      height: 72,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Container(
+                        width: 72,
+                        height: 72,
+                        color: const Color(0xFFF0F3F8),
+                      ),
+                      errorWidget: (context, url, error) => Container(
+                        width: 72,
+                        height: 72,
+                        color: const Color(0xFFF0F3F8),
+                        child: const Icon(Icons.storefront),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          store.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          store.isOpen
+                              ? 'يستقبل الطلبات'
+                              : 'مغلق حالياً - يمكنك تصفح المنتجات',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: store.isOpen
+                                ? Colors.green.shade700
+                                : Colors.orange.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.chevron_left, color: _blue),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _productResults() {
+    if (_loadingProducts && _products.isEmpty) {
+      return ListView.builder(itemCount: 7, itemBuilder: (_, __) => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+        child: ShimmerFoodCard(),
+      ));
+    }
+    if (_productError && _products.isEmpty) {
+      return Center(child: TextButton.icon(onPressed: _loadMoreProducts,
+          icon: const Icon(Icons.refresh), label: const Text('تعذر البحث، اضغط للمحاولة مجدداً')));
+    }
+    if (_query.isEmpty) return _empty('اكتب اسم وجبة أو منتج للبحث في المطاعم والماركت والخضروات');
+    if (_products.isEmpty) {
+      if (_moreProducts && !_loadingMore) {
+        return Center(child: TextButton.icon(
+          onPressed: _loadMoreProducts,
+          icon: const Icon(Icons.search),
+          label: const Text('عرض نتائج إضافية من المتاجر'),
+        ));
+      }
+      return _empty('لم نجد منتجات مطابقة في منطقتك');
+    }
+    final providers = Provider.of<CustomerProvider>(context, listen: false).allRestaurants;
+    final stores = providers.where((r) => r.isDeliverable).toList();
+    return ListView.separated(
+      controller: _productScroll,
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 20),
+      itemCount: _products.length + (_moreProducts || _loadingMore || _productError ? 1 : 0),
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        if (i == _products.length) {
+          if (_productError) return TextButton.icon(onPressed: _loadMoreProducts,
+              icon: const Icon(Icons.refresh), label: const Text('إعادة المحاولة'));
+          return Center(child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: _loadingMore ? const CircularProgressIndicator(strokeWidth: 2)
+                : TextButton.icon(onPressed: _loadMoreProducts,
+                icon: const Icon(Icons.expand_more),
+                label: const Text('عرض منتجات أخرى')),
+          ));
+        }
+        final food = _products[i];
+        final store = _storeOf(food, stores);
+        if (store == null) return const SizedBox.shrink();
+        return Material(color: Colors.white, borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _openStore(store, selected: food),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFE8EDF4))),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                ClipRRect(borderRadius: BorderRadius.circular(10),
+                  child: CachedNetworkImage(
+                      imageUrl: food.imageUrl, width: 76, height: 76, fit: BoxFit.cover,
+                      memCacheWidth: 260, memCacheHeight: 260,
+                      placeholder: (_, __) => Container(width: 76, height: 76, color: const Color(0xFFF0F3F8)),
+                      errorWidget: (_, __, ___) => Container(width: 76, height: 76,
+                          color: const Color(0xFFF0F3F8), child: const Icon(Icons.restaurant_menu))),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(food.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                              color: Color(0xFF1D2C42))),
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        const Icon(Icons.storefront_outlined, size: 13, color: _blue),
+                        const SizedBox(width: 4),
+                        Expanded(child: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, color: Color(0xFF60718B)))),
+                      ]),
+                      const SizedBox(height: 6),
+                      Text(food.formattedPrice, maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF19835A))),
+                    ]),
+                ),
+                const SizedBox(width: 6),
+                Icon(store.isOpen ? Icons.add_circle_rounded : Icons.visibility_outlined,
+                    color: store.isOpen ? _blue : Colors.grey, size: 25),
+              ]),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('نتائج البحث عن: "${widget.searchQuery}"')),
-      body: FutureBuilder<List<FoodItem>>(
-        future: _searchFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.75), itemCount: 8, itemBuilder: (context, index) => const ShimmerFoodCard());
-          if (snapshot.hasError) return NetworkErrorWidget(message: "فشل البحث", onRetry: _loadAndFilterSearch);
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("لم يتم العثور على نتائج لبحثك"));
-
-          final results = snapshot.data!;
-          return GridView.builder(padding: const EdgeInsets.all(15), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.75), itemCount: results.length, itemBuilder: (context, index) => FoodCard(food: results[index]));
-        },
+    return DefaultTabController(length: 2, child: Scaffold(
+      backgroundColor: const Color(0xFFFAFBFD),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF1D2C42),
+        elevation: 0,
+        title: const Text('البحث في بيتي', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
       ),
-    );
+      body: Column(children: [
+        _searchField(),
+        Container(color: Colors.white, child: const TabBar(
+          indicatorColor: _blue,
+          labelColor: _blue,
+          unselectedLabelColor: Color(0xFF6E7D91),
+          tabs: [
+            Tab(icon: Icon(Icons.storefront_outlined, size: 19), text: 'مطاعم ومتاجر'),
+            Tab(icon: Icon(Icons.restaurant_menu, size: 19), text: 'أطباق ومنتجات'),
+          ],
+        )),
+        Expanded(child: TabBarView(children: [_storeResults(), _productResults()])),
+      ]),
+    ));
   }
 }
 
@@ -14621,7 +15041,9 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
           }
 
           // 💰 المجموع النهائي بعد كل الخصومات
-          double finalTotal = rawTotal - premiumDiscount - boxRewardDiscount;
+          final double couponDiscount = premiumDiscount > 0 ? 0.0 :
+          max(0.0, cart.totalDiscountAmount - cart.boxRewardDiscount);
+          double finalTotal = rawTotal - premiumDiscount - boxRewardDiscount - couponDiscount;
           if (finalTotal < 0) finalTotal = 0;
 
           return Container(
@@ -15548,7 +15970,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     }
 
     // 🛡️ 2. قاعدة التعارض: إذا كان عرض الحملة مفعل، يتم تعطيل كود الخصم العادي تماماً
-    double couponDiscount = usedPremium ? 0.0 : widget.cart.totalDiscountAmount;
+    // The cart totalDiscountAmount ALREADY includes a box reward.
+    double couponDiscount = usedPremium ? 0.0 :
+    max(0.0, widget.cart.totalDiscountAmount - widget.cart.boxRewardDiscount);
     String? finalCouponCode = usedPremium ? null : widget.cart.appliedCoupon;
 
     // 🔥 3. خصم الصندوق (مع التحقق من الصلاحية)
