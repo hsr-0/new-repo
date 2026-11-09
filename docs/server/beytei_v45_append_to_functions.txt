@@ -1,0 +1,94 @@
+// ============================================================================
+// Beytei V4.5 - complete silent menu/price invalidation (append to functions.php)
+// Existing V4 continues to queue and send refresh_menu. No duplicate FCM sender.
+// Do NOT add another opening <?php tag when pasting into functions.php.
+// ============================================================================
+
+if (!function_exists('beytei_v45_queue_changed_product')) {
+    function beytei_v45_queue_changed_product($post_id) {
+        $post_id = absint($post_id);
+        if (!$post_id || wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
+            return;
+        }
+        $type = get_post_type($post_id);
+        if ($type === 'product_variation') {
+            $post_id = (int) wp_get_post_parent_id($post_id);
+            $type = $post_id ? get_post_type($post_id) : '';
+        }
+        if ($type !== 'product') {
+            return;
+        }
+        // Existing V4 coalesces multiple changes into a single event per restaurant.
+        if (function_exists('beytei_v4_queue_product')) {
+            beytei_v4_queue_product($post_id);
+        }
+    }
+}
+
+// Title, description, image/status changes through WordPress (not necessarily WC CRUD).
+add_action('save_post_product', function($post_id) {
+    beytei_v45_queue_changed_product($post_id);
+}, 30, 1);
+add_action('save_post_product_variation', function($post_id) {
+    beytei_v45_queue_changed_product($post_id);
+}, 30, 1);
+
+// Manager endpoints sometimes save prices and availability directly to post meta.
+if (!function_exists('beytei_v45_changed_product_meta')) {
+    function beytei_v45_changed_product_meta($meta_id, $post_id, $meta_key) {
+        $watched = array(
+            '_price' => true,
+            '_regular_price' => true,
+            '_sale_price' => true,
+            '_sale_price_dates_from' => true,
+            '_sale_price_dates_to' => true,
+            '_stock' => true,
+            '_stock_status' => true,
+            '_manage_stock' => true,
+            '_thumbnail_id' => true,
+            '_product_image_gallery' => true,
+            '_product_attributes' => true,
+            '_beytei_menu_options_v1' => true,
+            '_beytei_product_start_v20' => true,
+            '_beytei_product_end_v20' => true,
+            '_beytei_product_hidden' => true,
+            '_beytei_product_visible' => true,
+        );
+        if (isset($watched[(string) $meta_key])) {
+            beytei_v45_queue_changed_product($post_id);
+        }
+    }
+}
+add_action('added_post_meta',   'beytei_v45_changed_product_meta', 30, 3);
+add_action('updated_post_meta', 'beytei_v45_changed_product_meta', 30, 3);
+add_action('deleted_post_meta', 'beytei_v45_changed_product_meta', 30, 3);
+
+// Make existing data-only refresh_menu / refresh_status valid APNs background pushes.
+// Does NOT affect order, taxi, alert, VoIP or other notifications.
+add_filter('http_request_args', function($args, $url) {
+    if (!is_string($url) ||
+        strpos($url, 'fcm.googleapis.com/v1/projects/beytei-me/messages:send') === false ||
+        empty($args['body']) || !is_string($args['body'])) {
+        return $args;
+    }
+    $payload = json_decode($args['body'], true);
+    if (!is_array($payload) ||
+        !isset($payload['message']['data']['type']) ||
+        isset($payload['message']['notification'])) {
+        return $args;
+    }
+    $type = (string) $payload['message']['data']['type'];
+    if (!in_array($type, array('refresh_menu', 'refresh_status',
+        'restaurant_menu_updated', 'restaurant_updated',
+        'menu_updated', 'restaurant_status_updated'), true)) {
+        return $args;
+    }
+    $payload['message']['apns']['headers']['apns-push-type'] = 'background';
+    $payload['message']['apns']['headers']['apns-priority']  = '5';
+    $payload['message']['apns']['payload']['aps']['content-available'] = 1;
+    $new_body = wp_json_encode($payload);
+    if (is_string($new_body)) {
+        $args['body'] = $new_body;
+    }
+    return $args;
+}, 20, 2);
