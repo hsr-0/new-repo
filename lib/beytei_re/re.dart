@@ -6853,7 +6853,7 @@ class ApiService {
       if (response.statusCode != 404) throw Exception('تعذر تحميل المنيو: ${response.statusCode}');
       const fields = 'id,name,regular_price,sale_price,images,categories,short_description,average_rating,rating_count,meta_data,platform_markup';
       final legacyBase = Uri.parse(
-        '$BEYTEI_URL/wp-json/wc/v3/products?category=$restaurantId&per_page=100&_fields=$fields');
+          '$BEYTEI_URL/wp-json/wc/v3/products?category=$restaurantId&per_page=100&_fields=$fields');
       final legacyUri = forceRefresh ? legacyBase.replace(queryParameters: {
         ...legacyBase.queryParameters,
         '_beytei_refresh': DateTime.now().microsecondsSinceEpoch.toString(),
@@ -10340,7 +10340,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       final prefs = await SharedPreferences.getInstance();
       int? areaId = prefs.getInt('selectedAreaId');
 
-      if (areaId != null && [84, 85, 42].contains(areaId)) {
+      if (areaId != null && [84, 85, 42, 36].contains(areaId)) {
         _moveToCity(areaId);
         _tryAutoDetectLocation(isUserInitiated: false);
       } else {
@@ -10357,6 +10357,7 @@ class _MapLocationPickerState extends State<MapLocationPicker>
       case 84: cityPoint = ml.LatLng(32.5055, 45.8247); break;
       case 85: cityPoint = ml.LatLng(32.9288, 44.7766); break;
       case 42: cityPoint = ml.LatLng(32.5385, 45.4190); break;
+      case 36: cityPoint = ml.LatLng(32.90941, 45.06359); break;
       default: cityPoint = ml.LatLng(32.5000, 45.8000);
     }
 
@@ -10430,6 +10431,17 @@ class _MapLocationPickerState extends State<MapLocationPicker>
                       elevation: 0
                   ),
                   child: const Text("قضاء النعمانية",
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  onPressed: () => _saveAndMove(ctx, 36, "العزيزية"),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade50,
+                      foregroundColor: Colors.blue.shade800,
+                      elevation: 0
+                  ),
+                  child: const Text("قضاء العزيزية",
                       style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
@@ -14071,6 +14083,28 @@ class MenuScreen extends StatefulWidget {
   State<MenuScreen> createState() => _MenuScreenState();
 }
 
+// A lightweight, on-device index for one restaurant's loaded menu.
+// No remote search requests and no additional packages are required.
+class _BeyteiMenuSearchEntry {
+  final FoodItem item;
+  final String title;
+  final List<String> titleWords;
+  final String details;
+  final List<String> detailsWords;
+  final String categories;
+  final List<String> categoryWords;
+
+  const _BeyteiMenuSearchEntry({
+    required this.item,
+    required this.title,
+    required this.titleWords,
+    required this.details,
+    required this.detailsWords,
+    required this.categories,
+    required this.categoryWords,
+  });
+}
+
 class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   int _selectedCategoryId = 0;
   List<dynamic> _subcategories = [];
@@ -14079,6 +14113,254 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   bool _isRefreshingMenu = false;
   bool _pendingMenuRefreshFromPush = false;
   Timer? _menuStatusTimer;
+
+  // Menu-only search; kept separate from the homepage/server search.
+  final TextEditingController _menuSearchController = TextEditingController();
+  final FocusNode _menuSearchFocus = FocusNode();
+  final GlobalKey _menuSearchAnchor = GlobalKey();
+  Timer? _menuSearchDebounce;
+  String _menuSearchQuery = '';
+  List<FoodItem>? _lastSearchSource;
+  List<_BeyteiMenuSearchEntry> _menuSearchEntries = const [];
+  List<FoodItem>? _lastSearchResultSource;
+  String _lastSearchResultQuery = '';
+  List<FoodItem> _lastSearchResult = const [];
+
+  static String _normalizeMenuSearch(String input) {
+    final cleaned = input.toLowerCase()
+        .replaceAll(RegExp(r'[\u064B-\u065F\u0670\u06D6-\u06ED]'), '')
+        .replaceAll('ـ', '')
+        .replaceAll(RegExp(r'[أإآٱ]'), 'ا')
+        .replaceAll('ؤ', 'و').replaceAll('ئ', 'ي')
+        .replaceAll('ى', 'ي').replaceAll('ة', 'ه')
+        .replaceAll('ی', 'ي').replaceAll('ک', 'ك')
+        .replaceAll('پ', 'ب')
+        .replaceAll(RegExp(r'[^\u0621-\u064Aa-z0-9]+'), ' ')
+        .trim();
+    if (cleaned.isEmpty) return '';
+    return cleaned.split(RegExp(r'\s+')).map((original) {
+      var word = original;
+      if (word.length > 4 && word.startsWith('ال')) word = word.substring(2);
+      switch (word) {
+        case 'بركر':
+        case 'برغر':
+        case 'بيركر':
+        case 'همبرغر':
+          return 'برجر';
+        case 'شاورمه':
+          return 'شاورما';
+        case 'بطاطس':
+        case 'بطاطه':
+          return 'بطاطا';
+        case 'عصاير':
+          return 'عصاير';
+        default:
+          return word;
+      }
+    }).join(' ');
+  }
+
+  // Optimal-string-alignment edit distance also counts swapped neighboring
+  // letters as one typo; bounded to avoid searching distant/unrelated words.
+  static int _menuTypoDistance(String a, String b, int limit) {
+    if (a == b) return 0;
+    if ((a.length - b.length).abs() > limit) return limit + 1;
+    final m = b.length;
+    var older = List<int>.generate(m + 1, (i) => i);
+    var previous = List<int>.generate(m + 1, (i) => i);
+    for (var i = 1; i <= a.length; i++) {
+      final current = List<int>.filled(m + 1, 0);
+      current[0] = i;
+      var minimum = i;
+      for (var j = 1; j <= m; j++) {
+        final substitution = a.codeUnitAt(i - 1) == b.codeUnitAt(j - 1) ? 0 : 1;
+        var distance = min(min(previous[j] + 1, current[j - 1] + 1),
+            previous[j - 1] + substitution);
+        if (i > 1 && j > 1 &&
+            a.codeUnitAt(i - 1) == b.codeUnitAt(j - 2) &&
+            a.codeUnitAt(i - 2) == b.codeUnitAt(j - 1)) {
+          distance = min(distance, older[j - 2] + 1);
+        }
+        current[j] = distance;
+        minimum = min(minimum, distance);
+      }
+      if (minimum > limit) return limit + 1;
+      older = previous;
+      previous = current;
+    }
+    return previous[m];
+  }
+
+  static int? _menuTextMatchScore(
+      String text, List<String> words, String query, List<String> terms) {
+    if (text.isEmpty) return null;
+    if (text == query) return 0;
+    if (text.startsWith(query)) return 3;
+    if (text.contains(query)) return 7;
+    var total = 0;
+    for (final term in terms) {
+      int? best;
+      for (final word in words) {
+        int? score;
+        if (word == term) {
+          score = 0;
+        } else if (term.length >= 2 && word.startsWith(term)) {
+          score = 2;
+        } else if (term.length >= 3 && word.contains(term)) {
+          score = 4;
+        } else if (term.length >= 3) {
+          final allowance = term.length <= 5 ? 1 : 2;
+          if (_menuTypoDistance(term, word, allowance) <= allowance) {
+            score = 10;
+          }
+        }
+        if (score != null && (best == null || score < best)) best = score;
+        if (best == 0) break;
+      }
+      if (best == null) return null;
+      total += best;
+    }
+    return 12 + total;
+  }
+
+  void _ensureMenuSearchIndex(List<FoodItem> menu) {
+    if (identical(_lastSearchSource, menu)) return;
+    final labels = <int, String>{
+      for (final cat in _subcategories)
+        if (cat is Map && cat['id'] is int)
+          cat['id'] as int: cat['name']?.toString() ?? '',
+    };
+    _menuSearchEntries = menu.map((item) {
+      final title = _normalizeMenuSearch(item.name);
+      final description = _normalizeMenuSearch(
+          item.description.replaceAll(RegExp(r'<[^>]*>'), ' '));
+      final categories = _normalizeMenuSearch(item.allCategoryIds
+          .map((id) => labels[id] ?? '').where((name) => name.isNotEmpty).join(' '));
+      List<String> tokens(String value) => value.isEmpty
+          ? const <String>[] : value.split(' ');
+      return _BeyteiMenuSearchEntry(
+        item: item,
+        title: title,
+        titleWords: tokens(title),
+        details: description,
+        detailsWords: tokens(description),
+        categories: categories,
+        categoryWords: tokens(categories),
+      );
+    }).toList(growable: false);
+    _lastSearchSource = menu;
+    _lastSearchResultSource = null;
+  }
+
+  List<FoodItem> _searchWithinCurrentMenu(List<FoodItem> menu) {
+    final query = _menuSearchQuery;
+    if (query.isEmpty) return menu;
+    _ensureMenuSearchIndex(menu);
+    if (identical(menu, _lastSearchResultSource) &&
+        query == _lastSearchResultQuery) return _lastSearchResult;
+    final terms = query.split(' ');
+    final found = <({FoodItem food, int score, int order})>[];
+    for (var i = 0; i < _menuSearchEntries.length; i++) {
+      final entry = _menuSearchEntries[i];
+      var rank = _menuTextMatchScore(entry.title, entry.titleWords, query, terms);
+      if (rank == null && entry.details.isNotEmpty) {
+        final combined = '${entry.title} ${entry.details}';
+        rank = _menuTextMatchScore(combined,
+            [...entry.titleWords, ...entry.detailsWords], query, terms);
+        if (rank != null) rank += 65;
+      }
+      if (rank == null && entry.categories.isNotEmpty) {
+        rank = _menuTextMatchScore(entry.categories, entry.categoryWords, query, terms);
+        if (rank != null) rank += 125;
+      }
+      if (rank != null) found.add((food: entry.item, score: rank, order: i));
+    }
+    found.sort((a, b) {
+      final score = a.score.compareTo(b.score);
+      return score != 0 ? score : a.order.compareTo(b.order);
+    });
+    _lastSearchResultSource = menu;
+    _lastSearchResultQuery = query;
+    _lastSearchResult = List<FoodItem>.unmodifiable(found.map((r) => r.food));
+    return _lastSearchResult;
+  }
+
+  void _onMenuSearchChanged(String text) {
+    _menuSearchDebounce?.cancel();
+    final normalized = _normalizeMenuSearch(text);
+    if (normalized.isEmpty) {
+      if (_menuSearchQuery.isNotEmpty) setState(() => _menuSearchQuery = '');
+      return;
+    }
+    _menuSearchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (mounted && normalized != _menuSearchQuery) {
+        setState(() => _menuSearchQuery = normalized);
+      }
+    });
+  }
+
+  void _clearMenuSearch() {
+    _menuSearchDebounce?.cancel();
+    _menuSearchController.clear();
+    _menuSearchFocus.unfocus();
+    if (_menuSearchQuery.isNotEmpty) setState(() => _menuSearchQuery = '');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onScroll();
+    });
+  }
+
+  void _focusMenuSearch() {
+    final searchContext = _menuSearchAnchor.currentContext;
+    if (searchContext == null) return;
+    Scrollable.ensureVisible(searchContext,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic, alignment: 0.12).then((_) {
+      if (mounted) _menuSearchFocus.requestFocus();
+    });
+  }
+
+  Widget _buildMenuSearchField() {
+    final primary = Theme.of(context).primaryColor;
+    return Container(
+      key: _menuSearchAnchor,
+      margin: const EdgeInsets.fromLTRB(15, 12, 15, 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: const Color(0xFFE7EDF3)),
+      ),
+      child: TextField(
+        controller: _menuSearchController,
+        focusNode: _menuSearchFocus,
+        onChanged: _onMenuSearchChanged,
+        textInputAction: TextInputAction.search,
+        textDirection: TextDirection.rtl,
+        autocorrect: true,
+        enableSuggestions: true,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        decoration: InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 15),
+          hintText: 'ابحث عن وجبة في هذا المطعم...',
+          hintStyle: TextStyle(color: Colors.blueGrey.shade400, fontSize: 13),
+          prefixIcon: Icon(Icons.search_rounded, color: primary, size: 21),
+          suffixIcon: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _menuSearchController,
+            builder: (context, value, _) => value.text.isEmpty
+                ? const SizedBox(width: 0, height: 0)
+                : IconButton(
+              tooltip: 'مسح البحث',
+              icon: const Icon(Icons.close_rounded, size: 19),
+              color: Colors.blueGrey,
+              onPressed: _clearMenuSearch,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
 
   double _deliveryFee = -1.0;
   bool _isLoadingDeliveryFee = true;
@@ -14219,6 +14501,8 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
       _categoryChipKeys.putIfAbsent(id, () => GlobalKey());
     }
     _lastIndexedMenu = null; // rebuild buckets after a fresh section payload
+    _lastSearchSource = null; // refresh search text/category index too
+    _lastSearchResultSource = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _recordSectionOffsets();
@@ -14350,6 +14634,9 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     BeyteiMenuCacheEvents.menuChangeSequence.removeListener(_handleMenuUpdated);
     _openingBoundaryTimer?.cancel();
     _menuStatusTimer?.cancel();
+    _menuSearchDebounce?.cancel();
+    _menuSearchController.dispose();
+    _menuSearchFocus.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _categoryScrollController.dispose();
@@ -14850,7 +15137,8 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   }
 
   void _onScroll() {
-    if (!mounted || !_scrollController.hasClients || _isAutoScrolling) return;
+    if (!mounted || !_scrollController.hasClients || _isAutoScrolling ||
+        _menuSearchQuery.isNotEmpty) return;
     _recordSectionOffsets();
     final offset = _scrollController.offset;
     // 55px sticky category rail lives below the pinned app bar.
@@ -15080,327 +15368,393 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
         body: RefreshIndicator(
           onRefresh: _refreshMenuManually,
           child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          controller: _scrollController,
-          slivers: [
-            SliverAppBar(
-              expandedHeight: 220.0,
-              pinned: true,
-              // No explicit refresh button: pull down on the menu instead.
-              leading: IconButton(
-                icon: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
-                  child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+            physics: const AlwaysScrollableScrollPhysics(),
+            controller: _scrollController,
+            slivers: [
+              SliverAppBar(
+                expandedHeight: 220.0,
+                pinned: true,
+                // No explicit refresh button: pull down on the menu instead.
+                leading: IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                    child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                  ),
+                  onPressed: () async {
+                    if (await _onWillPop() && mounted) Navigator.pop(context);
+                  },
                 ),
-                onPressed: () async {
-                  if (await _onWillPop() && mounted) Navigator.pop(context);
-                },
-              ),
-              flexibleSpace: FlexibleSpaceBar(
-                background: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    CachedNetworkImage(imageUrl: widget.restaurant.imageUrl, fit: BoxFit.cover),
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Colors.black.withOpacity(0.4), Colors.transparent, Colors.black.withOpacity(0.9)],
-                          stops: const [0.0, 0.4, 1.0],
-                        ),
-                      ),
+                actions: [
+                  IconButton(
+                    tooltip: 'البحث في المنيو',
+                    onPressed: _focusMenuSearch,
+                    icon: Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: const BoxDecoration(
+                          color: Colors.black45, shape: BoxShape.circle),
+                      child: const Icon(Icons.search_rounded, color: Colors.white, size: 20),
                     ),
-                    Positioned(
-                      bottom: 15,
-                      left: 15,
-                      right: 15,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(widget.restaurant.name, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 8),
-                          _buildDeliveryFeeWidget()
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // Closed restaurants remain browsable; all add-to-cart actions stay disabled.
-            SliverToBoxAdapter(child: Consumer<CustomerProvider>(
-              builder: (context, provider, _) {
-                final accepting = provider.acceptingOrdersFor(widget.restaurant.id) ??
-                    widget.restaurant.isOpen;
-                final deliverable = provider.allRestaurants.any((r) =>
-                r.id == widget.restaurant.id && r.isDeliverable) || widget.restaurant.isDeliverable;
-                if (accepting && deliverable) return const SizedBox.shrink();
-                final hours = provider.openingLabelFor(widget.restaurant.id, widget.restaurant);
-                return Container(
-                  margin: const EdgeInsets.fromLTRB(14, 14, 14, 4),
-                  padding: const EdgeInsets.all(15),
-                  decoration: BoxDecoration(color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange.shade200)),
-                  child: Row(children: [
-                    const Icon(Icons.storefront_outlined, color: Colors.deepOrange),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text(!deliverable
-                        ? 'يمكنك تصفح المنيو، لكن التوصيل غير متاح إلى منطقتك الآن.'
-                        : 'المطعم مغلق حالياً ولا يستقبل الطلبات. وقت الفتح: $hours. يمكنك تصفح المنيو الآن.',
-                        style: const TextStyle(fontWeight: FontWeight.w600))),
-                  ]),
-                );
-              },
-            )),
-            SliverToBoxAdapter(child: _buildManualLocationNotice()),
-            if (_deliveryDiscount > 0 && _originalFee > _deliveryFee)
-              SliverToBoxAdapter(child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 9, 16, 3),
-                child: Row(children: [
-                  Icon(Icons.local_offer_rounded, color: Color(0xFF168565), size: 17),
-                  SizedBox(width: 7),
-                  Expanded(child: Text('عرض التوصيل محسوب ضمن السعر الظاهر',
-                      style: TextStyle(color: Color(0xFF168565),
-                          fontWeight: FontWeight.w700, fontSize: 12))),
-                ]),
-              )),
-            SliverToBoxAdapter(
-              child: Consumer<PremiumCampaignProvider>(
-                builder: (context, premium, child) {
-                  if (premium.config == null) return const SizedBox.shrink();
-                  final includedIds = List<int>.from(premium.config!['included_restaurants'] ?? []);
-                  if (!includedIds.contains(widget.restaurant.id)) return const SizedBox.shrink();
-
-                  double discountValue = double.tryParse(premium.config!['discount_value'].toString()) ?? 0.0;
-                  String discountType = premium.config!['discount_type'] ?? 'percent';
-                  double discountedDeliveryFee = double.tryParse(premium.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0;
-
-                  bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee');
-
-                  String discountText = "";
-                  if (!isZeroDiscount) {
-                    if (discountType == 'percent') {
-                      discountText = "خصم ${discountValue.toInt()}%";
-                    } else if (discountType == 'fixed') {
-                      discountText = "خصم ${NumberFormat('#,###', 'ar_IQ').format(discountValue)} د.ع";
-                    } else if (discountType == 'delivery_fee') {
-                      discountText = "توصيل بـ ${discountedDeliveryFee.toInt()} د.ع 🚚";
-                    } else {
-                      discountText = "هدية مجانية 🎁";
-                    }
-                  }
-
-                  IconData boxIcon = isZeroDiscount ? Icons.inventory_2_outlined : Icons.local_fire_department;
-                  Color mainColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
-                  Color subColor = isZeroDiscount ? Colors.amber.shade700 : Colors.red.shade600;
-                  Color bgColor = isZeroDiscount ? Colors.amber.shade50 : Colors.red.shade50;
-                  Color borderColor = isZeroDiscount ? Colors.amber.shade300 : Colors.red.shade300;
-
-                  return Container(
-                    margin: const EdgeInsets.fromLTRB(15, 15, 15, 5),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: bgColor,
-                      border: Border.all(color: borderColor, width: 1.5),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(boxIcon, color: mainColor, size: 28),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                isZeroDiscount ? "هذا المطعم مشمول بالعروض الصندوك 🎁" : "هذا المطعم مشمول بـخصم $discountText!",
-                                style: TextStyle(color: mainColor, fontWeight: FontWeight.bold, fontSize: 14),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                isZeroDiscount ? "على طلبك القادم اطلب هسه واربح صندوق الهدايا!" : "اطلب الآن والخصم يطبق تلقائياً في السلة.",
-                                style: TextStyle(color: subColor, fontSize: 11),
-                              ),
-                            ],
+                  ),
+                ],
+                flexibleSpace: FlexibleSpaceBar(
+                  background: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CachedNetworkImage(imageUrl: widget.restaurant.imageUrl, fit: BoxFit.cover),
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.black.withOpacity(0.4), Colors.transparent, Colors.black.withOpacity(0.9)],
+                            stops: const [0.0, 0.4, 1.0],
                           ),
                         ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-            SliverPersistentHeader(
-              pinned: true,
-              delegate: _StickyCategoryDelegate(
-                child: Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
-                  ),
-                  child: _isLoadingCats && _subcategories.isEmpty
-                      ? ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: 5,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    itemBuilder: (ctx, i) => Shimmer.fromColors(
-                      baseColor: Colors.grey.shade300,
-                      highlightColor: Colors.grey.shade100,
-                      child: Container(
-                        width: 80,
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
                       ),
-                    ),
-                  )
-                      : ListView(
-                    controller: _categoryScrollController,
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    children: [
-                      _buildCategoryChip(0, "الكل"),
-                      ..._subcategories.map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String)),
+                      Positioned(
+                        bottom: 15,
+                        left: 15,
+                        right: 15,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(widget.restaurant.name, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 8),
+                            _buildDeliveryFeeWidget()
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
-            ),
-            Consumer<CustomerProvider>(
-              builder: (context, provider, child) {
-                final menu = provider.menuItems[widget.restaurant.id] ?? [];
-
-                if (provider.isLoadingMenu && menu.isEmpty) {
-                  return SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                          (context, index) => _buildMenuShimmer(),
-                      childCount: 5,
-                    ),
+              // Closed restaurants remain browsable; all add-to-cart actions stay disabled.
+              SliverToBoxAdapter(child: Consumer<CustomerProvider>(
+                builder: (context, provider, _) {
+                  final accepting = provider.acceptingOrdersFor(widget.restaurant.id) ??
+                      widget.restaurant.isOpen;
+                  final deliverable = provider.allRestaurants.any((r) =>
+                  r.id == widget.restaurant.id && r.isDeliverable) || widget.restaurant.isDeliverable;
+                  if (accepting && deliverable) return const SizedBox.shrink();
+                  final hours = provider.openingLabelFor(widget.restaurant.id, widget.restaurant);
+                  return Container(
+                    margin: const EdgeInsets.fromLTRB(14, 14, 14, 4),
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange.shade200)),
+                    child: Row(children: [
+                      const Icon(Icons.storefront_outlined, color: Colors.deepOrange),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(!deliverable
+                          ? 'يمكنك تصفح المنيو، لكن التوصيل غير متاح إلى منطقتك الآن.'
+                          : 'المطعم مغلق حالياً ولا يستقبل الطلبات. وقت الفتح: $hours. يمكنك تصفح المنيو الآن.',
+                          style: const TextStyle(fontWeight: FontWeight.w600))),
+                    ]),
                   );
-                }
+                },
+              )),
+              SliverToBoxAdapter(child: _buildManualLocationNotice()),
+              if (_deliveryDiscount > 0 && _originalFee > _deliveryFee)
+                SliverToBoxAdapter(child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 9, 16, 3),
+                  child: Row(children: [
+                    Icon(Icons.local_offer_rounded, color: Color(0xFF168565), size: 17),
+                    SizedBox(width: 7),
+                    Expanded(child: Text('عرض التوصيل محسوب ضمن السعر الظاهر',
+                        style: TextStyle(color: Color(0xFF168565),
+                            fontWeight: FontWeight.w700, fontSize: 12))),
+                  ]),
+                )),
+              SliverToBoxAdapter(
+                child: Consumer<PremiumCampaignProvider>(
+                  builder: (context, premium, child) {
+                    if (premium.config == null) return const SizedBox.shrink();
+                    final includedIds = List<int>.from(premium.config!['included_restaurants'] ?? []);
+                    if (!includedIds.contains(widget.restaurant.id)) return const SizedBox.shrink();
 
-                if (menu.isEmpty) {
-                  Restaurant currentRest = provider.allRestaurants.firstWhere(
-                        (r) => r.id == widget.restaurant.id,
-                    orElse: () => widget.restaurant,
-                  );
-                  if (!currentRest.isOpen) {
-                    return SliverFillRemaining(
-                      hasScrollBody: false,
-                      child: Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.door_sliding_outlined, size: 80, color: Colors.grey.shade400),
-                            const SizedBox(height: 16),
-                            const Text("المطعم مغلق حالياً", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 8),
-                            Text("يفتح تلقائياً في: ${beyteiTime12(currentRest.autoOpenTime)}", style: TextStyle(fontSize: 16, color: Colors.grey.shade700)),
-                          ],
-                        ),
+                    double discountValue = double.tryParse(premium.config!['discount_value'].toString()) ?? 0.0;
+                    String discountType = premium.config!['discount_type'] ?? 'percent';
+                    double discountedDeliveryFee = double.tryParse(premium.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0;
+
+                    bool isZeroDiscount = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee');
+
+                    String discountText = "";
+                    if (!isZeroDiscount) {
+                      if (discountType == 'percent') {
+                        discountText = "خصم ${discountValue.toInt()}%";
+                      } else if (discountType == 'fixed') {
+                        discountText = "خصم ${NumberFormat('#,###', 'ar_IQ').format(discountValue)} د.ع";
+                      } else if (discountType == 'delivery_fee') {
+                        discountText = "توصيل بـ ${discountedDeliveryFee.toInt()} د.ع 🚚";
+                      } else {
+                        discountText = "هدية مجانية 🎁";
+                      }
+                    }
+
+                    IconData boxIcon = isZeroDiscount ? Icons.inventory_2_outlined : Icons.local_fire_department;
+                    Color mainColor = isZeroDiscount ? Colors.amber.shade800 : Colors.red.shade700;
+                    Color subColor = isZeroDiscount ? Colors.amber.shade700 : Colors.red.shade600;
+                    Color bgColor = isZeroDiscount ? Colors.amber.shade50 : Colors.red.shade50;
+                    Color borderColor = isZeroDiscount ? Colors.amber.shade300 : Colors.red.shade300;
+
+                    return Container(
+                      margin: const EdgeInsets.fromLTRB(15, 15, 15, 5),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: bgColor,
+                        border: Border.all(color: borderColor, width: 1.5),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(boxIcon, color: mainColor, size: 28),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isZeroDiscount ? "هذا المطعم مشمول بالعروض الصندوك 🎁" : "هذا المطعم مشمول بـخصم $discountText!",
+                                  style: TextStyle(color: mainColor, fontWeight: FontWeight.bold, fontSize: 14),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  isZeroDiscount ? "على طلبك القادم اطلب هسه واربح صندوق الهدايا!" : "اطلب الآن والخصم يطبق تلقائياً في السلة.",
+                                  style: TextStyle(color: subColor, fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     );
-                  }
-                  return const SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(child: Text("المطعم لا يحتوي على وجبات حالياً")),
-                  );
-                }
+                  },
+                ),
+              ),
+              SliverToBoxAdapter(child: _buildMenuSearchField()),
+              if (_menuSearchQuery.isEmpty) SliverPersistentHeader(
+                pinned: true,
+                delegate: _StickyCategoryDelegate(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
+                    ),
+                    child: _isLoadingCats && _subcategories.isEmpty
+                        ? ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: 5,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      itemBuilder: (ctx, i) => Shimmer.fromColors(
+                        baseColor: Colors.grey.shade300,
+                        highlightColor: Colors.grey.shade100,
+                        child: Container(
+                          width: 80,
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                        ),
+                      ),
+                    )
+                        : ListView(
+                      controller: _categoryScrollController,
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      children: [
+                        _buildCategoryChip(0, "الكل"),
+                        ..._subcategories.map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Consumer<CustomerProvider>(
+                builder: (context, provider, child) {
+                  final menu = provider.menuItems[widget.restaurant.id] ?? [];
 
-                List<Widget> sliverSections = [];
-
-                if (_subcategories.isEmpty) {
-                  sliverSections.add(
-                    SliverList(
+                  if (provider.isLoadingMenu && menu.isEmpty) {
+                    return SliverList(
                       delegate: SliverChildBuilderDelegate(
-                            (context, index) => FoodCard(
-                          key: ValueKey(menu[index].id),
-                          food: menu[index],
-                          isMarket: _isMarketSystem,
-                        ),
-                        childCount: menu.length,
-                        addRepaintBoundaries: true,
-                        addAutomaticKeepAlives: false,
-                      ),
-                    ),
-                  );
-                } else {
-                  _ensureCategoryIndex(menu);
-                  for (var cat in _subcategories) {
-                    final catItems = _categoryItems[cat['id']] ?? const <FoodItem>[];
-                    // Only sections containing actual meals should appear.
-                    if (catItems.isEmpty) continue;
-
-                    sliverSections.add(
-                      SliverToBoxAdapter(
-                        child: Container(
-                          // The anchor MUST be a RenderBox. A key on the Sliver
-                          // itself produces RenderSliverToBoxAdapter instead.
-                          key: _categoryKeys[cat['id']],
-                          width: double.infinity,
-                          color: Colors.grey.shade50,
-                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                          child: Text(
-                            cat['name'],
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
-                        ),
+                            (context, index) => _buildMenuShimmer(),
+                        childCount: 5,
                       ),
                     );
+                  }
 
+                  if (menu.isEmpty) {
+                    Restaurant currentRest = provider.allRestaurants.firstWhere(
+                          (r) => r.id == widget.restaurant.id,
+                      orElse: () => widget.restaurant,
+                    );
+                    if (!currentRest.isOpen) {
+                      return SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.door_sliding_outlined, size: 80, color: Colors.grey.shade400),
+                              const SizedBox(height: 16),
+                              const Text("المطعم مغلق حالياً", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 8),
+                              Text("يفتح تلقائياً في: ${beyteiTime12(currentRest.autoOpenTime)}", style: TextStyle(fontSize: 16, color: Colors.grey.shade700)),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                    return const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(child: Text("المطعم لا يحتوي على وجبات حالياً")),
+                    );
+                  }
+
+                  if (_menuSearchQuery.isNotEmpty) {
+                    final matches = _searchWithinCurrentMenu(menu);
+                    if (matches.isEmpty) {
+                      return SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 42),
+                          child: Column(
+                            children: [
+                              Icon(Icons.search_off_rounded,
+                                  size: 42, color: Colors.blueGrey.shade200),
+                              const SizedBox(height: 10),
+                              const Text('ما لقينا وجبة بهذا الاسم',
+                                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                              const SizedBox(height: 5),
+                              Text('جرّب كلمة أقصر أو كتابة مختلفة',
+                                  style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade500)),
+                              const SizedBox(height: 12),
+                              TextButton.icon(
+                                onPressed: _clearMenuSearch,
+                                icon: const Icon(Icons.grid_view_rounded, size: 18),
+                                label: const Text('عرض جميع الوجبات'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                    return SliverMainAxisGroup(slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(17, 5, 17, 9),
+                          child: Text('${matches.length} وجبة مطابقة',
+                              style: TextStyle(fontSize: 12,
+                                  color: Colors.blueGrey.shade600,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                              (context, index) => FoodCard(
+                            key: ValueKey('menu_search_${matches[index].id}'),
+                            food: matches[index],
+                            isMarket: _isMarketSystem,
+                          ),
+                          childCount: matches.length,
+                          addRepaintBoundaries: true,
+                          addAutomaticKeepAlives: false,
+                        ),
+                      ),
+                      const SliverToBoxAdapter(child: SizedBox(height: 90)),
+                    ]);
+                  }
+
+                  List<Widget> sliverSections = [];
+
+                  if (_subcategories.isEmpty) {
                     sliverSections.add(
                       SliverList(
                         delegate: SliverChildBuilderDelegate(
                               (context, index) => FoodCard(
-                            key: ValueKey(catItems[index].id),
-                            food: catItems[index],
+                            key: ValueKey(menu[index].id),
+                            food: menu[index],
                             isMarket: _isMarketSystem,
                           ),
-                          childCount: catItems.length,
+                          childCount: menu.length,
                           addRepaintBoundaries: true,
                           addAutomaticKeepAlives: false,
                         ),
                       ),
                     );
-                  }
+                  } else {
+                    _ensureCategoryIndex(menu);
+                    for (var cat in _subcategories) {
+                      final catItems = _categoryItems[cat['id']] ?? const <FoodItem>[];
+                      // Only sections containing actual meals should appear.
+                      if (catItems.isEmpty) continue;
 
-                  final uncategorized = _uncategorizedItems;
-                  if (uncategorized.isNotEmpty) {
-                    sliverSections.add(
-                      SliverToBoxAdapter(
-                        child: Container(
-                          width: double.infinity,
-                          color: Colors.grey.shade50,
-                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                          child: const Text("أخرى", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        ),
-                      ),
-                    );
-
-                    sliverSections.add(
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                              (context, index) => FoodCard(
-                            key: ValueKey(uncategorized[index].id),
-                            food: uncategorized[index],
-                            isMarket: _isMarketSystem,
+                      sliverSections.add(
+                        SliverToBoxAdapter(
+                          child: Container(
+                            // The anchor MUST be a RenderBox. A key on the Sliver
+                            // itself produces RenderSliverToBoxAdapter instead.
+                            key: _categoryKeys[cat['id']],
+                            width: double.infinity,
+                            color: Colors.grey.shade50,
+                            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                            child: Text(
+                              cat['name'],
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
                           ),
-                          childCount: uncategorized.length,
-                          addRepaintBoundaries: true,
-                          addAutomaticKeepAlives: false,
                         ),
-                      ),
-                    );
-                  }
-                }
+                      );
 
-                sliverSections.add(const SliverToBoxAdapter(child: SizedBox(height: 90)));
-                return SliverMainAxisGroup(slivers: sliverSections);
-              },
-            ),
-          ],
+                      sliverSections.add(
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                                (context, index) => FoodCard(
+                              key: ValueKey(catItems[index].id),
+                              food: catItems[index],
+                              isMarket: _isMarketSystem,
+                            ),
+                            childCount: catItems.length,
+                            addRepaintBoundaries: true,
+                            addAutomaticKeepAlives: false,
+                          ),
+                        ),
+                      );
+                    }
+
+                    final uncategorized = _uncategorizedItems;
+                    if (uncategorized.isNotEmpty) {
+                      sliverSections.add(
+                        SliverToBoxAdapter(
+                          child: Container(
+                            width: double.infinity,
+                            color: Colors.grey.shade50,
+                            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                            child: const Text("أخرى", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      );
+
+                      sliverSections.add(
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                                (context, index) => FoodCard(
+                              key: ValueKey(uncategorized[index].id),
+                              food: uncategorized[index],
+                              isMarket: _isMarketSystem,
+                            ),
+                            childCount: uncategorized.length,
+                            addRepaintBoundaries: true,
+                            addAutomaticKeepAlives: false,
+                          ),
+                        ),
+                      );
+                    }
+                  }
+
+                  sliverSections.add(const SliverToBoxAdapter(child: SizedBox(height: 90)));
+                  return SliverMainAxisGroup(slivers: sliverSections);
+                },
+              ),
+            ],
           ),
         ),
         bottomNavigationBar: Consumer2<CartProvider, PremiumCampaignProvider>(
