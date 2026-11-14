@@ -94,6 +94,6 @@ class _NearbyDriversMapState extends State<NearbyDriversMap> {
           ),
         )),
       ]),
-    )));
+    ));
   }
 }
