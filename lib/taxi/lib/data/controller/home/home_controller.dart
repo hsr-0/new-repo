@@ -415,89 +415,49 @@ class HomeController extends GetxController {
   // 1. جلب الخصومات المتاحة للزبون
   Future<void> getAvailableCoupons() async {
     try {
-      final url = 'https://taxi.beytei.com/api/coupons';
-      // يتم استخدام التوكن إذا كانت الدالة محمية
-      String? token = homeRepo.apiClient.sharedPreferences.getString('token'); // تأكد من مفتاح التوكن في نظامك
-
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {
-          'Accept': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'success') {
-          availableCoupons = data['data'] ?? [];
-          update();
-        }
+      final response = await homeRepo.apiClient.request(
+        UrlContainer.baseUrl + 'coupons', Method.getMethod, null, passHeader: true);
+      if (response.statusCode == 200 &&
+          response.responseJson['status'] == 'success') {
+        availableCoupons = response.responseJson['data'] is List
+            ? List<dynamic>.from(response.responseJson['data']) : [];
+        update();
       }
-    } catch (e) {
-      printX("❌ خطأ في جلب الخصومات: $e");
+    } catch (error) {
+      printX('Could not load coupons: ' + error.toString());
     }
   }
 
-  // 2. التحقق من كود الخصم المكتوب وتطبيقه
   Future<void> verifyPromoCode() async {
-    String code = promoCodeController.text.trim();
-    if (code.isEmpty) {
-      CustomSnackBar.error(errorList: ['الرجاء إدخال كود الخصم']);
+    final code = promoCodeController.text.trim();
+    if (code.isEmpty || originalAmount <= 0) {
+      CustomSnackBar.error(errorList: ['الرجاء اختيار الرحلة وإدخال رمز الخصم']);
       return;
     }
-
-    // التأكد من أن الزبون اختار المسار والسيارة وظهر له السعر
-    if (originalAmount <= 0) {
-      CustomSnackBar.error(errorList: ['الرجاء اختيار نقطة الانطلاق والوصول والسيارة لمعرفة السعر أولاً']);
-      return;
-    }
-
+    isSubmitLoading = true;
+    update();
     try {
-      isSubmitLoading = true;
-      update();
-
-      String? token = homeRepo.apiClient.sharedPreferences.getString('token');
-
-      final url = 'https://taxi.beytei.com/api/verify-coupon';
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {
-          'Accept': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-        body: {
+      final response = await homeRepo.apiClient.request(
+        UrlContainer.baseUrl + 'verify-coupon', Method.postMethod, {
           'coupon_code': code,
           'estimated_amount': originalAmount.toString(),
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'success') {
-          isCouponApplied = true;
-          appliedCouponCode = code;
-          appliedCouponId = data['data']['coupon_id'].toString();
-          discountAmount = double.tryParse(data['data']['discount_amount'].toString()) ?? 0.0;
-
-          // تحديث السعر النهائي ليراه الزبون مخصوماً
-          double newTotal = double.tryParse(data['data']['new_total'].toString()) ?? (originalAmount - discountAmount);
-          updateMainAmount(newTotal);
-
-          CustomSnackBar.success(successList: ['تم تطبيق كود الخصم بنجاح!']);
-        } else {
-          // استخراج رسالة الخطأ من السيرفر
-          String errorMsg = 'الكود غير صالح';
-          if (data['message'] != null && data['message']['error'] != null) {
-            errorMsg = data['message']['error'][0];
-          }
-          CustomSnackBar.error(errorList: [errorMsg]);
-        }
+        }, passHeader: true);
+      final data = response.responseJson;
+      if (response.statusCode == 200 && data['status'] == 'success') {
+        isCouponApplied = true;
+        appliedCouponCode = code;
+        appliedCouponId = data['data']['coupon_id'].toString();
+        discountAmount = double.tryParse(
+            data['data']['discount_amount'].toString()) ?? 0;
+        final payable = double.tryParse(data['data']['new_total'].toString())
+            ?? (originalAmount - discountAmount);
+        updateMainAmount(payable.clamp(0, double.infinity).toDouble());
+        CustomSnackBar.success(successList: ['تم تطبيق رمز الخصم']);
       } else {
-        CustomSnackBar.error(errorList: ['تعذر التحقق من الخصم، حاول مرة أخرى']);
+        CustomSnackBar.error(errorList: ['رمز الخصم غير صالح لهذه الرحلة']);
       }
-    } catch (e) {
-      printX("❌ خطأ أثناء التحقق من الخصم: $e");
+    } catch (_) {
+      CustomSnackBar.error(errorList: ['تعذر التحقق من رمز الخصم']);
     } finally {
       isSubmitLoading = false;
       update();
