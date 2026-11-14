@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:cosmetic_store/taxi/lib/data/controller/home/home_controller.dart';
+import 'nearby_drivers_map.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/home/section/ride_create_form.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/home/section/ride_service_section.dart';
 import '../../../../core/utils/dimensions.dart';
@@ -23,6 +24,8 @@ class _HomeBodyState extends State<HomeBody> {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        NearbyDriversMap(controller: widget.controller),
+        spaceDown(Dimensions.space20),
         //SERVICES
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
