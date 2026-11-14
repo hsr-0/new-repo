@@ -38,7 +38,7 @@ class _RideFareIncreaseCardState extends State<RideFareIncreaseCard> {
       if (!mounted || data is! Map) return;
       setState(() {
         _available = data['can_increase_fare'] == true;
-        _amount = double.tryParse(data['amount'].toString()) ?? 0;
+        _amount = double.tryParse(data['payable_amount'].toString()) ?? 0;
         _version = int.tryParse(data['price_version'].toString()) ?? 0;
         _choices = data['increase_choices'] is List
           ? (data['increase_choices'] as List).map((v) => int.tryParse(v.toString()) ?? 0)
