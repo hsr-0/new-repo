@@ -63,7 +63,7 @@ class _NearbyDriversMapState extends State<NearbyDriversMap> {
       try {
         _pins.add(await _map!.addSymbol(ml.SymbolOptions(
           geometry: ml.LatLng(lat, lng),
-          iconImage: raw['service_id'].toString() == '1' ? 'beytei_tuktuk' : 'beytei_car',
+          iconImage: raw['vehicle_type'].toString() == 'tuktuk' ? 'beytei_tuktuk' : 'beytei_car',
           iconSize: 0.18,
         )));
       } catch (_) {}
