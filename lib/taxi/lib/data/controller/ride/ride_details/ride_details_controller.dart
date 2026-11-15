@@ -165,11 +165,9 @@ class RideDetailsController extends GetxController {
           destination: destinationLatLng,
           isRunning: ride.status == "3",
         );
-        (
-          pickup: pickupLatLng,
-          destination: destinationLatLng,
-          isRunning: ride.status == "3",
-        );
+        if (ride.status == '2' || ride.status == '3') {
+          mapController.startLiveTracking(id);
+        }
       } else {
         if (shouldLoading) Get.back();
       }
