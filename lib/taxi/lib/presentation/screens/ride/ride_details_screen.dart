@@ -53,7 +53,7 @@ class _RideDetailsScreenState extends State<RideDetailsScreen> {
       // 🔥 بدء التتبع مباشرة (بدون .then لأن initialData ترجع void)
       Future.delayed(const Duration(milliseconds: 500), () {
         final status = controller.ride.status;
-        if (status == 'active' || status == 'running' || status == 'accepted' || status == 'pick_up') {
+        if (status == '2' || status == '3') {
           _mapController.startLiveTracking(widget.rideId);
         }
       });
