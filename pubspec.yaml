@@ -179,6 +179,7 @@ dependencies:
   pinput: ^5.0.0
   qr_flutter: ^4.1.0
   pusher_channels_flutter: ^2.6.0
+  laravel_reverb: ^0.7.1
   # ==========================================
   #  WebView
   # ==========================================
