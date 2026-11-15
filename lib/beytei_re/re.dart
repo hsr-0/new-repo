@@ -85,7 +85,7 @@ const String CONSUMER_SECRET = 'cs_78b90e397bbc2a8f5f5092cca36dc86e55c01c07';
 const Duration API_TIMEOUT = Duration(seconds: 30);
 const String CACHE_HOME_DATA_KEY = 'cache_home_data_area_'; // سنضيف رقم المنطقة
 const String CACHE_RESTAURANTS_KEY = 'cache_all_restaurants_area_';
-const String MISWAK_URL = 'https://beytei.com';    // 🔥 سيرفر المسواك (جديد)
+const String MISWAK_URL = BEYTEI_URL; // المسواك والمطاعم على خادم WordPress نفسه
 const String TAXI_URL = 'https://de.beytei.com/api'; // 🚕 تكسي )
 const int AD_PRODUCT_ID = 9999; // ⚠️ استبدل هذا الرقم بـ ID منتج "خدمة إعلان" من ووكومرس
 const double AD_COST = 3000.0; // تكلفة الإعلان
@@ -743,7 +743,7 @@ class _TeamLeaderZoneRidesScreenState extends State<TeamLeaderZoneRidesScreen> {
 
 class AuthProvider with ChangeNotifier {
   String? _token;       // توكن سيرفر المطاعم (re.beytei.com)
-  String? _miswakToken; // 🔥 توكن سيرفر المسواك (beytei.com)
+  String? _miswakToken; // مسواك: نفس توكن re.beytei.com
   String? _taxiToken;   // 🚕 توكن سيرفر التاكسي (banner.beytei.com)
   String? _userRole;    // 'owner' أو 'leader'
   bool _isLoading = true;
@@ -766,7 +766,7 @@ class AuthProvider with ChangeNotifier {
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('jwt_token');
-    _miswakToken = prefs.getString('miswak_jwt_token');
+    _miswakToken = _token; // لا نستخدم توكن قديم من سيرفر منفصل
     _taxiToken = prefs.getString('taxi_jwt_token'); // 🔥 استرجاع توكن التاكسي
     _userRole = prefs.getString('user_role');
     _isLoading = false;
@@ -781,9 +781,8 @@ class AuthProvider with ChangeNotifier {
     _token = await authService.loginToServer(BEYTEI_URL, username, password);
 
     if (role == 'leader') {
-      try {
-        _miswakToken = await authService.loginToServer(MISWAK_URL, username, password);
-      } catch (e) {}
+      // خادم واحد وتسجيل دخول واحد للمطاعم والمسواك.
+      _miswakToken = _token;
 
       // 🔥 تسجيل دخول Banner لكي تعمل شاشة "فريقي"
       try {
@@ -3983,13 +3982,13 @@ class RestaurantProductsProvider with ChangeNotifier {
   }
 
   // تحديث المنتج (مع الصورة)
-  Future<bool> updateProduct(String token, int productId, String name, String price, String salePrice, File? newImage) async {
+  Future<bool> updateProduct(String token, int productId, String name, String price, String salePrice, File? newImage, {String? unitType}) async {
     _isLoading = true;
     notifyListeners();
     bool success = false;
     try {
       // تم تحديث الدالة لتقبل الصورة
-      success = await _apiService.updateMyProduct(token, productId, name, price, salePrice, newImage);
+      success = await _apiService.updateMyProduct(token, productId, name, price, salePrice, newImage, unitType: unitType);
       if (success) {
         await fetchProducts(token);
       }
@@ -4119,9 +4118,12 @@ class Restaurant {
     double lng = 0.0;
     String sType = 'restaurant'; // افتراضي مطعم
 
-    // 🔥 الجديد: قراءة الحقل المباشر إذا أرسله السيرفر كحقل مستقل
-    if (json['beytei_store_type'] != null) {
-      sType = json['beytei_store_type'].toString();
+    // V33: Woo product-category metadata decides the presentation. Never
+    // infer a store type merely from its display name or create a second store.
+    final rawStoreType = json['beytei_store_type'] ?? json['store_type'] ??
+        json['_store_type'];
+    if (rawStoreType != null && rawStoreType.toString().trim().isNotEmpty) {
+      sType = rawStoreType.toString().trim().toLowerCase();
     }
 
     if (json['meta_data'] != null && json['meta_data'] is List) {
@@ -4153,10 +4155,13 @@ class Restaurant {
       var lngMeta = metaData.firstWhere((m) => m is Map && m['key'] == 'restaurant_longitude', orElse: () => null);
       if (lngMeta != null) lng = double.tryParse(lngMeta['value'].toString()) ?? 0.0;
 
-      // 🔥 قراءة النوع من الميتا كاحتياط قوي (يبحث عن store_type أو _store_type)
-      var typeMeta = metaData.firstWhere((m) => m is Map && (m['key'] == 'store_type' || m['key'] == '_store_type'), orElse: () => null);
-      if (typeMeta != null && typeMeta['value'] != null && typeMeta['value'].toString().isNotEmpty) {
-        sType = typeMeta['value'].toString();
+      // Old and new server versions may send the term type through meta_data.
+      var typeMeta = metaData.firstWhere((m) => m is Map &&
+          const ['store_type', '_store_type', 'beytei_store_type',
+            '_beytei_store_type'].contains(m['key']), orElse: () => null);
+      if (typeMeta != null && typeMeta['value'] != null &&
+          typeMeta['value'].toString().trim().isNotEmpty) {
+        sType = typeMeta['value'].toString().trim().toLowerCase();
       }
     }
 
@@ -4179,6 +4184,11 @@ class Restaurant {
     } else if (json['imageUrl'] != null && json['imageUrl'].toString().isNotEmpty) {
       imageUrl = json['imageUrl'].toString();
     }
+
+    // Server is authoritative. Common spelling aliases map to the existing
+    // Market/Baqala visual mode, with the old checkout/cart behavior unchanged.
+    if (const ['supermarket', 'super_market', 'mini_market', 'mini-market',
+      'minimarket'].contains(sType)) sType = 'grocery';
 
     return Restaurant(
       id: json['id'] ?? 0,
@@ -4212,6 +4222,8 @@ class FoodItem {
   final double restaurantLng;
 
   double selectedWeight;
+  final String unitType; // 'piece' by default, 'kg' only when enabled by the manager
+  bool get isSoldByWeight => unitType == 'kg';
   String customNote;
   final double platformMarkup;
   final bool isProductAvailable;
@@ -4286,6 +4298,7 @@ class FoodItem {
     this.restaurantLat = 0.0,
     this.restaurantLng = 0.0,
     this.selectedWeight = 1.0,
+    this.unitType = 'piece',
     this.customNote = '',
     this.platformMarkup = 0.0,
     this.isProductAvailable = true,
@@ -4306,7 +4319,8 @@ class FoodItem {
       imageUrl: imageUrl, categoryId: categoryId, allCategoryIds: allCategoryIds,
       isDeliverable: isDeliverable, averageRating: averageRating, ratingCount: ratingCount,
       restaurantLat: restaurantLat, restaurantLng: restaurantLng,
-      selectedWeight: selectedWeight ?? this.selectedWeight,
+      selectedWeight: isSoldByWeight ? (selectedWeight ?? this.selectedWeight) : 1.0,
+      unitType: unitType,
       customNote: customNote ?? this.customNote,
       quantity: quantity ?? this.quantity,
       platformMarkup: platformMarkup,
@@ -4362,10 +4376,21 @@ class FoodItem {
       final childId = safeParseInt(json[key]);
       if (childId > 0 && !catIds.contains(childId)) catIds.add(childId);
     }
+    final bool isWeightedUnit =
+        (json['unit_type'] ?? 'piece').toString().trim().toLowerCase() == 'kg';
     final rawGroups = json['option_groups'] ?? json['menu_option_groups'] ?? json['groups'];
     final groups = rawGroups is List ? rawGroups.whereType<Map>()
         .map((g) => Map<String, dynamic>.from(g))
-        .where((g) => g['options'] is List && (g['options'] as List).isNotEmpty).toList()
+        .where((g) {
+      if (g['options'] is! List || (g['options'] as List).isEmpty) return false;
+      // A stale weight group must not make biscuits sold by piece show kg.
+      final kind = (g['kind'] ?? '').toString().toLowerCase();
+      final name = (g['name'] ?? '').toString().toLowerCase();
+      final weightGroup = kind == 'weight' || (kind.isEmpty &&
+          (name.contains('وزن') || name.contains('كيلو') ||
+              name.contains('weight')));
+      return isWeightedUnit || !weightGroup;
+    }).toList()
         : <Map<String, dynamic>>[];
     final active = json['is_available'];
     final status = json['status']?.toString();
@@ -4387,6 +4412,7 @@ class FoodItem {
       averageRating: safeParseDouble(json['average_rating']),
       ratingCount: safeParseInt(json['rating_count']),
       platformMarkup: safeParseDouble(json['platform_markup']),
+      unitType: isWeightedUnit ? 'kg' : 'piece',
       isProductAvailable: productAvailable,
       menuOptionGroups: groups,
       unavailableReason: (json['unavailable_reason'] ?? 'غير متوفر حالياً').toString(),
@@ -4404,10 +4430,10 @@ class FoodItem {
 
   // 🔥 3. السعر النهائي للوزن والكمية
   double get finalPrice {
-    final raw = max(0.0, basePrice * selectedWeight + menuExtrasPrice);
+    final raw = max(0.0, basePrice * (isSoldByWeight ? selectedWeight : 1.0) + menuExtrasPrice);
     // Same rounding rule as Woo V17: once PER UNIT, only for weighted lines.
     // A plain meal with sauces keeps its pre-existing unweighted price.
-    if ((selectedWeight - 1.0).abs() <= 0.00001) return raw;
+    if (!isSoldByWeight || (selectedWeight - 1.0).abs() <= 0.00001) return raw;
     return raw <= 0 ? 0 : max(250.0,(raw / 250.0).roundToDouble() * 250.0);
   }
 
@@ -4416,6 +4442,7 @@ class FoodItem {
   String get formattedPrice => formattedFinalPrice;
 
   String get weightLabel {
+    if (!isSoldByWeight) return 'قطعة';
     if (selectedWeight == 0.25) return "ربع كيلو (250غم)";
     if (selectedWeight == 0.5) return "نصف كيلو (500غم)";
     if (selectedWeight == 0.75) return "كيلو إلا ربع";
@@ -4425,7 +4452,7 @@ class FoodItem {
     return "$selectedWeight كيلو";
   }
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId, 'selectedWeight': selectedWeight};
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'categoryId': categoryId, 'selectedWeight': isSoldByWeight ? selectedWeight : 1.0, 'unit_type': unitType};
 }
 
 // V14: Decode and prepare large market menus away from Flutter's UI isolate.
@@ -5726,7 +5753,7 @@ class CartProvider with ChangeNotifier {
   double get totalPrice => _items.fold(0.0, (sum, item) => sum + (item.finalPrice * item.quantity));
 
   // 🔥 حساب إجمالي أرباح المنصة لكل السلة لإرسالها للسيرفر
-  double get totalPlatformMarkup => _items.fold(0.0, (sum, item) => sum + (item.platformMarkup * item.selectedWeight * item.quantity));
+  double get totalPlatformMarkup => _items.fold(0.0, (sum, item) => sum + (item.platformMarkup * (item.isSoldByWeight ? item.selectedWeight : 1.0) * item.quantity));
 
   String? _appliedCoupon;
   double _discountPercentage = 0.0;
@@ -6010,15 +6037,18 @@ class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
   // NEVER multiply this price again using the old market weight selector.
   bool get _hasManagedWeightGroup => widget.foodItem.menuOptionGroups.any((g) {
     final n = (g['name'] ?? '').toString().toLowerCase();
-    return n.contains('وزن') || n.contains('كيلو') || n.contains('weight');
+    return g['kind']?.toString() == 'weight' || n.contains('وزن') ||
+        n.contains('كيلو') || n.contains('weight');
   });
-  bool get _showLegacyWeight => widget.isMarket && !_hasManagedWeightGroup;
+  bool get _showLegacyWeight => widget.foodItem.isSoldByWeight && !_hasManagedWeightGroup;
   double get _effectiveWeight {
+    if (!widget.foodItem.isSoldByWeight) return 1.0;
     if (_showLegacyWeight) return _currentWeight;
     for(final group in widget.foodItem.menuOptionGroups){
       final kind=(group['kind']??'').toString();
       final name=(group['name']??'').toString();
-      if(kind!='weight' && !name.contains('وزن'))continue;
+      if(kind!='weight' && !name.contains('وزن') && !name.contains('كيلو')
+          && !name.toLowerCase().contains('weight'))continue;
       final selected=_chosenMenuOptions[group['id'].toString()] ?? <String>{};
       for(final option in (group['options'] as List? ?? [])){
         if(option is! Map || !selected.contains(option['id'].toString()))continue;
@@ -6605,7 +6635,7 @@ class ApiService {
     });
   }
 
-  Future<bool> createProductWithSubcategory(String token, String name, String price, String? salePrice, String description, File? imageFile, int subcategoryId) async {
+  Future<bool> createProductWithSubcategory(String token, String name, String price, String? salePrice, String description, File? imageFile, int subcategoryId, {String unitType = 'piece'}) async {
     return _executeWithRetry(() async {
       String? imageBase64;
       if (imageFile != null) {
@@ -6614,15 +6644,16 @@ class ApiService {
       }
 
       final response = await http.post(
-        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product-with-category'),
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/create-product'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({
           'name': name,
-          'price': price,
-          'sale_price': salePrice,
+          'regular_price': price,
+          'sale_price': salePrice ?? '',
           'description': description,
+          'unit_type': unitType,
           'image_base64': imageBase64,
-          'subcategory_id': subcategoryId,
+          'category_id': subcategoryId,
         }),
       );
       return response.statusCode == 201 || response.statusCode == 200;
@@ -6788,7 +6819,7 @@ class ApiService {
 
   Future<String> getRawRestaurants(int areaId,
       {bool forceRefresh = false}) async {
-    const fields = 'id,name,image,count,meta_data,beytei_store_type';
+    const fields = 'id,name,image,count,meta_data,beytei_store_type,store_type';
     return _executeWithRetry(() async {
       final all = <dynamic>[];
       var totalPages = 1;
@@ -6896,6 +6927,8 @@ class ApiService {
       // Prevent silently charging a changed price or deleted sauce/weight.
       if((fresh.basePrice - item.basePrice).abs()>0.01)
         throw Exception('تغير سعر ${item.name}. يرجى تحديث السلة قبل المتابعة');
+      if(fresh.unitType != item.unitType)
+        throw Exception('تغير نوع بيع ${item.name}. يرجى إعادة إضافته للسلة');
       if(fresh.hasMenuOptions != item.hasMenuOptions)
         throw Exception('تغيرت خيارات ${item.name}. يرجى إعادة إضافتها للسلة');
       final selected=item.selectedMenuOptions;
@@ -6940,7 +6973,7 @@ class ApiService {
     });
   }
 
-  Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile) async {
+  Future<bool> updateMyProduct(String token, int productId, String name, String price, String salePrice, File? newImageFile, {String? unitType}) async {
     return _executeWithRetry(() async {
       String? imageBase64;
       if (newImageFile != null) {
@@ -6953,6 +6986,7 @@ class ApiService {
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: json.encode({
           'product_id': productId,
+          if (unitType != null) 'unit_type': unitType,
           'name': name,
           'regular_price': price,
           'sale_price': salePrice,
@@ -7015,7 +7049,7 @@ class ApiService {
   }
 
   Future<List<Restaurant>> getAllRestaurants({required int areaId}) async {
-    const fields = 'id,name,image,count,meta_data,beytei_store_type';
+    const fields = 'id,name,image,count,meta_data,beytei_store_type,store_type';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories?parent=0&per_page=100&page=1&_fields=$fields&area_id=$areaId';
     final cacheKey = 'restaurants_area_${areaId}_page_1_limit_100';
 
@@ -7031,7 +7065,7 @@ class ApiService {
   }
 
   Future<Restaurant> getRestaurantById(int restaurantId) async {
-    const fields = 'id,name,image,count,meta_data,beytei_store_type';
+    const fields = 'id,name,image,count,meta_data,beytei_store_type,store_type';
     final url = '$BEYTEI_URL/wp-json/wc/v3/products/categories/$restaurantId?_fields=$fields';
 
     return _executeWithRetry(() async {
@@ -7284,7 +7318,7 @@ class ApiService {
               {"key":"_beytei_customer_note","value":item.customNote.trim()},
             // Keep legacy market/weight picker descriptive; this metadata
             // never authorizes a client price and does not change totals.
-            if ((item.selectedWeight - 1.0).abs() > 0.00001)
+            if (item.isSoldByWeight && (item.selectedWeight - 1.0).abs() > 0.00001)
               {"key":"_beytei_selected_weight_kg","value":item.selectedWeight.toString()},
           ],
       }).toList(),
@@ -7630,7 +7664,8 @@ class AuthService {
       }
 
       // ب) سيرفر المسواك
-      if (miswakToken != null) {
+      // تسجيل توكن الجهاز على WordPress تم عبر restToken أعلاه؛ لا نكرر الإرسال.
+      if (miswakToken != null && restToken == null) {
         await _sendTokenRequest(MISWAK_URL, '/wp-json/restaurant-app/v1/register-device', miswakToken, standardBody, "مسواك");
       }
 
@@ -13252,6 +13287,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   return includedIds.isEmpty ? true : includedIds.contains(store.id);
                 }
 
+                if (_activeMainCategory == 'market') return const ['market', 'grocery'].contains(store.storeType);
                 return store.storeType == _activeMainCategory;
               }).toList();
 
@@ -13682,7 +13718,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "مرطبات وحلويات", imagePath: 'assets/icon/grocery_icon.png',
+                title: "ماركت وبقالة", imagePath: 'assets/icon/grocery_icon.png',
                 isSelected: _activeMainCategory == 'grocery',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'grocery' ? 'all' : 'grocery'),
               ),
@@ -14342,7 +14378,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
           isDense: true,
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 15),
-          hintText: 'ابحث عن وجبة في هذا المطعم...',
+          hintText: _isMarketVisual ? 'ابحث في منتجات المسواك...' : 'ابحث عن وجبة في هذا المطعم...',
           hintStyle: TextStyle(color: Colors.blueGrey.shade400, fontSize: 13),
           prefixIcon: Icon(Icons.search_rounded, color: primary, size: 21),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
@@ -14405,6 +14441,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     final id = BeyteiMenuCacheEvents.changedRestaurant.value;
     if (mounted && (id == widget.restaurant.id || id == 0)) {
       unawaited(_refreshMenuSilently());
+      if (_isMarketVisual) unawaited(_fetchMarketLayout());
     }
   }
 
@@ -14420,7 +14457,10 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
 
   // Pull-to-refresh explicitly bypasses the 8-hour menu cache. Silent push
   // uses exactly the same network and category-refresh pipeline without UI.
-  Future<void> _refreshMenuManually() => _refreshMenuFromServer(silent: false);
+  Future<void> _refreshMenuManually() async {
+    await _refreshMenuFromServer(silent: false);
+    if (_isMarketVisual) await _fetchMarketLayout();
+  }
 
   Future<void> _refreshMenuFromServer({required bool silent}) async {
     if (_isRefreshingMenu || !mounted) return;
@@ -14466,6 +14506,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
         if (_pendingMenuRefreshFromPush) {
           _pendingMenuRefreshFromPush = false;
           unawaited(_refreshMenuSilently());
+          if (_isMarketVisual) unawaited(_fetchMarketLayout());
         }
       }
     }
@@ -14474,6 +14515,27 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   List<dynamic> _sectionsWithMeals(List<dynamic> raw, List<FoodItem> menu) {
     if (menu.isEmpty) return <dynamic>[];
     final used = <int>{for (final item in menu) ...item.allCategoryIds};
+    // Market > Drinks > Soda must keep Market and Drinks visible even when
+    // products live only in the deepest category. Restaurant behavior unchanged.
+    if (_isMarketVisual) {
+      final parents = <int, int>{};
+      for (final section in raw) {
+        if (section is! Map) continue;
+        final id = int.tryParse('${section['id']}');
+        final parent = int.tryParse('${section['parent']}');
+        if (id != null && parent != null) parents[id] = parent;
+      }
+      for (final leaf in used.toList()) {
+        var id = leaf;
+        final seen = <int>{};
+        while (parents.containsKey(id) && seen.add(id)) {
+          final parent = parents[id]!;
+          if (parent == widget.restaurant.id) break;
+          used.add(parent);
+          id = parent;
+        }
+      }
+    }
     return raw.where((section) {
       if (section is! Map) return false;
       final id = int.tryParse(section['id']?.toString() ?? '');
@@ -14556,7 +14618,102 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   final Map<int, double> _sectionStartOffsets = {};
   bool _isAutoScrolling = false;
 
-  bool get _isMarketSystem => widget.restaurant.storeType == 'market' || widget.restaurant.storeType == 'meat';
+  bool get _isMarketSystem => const ['market', 'grocery', 'meat'].contains(widget.restaurant.storeType);
+  bool get _isMarketVisual => const ['market','grocery'].contains(widget.restaurant.storeType);
+  List<Map<String, dynamic>> _marketBanners = [];
+  Map<int, Map<String, dynamic>> _marketSectionStyles = {};
+  Future<void> _fetchMarketLayout() async {
+    if (!_isMarketVisual) return;
+    try {
+      final response = await http.get(Uri.parse(
+          '$BEYTEI_URL/wp-json/restaurant-app/v1/customer-market-layout/${widget.restaurant.id}'),
+      ).timeout(API_TIMEOUT);
+      if (response.statusCode != 200) return;
+      final data = jsonDecode(response.body);
+      if (data is! Map || data['banners'] is! List) return;
+      final styles = <int, Map<String, dynamic>>{};
+      for (final row in (data['sections'] as List? ?? const [])) {
+        if (row is! Map) continue;
+        final id = int.tryParse('${row['id']}');
+        if (id != null) styles[id] = Map<String, dynamic>.from(row);
+      }
+      if (mounted) setState(() {
+        _marketBanners = (data['banners'] as List)
+            .whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList();
+        _marketSectionStyles = styles;
+      });
+    } catch (error) {
+      debugPrint('Miswak banners temporarily unavailable: $error');
+    }
+  }
+
+  Widget _buildMarketCategories() {
+    if (!_isMarketVisual || _subcategories.isEmpty) return const SizedBox.shrink();
+    final cats = _subcategories.take(12).toList();
+    return Container(color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(10, 16, 10, 5),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Padding(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            child: Text('تسوق حسب القسم', style: TextStyle(fontWeight: FontWeight.w800,
+                fontSize: 16, color: Color(0xFF28201A)))),
+        GridView.builder(
+          shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4, childAspectRatio: .88,
+              mainAxisSpacing: 7, crossAxisSpacing: 6),
+          itemCount: cats.length,
+          itemBuilder: (context, i) {
+            final cat = cats[i] as Map;
+            final url = (cat['image_url'] ?? '').toString();
+            final icon = (cat['icon'] ?? '🛒').toString();
+            return InkWell(onTap: () => _scrollToCategory(cat['id'] as int),
+              child: Column(children: [
+                Expanded(child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(color: const Color(0xFFFAF2E8),
+                    alignment: Alignment.center,
+                    child: url.isEmpty ? Text(icon, style: const TextStyle(fontSize: 25))
+                        : CachedNetworkImage(imageUrl: url, fit: BoxFit.cover,
+                        width: double.infinity, height: double.infinity,
+                        errorWidget: (_, __, ___) => Text(icon,
+                            style: const TextStyle(fontSize: 25))),
+                  ),
+                )),
+                const SizedBox(height: 3),
+                Text((cat['name'] ?? '').toString(), maxLines: 1,
+                    overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600)),
+              ]),
+            );
+          },
+        ),
+      ]),
+    );
+  }
+
+  Widget _productsSliver(List<FoodItem> products) {
+    if (_isMarketVisual) {
+      return SliverPadding(padding: const EdgeInsets.fromLTRB(11, 7, 11, 6),
+        sliver: SliverGrid(
+          delegate: SliverChildBuilderDelegate(
+                  (context, i) => BeyteiMarketProductTile(
+                  key: ValueKey('market_${products[i].id}'), food: products[i]),
+              childCount: products.length,
+              addRepaintBoundaries: true, addAutomaticKeepAlives: false),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2, childAspectRatio: .70,
+              mainAxisSpacing: 10, crossAxisSpacing: 10),
+        ),
+      );
+    }
+    return SliverList(delegate: SliverChildBuilderDelegate(
+          (context, i) => FoodCard(key: ValueKey(products[i].id),
+          food: products[i], isMarket: _isMarketSystem),
+      childCount: products.length, addRepaintBoundaries: true,
+      addAutomaticKeepAlives: false,
+    ));
+  }
 
   @override
   void initState() {
@@ -14574,6 +14731,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initData();
+      unawaited(_fetchMarketLayout());
       if (!mounted) return;
       final provider = Provider.of<CustomerProvider>(context, listen: false);
       unawaited(provider.refreshRestaurantStatusNow(widget.restaurant.id));
@@ -15365,14 +15523,37 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
       onWillPop: _onWillPop,
       child: Scaffold(
         backgroundColor: Colors.white,
-        body: RefreshIndicator(
+        body: _isMarketVisual
+            ? Consumer<CustomerProvider>(builder: (context, customer, _) =>
+            BeyteiVideoMarketStorefront(
+              store: customer.allRestaurants.firstWhere(
+                      (r) => r.id == widget.restaurant.id,
+                  orElse: () => widget.restaurant),
+              products: customer.menuItems[widget.restaurant.id] ?? const <FoodItem>[],
+              categories: _subcategories.map((section) => {
+                ...section,
+                ...?_marketSectionStyles[int.tryParse('${section['id']}')],
+              }).toList(),
+              banners: _marketBanners,
+              onRefresh: _refreshMenuManually,
+              onBack: () async {
+                if (await _onWillPop() && mounted) Navigator.pop(context);
+              },
+              onCart: () {
+                _shouldClearCart = false;
+                Navigator.pop(context);
+                Provider.of<NavigationProvider>(context, listen: false).changeTab(3);
+              },
+            ))
+            : RefreshIndicator(
           onRefresh: _refreshMenuManually,
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             controller: _scrollController,
             slivers: [
               SliverAppBar(
-                expandedHeight: 220.0,
+                expandedHeight: _isMarketVisual ? 162.0 : 220.0,
+                backgroundColor: _isMarketVisual ? const Color(0xFFB80A25) : null,
                 pinned: true,
                 // No explicit refresh button: pull down on the menu instead.
                 leading: IconButton(
@@ -15401,7 +15582,8 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                   background: Stack(
                     fit: StackFit.expand,
                     children: [
-                      CachedNetworkImage(imageUrl: widget.restaurant.imageUrl, fit: BoxFit.cover),
+                      if (_isMarketVisual) const ColoredBox(color: Color(0xFFB80A25))
+                      else CachedNetworkImage(imageUrl: widget.restaurant.imageUrl, fit: BoxFit.cover),
                       Container(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
@@ -15449,7 +15631,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                       const SizedBox(width: 10),
                       Expanded(child: Text(!deliverable
                           ? 'يمكنك تصفح المنيو، لكن التوصيل غير متاح إلى منطقتك الآن.'
-                          : 'المطعم مغلق حالياً ولا يستقبل الطلبات. وقت الفتح: $hours. يمكنك تصفح المنيو الآن.',
+                          : '${_isMarketVisual ? 'المتجر' : 'المطعم'} مغلق حالياً ولا يستقبل الطلبات. وقت الفتح: $hours. يمكنك تصفح المنتجات الآن.',
                           style: const TextStyle(fontWeight: FontWeight.w600))),
                     ]),
                   );
@@ -15533,6 +15715,11 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                   },
                 ),
               ),
+              if (_isMarketVisual && _marketBanners.isNotEmpty)
+                SliverToBoxAdapter(child: BeyteiMarketBannerCarousel(
+                    banners: _marketBanners)),
+              if (_isMarketVisual && _menuSearchQuery.isEmpty)
+                SliverToBoxAdapter(child: _buildMarketCategories()),
               SliverToBoxAdapter(child: _buildMenuSearchField()),
               if (_menuSearchQuery.isEmpty) SliverPersistentHeader(
                 pinned: true,
@@ -15647,18 +15834,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                                   fontWeight: FontWeight.w600)),
                         ),
                       ),
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                              (context, index) => FoodCard(
-                            key: ValueKey('menu_search_${matches[index].id}'),
-                            food: matches[index],
-                            isMarket: _isMarketSystem,
-                          ),
-                          childCount: matches.length,
-                          addRepaintBoundaries: true,
-                          addAutomaticKeepAlives: false,
-                        ),
-                      ),
+                      _productsSliver(matches),
                       const SliverToBoxAdapter(child: SizedBox(height: 90)),
                     ]);
                   }
@@ -15667,18 +15843,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
 
                   if (_subcategories.isEmpty) {
                     sliverSections.add(
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                              (context, index) => FoodCard(
-                            key: ValueKey(menu[index].id),
-                            food: menu[index],
-                            isMarket: _isMarketSystem,
-                          ),
-                          childCount: menu.length,
-                          addRepaintBoundaries: true,
-                          addAutomaticKeepAlives: false,
-                        ),
-                      ),
+                      _productsSliver(menu),
                     );
                   } else {
                     _ensureCategoryIndex(menu);
@@ -15705,18 +15870,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                       );
 
                       sliverSections.add(
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                                (context, index) => FoodCard(
-                              key: ValueKey(catItems[index].id),
-                              food: catItems[index],
-                              isMarket: _isMarketSystem,
-                            ),
-                            childCount: catItems.length,
-                            addRepaintBoundaries: true,
-                            addAutomaticKeepAlives: false,
-                          ),
-                        ),
+                        _productsSliver(catItems),
                       );
                     }
 
@@ -15734,18 +15888,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                       );
 
                       sliverSections.add(
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                                (context, index) => FoodCard(
-                              key: ValueKey(uncategorized[index].id),
-                              food: uncategorized[index],
-                              isMarket: _isMarketSystem,
-                            ),
-                            childCount: uncategorized.length,
-                            addRepaintBoundaries: true,
-                            addAutomaticKeepAlives: false,
-                          ),
-                        ),
+                        _productsSliver(uncategorized),
                       );
                     }
                   }
@@ -19838,6 +19981,12 @@ class _ProductManagementTabState extends State<ProductManagementTab> {
               onChanged: (query) => provider.search(query),
             ),
             actions: [
+              IconButton(
+                tooltip: 'إدارة أقسام الماركت والبنرات',
+                icon: const Icon(Icons.dashboard_customize_outlined),
+                onPressed: auth.token == null ? null : () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => BeyteiMarketManagerScreen(token: auth.token!))),
+              ),
               // 🔥 أيقونة إضافة القسم في الأعلى
               Padding(
                 padding: const EdgeInsets.only(left: 8.0),
@@ -19999,11 +20148,13 @@ class _EditProductScreenState extends State<EditProductScreen> {
   late TextEditingController _salePriceController;
   File? _selectedImage; // لتخزين الصورة الجديدة
   bool _isLoading = false;
+  late bool _sellByKg;
   final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
+    _sellByKg = widget.product.isSoldByWeight;
     _nameController = TextEditingController(text: widget.product.name);
     _priceController = TextEditingController(text: widget.product.price.toStringAsFixed(0));
     _salePriceController = TextEditingController(text: widget.product.salePrice?.toStringAsFixed(0) ?? '');
@@ -20047,6 +20198,7 @@ class _EditProductScreenState extends State<EditProductScreen> {
       _priceController.text,
       _salePriceController.text,
       _selectedImage,
+      unitType: _sellByKg ? 'kg' : 'piece',
     );
 
     if (mounted) {
@@ -20118,6 +20270,12 @@ class _EditProductScreenState extends State<EditProductScreen> {
                   validator: (v) => v!.isEmpty ? 'الحقل مطلوب' : null,
                 ),
                 const SizedBox(height: 16),
+                SwitchListTile.adaptive(
+                  title: const Text('يُباع حسب الوزن (بالكيلو)'),
+                  subtitle: const Text('لا تفعّلها للبسكويت أو المشروبات أو المنتجات المعبأة'),
+                  value: _sellByKg,
+                  onChanged: _isLoading ? null : (v) => setState(() => _sellByKg = v),
+                ),
                 TextFormField(
                   controller: _salePriceController,
                   decoration: const InputDecoration(labelText: 'سعر الخصم (اختياري)', border: OutlineInputBorder()),
@@ -21402,6 +21560,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final _descController = TextEditingController();
   File? _selectedImage;
   bool _isLoading = false;
+  bool _sellByKg = false;
   final ImagePicker _picker = ImagePicker();
 
   // 🔥 المتغيرات الخاصة بالأقسام
@@ -21418,21 +21577,20 @@ class _AddProductScreenState extends State<AddProductScreen> {
   // 🔥 جلب الأقسام من السيرفر
   Future<void> _fetchCategories() async {
     try {
-      // نعتمد على رقم المطعم الموجود في أول منتج تم جلبه مسبقاً
-      if (widget.productProvider.products.isNotEmpty) {
-        int restaurantId = widget.productProvider.products.first.categoryId;
-        final cats = await ApiService().getSubcategories(restaurantId);
-        if (mounted) {
-          setState(() {
-            _categories = cats;
-            _isLoadingCategories = false;
-          });
-        }
-      } else {
-        setState(() => _isLoadingCategories = false);
-      }
+      final token = widget.authProvider.token;
+      if (token == null) throw Exception('قم بتسجيل الدخول مجدداً');
+      final response = await http.get(
+        Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/manager-context'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(API_TIMEOUT);
+      if (response.statusCode != 200) throw Exception('تعذر تحديد المتجر');
+      final id = int.tryParse(jsonDecode(response.body)['id'].toString()) ?? 0;
+      if (id <= 0) throw Exception('رقم المتجر غير صالح');
+      final cats = await ApiService().getSubcategories(id, forceRefresh: true);
+      if (mounted) setState(() { _categories = cats; _isLoadingCategories = false; });
     } catch (e) {
-      setState(() => _isLoadingCategories = false);
+      debugPrint('Beytei manager sections: $e');
+      if (mounted) setState(() => _isLoadingCategories = false);
     }
   }
 
@@ -21478,6 +21636,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       _descController.text,
       _selectedImage,
       _selectedCategoryId!, // 👈 تمرير القسم
+      unitType: _sellByKg ? 'kg' : 'piece',
     );
 
     if (mounted) {
@@ -21583,6 +21742,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile.adaptive(
+                  title: const Text('البيع حسب الوزن (كغم)'),
+                  subtitle: const Text('مغلق افتراضياً؛ البسكويت والمواد المغلفة تُباع بالقطعة'),
+                  value: _sellByKg,
+                  onChanged: _isLoading ? null : (v) => setState(() => _sellByKg = v),
                 ),
                 const SizedBox(height: 16),
 
@@ -22447,4 +22613,1016 @@ class _SecretAdminButtonState extends State<SecretAdminButton> {
       ),
     );
   }
+}
+
+
+// BEYTEI MARKET V30: product shopping cards, banners (image/video), RTL groups.
+// Append to the original Dart library, not as a new import-based library.
+class BeyteiMarketProductTile extends StatelessWidget {
+  final FoodItem food;
+  const BeyteiMarketProductTile({super.key, required this.food});
+
+  void _open(BuildContext context) {
+    if (!food.isDeliverable || !food.canBuyAtThisTime) return;
+    showModalBottomSheet(
+      context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => FoodItemBottomSheet(foodItem: food, isMarket: true),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final available = food.isDeliverable && food.canBuyAtThisTime;
+    const orange = Color(0xFFC54A13);
+    final sale = food.hasIndividualSale;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _open(context),
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFFF0EBE5)),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(flex: 6, child: Stack(children: [
+              Positioned.fill(child: CachedNetworkImage(
+                imageUrl: food.imageUrl,
+                fit: BoxFit.contain, memCacheWidth: 360,
+                placeholder: (_, __) => Container(color: const Color(0xFFF5F0EA)),
+                errorWidget: (_, __, ___) => const Icon(Icons.shopping_basket_outlined,
+                    color: Color(0xFFBBB1A9), size: 42),
+              )),
+              if (sale) Positioned(top: 5, right: 5, child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(color: const Color(0xFF257B55),
+                    borderRadius: BorderRadius.circular(6)),
+                child: const Text('عرض', style: TextStyle(
+                    color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+              )),
+              if (!available) Positioned.fill(child: Container(
+                color: Colors.white.withOpacity(.66),
+                alignment: Alignment.center,
+                child: const Text('غير متوفر', style: TextStyle(
+                    color: Colors.redAccent, fontWeight: FontWeight.bold)),
+              )),
+            ])),
+            Expanded(flex: 5, child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(food.name, textDirection: TextDirection.rtl, maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, height: 1.25,
+                        fontWeight: FontWeight.w700, color: Color(0xFF25221F))),
+                const Spacer(),
+                if (food.isSoldByWeight)
+                  const Text('السعر للكيلو', style: TextStyle(
+                      color: Colors.black54, fontSize: 10)),
+                Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min, children: [
+                        Text(food.formattedPrice,
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11, color: orange,
+                                fontWeight: FontWeight.w800)),
+                        if (sale) Text('${food.price.toStringAsFixed(0)} د.ع',
+                            style: const TextStyle(fontSize: 9, color: Colors.grey,
+                                decoration: TextDecoration.lineThrough)),
+                      ])),
+                  InkWell(
+                    onTap: available ? () {
+                      if (!food.isSoldByWeight && !food.hasMenuOptions) {
+                        Provider.of<CartProvider>(context, listen: false).addToCart(
+                            food.copyWith(), context);
+                      } else { _open(context); }
+                    } : null,
+                    child: Container(width: 30, height: 30,
+                        decoration: const BoxDecoration(color: orange, shape: BoxShape.circle),
+                        child: Icon(Icons.add, size: 20,
+                            color: available ? Colors.white : Colors.white54)),
+                  ),
+                ]),
+              ]),
+            )),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class BeyteiMarketBannerVideo extends StatefulWidget {
+  final String videoUrl;
+  final String poster;
+  const BeyteiMarketBannerVideo({super.key, required this.videoUrl, this.poster = ''});
+  @override
+  State<BeyteiMarketBannerVideo> createState() => _BeyteiMarketBannerVideoState();
+}
+class _BeyteiMarketBannerVideoState extends State<BeyteiMarketBannerVideo> {
+  late final WebViewController _controller;
+  @override
+  void initState() {
+    super.initState();
+    final url = htmlEscape.convert(widget.videoUrl);
+    final poster = htmlEscape.convert(widget.poster);
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF141414))
+      ..loadHtmlString('''<!doctype html><html><head>
+      <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+      <style>html,body{margin:0;height:100%;background:#111}video{width:100%;height:100%;object-fit:cover}</style>
+      </head><body><video src="$url" poster="$poster" muted autoplay loop playsinline controls preload="metadata"></video></body></html>''');
+  }
+  @override
+  Widget build(BuildContext context) => WebViewWidget(controller: _controller);
+}
+
+class BeyteiMarketBannerCarousel extends StatefulWidget {
+  final List<Map<String, dynamic>> banners;
+  const BeyteiMarketBannerCarousel({super.key, required this.banners});
+  @override
+  State<BeyteiMarketBannerCarousel> createState() => _BeyteiMarketBannerCarouselState();
+}
+class _BeyteiMarketBannerCarouselState extends State<BeyteiMarketBannerCarousel> {
+  final PageController _pager = PageController();
+  int _active = 0;
+  @override
+  void dispose() { _pager.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    if (widget.banners.isEmpty) return const SizedBox.shrink();
+    final banners = widget.banners;
+    return Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      child: Column(children: [
+        SizedBox(height: 158, child: PageView.builder(
+          controller: _pager, itemCount: banners.length,
+          onPageChanged: (i) => setState(() => _active = i),
+          itemBuilder: (context, i) {
+            final banner = banners[i];
+            final url = (banner['url'] ?? '').toString();
+            final poster = (banner['poster'] ?? '').toString();
+            final video = banner['type']?.toString() == 'video';
+            return Padding(padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: ClipRRect(borderRadius: BorderRadius.circular(13),
+                child: video ? BeyteiMarketBannerVideo(
+                    key: ValueKey('video_$url'), videoUrl: url, poster: poster)
+                    : CachedNetworkImage(imageUrl: url, fit: BoxFit.cover,
+                  errorWidget: (_, __, ___) => Container(
+                      alignment: Alignment.center, color: const Color(0xFFB60F29),
+                      child: Text((banner['title'] ?? 'عروض المسواك').toString(),
+                          style: const TextStyle(color: Colors.white,
+                              fontWeight: FontWeight.bold, fontSize: 21))),
+                ),
+              ),
+            );
+          },
+        )),
+        if (banners.length > 1) Padding(padding: const EdgeInsets.only(top: 8),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              for (var i=0; i<banners.length; i++) AnimatedContainer(
+                duration: const Duration(milliseconds: 170),
+                width: i==_active ? 19 : 6, height: 6,
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                decoration: BoxDecoration(color: i==_active ? const Color(0xFFB60F29)
+                    : Colors.grey.shade300, borderRadius: BorderRadius.circular(8)),
+              ),
+            ])),
+      ]),
+    );
+  }
+}
+
+
+// V30 manager module: section create/edit/delete, section images, image/video banners.
+class BeyteiMarketManagerScreen extends StatefulWidget {
+  final String token;
+  const BeyteiMarketManagerScreen({super.key, required this.token});
+  @override
+  State<BeyteiMarketManagerScreen> createState() => _BeyteiMarketManagerScreenState();
+}
+
+class _BeyteiMarketManagerScreenState extends State<BeyteiMarketManagerScreen> {
+  final ImagePicker _picker = ImagePicker();
+  bool _loading = true;
+  bool _busy = false;
+  int _storeId = 0;
+  List<Map<String,dynamic>> _sections = [];
+  List<Map<String,dynamic>> _banners = [];
+
+  @override
+  void initState() { super.initState(); _load(); }
+  Future<Map<String,dynamic>> _request(String method, String endpoint,
+      [Map<String,dynamic>? data]) async {
+    final uri = Uri.parse('$BEYTEI_URL/wp-json/restaurant-app/v1/$endpoint');
+    final headers = {'Authorization':'Bearer ${widget.token}',
+      'Content-Type':'application/json'};
+    final http.Response response = method == 'GET'
+        ? await http.get(uri,headers:headers).timeout(API_TIMEOUT)
+        : await http.post(uri,headers:headers,body:jsonEncode(data??{})).timeout(API_TIMEOUT);
+    final decoded = jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(decoded is Map ? (decoded['message'] ?? 'خطأ ${response.statusCode}')
+          : 'خطأ ${response.statusCode}');
+    }
+    if (decoded is! Map) throw Exception('استجابة غير صحيحة من السيرفر');
+    return Map<String,dynamic>.from(decoded);
+  }
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading=true);
+    try {
+      final ctx=await _request('GET','manager-context');
+      final storeId=int.tryParse(ctx['id'].toString())??0;
+      final sections=await ApiService().getSubcategories(storeId,forceRefresh:true);
+      final layout=await _request('GET','manager-market-layout');
+      if (!mounted) return;
+      setState(() {
+        _storeId=storeId;
+        _sections=sections.whereType<Map>()
+            .map((x)=>Map<String,dynamic>.from(x)).toList();
+        _banners=(layout['banners'] as List? ?? [])
+            .whereType<Map>().map((x)=>Map<String,dynamic>.from(x)).toList();
+        _loading=false;
+      });
+    } catch(e) {
+      if (mounted) { setState(() => _loading=false); _message('$e',error:true); }
+    }
+  }
+  void _message(String value,{bool error=false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(value),
+        backgroundColor:error?Colors.red:Colors.green));
+  }
+  Future<void> _saveSection({Map<String,dynamic>? section}) async {
+    final name=TextEditingController(text:section?['name']?.toString()??'');
+    final icon=TextEditingController(text:section?['icon']?.toString()??'🛒');
+    final order=TextEditingController(text:section?['display_order']?.toString()??'0');
+    final description=TextEditingController(text:section?['description']?.toString()??'');
+    int parentId = int.tryParse('${section?['parent'] ?? _storeId}') ?? _storeId;
+    final confirmed=await showDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title:Text(section==null?'إضافة قسم داخل المسواك':'تعديل القسم'),
+          content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+            TextField(controller:name,decoration:const InputDecoration(labelText:'اسم القسم (مثلاً: ماركت)')),
+            TextField(controller:icon,decoration:const InputDecoration(labelText:'أيقونة القسم')),
+            TextField(controller:description,decoration:const InputDecoration(labelText:'الوصف الصغير أسفل العنوان')),
+            TextField(controller:order,keyboardType:TextInputType.number,
+                decoration:const InputDecoration(labelText:'ترتيب ظهور القسم')),
+            DropdownButtonFormField<int>(value: parentId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'القسم الأب'),
+                items: [DropdownMenuItem(value:_storeId,child:const Text('المتجر - قسم رئيسي')),
+                  for (final c in _sections)
+                    if (c['id'] != section?['id'])
+                      DropdownMenuItem(value:int.tryParse('${c['id']}')??0,
+                          child:Text('${c['name']}',overflow:TextOverflow.ellipsis))],
+                onChanged:(value) => setDialog(() => parentId=value??_storeId)),
+          ])),
+          actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('إلغاء')),
+            FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('حفظ'))],
+        )));
+    if (confirmed!=true) { name.dispose();icon.dispose();order.dispose();description.dispose(); return; }
+    try {
+      if (!mounted) return;
+      setState(()=>_busy=true);
+      await _request('POST',section==null?'create-subcategory':'update-subcategory',{
+        if(section!=null)'term_id':section['id'],
+        'name':name.text.trim(),'icon':icon.text.trim(),
+        'description':description.text.trim(), 'parent_id':parentId,
+        'display_order':int.tryParse(order.text.trim())??0,
+      });
+      _message('تم حفظ القسم');
+      await _load();
+    } catch(e) { _message('$e',error:true); }
+    finally { name.dispose();icon.dispose();order.dispose();description.dispose(); if(mounted)setState(()=>_busy=false); }
+  }
+  Future<void> _deleteSection(Map<String,dynamic> section) async {
+    final confirmed=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('حذف القسم؟'),
+      content:Text('سيتم حذف ${section['name']} فقط إذا كان خالياً من المنتجات والأقسام الفرعية.'),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('إلغاء')),
+        TextButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('حذف',
+            style:TextStyle(color:Colors.red)))],
+    ));
+    if (confirmed!=true) return;
+    try { setState(()=>_busy=true);
+    await _request('POST','delete-subcategory',{'term_id':section['id']});
+    _message('تم حذف القسم'); await _load();
+    } catch(e) { _message('$e',error:true); }
+    finally { if(mounted)setState(()=>_busy=false); }
+  }
+  Future<Map<String,dynamic>> _upload(XFile file) async {
+    final bytes=await File(file.path).readAsBytes();
+    return _request('POST','manager-market-media',{'base64':base64Encode(bytes)});
+  }
+  Future<void> _changeSectionImage(Map<String,dynamic> section) async {
+    final file=await _picker.pickImage(source:ImageSource.gallery,
+        imageQuality:75,maxWidth:1000,maxHeight:1000);
+    if(file==null)return;
+    try {setState(()=>_busy=true);
+    final media=await _upload(file);
+    await _request('POST','manager-section-image',{
+      'term_id':section['id'],'attachment_id':media['id']});
+    _message('تم تغيير صورة القسم');await _load();
+    } catch(e) { _message('$e',error:true); }
+    finally {if(mounted)setState(()=>_busy=false);}
+  }
+  Future<void> _saveBanners(List<Map<String,dynamic>> banners) async {
+    await _request('POST','manager-market-layout',{'banners':banners});
+    if (!mounted)return;
+    setState(()=>_banners=banners);
+  }
+  Future<void> _addBanner(bool video) async {
+    final XFile? file=video
+        ? await _picker.pickVideo(source:ImageSource.gallery)
+        : await _picker.pickImage(source:ImageSource.gallery,
+        imageQuality:85,maxWidth:1600,maxHeight:1000);
+    if(file==null)return;
+    try {setState(()=>_busy=true);
+    final media=await _upload(file);
+    final next=[..._banners,{'type':video?'video':'image',
+      'url':media['url'],'poster':'','title':'',
+      'placement':'hero','after_category_id':0}];
+    await _saveBanners(next);
+    _message(video?'تمت إضافة بنر فيديو':'تمت إضافة بنر صورة');
+    } catch(e) {_message('$e',error:true);}
+    finally {if(mounted)setState(()=>_busy=false);}
+  }
+  Future<void> _setBannerPlacement(int index, String placement) async {
+    try { setState(()=>_busy=true);
+    final next=_banners.map((x) => Map<String,dynamic>.from(x)).toList();
+    next[index]['placement']=placement;
+    next[index]['after_category_id']=0;
+    await _saveBanners(next);
+    _message('تم تحديث موقع البنر');
+    } catch(e) {_message('$e',error:true);}
+    finally {if(mounted)setState(()=>_busy=false);}
+  }
+  Future<void> _setBannerAfter(int index, int categoryId) async {
+    try { setState(()=>_busy=true);
+    final next=_banners.map((x) => Map<String,dynamic>.from(x)).toList();
+    next[index]['after_category_id']=categoryId;
+    await _saveBanners(next);
+    _message('تم تحديد القسم الذي يظهر بعده البنر');
+    } catch(e) {_message('$e',error:true);}
+    finally {if(mounted)setState(()=>_busy=false);}
+  }
+  Future<void> _deleteBanner(int index) async {
+    try {setState(()=>_busy=true);
+    final next=[..._banners]..removeAt(index);
+    await _saveBanners(next);
+    _message('تم حذف البنر من العرض');
+    } catch(e) {_message('$e',error:true);}
+    finally {if(mounted)setState(()=>_busy=false);}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar:AppBar(title:const Text('إدارة ماركت المسواك'),actions:[
+        IconButton(onPressed:_busy?null:_load,icon:const Icon(Icons.refresh))]),
+      body:_loading?const Center(child:CircularProgressIndicator())
+          :RefreshIndicator(onRefresh:_load,child:ListView(padding:const EdgeInsets.all(14),children:[
+        if(_busy)const LinearProgressIndicator(),
+        Text('المتجر رقم $_storeId',style:const TextStyle(color:Colors.grey)),
+        const SizedBox(height:8),
+        Row(children:[const Expanded(child:Text('الأقسام والتصنيفات',
+            style:TextStyle(fontSize:17,fontWeight:FontWeight.bold))),
+          IconButton(onPressed:_busy?null:()=>_saveSection(),
+              icon:const Icon(Icons.add_circle,color:Colors.green))]),
+        for (final sec in _sections)
+          Card(child:ListTile(
+            leading:CircleAvatar(backgroundColor:const Color(0xFFF6EEE4),
+                child:Text((sec['icon']??'🛒').toString())),
+            title:Text((sec['name']??'').toString()),
+            subtitle:Text('ترتيب ${sec['display_order']??0}'),
+            trailing:Wrap(spacing:0,children:[
+              IconButton(tooltip:'صورة القسم',icon:const Icon(Icons.image_outlined),
+                  onPressed:_busy?null:()=>_changeSectionImage(sec)),
+              IconButton(tooltip:'تعديل',icon:const Icon(Icons.edit_outlined),
+                  onPressed:_busy?null:()=>_saveSection(section:sec)),
+              IconButton(tooltip:'حذف',icon:const Icon(Icons.delete_outline,color:Colors.red),
+                  onPressed:_busy?null:()=>_deleteSection(sec)),
+            ]),
+          )),
+        const SizedBox(height:22),
+        const Text('بنرات العروض',style:TextStyle(fontSize:17,fontWeight:FontWeight.bold)),
+        const Text('تظهر الصور والفيديوهات داخل الماركت حسب ترتيبها في هذه القائمة.'),
+        const SizedBox(height:8),
+        Wrap(spacing:10,children:[
+          OutlinedButton.icon(onPressed:(_busy||_banners.length>=12)?null:()=>_addBanner(false),
+              icon:const Icon(Icons.image),label:const Text('إضافة صورة')),
+          OutlinedButton.icon(onPressed:(_busy||_banners.length>=12)?null:()=>_addBanner(true),
+              icon:const Icon(Icons.movie),label:const Text('إضافة فيديو MP4')),
+        ]),
+        for(var i=0;i<_banners.length;i++)
+          Card(child:ListTile(
+            leading:Icon(_banners[i]['type']=='video'?Icons.play_circle:Icons.image),
+            title:Text(_banners[i]['type']=='video'?'بنر فيديو ${i+1}':'بنر صورة ${i+1}'),
+            subtitle:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text((_banners[i]['url']??'').toString(),maxLines:1,
+                  overflow:TextOverflow.ellipsis),
+              Row(children:[
+                Expanded(child:DropdownButton<String>(
+                    isExpanded:true, value:(_banners[i]['placement']??'hero').toString(),
+                    items:const [DropdownMenuItem(value:'hero',child:Text('بنر رئيسي')),
+                      DropdownMenuItem(value:'inline',child:Text('بين الأقسام'))],
+                    onChanged:_busy?null:(value){if(value!=null)_setBannerPlacement(i,value);})),
+                if(_banners[i]['placement']=='inline')
+                  Expanded(child:DropdownButton<int>(isExpanded:true,
+                      value:int.tryParse('${_banners[i]['after_category_id']??0}')??0,
+                      items:[const DropdownMenuItem(value:0,child:Text('تلقائي')),
+                        for(final cat in _sections)
+                          DropdownMenuItem(value:int.tryParse('${cat['id']}')??0,
+                              child:Text('${cat['name']}',overflow:TextOverflow.ellipsis))],
+                      onChanged:_busy?null:(value){if(value!=null)_setBannerAfter(i,value);}))
+              ]),
+            ]),
+            trailing:IconButton(icon:const Icon(Icons.delete_outline,color:Colors.red),
+                onPressed:_busy?null:()=>_deleteBanner(i)),
+          )),
+        const SizedBox(height:70),
+      ])),
+    );
+  }
+}
+
+
+// Beytei V31 - Market storefront based on the 60.8s, 384x832 reference video.
+// This is a part of the existing Flutter library. Do not add imports here.
+// It uses the existing FoodItem, Restaurant, CartProvider and FoodItemBottomSheet.
+class BeyteiVideoMarketStorefront extends StatefulWidget {
+  final Restaurant store;
+  final int? rootCategoryId;
+  final String? headerName;
+  final List<FoodItem> products;
+  final List<dynamic> categories;
+  final List<Map<String, dynamic>> banners;
+  final Future<void> Function() onRefresh;
+  final VoidCallback onBack;
+  final VoidCallback onCart;
+  const BeyteiVideoMarketStorefront({super.key, required this.store,
+    this.rootCategoryId, this.headerName,
+    required this.products, required this.categories, required this.banners,
+    required this.onRefresh, required this.onBack, required this.onCart});
+  @override
+  State<BeyteiVideoMarketStorefront> createState() => _BeyteiVideoMarketStorefrontState();
+}
+
+class _BeyteiVideoMarketStorefrontState extends State<BeyteiVideoMarketStorefront> {
+  static const red = Color(0xFFBB101B);
+  final _queryController = TextEditingController();
+  String _query = '';
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() { _queryController.dispose(); _scroll.dispose(); super.dispose(); }
+
+  String _normalized(String s) => s.toLowerCase()
+      .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+      .replaceAll(RegExp(r'[أإآٱ]'), 'ا').replaceAll('ة','ه')
+      .replaceAll('ى','ي');
+
+  List<Map<String, dynamic>> get _cats => widget.categories.whereType<Map>()
+      .map((x) => Map<String, dynamic>.from(x))
+      .where((x) => int.tryParse('${x['id']}') != null &&
+      (x['parent'] == null || int.tryParse('${x['parent']}') ==
+          (widget.rootCategoryId ?? widget.store.id)))
+  // A parent with products in its descendants stays visible; a fully empty
+  // category (including an empty «ماركت») disappears from the customer UI.
+      .where((x) => _productsOf(int.parse('${x['id']}')).isNotEmpty).toList();
+
+  Set<int> _selfAndDescendants(int catId) {
+    final ids = <int>{catId};
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (final section in widget.categories.whereType<Map>()) {
+        final id = int.tryParse('${section['id']}');
+        final parent = int.tryParse('${section['parent']}');
+        if (id != null && parent != null && ids.contains(parent) && ids.add(id)) {
+          changed = true;
+        }
+      }
+    }
+    return ids;
+  }
+
+  List<FoodItem> _productsOf(int catId) {
+    final ids = _selfAndDescendants(catId);
+    return widget.products.where((f) =>
+        f.allCategoryIds.any(ids.contains)).toList();
+  }
+
+  void _openCategory(Map<String, dynamic> category) {
+    final catId = int.tryParse('${category['id']}') ?? 0;
+    if (catId <= 0) return;
+    final products = _productsOf(catId);
+    if (products.isEmpty) return; // Never navigate to an empty category.
+    final hasChildren = widget.categories.whereType<Map>().any((child) =>
+    int.tryParse('${child['parent']}') == catId);
+    final categoryName = '${category['name'] ?? ''}';
+    // Opening the Market section displays its OWN full video-style storefront,
+    // not the two-column listing intended for a leaf category.
+    if ((hasChildren || products.isEmpty) && (categoryName.contains('ماركت') ||
+        categoryName.toLowerCase().contains('market') ||
+        '${category['slug'] ?? ''}'.toLowerCase().contains('market'))) {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) =>
+          BeyteiVideoMarketStorefront(store: widget.store,
+              rootCategoryId: catId, headerName: categoryName,
+              products: products, categories: widget.categories,
+              banners: widget.banners, onRefresh: widget.onRefresh,
+              onBack: () => Navigator.of(context).pop(),
+              onCart: () { Navigator.of(context).pop(); widget.onCart(); })));
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) =>
+        BeyteiVideoMarketCategoryPage(name: '${category['name'] ?? 'المنتجات'}',
+            products: products, store: widget.store,
+            categoryId: catId, allCategories: widget.categories.whereType<Map>()
+                .map((x)=>Map<String,dynamic>.from(x)).toList())));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = _query.trim().isEmpty ? const <FoodItem>[] : widget.products
+        .where((item) => _normalized('${item.name} ${item.description}').contains(_normalized(_query.trim())))
+        .toList();
+    final cats = _cats;
+    final heroBanners = widget.banners.where((b) =>
+    (b['placement'] ?? 'hero') == 'hero').toList();
+    final inlineBanners = widget.banners.where((b) => b['placement'] == 'inline').toList();
+    return Directionality(textDirection: TextDirection.rtl,
+      child: RefreshIndicator(onRefresh: widget.onRefresh,
+        child: CustomScrollView(controller: _scroll,
+          physics: const AlwaysScrollableScrollPhysics(), slivers: [
+            SliverAppBar(
+              pinned: true, backgroundColor: red, foregroundColor: Colors.white,
+              surfaceTintColor: red, elevation: 0, scrolledUnderElevation: 0,
+              toolbarHeight: 60, automaticallyImplyLeading: false,
+              shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(17))),
+              leadingWidth: 40,
+              leading: IconButton(icon: const Icon(Icons.arrow_forward_rounded, size: 22),
+                  onPressed: widget.onBack),
+              titleSpacing: 0,
+              title: Row(children: [
+                ClipOval(child: SizedBox(height: 36, width: 36,
+                    child: CachedNetworkImage(imageUrl: widget.store.imageUrl,
+                        fit: BoxFit.cover, errorWidget: (_,__,___) =>
+                        const ColoredBox(color: Color(0xFFDB4E52),
+                            child: Icon(Icons.storefront_rounded, size: 20, color: Colors.white))))),
+                const SizedBox(width: 7),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, children: [
+                      Text(widget.headerName ?? widget.store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white,
+                              fontSize: 16, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        const Icon(Icons.star_rounded, size: 12, color: Colors.white),
+                        const SizedBox(width: 3),
+                        Text('${widget.store.averageRating.toStringAsFixed(1)} '
+                            '(${widget.store.ratingCount})',
+                            style: const TextStyle(color: Colors.white, fontSize: 10)),
+                        const SizedBox(width: 5),
+                        Flexible(child: Text(widget.rootCategoryId != null
+                            ? 'أقسام الماركت' : widget.store.storeType == 'market'
+                            ? 'المسواك · خضروات وماركت' : 'ماركت · مواد غذائية',
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white, fontSize: 10))),
+                        const SizedBox(width: 5),
+                        Flexible(child: Text(widget.store.isOpen ? 'مفتوح' : 'مغلق',
+                            maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white, fontSize: 10))),
+                      ]),
+                    ])),
+              ]),
+              actions: [
+                Consumer<CartProvider>(builder: (context, cart, _) => IconButton(
+                    tooltip: 'سلة منصة بيتي', onPressed: widget.onCart,
+                    icon: Badge(isLabelVisible: cart.cartCount > 0,
+                        label: Text('${cart.cartCount}'),
+                        child: const Icon(Icons.shopping_cart_outlined, size: 22)))),
+              ],
+              bottom: PreferredSize(preferredSize: const Size.fromHeight(55),
+                child: Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 13),
+                  child: Container(height: 42,
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(.13),
+                        borderRadius: BorderRadius.circular(24)),
+                    child: Row(children: [
+                      const Padding(padding: EdgeInsets.only(right: 12),
+                          child: Icon(Icons.search_rounded, color: Colors.white, size: 19)),
+                      Expanded(child: TextField(controller: _queryController,
+                          onChanged: (s) => setState(() => _query=s),
+                          cursorColor: Colors.white,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(isDense: true, border: InputBorder.none,
+                              hintText: 'ابحث في ${widget.headerName ?? widget.store.name}',
+                              hintStyle: const TextStyle(color: Color(0xFFFFD4D7), fontSize: 13))),
+                      ),
+                      if (_queryController.text.isNotEmpty)
+                        IconButton(icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white),
+                            onPressed: () => setState(() {
+                              _queryController.clear(); _query='';
+                              FocusScope.of(context).unfocus();
+                            }))
+                      else const Padding(padding: EdgeInsets.only(left: 14),
+                          child: Icon(Icons.tune_rounded, color: Colors.white70, size: 19)),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+            if (!widget.store.isOpen)
+              const SliverToBoxAdapter(child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+                  child: Text('المتجر مغلق حالياً، يمكنك تصفح المنتجات ولكن لا يمكن تأكيد الطلب',
+                      textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.red)))),
+            if (_query.trim().isNotEmpty) ...[
+              SliverToBoxAdapter(child: Padding(padding: const EdgeInsets.all(14),
+                  child: Text('${matches.length} نتيجة بحث',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)))),
+              SliverPadding(padding: const EdgeInsets.symmetric(horizontal: 11),
+                  sliver: SliverGrid(delegate: SliverChildBuilderDelegate((context, i) =>
+                      BeyteiVideoMarketTile(food: matches[i], store: widget.store,
+                          related: widget.products), childCount: matches.length),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2, childAspectRatio: .72,
+                          mainAxisSpacing: 9, crossAxisSpacing: 9))),
+            ] else ...[
+              if (heroBanners.isNotEmpty)
+                SliverToBoxAdapter(child: BeyteiVideoBannerStrip(
+                    banners: heroBanners, large: true)),
+              if (cats.isNotEmpty) SliverToBoxAdapter(child: _categoryGrid(cats)),
+              if (cats.isEmpty && widget.products.isNotEmpty)
+                SliverToBoxAdapter(child: _productRail('تسوق المنتجات', widget.products)),
+              if (cats.isEmpty && widget.products.isEmpty)
+                const SliverToBoxAdapter(child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 55, horizontal: 22),
+                    child: Column(children: [
+                      Icon(Icons.inventory_2_outlined, size: 52, color: Colors.black26),
+                      SizedBox(height: 12),
+                      Text('المنتجات والأقسام ستظهر هنا بعد إضافتها من المدير',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.black54, fontSize: 13)),
+                    ]))),
+              for (var i = 0; i < cats.length; i++) ...[
+                if (_productsOf(int.parse('${cats[i]['id']}')).isNotEmpty)
+                  SliverToBoxAdapter(child: _productRail('${cats[i]['name']}',
+                      _productsOf(int.parse('${cats[i]['id']}')),
+                      description: '${cats[i]['description'] ?? ''}',
+                      special: cats[i]['featured'] == true ||
+                          (i == 0 && cats[i]['background_color'] == null),
+                      category: cats[i])),
+                for (final inline in inlineBanners)
+                  if (int.tryParse('${inline['after_category_id'] ?? 0}') ==
+                      int.tryParse('${cats[i]['id']}') ||
+                      (int.tryParse('${inline['after_category_id'] ?? 0}') == 0 &&
+                          i > 0 && (i + 1) % 3 == 0 &&
+                          inlineBanners.indexOf(inline) == (((i + 1) ~/ 3 - 1) % inlineBanners.length)))
+                    SliverToBoxAdapter(child: BeyteiVideoBannerStrip(
+                        banners: [inline], large: true)),
+              ],
+            ],
+            const SliverToBoxAdapter(child: SizedBox(height: 110)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _categoryGrid(List<Map<String, dynamic>> cats) => Container(
+      color: const Color(0xFFFEFEFE),
+      padding: const EdgeInsets.fromLTRB(12, 15, 12, 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Padding(padding: EdgeInsets.symmetric(vertical: 11, horizontal: 6),
+            child: Row(children: [
+              Icon(Icons.shopping_cart_outlined, size: 17, color: Color(0xFFBF8B2D)),
+              SizedBox(width: 7),
+              Text('تسوق حسب القسم', style: TextStyle(fontWeight: FontWeight.w800,
+                  fontSize: 17, color: Color(0xFF232323))),
+            ])),
+        GridView.builder(shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero, itemCount: cats.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4, childAspectRatio: .91, mainAxisSpacing: 6, crossAxisSpacing: 5),
+            itemBuilder: (_, i) {
+              final cat = cats[i];
+              final image = '${cat['image_url'] ?? cat['image'] ?? ''}';
+              return InkWell(onTap: () => _openCategory(cat), child: Column(children: [
+                Container(width: 67, height: 67,
+                    decoration: BoxDecoration(color: const Color(0xFFF8EDE2),
+                        borderRadius: BorderRadius.circular(13)),
+                    clipBehavior: Clip.antiAlias,
+                    child: image.isEmpty ? Center(child: Text('${cat['icon'] ?? '🛒'}',
+                        style: const TextStyle(fontSize: 27)))
+                        : CachedNetworkImage(imageUrl: image, fit: BoxFit.cover,
+                        errorWidget: (_,__,___) => const Icon(Icons.storefront_outlined))),
+                const SizedBox(height: 4),
+                Expanded(child: Text('${cat['name'] ?? ''}', maxLines: 2,
+                    overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF222222), height: 1.1))),
+              ]));
+            }),
+      ]));
+
+  Widget _productRail(String title, List<FoodItem> products,
+      {String description = '', bool special = false, Map<String,dynamic>? category}) {
+    Color sectionColor = special ? const Color(0xFFFFF4D6) : Colors.white;
+    final hex = '${category?['background_color'] ?? ''}'.replaceAll('#', '');
+    if (RegExp(r'^[0-9A-Fa-f]{6}$').hasMatch(hex)) {
+      sectionColor = Color(int.parse('FF$hex', radix: 16));
+    }
+    return Container(color: sectionColor,
+      padding: const EdgeInsets.only(top: 16, bottom: 13),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.fromLTRB(13, 0, 13, 10), child: Row(children: [
+          Container(width: 29, height: 29, alignment: Alignment.center,
+              decoration: BoxDecoration(color: special ? const Color(0xFFF7DE9F) : const Color(0xFFFFEEEE),
+                  borderRadius: BorderRadius.circular(6)),
+              child: Text('${category?['icon'] ?? (special ? '🛍️' : '🛒')}',
+                  style: const TextStyle(fontSize: 17))),
+          const SizedBox(width: 7),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+            if (description.isNotEmpty) Text(description, maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 10, color: Colors.black54)),
+          ])),
+          if (category != null) TextButton(
+              onPressed: () => _openCategory(category),
+              child: const Text('عرض الكل', style: TextStyle(fontSize: 11,
+                  color: Color(0xFF444444)))),
+        ])),
+        SizedBox(height: 206,
+            child: ListView.separated(padding: const EdgeInsets.symmetric(horizontal: 10),
+                scrollDirection: Axis.horizontal, itemCount: products.length,
+                separatorBuilder: (_,__) => const SizedBox(width: 6),
+                itemBuilder: (_, i) => SizedBox(width: 116,
+                    child: BeyteiVideoMarketTile(food: products[i], store: widget.store,
+                        related: widget.products, compact: true)))),
+      ]),
+    );
+  }
+}
+
+class BeyteiVideoBannerStrip extends StatefulWidget {
+  final List<Map<String, dynamic>> banners;
+  final bool large;
+  const BeyteiVideoBannerStrip({super.key, required this.banners, this.large = false});
+  @override State<BeyteiVideoBannerStrip> createState() => _BeyteiVideoBannerStripState();
+}
+class _BeyteiVideoBannerStripState extends State<BeyteiVideoBannerStrip> {
+  int index = 0;
+  @override Widget build(BuildContext context) => Column(children: [
+    Padding(padding: const EdgeInsets.fromLTRB(13, 16, 13, 0),
+        child: ClipRRect(borderRadius: BorderRadius.circular(10),
+            child: SizedBox(height: widget.large ? 192 : 145,
+              child: PageView.builder(itemCount: widget.banners.length,
+                  onPageChanged: (v) => setState(() => index=v),
+                  itemBuilder: (_, i) {
+                    final data = widget.banners[i];
+                    final url = '${data['url'] ?? ''}';
+                    return data['type'] == 'video'
+                        ? BeyteiMarketBannerVideo(key: ValueKey(url), videoUrl: url,
+                        poster: '${data['poster'] ?? ''}')
+                        : CachedNetworkImage(imageUrl: url, fit: BoxFit.cover,
+                        errorWidget: (_,__,___) => Container(color: const Color(0xFFBA151C),
+                            alignment: Alignment.center, child: Text('${data['title'] ?? 'عروض المسواك'}',
+                                style: const TextStyle(color: Colors.white,
+                                    fontWeight: FontWeight.w800, fontSize: 18))));
+                  }),
+            ))),
+    if (widget.banners.length > 1) Padding(padding: const EdgeInsets.only(top: 6),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          for (var i=0;i<widget.banners.length;i++) Container(
+              margin: const EdgeInsets.symmetric(horizontal: 2),
+              height: 5, width: index==i?18:5,
+              decoration: BoxDecoration(color: index==i ? const Color(0xFFB34A0A) :
+              Colors.grey.shade300, borderRadius: BorderRadius.circular(8))),
+        ])),
+  ]);
+}
+
+class BeyteiVideoMarketTile extends StatelessWidget {
+  final FoodItem food;
+  final Restaurant store;
+  final List<FoodItem> related;
+  final bool compact;
+  const BeyteiVideoMarketTile({super.key, required this.food,
+    required this.store, required this.related, this.compact = false});
+  void _show(BuildContext context) {
+    if (food.isSoldByWeight || food.hasMenuOptions) {
+      showModalBottomSheet(context: context, backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          builder: (_) => FoodItemBottomSheet(foodItem: food, isMarket: true));
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) =>
+        BeyteiVideoMarketProductPage(food: food, store: store, related: related)));
+  }
+  void _add(BuildContext context) {
+    if (!food.isDeliverable || !food.canBuyAtThisTime || !store.isOpen) return;
+    if (food.isSoldByWeight || food.hasMenuOptions) { _show(context); return; }
+    Provider.of<CartProvider>(context, listen: false).addToCart(food.copyWith(quantity: 1), context);
+  }
+  @override Widget build(BuildContext context) {
+    final valid = food.isDeliverable && food.canBuyAtThisTime && store.isOpen;
+    return InkWell(onTap: () => _show(context),
+        child: Container(color: Colors.white, child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(flex: 6, child: Stack(children: [
+            Positioned.fill(child: CachedNetworkImage(imageUrl: food.imageUrl,
+                fit: BoxFit.contain,
+                errorWidget: (_,__,___) => Container(color: const Color(0xFFF1E8E0),
+                    child: const Icon(Icons.shopping_basket_outlined, color: Colors.black26)))),
+            if (food.hasIndividualSale) Positioned(top: 1, right: 2,
+                child: Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(color: const Color(0xFF238152),
+                        borderRadius: BorderRadius.circular(3)),
+                    child: const Text('عرض', style: TextStyle(fontSize: 8, color: Colors.white)))),
+            if (!valid) Positioned.fill(child: ColoredBox(
+                color: Color(0x88FFFFFF),
+                child: Center(child: Text(store.isOpen ? 'غير متوفر' : 'مغلق',
+                    style: const TextStyle(fontSize: 11, color: Colors.red))))),
+            Positioned(bottom: 3, left: 4, child: InkWell(onTap: valid ? () => _add(context) : null,
+                child: Container(width: 28, height: 28,
+                    decoration: const BoxDecoration(color: Color(0xFFB84A0A),
+                        shape: BoxShape.circle),
+                    child: const Icon(Icons.add, color: Colors.white, size: 17)))),
+          ])),
+          Expanded(flex: 4, child: Padding(padding: const EdgeInsets.fromLTRB(4, 4, 4, 3),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Text(food.name, maxLines: 2, textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: compact ? 10.5 : 12.0, height: 1.15,
+                        fontWeight: FontWeight.w600, color: const Color(0xFF292929))),
+                const SizedBox(height: 4),
+                Text(food.formattedPrice, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800,
+                        color: Color(0xFFAA430A))),
+              ]))),
+        ])));
+  }
+}
+
+class BeyteiVideoMarketCategoryPage extends StatefulWidget {
+  final String name; final Restaurant store; final List<FoodItem> products;
+  final int categoryId; final List<Map<String,dynamic>> allCategories;
+  const BeyteiVideoMarketCategoryPage({super.key, required this.name,
+    required this.store, required this.products, required this.categoryId,
+    required this.allCategories});
+  @override State<BeyteiVideoMarketCategoryPage> createState() => _BeyteiVideoMarketCategoryPageState();
+}
+class _BeyteiVideoMarketCategoryPageState extends State<BeyteiVideoMarketCategoryPage> {
+  final ctrl = TextEditingController(); String query=''; int filterId=0;
+  @override void dispose() { ctrl.dispose(); super.dispose(); }
+  @override Widget build(BuildContext context) {
+    final shown = widget.products.where((x) =>
+    (filterId == 0 || x.allCategoryIds.contains(filterId)) &&
+        (query.isEmpty || x.name.toLowerCase().contains(query.toLowerCase())))
+        .toList();
+    final nested = widget.allCategories.where((c) =>
+    int.tryParse('${c['parent'] ?? 0}') == widget.categoryId).toList();
+    return Directionality(textDirection: TextDirection.rtl,
+        child: Scaffold(backgroundColor: Colors.white,
+            appBar: AppBar(centerTitle: true, backgroundColor: Colors.white,
+                foregroundColor: const Color(0xFF222222), elevation: 0,
+                title: Text(widget.name, style: const TextStyle(fontSize: 16,
+                    fontWeight: FontWeight.w800))),
+            body: Column(children: [
+              SizedBox(height: 50, child: ListView(scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  children: [
+                    ChoiceChip(selected: filterId==0,
+                        selectedColor: const Color(0xFFC25012),
+                        label: Text('الكل', style: TextStyle(fontSize: 11,
+                            color: filterId==0 ? Colors.white : Colors.black87)),
+                        onSelected: (_) => setState(() => filterId=0)),
+                    for (final c in nested) ...[
+                      const SizedBox(width: 6),
+                      ChoiceChip(selected: filterId==int.tryParse('${c['id']}'),
+                          selectedColor: const Color(0xFFC25012),
+                          label: Text('${c['name']}', style: TextStyle(fontSize: 11,
+                              color: filterId==int.tryParse('${c['id']}') ? Colors.white : Colors.black87)),
+                          onSelected: (_) => setState(() => filterId=int.tryParse('${c['id']}') ?? 0)),
+                    ],
+                  ])),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: TextField(
+                  controller: ctrl, onChanged: (s) => setState(() => query=s),
+                  decoration: InputDecoration(isDense: true, hintText: 'ابحث في ${widget.name}',
+                      prefixIcon: const Icon(Icons.search, size: 19),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(20))))),
+              const SizedBox(height: 8),
+              Expanded(child: shown.isEmpty
+                  ? const Center(child: Padding(padding: EdgeInsets.all(24),
+                  child: Text('لا توجد منتجات في هذا التصنيف حالياً',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.black54))))
+                  : GridView.builder(padding: const EdgeInsets.all(11),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2, childAspectRatio: .76,
+                      mainAxisSpacing: 10, crossAxisSpacing: 10),
+                  itemCount: shown.length,
+                  itemBuilder: (_,i) => BeyteiVideoMarketTile(food: shown[i],
+                      store: widget.store, related: widget.products))),
+            ])));
+  }
+}
+
+class BeyteiVideoMarketProductPage extends StatefulWidget {
+  final FoodItem food; final Restaurant store; final List<FoodItem> related;
+  const BeyteiVideoMarketProductPage({super.key, required this.food,
+    required this.store, required this.related});
+  @override State<BeyteiVideoMarketProductPage> createState() => _BeyteiVideoMarketProductPageState();
+}
+class _BeyteiVideoMarketProductPageState extends State<BeyteiVideoMarketProductPage> {
+  int count = 1;
+  @override Widget build(BuildContext context) {
+    final food = widget.food;
+    final related = widget.related.where((f) => f.id != food.id).take(12).toList();
+    final available = widget.store.isOpen && food.isDeliverable && food.canBuyAtThisTime;
+    return Directionality(textDirection: TextDirection.rtl,
+        child: Scaffold(backgroundColor: Colors.white,
+            body: SafeArea(child: Column(children: [
+              Expanded(child: ListView(children: [
+                Stack(children: [
+                  SizedBox(height: MediaQuery.of(context).size.width * .96,
+                      width: double.infinity,
+                      child: CachedNetworkImage(imageUrl: food.imageUrl, fit: BoxFit.contain,
+                          errorWidget: (_,__,___) => const Icon(Icons.image_outlined, size: 75))),
+                  Positioned(top: 12, right: 12, child: _circle(Icons.arrow_forward_rounded,
+                          () => Navigator.pop(context))),
+                  Positioned(top: 12, left: 12, child: _circle(Icons.shopping_cart_outlined,
+                          () => Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => const CartScreen())))),
+                ]),
+                const SizedBox(height: 17),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 15),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(food.name, style: const TextStyle(fontSize: 24,
+                          color: Color(0xFF202020), fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 6),
+                      Text(food.formattedPrice, style: const TextStyle(fontSize: 21,
+                          fontWeight: FontWeight.w800, color: Color(0xFFB14A09))),
+                      const SizedBox(height: 8),
+                      Text('من ${widget.store.name}',
+                          style: const TextStyle(color: Colors.black54, fontSize: 12)),
+                      if (food.description.trim().isNotEmpty) ...[
+                        const SizedBox(height: 14),
+                        Text(food.description, style: const TextStyle(
+                            fontSize: 13, color: Colors.black54, height: 1.45)),
+                      ],
+                    ])),
+                const SizedBox(height: 18), const Divider(height: 1),
+                if (related.isNotEmpty) ...[
+                  const Padding(padding: EdgeInsets.fromLTRB(13, 17, 13, 10),
+                      child: Text('عادةً ما يتم شراؤها مع',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
+                  SizedBox(height: 200, child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 9),
+                      scrollDirection: Axis.horizontal, itemCount: related.length,
+                      separatorBuilder: (_,__) => const SizedBox(width: 5),
+                      itemBuilder: (_,i) => SizedBox(width: 115, child: BeyteiVideoMarketTile(
+                          food: related[i], store: widget.store, related: widget.related,
+                          compact: true)))),
+                ],
+              ])),
+              Container(color: Colors.white,
+                  padding: const EdgeInsets.fromLTRB(12, 9, 12, 10),
+                  child: Row(children: [
+                    Expanded(flex: 3, child: ElevatedButton(
+                        onPressed: available ? () {
+                          Provider.of<CartProvider>(context, listen: false).addToCart(
+                              food.copyWith(quantity: 1), context, quantity: count);
+                        } : null,
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB84505),
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(0, 46),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                        child: Text('إضافة · ${NumberFormat('#,###', 'ar_IQ').format(food.finalPrice*count)} د.ع',
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)))),
+                    const SizedBox(width: 9),
+                    Container(width: 118, height: 46,
+                        decoration: BoxDecoration(color: const Color(0xFFF0F0F0),
+                            borderRadius: BorderRadius.circular(9)),
+                        child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                          IconButton(onPressed: () => setState(() => count++),
+                              icon: const Icon(Icons.add, size: 17)),
+                          Text('$count', style: const TextStyle(fontWeight: FontWeight.w800)),
+                          IconButton(onPressed: count > 1 ? () => setState(() => count--) : null,
+                              icon: const Icon(Icons.remove, size: 17)),
+                        ])),
+                  ])),
+            ]))));
+  }
+  Widget _circle(IconData icon, VoidCallback onTap) => InkWell(onTap: onTap,
+      child: Container(width: 42, height: 42,
+          decoration: const BoxDecoration(color: Color(0xAE303030), shape: BoxShape.circle),
+          child: Icon(icon, color: Colors.white, size: 21)));
 }
