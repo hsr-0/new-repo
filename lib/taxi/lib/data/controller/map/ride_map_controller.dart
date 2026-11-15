@@ -13,7 +13,6 @@ import 'package:latlong2/latlong.dart';
 
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:apple_maps_flutter/apple_maps_flutter.dart' as ap;
-import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
 import 'package:cosmetic_store/taxi/lib/eco.dart';
 
 import 'package:cosmetic_store/taxi/lib/core/utils/my_icons.dart';
@@ -69,43 +68,16 @@ class RideMapController extends GetxController with GetSingleTickerProviderState
     super.onClose();
   }
 
+  /// Ride location is delivered on the authenticated rider-user channel.
+  /// That channel is managed by PusherRideController, which now uses Reverb
+  /// (or the legacy broadcaster before V2 activation). Do not subscribe to
+  /// the old public ride.ID location channel.
   void startLiveTracking(String rideId) {
     _currentRideId = rideId;
-    if (_currentRideId != null) {
-      pusher.unsubscribe(channelName: 'ride.$rideId');
-    }
-    print("🎧 [TRACKING] بدء الاستماع لموقع السائق للرحلة: $rideId");
-
-    pusher.subscribe(
-      channelName: 'ride.$rideId',
-      onEvent: (PusherEvent event) {
-        try {
-          final eventData = event.data;
-          if (eventData == null || eventData.isEmpty) return;
-
-          final data = jsonDecode(eventData);
-          double newLat = (data['latitude'] is num) ? (data['latitude'] as num).toDouble() : 0.0;
-          double newLng = (data['longitude'] is num) ? (data['longitude'] as num).toDouble() : 0.0;
-
-          if (newLat != 0.0 && newLng != 0.0) {
-            print("🚗 [LIVE UPDATE] موقع جديد: $newLat, $newLng");
-            updateDriverLocation(
-              latLng: LatLng(newLat, newLng),
-              isRunning: true,
-            );
-          }
-        } catch (e) {
-          print("❌ [ERROR] فشل في تحليل بيانات الموقع: $e");
-        }
-      },
-    );
   }
 
   void stopLiveTracking(String rideId) {
-    if (_currentRideId != null) {
-      pusher.unsubscribe(channelName: 'ride.$rideId');
-      _currentRideId = null;
-    }
+    if (_currentRideId == rideId) _currentRideId = null;
   }
 
   Future<Uint8List> getBytesFromAsset(String path, int width) async {
