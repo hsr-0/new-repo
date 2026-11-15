@@ -34,6 +34,8 @@ class PusherManager {
     _listeners.remove(listener);
   }
 
+  bool get usesReverb => _reverbMode;
+
   bool isConnected() =>
       _reverbMode ? (_reverb?.state == ReverbState.connected) :
       pusher.connectionState.toLowerCase() == 'connected';
