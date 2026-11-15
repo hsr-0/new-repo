@@ -6017,7 +6017,9 @@ class CartProvider with ChangeNotifier {
 class FoodItemBottomSheet extends StatefulWidget {
   final FoodItem foodItem;
   final bool isMarket;
-  const FoodItemBottomSheet({super.key, required this.foodItem, this.isMarket = false});
+  final int initialQuantity;
+  const FoodItemBottomSheet({super.key, required this.foodItem,
+    this.isMarket = false, this.initialQuantity = 1});
 
   @override
   State<FoodItemBottomSheet> createState() => _FoodItemBottomSheetState();
@@ -6025,6 +6027,10 @@ class FoodItemBottomSheet extends StatefulWidget {
 
 class _FoodItemBottomSheetState extends State<FoodItemBottomSheet> {
   int quantity = 1;
+  @override void initState() {
+    super.initState();
+    quantity=widget.initialQuantity.clamp(1, 99);
+  }
   double _currentWeight = 1.0;
   final TextEditingController _noteController = TextEditingController();
   final List<double> _quickWeights = [1.5, 1.0, 0.5, 0.25];
@@ -13287,7 +13293,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   return includedIds.isEmpty ? true : includedIds.contains(store.id);
                 }
 
-                if (_activeMainCategory == 'market') return const ['market', 'grocery'].contains(store.storeType);
+                if (_activeMainCategory == 'market') return store.storeType == 'market';
                 return store.storeType == _activeMainCategory;
               }).toList();
 
@@ -13587,7 +13593,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     switch (category) {
       case 'market': return "أسواق المسواك";
       case 'pastry': return "المعجنات والحلويات";
-      case 'grocery': return "الماركت والبقالة";
+      case 'grocery': return "المرطبات";
       case 'meat': return "القصابة واللحوم";
       case 'restaurant': return "المطاعم المتاحة";
       case 'premium': return "المطاعم المميزة 🌟";
@@ -13718,7 +13724,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4.0),
               child: _buildCategoryImage(
-                title: "ماركت وبقالة", imagePath: 'assets/icon/grocery_icon.png',
+                title: "مرطبات", imagePath: 'assets/icon/grocery_icon.png',
                 isSelected: _activeMainCategory == 'grocery',
                 onTap: () => setState(() => _activeMainCategory = _activeMainCategory == 'grocery' ? 'all' : 'grocery'),
               ),
@@ -14145,6 +14151,9 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   int _selectedCategoryId = 0;
   List<dynamic> _subcategories = [];
   bool _isLoadingCats = true;
+  // Per-store V36 display selection. Legacy is the safe default.
+  String _storeLayoutMode = 'legacy';
+  List<dynamic> _lastRawSections = const [];
   bool _shouldClearCart = true;
   bool _isRefreshingMenu = false;
   bool _pendingMenuRefreshFromPush = false;
@@ -14441,7 +14450,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     final id = BeyteiMenuCacheEvents.changedRestaurant.value;
     if (mounted && (id == widget.restaurant.id || id == 0)) {
       unawaited(_refreshMenuSilently());
-      if (_isMarketVisual) unawaited(_fetchMarketLayout());
+      if (_supportsMarketLayouts) unawaited(_fetchMarketLayout());
     }
   }
 
@@ -14459,7 +14468,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   // uses exactly the same network and category-refresh pipeline without UI.
   Future<void> _refreshMenuManually() async {
     await _refreshMenuFromServer(silent: false);
-    if (_isMarketVisual) await _fetchMarketLayout();
+    if (_supportsMarketLayouts) await _fetchMarketLayout();
   }
 
   Future<void> _refreshMenuFromServer({required bool silent}) async {
@@ -14506,7 +14515,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
         if (_pendingMenuRefreshFromPush) {
           _pendingMenuRefreshFromPush = false;
           unawaited(_refreshMenuSilently());
-          if (_isMarketVisual) unawaited(_fetchMarketLayout());
+          if (_supportsMarketLayouts) unawaited(_fetchMarketLayout());
         }
       }
     }
@@ -14517,7 +14526,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     final used = <int>{for (final item in menu) ...item.allCategoryIds};
     // Market > Drinks > Soda must keep Market and Drinks visible even when
     // products live only in the deepest category. Restaurant behavior unchanged.
-    if (_isMarketVisual) {
+    if (_isMarketVisual || _storeLayoutMode == 'hybrid') {
       final parents = <int, int>{};
       for (final section in raw) {
         if (section is! Map) continue;
@@ -14544,6 +14553,7 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   }
 
   void _applyMenuSections(List<dynamic> sections, List<FoodItem> items) {
+    _lastRawSections = List<dynamic>.from(sections);
     final visible = _sectionsWithMeals(sections, items);
     // Normalize IDs: the API may serialize section IDs as strings.
     _subcategories = visible.map((raw) {
@@ -14619,11 +14629,12 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   bool _isAutoScrolling = false;
 
   bool get _isMarketSystem => const ['market', 'grocery', 'meat'].contains(widget.restaurant.storeType);
-  bool get _isMarketVisual => const ['market','grocery'].contains(widget.restaurant.storeType);
+  bool get _supportsMarketLayouts => const ['market', 'grocery'].contains(widget.restaurant.storeType);
+  bool get _isMarketVisual => _supportsMarketLayouts && _storeLayoutMode == 'modern';
   List<Map<String, dynamic>> _marketBanners = [];
   Map<int, Map<String, dynamic>> _marketSectionStyles = {};
   Future<void> _fetchMarketLayout() async {
-    if (!_isMarketVisual) return;
+    if (!_supportsMarketLayouts) return;
     try {
       final response = await http.get(Uri.parse(
           '$BEYTEI_URL/wp-json/restaurant-app/v1/customer-market-layout/${widget.restaurant.id}'),
@@ -14637,14 +14648,128 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
         final id = int.tryParse('${row['id']}');
         if (id != null) styles[id] = Map<String, dynamic>.from(row);
       }
+      final rawMode=(data['display_mode']??'legacy').toString();
+      final appliedMode=const ['legacy','modern','hybrid'].contains(rawMode)
+          ? rawMode : 'legacy';
+      final prefs=await SharedPreferences.getInstance();
+      await prefs.setString('beytei_display_mode_v36_${widget.restaurant.id}',appliedMode);
       if (mounted) setState(() {
+        _storeLayoutMode=appliedMode;
         _marketBanners = (data['banners'] as List)
             .whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList();
         _marketSectionStyles = styles;
+        // Keep old 8-hour menu cache; only re-evaluate visible sections locally.
+        if (_lastRawSections.isNotEmpty) {
+          final menu=Provider.of<CustomerProvider>(context,listen:false)
+              .menuItems[widget.restaurant.id] ?? const <FoodItem>[];
+          _applyMenuSections(_lastRawSections, menu);
+        }
       });
     } catch (error) {
       debugPrint('Miswak banners temporarily unavailable: $error');
     }
+  }
+
+  int _hybridModernRoot(int id) {
+    if (_storeLayoutMode != 'hybrid' || id <= 0) return 0;
+    final byId=<int,Map<String,dynamic>>{
+      for(final row in _subcategories)
+        if(row is Map<String,dynamic>) row['id'] as int:row,
+    };
+    var current=id; var modernRoot=0; final seen=<int>{};
+    while(current>0 && seen.add(current)) {
+      if (_marketSectionStyles[current]?['presentation_mode']=='modern') {
+        modernRoot=current;
+      }
+      current=int.tryParse('${byId[current]?['parent']??0}')??0;
+    }
+    return modernRoot;
+  }
+
+  List<Map<String,dynamic>> get _hybridModernRoots {
+    if (_storeLayoutMode!='hybrid') return const [];
+    return _subcategories.whereType<Map<String,dynamic>>()
+        .where((cat) => _hybridModernRoot(cat['id'] as int)==cat['id'])
+        .toList();
+  }
+
+  void _goToPlatformCartFromHybrid(BuildContext pageContext) {
+    final navigation=Provider.of<NavigationProvider>(context,listen:false);
+    _shouldClearCart=false;
+    Navigator.of(pageContext).pop();
+    if(mounted) Navigator.pop(context);
+    navigation.changeTab(3);
+  }
+
+  Future<void> _openHybridModernSection(int sectionId) async {
+    if (_storeLayoutMode!='hybrid' || _hybridModernRoot(sectionId)==0) return;
+    final allCats=_subcategories.whereType<Map<String,dynamic>>().map((cat)=>{
+      ...cat,
+      ...?_marketSectionStyles[cat['id'] as int],
+    }).toList();
+    final byId={for(final cat in allCats) cat['id'] as int:cat};
+    final root=_hybridModernRoot(sectionId);
+    final rootCat=byId[root];
+    if(rootCat==null || !mounted) return;
+    final provider=Provider.of<CustomerProvider>(context,listen:false);
+    final store=provider.allRestaurants.firstWhere(
+            (r)=>r.id==widget.restaurant.id,orElse:()=>widget.restaurant);
+    await Navigator.push<void>(context,MaterialPageRoute(builder:(pageContext)=>
+        Scaffold(backgroundColor:Colors.white,
+          bottomNavigationBar:BeyteiMarketCartSummary(onCart:(){
+            _goToPlatformCartFromHybrid(pageContext);
+          }),
+          body:Consumer<CustomerProvider>(builder:(ctx,customer,_)=>
+              BeyteiVideoMarketStorefront(
+                key:ValueKey('hybrid_$root'), store:store, rootCategoryId:root,
+                headerName:'${rootCat['name']}',
+                products:customer.menuItems[widget.restaurant.id] ?? const <FoodItem>[],
+                categories:_subcategories.whereType<Map<String,dynamic>>().map((cat)=>{
+                  ...cat,...?_marketSectionStyles[cat['id'] as int],
+                }).toList(), banners:_marketBanners,
+                onRefresh:_refreshMenuManually,
+                onBack:()=>Navigator.pop(pageContext),
+                onCart:(){
+                  _goToPlatformCartFromHybrid(pageContext);
+                },
+              ),
+          ),
+        ),
+    ));
+  }
+
+  Widget _buildHybridMarketEntrances() {
+    final roots=_hybridModernRoots;
+    if(roots.isEmpty)return const SizedBox.shrink();
+    return Padding(padding:const EdgeInsets.fromLTRB(14,12,14,4),
+      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        for(final cat in roots) Padding(
+          padding:const EdgeInsets.only(bottom:10),
+          child:Material(color:const Color(0xFFFFF4F4),
+              borderRadius:BorderRadius.circular(15),
+              child:InkWell(onTap:()=>_openHybridModernSection(cat['id'] as int),
+                  borderRadius:BorderRadius.circular(15),
+                  child:Padding(padding:const EdgeInsets.all(12),child:Row(children:[
+                    ClipRRect(borderRadius:BorderRadius.circular(11),
+                        child:SizedBox(width:72,height:72,child:
+                        (cat['image_url']??'').toString().isNotEmpty
+                            ?CachedNetworkImage(imageUrl:'${cat['image_url']}',fit:BoxFit.cover,
+                            errorWidget:(_,__,___)=>const Icon(Icons.storefront_rounded))
+                            :const Icon(Icons.storefront_rounded,size:35,
+                            color:BeyteiMarketPalette.brand))),
+                    const SizedBox(width:12),
+                    Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                      Text('${cat['name']}',style:const TextStyle(
+                          fontSize:16,fontWeight:FontWeight.w800)),
+                      const Text('تسوق الأقسام والعروض بشكل الماركت الحديث',
+                          style:TextStyle(fontSize:11,color:Colors.black54)),
+                    ])),
+                    const Icon(Icons.chevron_left_rounded,
+                        color:BeyteiMarketPalette.brand,size:26),
+                  ])))),
+        ),
+      ]),
+    );
   }
 
   Widget _buildMarketCategories() {
@@ -14730,6 +14855,13 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
       unawaited(provider.refreshRestaurantStatusNow(widget.restaurant.id));
     });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_supportsMarketLayouts) {
+        final prefs=await SharedPreferences.getInstance();
+        final cached=prefs.getString('beytei_display_mode_v36_${widget.restaurant.id}');
+        if (mounted && const ['legacy','modern','hybrid'].contains(cached)) {
+          setState(() => _storeLayoutMode=cached!);
+        }
+      }
       await _initData();
       unawaited(_fetchMarketLayout());
       if (!mounted) return;
@@ -15715,6 +15847,8 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                   },
                 ),
               ),
+              if (_storeLayoutMode == 'hybrid' && _hybridModernRoots.isNotEmpty)
+                SliverToBoxAdapter(child:_buildHybridMarketEntrances()),
               if (_isMarketVisual && _marketBanners.isNotEmpty)
                 SliverToBoxAdapter(child: BeyteiMarketBannerCarousel(
                     banners: _marketBanners)),
@@ -15750,7 +15884,10 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                       children: [
                         _buildCategoryChip(0, "الكل"),
-                        ..._subcategories.map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String)),
+                        ..._subcategories.where((cat)=>_storeLayoutMode!='hybrid' ||
+                            _hybridModernRoot(cat['id'] as int)==0 ||
+                            _hybridModernRoot(cat['id'] as int)==cat['id'])
+                            .map((cat) => _buildCategoryChip(cat['id'] as int, cat['name'] as String)),
                       ],
                     ),
                   ),
@@ -15849,6 +15986,9 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                     _ensureCategoryIndex(menu);
                     for (var cat in _subcategories) {
                       final catItems = _categoryItems[cat['id']] ?? const <FoodItem>[];
+                      // Modern subtrees appear only in their own storefront, not twice.
+                      if (_storeLayoutMode=='hybrid' &&
+                          _hybridModernRoot(cat['id'] as int)>0) continue;
                       // Only sections containing actual meals should appear.
                       if (catItems.isEmpty) continue;
 
@@ -16003,7 +16143,8 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     final isSelected = _selectedCategoryId == id;
     return GestureDetector(
       key: _categoryChipKeys.putIfAbsent(id, () => GlobalKey()),
-      onTap: () => _scrollToCategory(id),
+      onTap: () => (_storeLayoutMode=='hybrid' && _hybridModernRoot(id)>0)
+          ? _openHybridModernSection(id) : _scrollToCategory(id),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
         margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -23053,6 +23194,36 @@ class _BeyteiMarketManagerScreenState extends State<BeyteiMarketManagerScreen> {
 // Beytei V31 - Market storefront based on the 60.8s, 384x832 reference video.
 // This is a part of the existing Flutter library. Do not add imports here.
 // It uses the existing FoodItem, Restaurant, CartProvider and FoodItemBottomSheet.
+// Brand-consistent V36 market palette. This is a view-only change; cart prices
+// continue to be calculated by CartProvider and the existing checkout server.
+class BeyteiMarketPalette {
+  static const Color brand=Color(0xFFBB101B);
+  static const Color light=Color(0xFFFFF1F1);
+}
+
+// The nested market/category routes show the SAME platform cart, not a second cart.
+class BeyteiMarketCartSummary extends StatelessWidget {
+  final VoidCallback onCart;
+  const BeyteiMarketCartSummary({super.key,required this.onCart});
+  @override Widget build(BuildContext context) => Consumer<CartProvider>(
+    builder:(context,cart,_) {
+      if(cart.cartCount==0)return const SizedBox.shrink();
+      return SafeArea(top:false,child:Padding(padding:const EdgeInsets.all(10),
+        child:FilledButton(onPressed:onCart,
+          style:FilledButton.styleFrom(backgroundColor:BeyteiMarketPalette.brand,
+              foregroundColor:Colors.white,minimumSize:const Size.fromHeight(48)),
+          child:Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+            Text('${cart.cartCount}',style:const TextStyle(fontWeight:FontWeight.w800)),
+            const Text('عرض السلة',style:TextStyle(fontWeight:FontWeight.w800)),
+            Text('${NumberFormat('#,###','ar_IQ').format(cart.totalPrice)} د.ع',
+                style:const TextStyle(fontWeight:FontWeight.w800)),
+          ]),
+        ),
+      ));
+    },
+  );
+}
+
 class BeyteiVideoMarketStorefront extends StatefulWidget {
   final Restaurant store;
   final int? rootCategoryId;
@@ -23072,7 +23243,7 @@ class BeyteiVideoMarketStorefront extends StatefulWidget {
 }
 
 class _BeyteiVideoMarketStorefrontState extends State<BeyteiVideoMarketStorefront> {
-  static const red = Color(0xFFBB101B);
+  static const red = BeyteiMarketPalette.brand;
   final _queryController = TextEditingController();
   String _query = '';
   final _scroll = ScrollController();
@@ -23129,13 +23300,18 @@ class _BeyteiVideoMarketStorefrontState extends State<BeyteiVideoMarketStorefron
     if ((hasChildren || products.isEmpty) && (categoryName.contains('ماركت') ||
         categoryName.toLowerCase().contains('market') ||
         '${category['slug'] ?? ''}'.toLowerCase().contains('market'))) {
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) =>
-          BeyteiVideoMarketStorefront(store: widget.store,
-              rootCategoryId: catId, headerName: categoryName,
-              products: products, categories: widget.categories,
-              banners: widget.banners, onRefresh: widget.onRefresh,
-              onBack: () => Navigator.of(context).pop(),
-              onCart: () { Navigator.of(context).pop(); widget.onCart(); })));
+      Navigator.of(context).push(MaterialPageRoute(builder: (nestedContext) =>
+          Scaffold(backgroundColor:Colors.white,
+            bottomNavigationBar:BeyteiMarketCartSummary(onCart:(){
+              Navigator.of(nestedContext).pop();widget.onCart();
+            }),
+            body:BeyteiVideoMarketStorefront(store: widget.store,
+                rootCategoryId: catId, headerName: categoryName,
+                products: products, categories: widget.categories,
+                banners: widget.banners, onRefresh: widget.onRefresh,
+                onBack: () => Navigator.of(nestedContext).pop(),
+                onCart:(){Navigator.of(nestedContext).pop();widget.onCart();}),
+          )));
       return;
     }
     Navigator.of(context).push(MaterialPageRoute(builder: (_) =>
@@ -23190,7 +23366,7 @@ class _BeyteiVideoMarketStorefrontState extends State<BeyteiVideoMarketStorefron
                         const SizedBox(width: 5),
                         Flexible(child: Text(widget.rootCategoryId != null
                             ? 'أقسام الماركت' : widget.store.storeType == 'market'
-                            ? 'المسواك · خضروات وماركت' : 'ماركت · مواد غذائية',
+                            ? 'المسواك · خضروات وماركت' : 'مرطبات · مواد غذائية',
                             maxLines: 1, overflow: TextOverflow.ellipsis,
                             style: const TextStyle(color: Colors.white, fontSize: 10))),
                         const SizedBox(width: 5),
@@ -23403,7 +23579,7 @@ class _BeyteiVideoBannerStripState extends State<BeyteiVideoBannerStrip> {
           for (var i=0;i<widget.banners.length;i++) Container(
               margin: const EdgeInsets.symmetric(horizontal: 2),
               height: 5, width: index==i?18:5,
-              decoration: BoxDecoration(color: index==i ? const Color(0xFFB34A0A) :
+              decoration: BoxDecoration(color: index==i ? BeyteiMarketPalette.brand :
               Colors.grey.shade300, borderRadius: BorderRadius.circular(8))),
         ])),
   ]);
@@ -23417,12 +23593,6 @@ class BeyteiVideoMarketTile extends StatelessWidget {
   const BeyteiVideoMarketTile({super.key, required this.food,
     required this.store, required this.related, this.compact = false});
   void _show(BuildContext context) {
-    if (food.isSoldByWeight || food.hasMenuOptions) {
-      showModalBottomSheet(context: context, backgroundColor: Colors.transparent,
-          isScrollControlled: true,
-          builder: (_) => FoodItemBottomSheet(foodItem: food, isMarket: true));
-      return;
-    }
     Navigator.push(context, MaterialPageRoute(builder: (_) =>
         BeyteiVideoMarketProductPage(food: food, store: store, related: related)));
   }
@@ -23452,7 +23622,7 @@ class BeyteiVideoMarketTile extends StatelessWidget {
                     style: const TextStyle(fontSize: 11, color: Colors.red))))),
             Positioned(bottom: 3, left: 4, child: InkWell(onTap: valid ? () => _add(context) : null,
                 child: Container(width: 28, height: 28,
-                    decoration: const BoxDecoration(color: Color(0xFFB84A0A),
+                    decoration: const BoxDecoration(color: BeyteiMarketPalette.brand,
                         shape: BoxShape.circle),
                     child: const Icon(Icons.add, color: Colors.white, size: 17)))),
           ])),
@@ -23465,7 +23635,7 @@ class BeyteiVideoMarketTile extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(food.formattedPrice, maxLines: 1, overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800,
-                        color: Color(0xFFAA430A))),
+                        color: BeyteiMarketPalette.brand)),
               ]))),
         ])));
   }
@@ -23491,6 +23661,8 @@ class _BeyteiVideoMarketCategoryPageState extends State<BeyteiVideoMarketCategor
     int.tryParse('${c['parent'] ?? 0}') == widget.categoryId).toList();
     return Directionality(textDirection: TextDirection.rtl,
         child: Scaffold(backgroundColor: Colors.white,
+            bottomNavigationBar:BeyteiMarketCartSummary(onCart:()=>Navigator.push(
+                context,MaterialPageRoute(builder:(_)=>const CartScreen()))),
             appBar: AppBar(centerTitle: true, backgroundColor: Colors.white,
                 foregroundColor: const Color(0xFF222222), elevation: 0,
                 title: Text(widget.name, style: const TextStyle(fontSize: 16,
@@ -23500,14 +23672,14 @@ class _BeyteiVideoMarketCategoryPageState extends State<BeyteiVideoMarketCategor
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   children: [
                     ChoiceChip(selected: filterId==0,
-                        selectedColor: const Color(0xFFC25012),
+                        selectedColor: BeyteiMarketPalette.brand,
                         label: Text('الكل', style: TextStyle(fontSize: 11,
                             color: filterId==0 ? Colors.white : Colors.black87)),
                         onSelected: (_) => setState(() => filterId=0)),
                     for (final c in nested) ...[
                       const SizedBox(width: 6),
                       ChoiceChip(selected: filterId==int.tryParse('${c['id']}'),
-                          selectedColor: const Color(0xFFC25012),
+                          selectedColor: BeyteiMarketPalette.brand,
                           label: Text('${c['name']}', style: TextStyle(fontSize: 11,
                               color: filterId==int.tryParse('${c['id']}') ? Colors.white : Colors.black87)),
                           onSelected: (_) => setState(() => filterId=int.tryParse('${c['id']}') ?? 0)),
@@ -23543,9 +23715,27 @@ class BeyteiVideoMarketProductPage extends StatefulWidget {
 }
 class _BeyteiVideoMarketProductPageState extends State<BeyteiVideoMarketProductPage> {
   int count = 1;
+  void _addSelectedProduct(BuildContext context) {
+    final food=widget.food;
+    if(food.isSoldByWeight || food.hasMenuOptions) {
+      showModalBottomSheet(context:context,isScrollControlled:true,
+          backgroundColor:Colors.transparent,
+          builder:(_)=>FoodItemBottomSheet(foodItem:food,isMarket:true,
+              initialQuantity:count));
+      return;
+    }
+    Provider.of<CartProvider>(context,listen:false).addToCart(
+        food.copyWith(quantity:1),context,quantity:count);
+  }
   @override Widget build(BuildContext context) {
     final food = widget.food;
-    final related = widget.related.where((f) => f.id != food.id).take(12).toList();
+    final related = widget.related.where((f)=>f.id!=food.id).toList()
+      ..sort((a,b) {
+        final aSame=a.allCategoryIds.any(food.allCategoryIds.contains)?0:1;
+        final bSame=b.allCategoryIds.any(food.allCategoryIds.contains)?0:1;
+        return aSame.compareTo(bSame);
+      });
+    if(related.length>12) related.removeRange(12,related.length);
     final available = widget.store.isOpen && food.isDeliverable && food.canBuyAtThisTime;
     return Directionality(textDirection: TextDirection.rtl,
         child: Scaffold(backgroundColor: Colors.white,
@@ -23569,7 +23759,7 @@ class _BeyteiVideoMarketProductPageState extends State<BeyteiVideoMarketProductP
                           color: Color(0xFF202020), fontWeight: FontWeight.w800)),
                       const SizedBox(height: 6),
                       Text(food.formattedPrice, style: const TextStyle(fontSize: 21,
-                          fontWeight: FontWeight.w800, color: Color(0xFFB14A09))),
+                          fontWeight: FontWeight.w800, color: BeyteiMarketPalette.brand)),
                       const SizedBox(height: 8),
                       Text('من ${widget.store.name}',
                           style: const TextStyle(color: Colors.black54, fontSize: 12)),
@@ -23597,28 +23787,29 @@ class _BeyteiVideoMarketProductPageState extends State<BeyteiVideoMarketProductP
                   padding: const EdgeInsets.fromLTRB(12, 9, 12, 10),
                   child: Row(children: [
                     Expanded(flex: 3, child: ElevatedButton(
-                        onPressed: available ? () {
-                          Provider.of<CartProvider>(context, listen: false).addToCart(
-                              food.copyWith(quantity: 1), context, quantity: count);
-                        } : null,
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB84505),
+                        onPressed: available ? () => _addSelectedProduct(context) : null,
+                        style: ElevatedButton.styleFrom(backgroundColor: BeyteiMarketPalette.brand,
                             foregroundColor: Colors.white,
                             minimumSize: const Size(0, 46),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                        child: Text('إضافة · ${NumberFormat('#,###', 'ar_IQ').format(food.finalPrice*count)} د.ع',
+                        child: Text(food.isSoldByWeight || food.hasMenuOptions
+                            ? 'اختيار الوزن والإضافات'
+                            : 'إضافة · ${NumberFormat('#,###', 'ar_IQ').format(food.finalPrice*count)} د.ع',
                             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)))),
                     const SizedBox(width: 9),
                     Container(width: 118, height: 46,
                         decoration: BoxDecoration(color: const Color(0xFFF0F0F0),
                             borderRadius: BorderRadius.circular(9)),
                         child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-                          IconButton(onPressed: () => setState(() => count++),
+                          IconButton(onPressed: count < 99 ? () => setState(() => count++) : null,
                               icon: const Icon(Icons.add, size: 17)),
                           Text('$count', style: const TextStyle(fontWeight: FontWeight.w800)),
                           IconButton(onPressed: count > 1 ? () => setState(() => count--) : null,
                               icon: const Icon(Icons.remove, size: 17)),
                         ])),
                   ])),
+              BeyteiMarketCartSummary(onCart:()=>Navigator.push(context,
+                  MaterialPageRoute(builder:(_)=>const CartScreen()))),
             ]))));
   }
   Widget _circle(IconData icon, VoidCallback onTap) => InkWell(onTap: onTap,
