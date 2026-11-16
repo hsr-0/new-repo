@@ -46,8 +46,8 @@ android {
         applicationId = "co.median.android.wqwnby"
         minSdk = 24
         targetSdk = 36
-        versionCode = 97
-        versionName = "1.9.7"
+        versionCode = 98
+        versionName = "1.9.8"
     }
 
     // --- هذا هو الجزء المطلوب حله للمشكلة ---
