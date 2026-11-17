@@ -1,4 +1,5 @@
 import '/backend/api_requests/api_calls.dart';
+import '/beytei_re/customer_order_edits_panel.dart';
 import '/flutter_flow/flutter_flow_animations.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -223,6 +224,11 @@ class _OrderDetailsPageWidgetState extends State<OrderDetailsPageWidget>
                                       ),
                                       scrollDirection: Axis.vertical,
                                       children: [
+                                        if (widget.orderId != null)
+                                          CustomerOrderEditsPanel(
+                                            sourceOrderId: widget.orderId!,
+                                            wpJwt: FFAppState().token,
+                                          ),
                                         Container(
                                           width: double.infinity,
                                           decoration: BoxDecoration(
