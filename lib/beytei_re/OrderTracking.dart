@@ -7,7 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 
-import '../beytei_re/re.dart'; //
+import '../beytei_re/re.dart';
+import 'customer_order_edits_panel.dart'; //
 
 class OrderTrackingScreen extends StatefulWidget {
   final dynamic order;
@@ -398,6 +399,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   children: [
                     const Text("ملخص الطلب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const Divider(height: 30),
+                    CustomerOrderEditsPanel(
+                      sourceOrderId: int.tryParse(widget.order.id.toString()) ?? 0,
+                      wpJwt: Provider.of<AuthProvider>(context, listen: false).token,
+                    ),
                     _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
                     const SizedBox(height: 15),
 
