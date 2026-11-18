@@ -7417,7 +7417,19 @@ class ApiService {
 
       if (response.statusCode == 201) {
         print("✅ [SubmitOrder] تم إنشاء الطلب بنجاح!");
-        final createdOrder = Order.fromJson(json.decode(response.body));
+        final data = json.decode(response.body);
+        final createdOrder = Order.fromJson(data);
+        // Woo already returns a random per-order key. Store it only on this
+        // device so Laravel can verify Woo ownership read-only, with NO WP edits.
+        if (data is Map && createdOrder.id > 0) {
+          final key = (data['order_key'] ?? '').toString();
+          if (key.startsWith('wc_order_') && key.length >= 12 && key.length <= 160) {
+            await const FlutterSecureStorage().write(
+              key: 'beytei_woo_order_key_v44_' + createdOrder.id.toString(),
+              value: key,
+            );
+          }
+        }
         await OrderHistoryService().saveOrder(createdOrder);
         return createdOrder;
       } else if (response.statusCode == 409) {
