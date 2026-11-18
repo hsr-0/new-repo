@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Show ONLY "غير متوفر" for products reported unavailable.
 /// No courier proposal, explanation, price, proof or review is shown to customers.
@@ -51,17 +52,19 @@ class _CustomerOrderEditsPanelState extends State<CustomerOrderEditsPanel> {
   }
 
   Future<void> _load() async {
-    final token = widget.wpJwt;
-    if (widget.sourceOrderId <= 0 || token == null || token.isEmpty) {
-      if (mounted) setState(() => _unavailable = const []);
-      return;
-    }
+    if (widget.sourceOrderId <= 0) return;
     try {
+      final token = widget.wpJwt;
+      final orderKey = await const FlutterSecureStorage().read(
+        key: 'beytei_customer_order_key_v42_' + widget.sourceOrderId.toString());
+      if ((token == null || token.isEmpty) &&
+          (orderKey == null || orderKey.isEmpty)) return;
       final response = await http.get(
         Uri.parse('https://de.beytei.com/api/beytei/customer/v42/orders/' +
             widget.sourceOrderId.toString() + '/edits'),
         headers: {
-          'Authorization': 'Bearer ' + token,
+          if (token != null && token.isNotEmpty) 'Authorization': 'Bearer ' + token,
+          if (orderKey != null && orderKey.isNotEmpty) 'X-Beytei-Order-Token': orderKey,
           'Accept': 'application/json',
         },
       ).timeout(const Duration(seconds: 12));
