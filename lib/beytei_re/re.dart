@@ -7424,10 +7424,16 @@ class ApiService {
         if (data is Map && createdOrder.id > 0) {
           final key = (data['order_key'] ?? '').toString();
           if (key.startsWith('wc_order_') && key.length >= 12 && key.length <= 160) {
-            await const FlutterSecureStorage().write(
-              key: 'beytei_woo_order_key_v44_' + createdOrder.id.toString(),
-              value: key,
-            );
+            // The Woo order is already created; a local storage failure must
+            // never make checkout look failed or invite a duplicate purchase.
+            try {
+              await const FlutterSecureStorage().write(
+                key: 'beytei_woo_order_key_v44_' + createdOrder.id.toString(),
+                value: key,
+              );
+            } catch (_) {
+              debugPrint('Order key could not be saved locally; checkout remains successful.');
+            }
           }
         }
         await OrderHistoryService().saveOrder(createdOrder);
@@ -18020,11 +18026,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
                     // Only this device can read the Laravel-adjusted amount for
                     // this checkout, including guest orders. Store it securely.
-                    await const FlutterSecureStorage().write(
-                      key: 'beytei_customer_order_key_v42_' +
-                          createdOrder.id.toString(),
-                      value: _checkoutSessionId,
-                    );
+                    try {
+                      await const FlutterSecureStorage().write(
+                        key: 'beytei_customer_order_key_v42_' +
+                            createdOrder.id.toString(),
+                        value: _checkoutSessionId,
+                      );
+                    } catch (_) {
+                      debugPrint('Checkout token could not be saved locally; order was created.');
+                    }
 
                     // ✅ تم إنشاء الطلب بنجاح: احفظ المراجع قبل إزالة شاشة الدفع.
                     // لدى MainScreen أربعة Navigators مستقلة، والسلة هي التبويب 3.
