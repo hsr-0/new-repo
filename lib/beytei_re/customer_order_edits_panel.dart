@@ -6,7 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Show ONLY "غير متوفر" for products reported unavailable.
 /// No courier proposal, explanation, price, proof or review is shown to customers.
-/// Laravel verifies that the current WP user owns this exact order.
+/// Laravel verifies ownership by Woo order key / checkout session or verified WP login.
 class CustomerOrderEditsPanel extends StatefulWidget {
   final int sourceOrderId;
   final String? wpJwt;
@@ -57,14 +57,20 @@ class _CustomerOrderEditsPanelState extends State<CustomerOrderEditsPanel> {
       final token = widget.wpJwt;
       final orderKey = await const FlutterSecureStorage().read(
         key: 'beytei_customer_order_key_v42_' + widget.sourceOrderId.toString());
+      final wooOrderKey = await const FlutterSecureStorage().read(
+        key: 'beytei_woo_order_key_v44_' + widget.sourceOrderId.toString());
       if ((token == null || token.isEmpty) &&
-          (orderKey == null || orderKey.isEmpty)) return;
+          (orderKey == null || orderKey.isEmpty) &&
+          (wooOrderKey == null || wooOrderKey.isEmpty)) return;
       final response = await http.get(
         Uri.parse('https://de.beytei.com/api/beytei/customer/v42/orders/' +
             widget.sourceOrderId.toString() + '/edits'),
         headers: {
           if (token != null && token.isNotEmpty) 'Authorization': 'Bearer ' + token,
           if (orderKey != null && orderKey.isNotEmpty) 'X-Beytei-Order-Token': orderKey,
+          if (wooOrderKey != null && wooOrderKey.isNotEmpty)
+            'X-Beytei-Woo-Order-Key': wooOrderKey,
+          'Cache-Control': 'no-store',
           'Accept': 'application/json',
         },
       ).timeout(const Duration(seconds: 12));
