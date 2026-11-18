@@ -70,6 +70,8 @@ import 'package:image_picker/image_picker.dart';
 import '../main.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'customer_order_edits_panel.dart';
 import 'package:uuid/uuid.dart'; // أضف هذه المكتبة في pubspec.yaml
 import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 
@@ -17980,6 +17982,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
 
                     if (!mounted) return;
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
+                    // Only this device can read the Laravel-adjusted amount for
+                    // this checkout, including guest orders. Store it securely.
+                    await const FlutterSecureStorage().write(
+                      key: 'beytei_customer_order_key_v42_' +
+                          createdOrder.id.toString(),
+                      value: _checkoutSessionId,
+                    );
 
                     // ✅ تم إنشاء الطلب بنجاح: احفظ المراجع قبل إزالة شاشة الدفع.
                     // لدى MainScreen أربعة Navigators مستقلة، والسلة هي التبويب 3.
@@ -18382,6 +18391,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   late String _currentStatus;
   String? _driverName;
   bool _isSyncing = false;
+  int? _confirmedCollectedIqd;
   bool _ratingAlreadySubmitted = false;
   StreamSubscription<RemoteMessage>? _fcmSubscription;
 
@@ -18795,6 +18805,15 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   children: [
                     const Text("ملخص الطلب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const Divider(height: 30),
+                    CustomerOrderEditsPanel(
+                      sourceOrderId: int.tryParse(widget.order.id.toString()) ?? 0,
+                      wpJwt: Provider.of<AuthProvider>(context, listen: false).token,
+                      onTotalChanged: (amount) {
+                        if (mounted && _confirmedCollectedIqd != amount) {
+                          setState(() => _confirmedCollectedIqd = amount);
+                        }
+                      },
+                    ),
                     _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
                     const SizedBox(height: 15),
 
@@ -18805,7 +18824,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                         const Text("الإجمالي المطلوب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         Builder(
                           builder: (context) {
-                            final double finalTotal = double.tryParse(widget.order.total.toString()) ?? 0.0;
+                            final double finalTotal = _confirmedCollectedIqd?.toDouble() ??
+                                double.tryParse(widget.order.total.toString()) ?? 0.0;
                             final double discountAmount = widget.order.discountAmount != null
                                 ? double.tryParse(widget.order.discountAmount.toString()) ?? 0.0
                                 : 0.0;
@@ -18813,7 +18833,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                                 ? double.tryParse(widget.order.originalTotal.toString()) ?? 0.0
                                 : (finalTotal + discountAmount);
 
-                            if (discountAmount > 0) {
+                            if (discountAmount > 0 && _confirmedCollectedIqd == null) {
                               return Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
