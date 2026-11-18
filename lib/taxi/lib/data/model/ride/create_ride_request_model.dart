@@ -16,6 +16,7 @@ class CreateRideRequestModel {
   String offerAmount;
   String paymentType;
   String gatewayCurrencyId;
+  String? couponCode;
   CreateRideRequestModel({
     required this.serviceId,
     required this.pickUpLocation,
@@ -31,6 +32,7 @@ class CreateRideRequestModel {
     required this.offerAmount,
     required this.paymentType,
     required this.gatewayCurrencyId,
+    this.couponCode,
   });
 
   Map<String, dynamic> toMap() {
@@ -49,6 +51,7 @@ class CreateRideRequestModel {
       'offer_amount': offerAmount,
       'payment_type': paymentType,
       'gateway_currency_id': gatewayCurrencyId,
+      if (couponCode != null && couponCode!.isNotEmpty) 'coupon_code': couponCode,
     };
   }
 

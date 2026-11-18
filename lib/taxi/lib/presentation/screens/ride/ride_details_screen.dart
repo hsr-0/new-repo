@@ -15,6 +15,7 @@ import 'package:cosmetic_store/taxi/lib/data/repo/ride/ride_repo.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/ride/widget/poly_line_map.dart';
 import 'package:cosmetic_store/taxi/lib/presentation/screens/ride/widget/ride_details_bottom_sheet_widget.dart';
 import 'package:toastification/toastification.dart';
+import 'ride_fare_increase_card.dart';
 
 class RideDetailsScreen extends StatefulWidget {
   final String rideId;
@@ -52,7 +53,7 @@ class _RideDetailsScreenState extends State<RideDetailsScreen> {
       // 🔥 بدء التتبع مباشرة (بدون .then لأن initialData ترجع void)
       Future.delayed(const Duration(milliseconds: 500), () {
         final status = controller.ride.status;
-        if (status == 'active' || status == 'running' || status == 'accepted' || status == 'pick_up') {
+        if (status == '2' || status == '3') {
           _mapController.startLiveTracking(widget.rideId);
         }
       });
@@ -114,6 +115,12 @@ class _RideDetailsScreenState extends State<RideDetailsScreen> {
                       },
                     ),
                   ),
+                  Positioned(
+                     top: 88,
+                     left: 16,
+                     right: 16,
+                     child: RideFareIncreaseCard(rideId: widget.rideId),
+                   ),
                   Positioned(
                     top: 0,
                     left: 0,

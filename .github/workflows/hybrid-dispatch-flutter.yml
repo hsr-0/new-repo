@@ -1,0 +1,25 @@
+name: Passenger taxi Flutter analysis
+on:
+  pull_request:
+    paths:
+      - 'lib/taxi/**'
+      - '.github/workflows/hybrid-dispatch-flutter.yml'
+jobs:
+  flutter-analyze:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Check changed taxi files
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings \
+            lib/taxi/lib/data/controller/home/home_controller.dart \
+            lib/taxi/lib/data/model/ride/create_ride_request_model.dart \
+            lib/taxi/lib/presentation/screens/home/widgets/nearby_drivers_map.dart \
+            lib/taxi/lib/presentation/screens/home/widgets/home_body.dart \
+            lib/taxi/lib/presentation/screens/ride/ride_fare_increase_card.dart \
+            lib/taxi/lib/presentation/screens/ride/ride_details_screen.dart

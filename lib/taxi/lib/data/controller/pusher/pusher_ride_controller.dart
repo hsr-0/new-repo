@@ -226,8 +226,8 @@ class PusherRideController extends GetxController {
   Future<void> ensureConnection({String? channelName}) async {
     try {
       var userId = apiClient.sharedPreferences.getString(SharedPreferenceHelper.userIdKey) ?? '';
-      // التغيير هنا ليتطابق مع: private-rider-rider-ID
-      await PusherManager().checkAndInitIfNeeded(channelName ?? "private-rider-rider-$userId");
+      // نفس قناة الزبون الخاصة، سواء كان موصولاً بـ Reverb أو بالنظام القديم.
+      await PusherManager().checkAndInitIfNeeded(channelName ?? "private-rider-user-$userId");
     } catch (e) {
       printX("Error ensuring connection: $e");
     }

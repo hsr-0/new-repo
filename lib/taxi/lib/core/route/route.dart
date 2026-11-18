@@ -1,4 +1,4 @@
-import 'package:cosmetic_store/taxi/lib/presentation/screens/Profile/profile_screen.dart';
+import 'package:cosmetic_store/taxi/lib/presentation/screens/profile/profile_screen.dart';
 
 import 'package:cosmetic_store/taxi/lib/presentation/screens/account/change-password/change_password_screen.dart';
 
