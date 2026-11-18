@@ -5457,6 +5457,30 @@ class OrderHistoryService {
     return [];
   }
 
+  // Refresh the local history price ONLY after Laravel returns a confirmed
+  // order-scoped amount. No WooCommerce writes and no speculative amounts.
+  Future<void> updateOrderTotalLocally(int orderId, int totalIqd) async {
+    if (orderId <= 0 || totalIqd < 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key);
+    if (raw == null) return;
+    try {
+      final parsed = json.decode(raw);
+      if (parsed is! List) return;
+      var changed = false;
+      for (final entry in parsed) {
+        if (entry is Map && entry['id']?.toString() == orderId.toString()) {
+          if (entry['total']?.toString() != totalIqd.toString()) {
+            entry['total'] = totalIqd.toString();
+            changed = true;
+          }
+          break;
+        }
+      }
+      if (changed) await prefs.setString(_key, json.encode(parsed));
+    } catch (_) {}
+  }
+
   // 3. 🔥 الدالة الجديدة: تحديث حالة طلب موجود مسبقاً
   Future<void> updateOrderStatusLocally(int orderId, String newStatus) async {
     try {
@@ -18811,6 +18835,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                       onTotalChanged: (amount) {
                         if (mounted && _confirmedCollectedIqd != amount) {
                           setState(() => _confirmedCollectedIqd = amount);
+                          if (amount != null) {
+                            OrderHistoryService().updateOrderTotalLocally(
+                              widget.order.id, amount);
+                          }
                         }
                       },
                     ),
