@@ -22,6 +22,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   late String _currentStatus;
   String? _driverName;
   bool _isSyncing = false;
+  int? _laravelCollectedIqd;
   StreamSubscription<RemoteMessage>? _fcmSubscription;
 
   // متغير لمنع منح الصندوق مرتين لنفس الطلب في الجلسة الواحدة
@@ -402,6 +403,11 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     CustomerOrderEditsPanel(
                       sourceOrderId: int.tryParse(widget.order.id.toString()) ?? 0,
                       wpJwt: Provider.of<AuthProvider>(context, listen: false).token,
+                      onTotalChanged: (amount) {
+                        if (mounted && _laravelCollectedIqd != amount) {
+                          setState(() => _laravelCollectedIqd = amount);
+                        }
+                      },
                     ),
                     _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
                     const SizedBox(height: 15),
@@ -413,7 +419,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                         const Text("الإجمالي المطلوب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         Builder(
                           builder: (context) {
-                            final double finalTotal = double.tryParse(widget.order.total.toString()) ?? 0.0;
+                            final double finalTotal = _laravelCollectedIqd?.toDouble() ??
+                                double.tryParse(widget.order.total.toString()) ?? 0.0;
                             final double discountAmount = widget.order.discountAmount != null
                                 ? double.tryParse(widget.order.discountAmount.toString()) ?? 0.0
                                 : 0.0;
@@ -421,7 +428,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                                 ? double.tryParse(widget.order.originalTotal.toString()) ?? 0.0
                                 : (finalTotal + discountAmount);
 
-                            if (discountAmount > 0) {
+                            if (discountAmount > 0 && _laravelCollectedIqd == null) {
                               return Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
