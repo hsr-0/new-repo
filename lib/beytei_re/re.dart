@@ -70,6 +70,8 @@ import 'package:image_picker/image_picker.dart';
 import '../main.dart';
 import 'OrderTracking.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'customer_order_edits_panel.dart';
 import 'package:uuid/uuid.dart'; // أضف هذه المكتبة في pubspec.yaml
 import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
 
@@ -5455,6 +5457,30 @@ class OrderHistoryService {
     return [];
   }
 
+  // Refresh the local history price ONLY after Laravel returns a confirmed
+  // order-scoped amount. No WooCommerce writes and no speculative amounts.
+  Future<void> updateOrderTotalLocally(int orderId, int totalIqd) async {
+    if (orderId <= 0 || totalIqd < 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key);
+    if (raw == null) return;
+    try {
+      final parsed = json.decode(raw);
+      if (parsed is! List) return;
+      var changed = false;
+      for (final entry in parsed) {
+        if (entry is Map && entry['id']?.toString() == orderId.toString()) {
+          if (entry['total']?.toString() != totalIqd.toString()) {
+            entry['total'] = totalIqd.toString();
+            changed = true;
+          }
+          break;
+        }
+      }
+      if (changed) await prefs.setString(_key, json.encode(parsed));
+    } catch (_) {}
+  }
+
   // 3. 🔥 الدالة الجديدة: تحديث حالة طلب موجود مسبقاً
   Future<void> updateOrderStatusLocally(int orderId, String newStatus) async {
     try {
@@ -7391,7 +7417,25 @@ class ApiService {
 
       if (response.statusCode == 201) {
         print("✅ [SubmitOrder] تم إنشاء الطلب بنجاح!");
-        final createdOrder = Order.fromJson(json.decode(response.body));
+        final data = json.decode(response.body);
+        final createdOrder = Order.fromJson(data);
+        // Woo already returns a random per-order key. Store it only on this
+        // device so Laravel can verify Woo ownership read-only, with NO WP edits.
+        if (data is Map && createdOrder.id > 0) {
+          final key = (data['order_key'] ?? '').toString();
+          if (key.startsWith('wc_order_') && key.length >= 12 && key.length <= 160) {
+            // The Woo order is already created; a local storage failure must
+            // never make checkout look failed or invite a duplicate purchase.
+            try {
+              await const FlutterSecureStorage().write(
+                key: 'beytei_woo_order_key_v44_' + createdOrder.id.toString(),
+                value: key,
+              );
+            } catch (_) {
+              debugPrint('Order key could not be saved locally; checkout remains successful.');
+            }
+          }
+        }
         await OrderHistoryService().saveOrder(createdOrder);
         return createdOrder;
       } else if (response.statusCode == 409) {
@@ -17980,6 +18024,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
 
                     if (!mounted) return;
                     if (createdOrder == null) throw Exception('فشل إنشاء الطلب.');
+                    // Only this device can read the Laravel-adjusted amount for
+                    // this checkout, including guest orders. Store it securely.
+                    try {
+                      await const FlutterSecureStorage().write(
+                        key: 'beytei_customer_order_key_v42_' +
+                            createdOrder.id.toString(),
+                        value: _checkoutSessionId,
+                      );
+                    } catch (_) {
+                      debugPrint('Checkout token could not be saved locally; order was created.');
+                    }
 
                     // ✅ تم إنشاء الطلب بنجاح: احفظ المراجع قبل إزالة شاشة الدفع.
                     // لدى MainScreen أربعة Navigators مستقلة، والسلة هي التبويب 3.
@@ -18382,6 +18437,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   late String _currentStatus;
   String? _driverName;
   bool _isSyncing = false;
+  int? _confirmedCollectedIqd;
   bool _ratingAlreadySubmitted = false;
   StreamSubscription<RemoteMessage>? _fcmSubscription;
 
@@ -18795,6 +18851,19 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   children: [
                     const Text("ملخص الطلب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const Divider(height: 30),
+                    CustomerOrderEditsPanel(
+                      sourceOrderId: int.tryParse(widget.order.id.toString()) ?? 0,
+                      wpJwt: Provider.of<AuthProvider>(context, listen: false).token,
+                      onTotalChanged: (amount) {
+                        if (mounted && _confirmedCollectedIqd != amount) {
+                          setState(() => _confirmedCollectedIqd = amount);
+                          if (amount != null) {
+                            OrderHistoryService().updateOrderTotalLocally(
+                              widget.order.id, amount);
+                          }
+                        }
+                      },
+                    ),
                     _buildPriceRow("حالة الطلب الحالية", _currentStatus.toUpperCase()),
                     const SizedBox(height: 15),
 
@@ -18805,7 +18874,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                         const Text("الإجمالي المطلوب", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         Builder(
                           builder: (context) {
-                            final double finalTotal = double.tryParse(widget.order.total.toString()) ?? 0.0;
+                            final double finalTotal = _confirmedCollectedIqd?.toDouble() ??
+                                double.tryParse(widget.order.total.toString()) ?? 0.0;
                             final double discountAmount = widget.order.discountAmount != null
                                 ? double.tryParse(widget.order.discountAmount.toString()) ?? 0.0
                                 : 0.0;
@@ -18813,7 +18883,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                                 ? double.tryParse(widget.order.originalTotal.toString()) ?? 0.0
                                 : (finalTotal + discountAmount);
 
-                            if (discountAmount > 0) {
+                            if (discountAmount > 0 && _confirmedCollectedIqd == null) {
                               return Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
