@@ -2008,6 +2008,9 @@ class CustomerProvider with ChangeNotifier {
 
   // قائمة العروض النشطة
   List<Offer> _activeOffers = [];
+  // BEYTEI V47: separate live joint promotions feed; old on_sale offers remain untouched.
+  List<BeyteiJointRestaurantOffer> _jointRestaurantOffers = [];
+  int _jointRequestedAreaId = -1;
 
   int _lastLoadedAreaId = -1;
   bool _isRefreshingStatuses = false;
@@ -2038,6 +2041,7 @@ class CustomerProvider with ChangeNotifier {
   }
   Map<int, List<FoodItem>> get menuItems => _menuItems;
   List<Offer> get activeOffers => _activeOffers;
+  List<BeyteiJointRestaurantOffer> get jointRestaurantOffers => _jointRestaurantOffers;
 
   bool get isLoadingHome => _isLoadingHome;
   bool get isLoadingRestaurants => _isLoadingHome;
@@ -2060,10 +2064,54 @@ class CustomerProvider with ChangeNotifier {
     _menuAutoClose.clear();
     _modernMenuIds.clear();
     _activeOffers = [];
+    _jointRestaurantOffers = [];
     _lastLoadedAreaId = -1;
     _lastStatusRefresh = null;
     _hasError = false;
     notifyListeners();
+  }
+
+  // BEYTEI V47: live promotion catalogue. Never calculate/authorize money from this feed.
+  // If server/feature flag is unavailable, preserve existing on-sale offers.
+  Future<void> fetchJointRestaurantOffers(int areaId) async {
+    _jointRequestedAreaId = areaId;
+    try {
+      final uri = Uri.parse(
+          'https://de.beytei.com/api/beytei/promotions/v47/offers?area_id=$areaId');
+      final response = await http.get(uri, headers: {'Accept':'application/json'})
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        if (_jointRequestedAreaId == areaId) {
+          _jointRestaurantOffers = [];
+          notifyListeners();
+        }
+        return;
+      }
+      final data = json.decode(response.body);
+      if (data is! Map || data['success'] != true || data['checkout_ready'] != true ||
+          data['offers'] is! List) {
+        if (_jointRequestedAreaId == areaId) {
+          _jointRestaurantOffers = [];
+          notifyListeners();
+        }
+        return;
+      }
+      final rows = (data['offers'] as List)
+          .whereType<Map>()
+          .map((row) => BeyteiJointRestaurantOffer.fromJson(
+          Map<String, dynamic>.from(row)))
+          .where((o) => o.restaurantId > 0 && o.areaId == areaId && o.checkoutReady)
+          .toList();
+      // Area switch protection: never show Aziziyah offers in another zone.
+      if (_jointRequestedAreaId != areaId) return;
+      _jointRestaurantOffers = rows;
+      notifyListeners();
+    } catch (_) {
+      if (_jointRequestedAreaId == areaId) {
+        _jointRestaurantOffers = [];
+        notifyListeners();
+      }
+    }
   }
 
   // ============================================================
@@ -5547,6 +5595,100 @@ class Offer {
 }
 
 // ==========================================
+// BEYTEI V47: a marketing badge is NOT a financial quote.
+class BeyteiJointRestaurantOffer {
+  final int campaignId;
+  final int restaurantId;
+  final int areaId;
+  final String title;
+  final String badge;
+  final int platformPercent;
+  final int merchantPercent;
+  final bool freeDelivery;
+  final bool checkoutReady;
+
+  const BeyteiJointRestaurantOffer({required this.campaignId,
+    required this.restaurantId,required this.areaId,required this.title,
+    required this.badge,required this.platformPercent,
+    required this.merchantPercent,required this.freeDelivery,
+    required this.checkoutReady});
+
+  factory BeyteiJointRestaurantOffer.fromJson(Map<String,dynamic> json) {
+    int number(dynamic v) => int.tryParse('${v ?? ''}') ?? 0;
+    return BeyteiJointRestaurantOffer(
+      campaignId:number(json['id']),restaurantId:number(json['restaurant_id']),
+      areaId:number(json['area_id']),title:(json['title']??'عرض بيتي').toString(),
+      badge:(json['badge']??'عرض خاص').toString(),
+      platformPercent:number(json['platform_percent']),
+      merchantPercent:number(json['merchant_percent']),
+      freeDelivery:json['free_delivery']==true,
+      checkoutReady:json['checkout_ready']==true,
+    );
+  }
+}
+
+class _BeyteiV47OfferView {
+  final Restaurant store;
+  final String badge;
+  final String details;
+  final bool isFreeDelivery;
+  const _BeyteiV47OfferView(this.store,this.badge,this.details,this.isFreeDelivery);
+}
+
+// A compact restaurant card for a horizontally scrollable TWO-row offer grid.
+class BeyteiV47RestaurantOfferCard extends StatelessWidget {
+  final Restaurant store;
+  final String badge;
+  final String details;
+  final bool isFreeDelivery;
+  const BeyteiV47RestaurantOfferCard({super.key,required this.store,
+    required this.badge,required this.details,required this.isFreeDelivery});
+
+  @override Widget build(BuildContext context) {
+    const sky=Color(0xFF119ED9);
+    final canOrder=store.isOpen && store.isDeliverable;
+    return InkWell(
+      onTap:()=>Navigator.push(context, MaterialPageRoute(
+          builder: (_) => MenuScreen(restaurant:store))),
+      borderRadius:BorderRadius.circular(16),
+      child:Container(
+        decoration:BoxDecoration(color:Colors.white,borderRadius:BorderRadius.circular(16),
+            border:Border.all(color:const Color(0xFFD6EDF9)),
+            boxShadow:const [BoxShadow(color:Color(0x12016B9F),blurRadius:8,offset:Offset(0,3))]),
+        child:Row(children:[
+          ClipRRect(borderRadius:const BorderRadius.horizontal(left:Radius.circular(15)),
+              child:CachedNetworkImage(imageUrl:store.imageUrl,width:87,height:double.infinity,
+                  fit:BoxFit.cover,errorWidget:(ctx,url,error)=>const Icon(Icons.storefront,color:sky))),
+          Expanded(child:Padding(padding:const EdgeInsets.fromLTRB(8,9,7,9),
+              child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Text(store.name,maxLines:1,overflow:TextOverflow.ellipsis,
+                    style:const TextStyle(fontWeight:FontWeight.w800,fontSize:13,color:Color(0xFF153F56))),
+                const SizedBox(height:5),
+                Container(padding:const EdgeInsets.symmetric(horizontal:7,vertical:4),
+                    decoration:BoxDecoration(color:isFreeDelivery?const Color(0xFFE5F8FF):const Color(0xFFE9F8F1),
+                        borderRadius:BorderRadius.circular(7)),
+                    child:Row(mainAxisSize:MainAxisSize.min,children:[
+                      Icon(isFreeDelivery?Icons.local_shipping_outlined:Icons.percent,
+                          color:isFreeDelivery?sky:const Color(0xFF098858),size:13),
+                      const SizedBox(width:3),
+                      Flexible(child:Text(badge,maxLines:1,overflow:TextOverflow.ellipsis,
+                          style:TextStyle(fontSize:11,fontWeight:FontWeight.w800,
+                              color:isFreeDelivery?const Color(0xFF0784B4):const Color(0xFF08744C)))),
+                    ])),
+                const SizedBox(height:4),
+                Text(details,maxLines:1,overflow:TextOverflow.ellipsis,
+                    style:const TextStyle(color:Color(0xFF627A88),fontSize:10)),
+                const Spacer(),
+                Text(canOrder?'اطلب الآن':'مغلق حالياً',
+                    style:TextStyle(fontSize:10,fontWeight:FontWeight.w700,
+                        color:canOrder?sky:Colors.grey)),
+              ]))),
+        ]),
+      ),
+    );
+  }
+}
+
 // ==========================================
 // 2. ويدجت بطاقة العرض العصرية (Modern Offer Card) - النسخة المحسنة
 // =======================================================================
@@ -7253,6 +7395,8 @@ class ApiService {
     double? discountAmount,        // 👈 الخصم الكلي (كوبون + عرض مميز + خصم توصيل)
     double? finalTotal,            // 👈 المبلغ النهائي بعد كل الخصومات
     bool usedPremiumCampaign = false,
+    BeyteiJointRestaurantOffer? jointPromotion,
+    int? expectedPromotionTotalIqd,
   }) async {
     // 🛡️ 1. تجهيز خطوط الكوبونات (فقط إذا كان هناك كوبون عادي)
     List<Map<String, dynamic>> couponLines =
@@ -7380,6 +7524,14 @@ class ApiService {
           {"key": "calculated_final_total", "value": finalTotal.toString()}
         ],
         if (usedPremiumCampaign) {"key": "_used_premium_campaign", "value": "yes"},
+        // V47 opt-in; old clients omit these fields.
+        if (jointPromotion != null) ...[
+          {"key":"_beytei_v47_campaign_id","value":jointPromotion.campaignId.toString()},
+          {"key":"_beytei_v47_expected_platform_percent","value":jointPromotion.platformPercent.toString()},
+          {"key":"_beytei_v47_expected_merchant_percent","value":jointPromotion.merchantPercent.toString()},
+          {"key":"_beytei_v47_expected_free_delivery","value":jointPromotion.freeDelivery?'yes':'no'},
+          {"key":"_beytei_v47_expected_total_iqd","value":(expectedPromotionTotalIqd??0).toString()},
+        ],
 
         // 🔥🔥🔥 8. بيانات خصم التوصيل (للمحاسبة في السيرفر) 🔥🔥🔥
         if (deliveryDiscountAmount != null && deliveryDiscountAmount > 0) ...[
@@ -13203,6 +13355,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final provider = Provider.of<CustomerProvider>(context, listen: false);
       provider.fetchHomeData(_selectedAreaId!, isRefresh: false);
       provider.fetchOffers(_selectedAreaId!);
+      unawaited(provider.fetchJointRestaurantOffers(_selectedAreaId!));
 
       final premiumProvider = Provider.of<PremiumCampaignProvider>(context, listen: false);
 
@@ -13346,6 +13499,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   await Future.wait([
                     provider.fetchHomeData(_selectedAreaId!, isRefresh: true),
                     provider.fetchOffers(_selectedAreaId!),
+                    provider.fetchJointRestaurantOffers(_selectedAreaId!),
                     premiumProvider.fetchCampaignConfig(_selectedAreaId!),
                   ]);
                 },
@@ -13423,67 +13577,76 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ],
                           ],
 
-                          // ==========================================
-                          // 🎁 القسم الثاني: الحملة التسويقية (خصومات حصرية)
-                          // ==========================================
-                          if (premiumProvider.config != null && _activeMainCategory == 'all') ...[
+                          // BEYTEI V47: unified TWO-ROW restaurant offers,
+                          // combining LIVE joint deals with the original premium promotion.
+                          // Legacy on-sale MEAL offers above remain unchanged.
+                          if (_activeMainCategory == 'all')
                             Builder(builder: (context) {
-                              final includedIds = List<int>.from(premiumProvider.config!['included_restaurants'] ?? []);
-                              final premiumStores = allStores.where((r) => includedIds.contains(r.id)).toList();
-
-                              if (premiumStores.isEmpty) return const SizedBox.shrink();
-
-                              // 🔥 قراءة القيم من السيرفر
-                              double discountValue = double.tryParse(premiumProvider.config!['discount_value'].toString()) ?? 0.0;
-                              String discountType = premiumProvider.config!['discount_type'] ?? 'percent';
-                              double discountedDeliveryFee = double.tryParse(premiumProvider.config!['discounted_delivery_fee']?.toString() ?? '0') ?? 0.0;
-
-                              // 🔥 تصحيح منطق الصندوق والمجاني
-                              bool isBoxReward = (discountValue == 0 && discountType != 'free_item' && discountType != 'delivery_fee');
-
-                              // 🔥 تجهيز النص حسب الحالة
-                              String discountText = "";
-                              if (!isBoxReward) {
-                                if (discountType == 'percent') {
-                                  discountText = "خصم ${discountValue.toInt()}%";
-                                } else if (discountType == 'fixed') {
-                                  discountText = "خصم ${NumberFormat('#,###').format(discountValue)} د.ع";
-                                } else if (discountType == 'delivery_fee') {
-                                  // 🔥 السطر المسؤول عن إظهار "توصيل بـ 500 د.ع"
-                                  discountText = "توصيل بـ ${discountedDeliveryFee.toInt()} د.ع 🚚";
-                                } else {
-                                  discountText = "هدية مجانية 🎁";
+                              final offers = <_BeyteiV47OfferView>[];
+                              final added = <int>{};
+                              final available = <int, Restaurant>{
+                                for (final store in allStores) store.id: store
+                              };
+                              for (final deal in provider.jointRestaurantOffers) {
+                                final store = available[deal.restaurantId];
+                                if (store == null || !added.add(store.id)) continue;
+                                final details = deal.freeDelivery
+                                    ? 'وفر أجرة التوصيل'
+                                    : deal.merchantPercent > 0 && deal.platformPercent > 0
+                                    ? '${deal.platformPercent}% بيتي + ${deal.merchantPercent}% المطعم'
+                                    : deal.merchantPercent > 0
+                                    ? '${deal.merchantPercent}% على حساب المطعم'
+                                    : '${deal.platformPercent}% على حساب بيتي';
+                                offers.add(_BeyteiV47OfferView(
+                                    store,deal.badge,details,deal.freeDelivery));
+                              }
+                              final config = premiumProvider.config;
+                              if (config != null) {
+                                final raw = config['included_restaurants'];
+                                final ids = raw is List
+                                    ? raw.map((e) => int.tryParse('$e') ?? 0).toSet()
+                                    : <int>{};
+                                final type=(config['discount_type']??'percent').toString();
+                                final value=double.tryParse('${config['discount_value']??0}')??0;
+                                final fee=double.tryParse('${config['discounted_delivery_fee']??0}')??0;
+                                final label = type=='delivery_fee' ? 'توصيل بـ ${fee.toInt()} د.ع'
+                                    : type=='percent' ? 'خصم ${value.toInt()}%'
+                                    : type=='fixed' ? 'خصم ${NumberFormat('#,###').format(value)} د.ع'
+                                    : type=='free_item' ? 'هدية مجانية' : 'عرض حصري';
+                                for (final store in allStores) {
+                                  if (!ids.contains(store.id) || !added.add(store.id)) continue;
+                                  offers.add(_BeyteiV47OfferView(store,label,
+                                      'عرض بيتي لفترة محدودة',type=='delivery_fee'&&fee==0));
                                 }
                               }
-
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  const Center(
-                                    child: Text("خصومات حصرية الك 🎁", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  SizedBox(
-                                    height: 200,
-                                    child: ListView.builder(
-                                        scrollDirection: Axis.horizontal,
-                                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                                        itemCount: premiumStores.length,
-                                        itemBuilder: (ctx, i) {
-                                          final store = premiumStores[i];
-                                          return Container(
-                                            width: 150,
-                                            margin: const EdgeInsets.only(left: 12),
-                                            child: _buildPremiumStoreCard(store, discountText, context, isBoxReward: isBoxReward),
-                                          );
-                                        }
-                                    ),
-                                  ),
-                                  const SizedBox(height: 25),
-                                ],
-                              );
+                              if (offers.isEmpty) return const SizedBox.shrink();
+                              return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                                const Padding(padding:EdgeInsets.symmetric(horizontal:16),
+                                    child:Row(children:[
+                                      Icon(Icons.local_offer_outlined,color:Color(0xFF119ED9)),
+                                      SizedBox(width:8),
+                                      Text('عروض المطاعم في منطقتك',style:TextStyle(
+                                          fontSize:18,fontWeight:FontWeight.w800,color:Color(0xFF153F56))),
+                                    ])),
+                                const SizedBox(height:10),
+                                SizedBox(height:300,child:GridView.builder(
+                                  scrollDirection:Axis.horizontal,
+                                  physics:const BouncingScrollPhysics(),
+                                  padding:const EdgeInsets.symmetric(horizontal:16,vertical:3),
+                                  gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount:2,childAspectRatio:0.58,
+                                      mainAxisSpacing:10,crossAxisSpacing:10),
+                                  itemCount:offers.length,
+                                  itemBuilder:(ctx,i) {
+                                    final item=offers[i];
+                                    return BeyteiV47RestaurantOfferCard(
+                                        store:item.store,badge:item.badge,details:item.details,
+                                        isFreeDelivery:item.isFreeDelivery);
+                                  },
+                                )),
+                                const SizedBox(height:20),
+                              ]);
                             }),
-                          ],
 
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 5),
@@ -16725,6 +16888,20 @@ class _CartScreenState extends State<CartScreen> with SingleTickerProviderStateM
 
           // 💰 حساب قيمة الخصم من المحرك (العرض المميز)
           double premiumDiscount = premium.calculateActualDiscount(cart.items, restaurantId);
+          final jointFeed=Provider.of<CustomerProvider>(context).jointRestaurantOffers;
+          if (!cart.hasBoxReward && cart.appliedCoupon==null &&
+              cart.totalDiscountAmount<=0 &&
+              cart.items.every((item)=>item.categoryId==restaurantId)) {
+            for (final deal in jointFeed) {
+              if (deal.restaurantId==restaurantId && deal.checkoutReady) {
+                final foodBase=(cart.totalPrice-cart.totalPlatformMarkup)
+                    .clamp(0.0,double.infinity).toDouble();
+                premiumDiscount=(foodBase*(deal.platformPercent+deal.merchantPercent)/100)
+                    .roundToDouble();
+                break;
+              }
+            }
+          }
 
           // 🔥 الجديد: خصم الصندوق
           double boxRewardDiscount = cart.boxRewardDiscount;
@@ -17647,6 +17824,29 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
     final premium = Provider.of<PremiumCampaignProvider>(context);
     final wallet = Provider.of<SmartWalletProvider>(context);
     int restaurantId = widget.cart.items.isNotEmpty ? widget.cart.items.first.categoryId : 0;
+    final jointFeed=Provider.of<CustomerProvider>(context).jointRestaurantOffers;
+    BeyteiJointRestaurantOffer? jointPromotion;
+    // No coupon, loyalty, box or mixed-restaurant stacking.
+    if (restaurantId>0 && !widget.cart.hasBoxReward &&
+        widget.cart.appliedCoupon == null && widget.cart.totalDiscountAmount <= 0 &&
+        widget.cart.items.every((i)=>i.categoryId==restaurantId)) {
+      for (final deal in jointFeed) {
+        if (deal.restaurantId==restaurantId && deal.checkoutReady) {
+          jointPromotion=deal;break;
+        }
+      }
+    }
+    final foodBeforeMarkup=(widget.cart.totalPrice-widget.cart.totalPlatformMarkup)
+        .clamp(0.0,double.infinity).toDouble();
+    final jointPlatformFood=jointPromotion==null?0.0:
+    (foodBeforeMarkup*jointPromotion.platformPercent/100).roundToDouble();
+    final jointMerchantFood=jointPromotion==null?0.0:
+    (foodBeforeMarkup*jointPromotion.merchantPercent/100).roundToDouble();
+    final jointFoodDiscount=jointPlatformFood+jointMerchantFood;
+    final originalDeliveryForPromo=_originalDeliveryFee>0?_originalDeliveryFee:
+    (_deliveryFee>0?_deliveryFee:0.0);
+    final feeShownToCustomer=jointPromotion==null?(_deliveryFee>0?_deliveryFee:0.0):
+    (jointPromotion.freeDelivery?0.0:originalDeliveryForPromo);
 
     double premiumDiscount = 0.0;
     bool usedPremium = false;
@@ -17667,9 +17867,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
       }
     }
 
-    // 🛡️ 2. قاعدة التعارض: إذا كان عرض الحملة مفعل، يتم تعطيل كود الخصم العادي تماماً
-    double couponDiscount = usedPremium ? 0.0 : widget.cart.totalDiscountAmount;
-    String? finalCouponCode = usedPremium ? null : widget.cart.appliedCoupon;
+    if (jointPromotion!=null) {premiumDiscount=0;usedPremium=false;hasFreeItem=false;}
+    // Joint promotions replace, NOT stack, with legacy premium campaigns.
+    double couponDiscount = (usedPremium || jointPromotion!=null) ? 0.0 : widget.cart.totalDiscountAmount;
+    String? finalCouponCode = (usedPremium || jointPromotion!=null) ? null : widget.cart.appliedCoupon;
 
     // 🔥 3. خصم الصندوق (مع التحقق من الصلاحية)
     double boxRewardDiscount = 0.0;
@@ -17686,11 +17887,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
 
     // 💰 4. حساب الإجمالي النهائي
     double total = widget.cart.totalPrice - couponDiscount;
-    double grandTotal = total - premiumDiscount - boxRewardDiscount + (_deliveryFee > 0 ? _deliveryFee : 0) + _serviceFee;
+    double grandTotal = total - premiumDiscount - boxRewardDiscount
+        - jointFoodDiscount + feeShownToCustomer + _serviceFee;
     if (grandTotal < 0) grandTotal = 0;
 
     // 🔥 المجموع الكلي للخصومات لإرساله للسيرفر (يشمل خصم التوصيل)
-    double totalDiscountSent = couponDiscount + premiumDiscount + boxRewardDiscount + _deliveryDiscountAmount;
+    // V47 WordPress independently reserves/verifies the finance quote.
+    double totalDiscountSent = jointPromotion!=null ? 0.0 :
+    couponDiscount + premiumDiscount + boxRewardDiscount + _deliveryDiscountAmount;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
@@ -17916,6 +18120,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                 _buildSummaryRow("سعر الطلبات:", widget.cart.totalPrice),
                 if (couponDiscount > 0) _buildSummaryRow("الخصم (البروموكود):", -couponDiscount, isDiscount: true),
                 if (premiumDiscount > 0) _buildSummaryRow("خصم العرض المميز 🔥:", -premiumDiscount, isDiscount: true),
+                if (jointPlatformFood>0) _buildSummaryRow('خصم منصة بيتي:',-jointPlatformFood,isDiscount:true),
+                if (jointMerchantFood>0) _buildSummaryRow('خصم المطعم:',-jointMerchantFood,isDiscount:true),
+                if (jointPromotion?.freeDelivery==true) _buildSummaryRow('خصم التوصيل المشترك:',
+                    -originalDeliveryForPromo,isDiscount:true),
 
                 // عرض خصم الصندوق
                 if (boxRewardDiscount > 0 && isBoxRewardValid)
@@ -17951,10 +18159,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                   const Text("بيبسي مجاني 🎁", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
                 ])),
 
-                _buildSummaryRow("رسوم التوصيل:", _deliveryFee, isLoading: _isCalculatingFees),
+                _buildSummaryRow('رسوم التوصيل:', jointPromotion==null?_deliveryFee:originalDeliveryForPromo,
+                    isLoading:_isCalculatingFees),
 
                 // 🔥 عرض تفاصيل خصم التوصيل (السعر الأصلي مشطوب + قيمة الخصم)
-                if (_hasDeliveryDiscount && _deliveryDiscountAmount > 0) ...[
+                if (jointPromotion==null && _hasDeliveryDiscount && _deliveryDiscountAmount > 0) ...[
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4.0),
                     child: Row(
@@ -18009,7 +18218,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       cartItems: widget.cart.items,
                       couponCode: finalCouponCode,
                       position: _capturedPosition,
-                      deliveryFee: _deliveryFee, // السعر الظاهر للزبون بعد الخصم
+                      deliveryFee: jointPromotion==null?_deliveryFee:feeShownToCustomer,
+                      // Original fee remains the amount owed to the driver.
                       originalDeliveryFee: _originalDeliveryFee > 0 ? _originalDeliveryFee : _deliveryFee, // للسائق
                       zoneId: currentZoneId,
                       restaurantId: firstRestaurantId,
@@ -18018,8 +18228,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> with SingleTickerProvid
                       checkoutSessionId: _checkoutSessionId,
                       discountAmount: totalDiscountSent,
                       finalTotal: grandTotal,
-                      usedPremiumCampaign: usedPremium,
-                      deliveryDiscountAmount: _deliveryDiscountAmount > 0 ? _deliveryDiscountAmount : null, // 🔥 إرسال خصم التوصيل كـ Metadata
+                      usedPremiumCampaign: usedPremium && jointPromotion==null,
+                      deliveryDiscountAmount: jointPromotion==null && _deliveryDiscountAmount>0
+                          ?_deliveryDiscountAmount:null,
+                      jointPromotion:jointPromotion,
+                      expectedPromotionTotalIqd:jointPromotion!=null?grandTotal.round():null,
                     );
 
                     if (!mounted) return;
@@ -18859,7 +19072,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                           setState(() => _confirmedCollectedIqd = amount);
                           if (amount != null) {
                             OrderHistoryService().updateOrderTotalLocally(
-                              widget.order.id, amount);
+                                widget.order.id, amount);
                           }
                         }
                       },
